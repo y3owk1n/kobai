@@ -1,7 +1,14 @@
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { defineMigrationSet } from "../migrations/set.ts";
-import { createTestKobai, signInTestMerchant, type TestKobai } from "../testing/index.ts";
+import {
+  createTestKobai,
+  inspectSchema,
+  type SchemaInspector,
+  signInTestMerchant,
+  type TableRef,
+  type TestKobai,
+} from "../testing/index.ts";
 
 let kobai: TestKobai | undefined;
 
@@ -9,6 +16,23 @@ afterEach(async () => {
   await kobai?.close();
   kobai = undefined;
 });
+
+/**
+ * The Store's table, qualified as Postgres actually holds it.
+ *
+ * Read back from `tables()` rather than written as the bare string `"core_store"`, which
+ * resolves to `public` — so on a deployment whose search path is elsewhere the sweep below
+ * would find no foreign key on a table it never looked at, and pass. Looking the name up
+ * also fails loudly if the table is ever renamed, where a bare name would go quiet.
+ */
+async function storeTable(schema: SchemaInspector): Promise<TableRef> {
+  const matches = (await schema.tables()).filter((table) => table.name === "core_store");
+  const [store] = matches;
+  if (matches.length !== 1 || store === undefined) {
+    throw new Error(`expected exactly one core_store table, found ${matches.length}`);
+  }
+  return store;
+}
 
 describe("GET /admin/store", () => {
   it("returns the Store a fresh database was migrated into being", async () => {
@@ -55,18 +79,67 @@ describe("the Store is a singleton", () => {
 
   it("is referenced by no foreign key anywhere in the database", async () => {
     kobai = await createTestKobai();
-
-    const references = await kobai.db.execute<{ src: string }>(sql`
-      select tc.table_name as src
-      from information_schema.table_constraints tc
-      join information_schema.constraint_column_usage ccu
-        using (constraint_name, constraint_schema)
-      where tc.constraint_type = 'FOREIGN KEY' and ccu.table_name = 'core_store'
-    `);
+    const schema = inspectSchema(kobai.database);
 
     // A foreign key onto the Store is multi-tenancy arriving by the back door: it makes the
-    // Store a scoping key on whatever points at it.
-    expect(references.rows).toEqual([]);
+    // Store a scoping key on whatever points at it (ADR-0005). Asked of the one table rather
+    // than of the `core` prefix, because ADR-0005 is the stronger rule and
+    // `foreignKeysCrossingInto` would excuse a `core_` table pointing at the Store —
+    // `foreignKeysTargeting`'s own JSDoc has the argument.
+    await expect(schema.foreignKeysTargeting(await storeTable(schema))).resolves.toEqual(
+      [],
+    );
+  });
+
+  /**
+   * And that sweep is not vacuous, which is the half worth proving: an assertion that would
+   * say "no references" whatever the database held would let the scoping key it exists to
+   * catch walk straight past it.
+   *
+   * The tables are created here rather than in a migration because that is exactly what the
+   * mistake looks like on the day somebody makes it — an ordinary table with a `store_id` on
+   * it, added by a Plugin or by Core, neither of which the sweep is allowed to excuse. One
+   * sits in another schema, because "everywhere in the database" has to mean everywhere.
+   */
+  it("has that proven by a sweep that names a foreign key when one arrives", async () => {
+    kobai = await createTestKobai();
+    const schema = inspectSchema(kobai.database);
+    const store = await storeTable(schema);
+
+    // The Store's key is the boolean pinned to true, so this is what scoping by it would
+    // have to look like. The constraint is named rather than left to Postgres, so what the
+    // sweep reports back is pinned rather than guessed.
+    await kobai.database.query(`
+      create table core_scoped (
+        id uuid primary key default gen_random_uuid(),
+        store_id boolean not null,
+        constraint core_scoped_store_fk foreign key (store_id) references core_store (singleton)
+      )
+    `);
+    // And one from a schema nobody thought to look in. A Project owns its own migrations and
+    // may put its tables wherever it likes; a sweep confined to `public` would call this
+    // database single-tenant while a `store_id` sat one schema over.
+    await kobai.database.query(`create schema a_project_of_its_own`);
+    await kobai.database.query(`
+      create table a_project_of_its_own.scoped (
+        store_id boolean not null,
+        constraint project_scoped_store_fk foreign key (store_id) references core_store (singleton)
+      )
+    `);
+
+    // Ordered by the schema and table a key points *from*, which `foreignKeys()` sorts on.
+    await expect(schema.foreignKeysTargeting(store)).resolves.toEqual([
+      {
+        constraint: "project_scoped_store_fk",
+        from: { schema: "a_project_of_its_own", name: "scoped" },
+        to: store,
+      },
+      {
+        constraint: "core_scoped_store_fk",
+        from: { schema: store.schema, name: "core_scoped" },
+        to: store,
+      },
+    ]);
   });
 });
 

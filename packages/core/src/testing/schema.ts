@@ -123,6 +123,22 @@ export type SchemaInspector = {
    * Core's own foreign keys between its own tables are not crossings and do not appear.
    */
   foreignKeysCrossingInto(prefix: string): Promise<ForeignKeyFact[]>;
+  /**
+   * Every foreign key pointing at **one table**, from anywhere at all — the table's own
+   * package included.
+   *
+   * The stronger question, and deliberately not the prefix one. ADR-0005 makes the Store a
+   * singleton that is never a scoping key, so `foreignKeysTargeting(coreStore)` returning
+   * `[]` is single-tenancy holding structurally: nothing can scope by a row nothing
+   * references. `foreignKeysCrossingInto("core")` cannot ask it — it excuses a package's
+   * references to itself, so a `core_` table growing a `store_id` would read as Core's own
+   * business, which is exactly how multi-tenancy would arrive.
+   *
+   * Pass the ref `tables()` hands back rather than a bare name where it matters: a bare name
+   * resolves to `public`, and a sweep aimed at a schema the table is not in finds nothing and
+   * says the rule holds.
+   */
+  foreignKeysTargeting(table: TableRef | string): Promise<ForeignKeyFact[]>;
   /** Every migration tracking table, wherever it lives, with its row count. */
   migrationTracking(): Promise<MigrationTrackingFact[]>;
 };
@@ -267,6 +283,12 @@ export function inspectSchema(source: SchemaQuery): SchemaInspector {
     async foreignKeysCrossingInto(prefix) {
       const all = await inspector.foreignKeys();
       return all.filter((fk) => owns(prefix, fk.to.name) && !owns(prefix, fk.from.name));
+    },
+
+    async foreignKeysTargeting(table) {
+      const ref = resolve(table);
+      const all = await inspector.foreignKeys();
+      return all.filter((fk) => fk.to.schema === ref.schema && fk.to.name === ref.name);
     },
 
     async migrationTracking() {

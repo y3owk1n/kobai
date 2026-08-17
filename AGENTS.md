@@ -623,6 +623,17 @@ It also reads `migrationTracking()`, `columnsOf()`, `indexedColumnsOf()` and `tr
 every non-system schema rather than only `public` — the prototype's inspector reported "no
 tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
 
+`foreignKeysTargeting(table)` asks the foreign-key question of **one table instead of one
+package**, and it is the stronger of the two: `foreignKeysCrossingInto` excuses a package's
+references to itself, which is right for ADR-0004 and wrong for the Store. ADR-0005 says the
+Store is referenced by *nothing* — a `core_` table growing a `store_id` smuggles in the same
+scoping key a Plugin's would, and the prefix sweep would read it as Core's own business. So
+`store.test.ts` asks this one, and pairs it with a test that creates such a table and watches
+the sweep name it, because an emptiness assertion nobody has ever seen fail is not yet known
+to be able to. **Pass the qualified ref `tables()` hands back**, not a bare name: a bare name
+resolves to `public`, and a sweep aimed at the wrong schema finds nothing and reports that
+the rule holds.
+
 The **Workflow seam** is the one place a test may reach past HTTP into a module, and it is
 allowed because a declared Workflow *is* a public interface: it is one of ADR-0003's five
 Extension Points, imported and read by a Project. `describe()` naming its Steps in order, and
