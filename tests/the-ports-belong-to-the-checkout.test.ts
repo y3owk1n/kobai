@@ -1,33 +1,23 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  checkoutPinning,
+  discardCheckouts,
+  readDevbox,
+  runInitHook,
+} from "./support/init-hook.ts";
 
 /**
- * The derivation in `devbox.json`'s `init_hook`, run rather than read.
+ * The ports in `devbox.json`'s `init_hook`, run rather than read.
  *
  * Two checkouts of kobai — a second clone, a git worktree — differ by their path and nothing
  * else, so the hook hashes that path into a Postgres port (#21) and an application port
  * (#61) and exports both in front of every script. `AGENTS.md` § The ports belong to the
  * checkout is the prose; this is what holds it up.
  *
- * It has to *execute* the hook. The gate always runs with those variables already exported,
- * so every other test in this repository sees the result and none of them can see the rule
- * that produced it: a hook that had stopped deriving anything, and simply left the fallbacks
- * standing, would be green everywhere until two Developers ran `devbox run up` at once. The
- * lines are therefore read out of `devbox.json` and handed to `sh`, with the checkout and
- * the environment this file chooses.
- *
- * Reading those lines rather than restating them is the whole arrangement — a second copy of
- * the derivation here would agree with itself forever.
+ * Running the hook rather than reading it is what makes that possible at all, and
+ * `tests/support/init-hook.ts` is where that lives — the credentials the same hook carries
+ * are asserted next door, against the same runner.
  */
-
-const run = promisify(execFile);
-const repoRoot = new URL("../", import.meta.url);
 
 /** What the hook hands every script, and what this file asks it for. */
 type DerivedAddresses = {
@@ -50,104 +40,24 @@ const ANOTHER_CHECKOUT = "/checkouts/kobai-worktree";
 const APPLICATION_RANGE = { from: 53000, to: 53999 } as const;
 const POSTGRES_RANGE = { from: 55000, to: 55999 } as const;
 
-type DevboxConfig = {
-  shell?: {
-    init_hook?: string[] | null;
-    scripts?: Record<string, string> | null;
-  } | null;
-};
-
-async function readDevbox(): Promise<DevboxConfig> {
-  const contents = await readFile(
-    fileURLToPath(new URL("devbox.json", repoRoot)),
-    "utf8",
-  );
-  const errors: ParseError[] = [];
-  // `allowTrailingComma` because `devbox add` rewrites the file in that style, which
-  // `tests/no-push-script.test.ts` has to allow for too.
-  const config = parseJsonc(contents, errors, {
-    allowTrailingComma: true,
-  }) as DevboxConfig;
-
-  const [failure] = errors;
-  if (failure !== undefined) {
-    throw new Error(
-      `devbox.json did not parse: ${printParseErrorCode(failure.error)} at offset ${failure.offset}.`,
-    );
-  }
-  return config;
-}
-
-/**
- * Runs the hook against a checkout and reports what a script would have been given.
- *
- * The environment is built from `PATH` and what a caller passes, and nothing else. Under the
- * gate this process already carries a derived `PORT` and `POSTGRES_PORT` — devbox exported
- * them before vitest started — and inheriting those would pin every case below to whatever
- * the checkout running the suite happens to have, which is the one thing that must not
- * decide the answer.
- *
- * `corepack` is stubbed rather than run: the hook's first line activates pnpm, has nothing to
- * do with an address, and would otherwise write into a directory this test only invented.
- */
+/** Runs the hook against a checkout and reports the three names this file is about. */
 async function derive(options: {
   readonly root: string;
   readonly env?: Readonly<Record<string, string>>;
 }): Promise<DerivedAddresses> {
-  const { shell } = await readDevbox();
-  const lines = shell?.init_hook ?? [];
-  if (lines.length === 0) {
-    // Failing open would be worse than failing: with no lines to run, every assertion below
-    // would be about an empty script rather than about the derivation.
-    throw new Error(
-      "devbox.json declares no `shell.init_hook`, so there is no derivation to run. That is where PORT, POSTGRES_PORT, COMPOSE_PROJECT_NAME and both database addresses are set.",
-    );
-  }
-
-  const script = [
-    "corepack() { :; }",
-    ...lines,
-    'printf "%s\\n%s\\n%s\\n" "$PORT" "$POSTGRES_PORT" "$COMPOSE_PROJECT_NAME"',
-  ].join("\n");
-
-  const { stdout } = await run("sh", ["-c", script], {
-    env: {
-      PATH: process.env.PATH ?? "",
-      DEVBOX_PROJECT_ROOT: options.root,
-      ...options.env,
-    },
+  const derived = await runInitHook({
+    ...options,
+    report: ["PORT", "POSTGRES_PORT", "COMPOSE_PROJECT_NAME"],
   });
 
-  const [port, postgresPort, composeProjectName] = stdout.trim().split("\n");
-  if (
-    port === undefined ||
-    postgresPort === undefined ||
-    composeProjectName === undefined
-  ) {
-    throw new Error(
-      `The hook reported fewer than the three values asked of it:\n${stdout}`,
-    );
-  }
-
-  return { port: Number(port), postgresPort: Number(postgresPort), composeProjectName };
+  return {
+    port: Number(derived.PORT),
+    postgresPort: Number(derived.POSTGRES_PORT),
+    composeProjectName: derived.COMPOSE_PROJECT_NAME,
+  };
 }
 
-let workspace: string;
-
-/** A checkout that exists, because a pin in `.env` needs a file to be read out of. */
-async function checkoutPinning(dotenv: string): Promise<string> {
-  const root = await mkdtemp(join(workspace, "checkout-"));
-  await writeFile(join(root, ".env"), dotenv);
-  return root;
-}
-
-beforeAll(async () => {
-  workspace = await mkdtemp(join(tmpdir(), "kobai-derived-ports-"));
-});
-
-afterAll(async () => {
-  await rm(workspace, { recursive: true, force: true });
-});
+afterAll(discardCheckouts);
 
 describe("the ports a checkout derives", () => {
   it("gives the application a port of its own, in the range AGENTS.md promises", async () => {
