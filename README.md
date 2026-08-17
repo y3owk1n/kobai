@@ -3,9 +3,25 @@
 Open source headless commerce engine with a pre-built admin UI, built to be extended
 without forking.
 
-> **Status: greenfield.** Design in progress, no application code yet. See
+> **Status: walking skeleton in progress.** It boots, migrates and serves a Store; the
+> catalog, the Workflows and the Admin are being built on top of it. See
 > [`CONTEXT.md`](./CONTEXT.md) for the vocabulary and [`docs/adr/`](./docs/adr/) for the
 > decisions made so far.
+
+## Running it
+
+You need [devbox](https://www.jetify.com/devbox) and Docker. Nothing else — devbox brings
+its own Node.
+
+```sh
+devbox run up     # Postgres and the application, and nothing else
+curl localhost:3000/health
+```
+
+Migrations apply at boot, so a fresh database becomes a working Store with no separate step.
+If they fail, the application exits rather than serving traffic against a half-migrated
+schema — `/health` says which it is. `devbox run ci` is the gate: lint, typecheck, build and
+the test suite.
 
 ## What it is
 

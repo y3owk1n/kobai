@@ -3,6 +3,14 @@
 .env.*
 !.env.example
 
+# Build output and dependencies
+node_modules/
+dist/
+*.tsbuildinfo
+
+# devbox's nix profile
+.devbox/
+
 # Agent scratch space — /to-tickets and /prototype use this for anything not on the
 # issue tracker. Nothing here is a primary source; don't commit it.
 .scratch/

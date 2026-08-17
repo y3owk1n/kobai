@@ -1,0 +1,18 @@
+{
+  "name": "kobai-reference",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The reference Project — kobai's own Project, and its release gate (ADR-0029).",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node --env-file-if-exists=../.env --watch src/server.ts",
+    "start": "node dist/src/server.js",
+    "// db:push": "There is deliberately no db:push script here either. A Project's database holds Core's tables and every wired Plugin's, so `drizzle-kit push` — which diffs against the LIVE database — reports success while silently dropping the tables of whichever packages the pushed schema does not know about, and leaves their tracking rows behind so the migration runner cannot repair it. Generate a migration instead. See docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@kobai/core": "workspace:*"
+  }
+}

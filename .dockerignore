@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+.devbox
+.git
+.github
+.scratch
+docs
+*.md
+.env
+.env.*
+!.env.example

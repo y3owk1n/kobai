@@ -1,0 +1,35 @@
+# One job running the one gate. If `devbox run ci` passes locally it passes here, because
+# it is the same command against the same pinned toolchain — see AGENTS.md § Development.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install devbox
+        uses: jetify-com/devbox-install-action@v0.13.0
+        with:
+          enable-cache: "true"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      # Postgres comes up through the repository's own compose file rather than a service
+      # container, so CI runs against the same database a Developer does.
+      - run: devbox run ci
