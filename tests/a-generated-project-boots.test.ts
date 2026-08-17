@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import {
   publishPackages,
   startLocalRegistry,
 } from "./support/local-registry.ts";
+import { bootProject, PROJECT_TIMEOUT, runInProject } from "./support/project.ts";
 
 /**
  * The acceptance test for #11, and the only one that proves the promise rather than
@@ -34,38 +35,6 @@ import {
 
 const run = promisify(execFile);
 
-/** An install, a TypeScript build, a Vite build and a boot, on a cold CI runner. */
-const ACCEPTANCE_TIMEOUT = 900_000;
-
-/**
- * Runs a command in the generated Project, and on failure says what it printed.
- *
- * `execFile`'s own error is `Command failed: pnpm -r build` and nothing else, which for this
- * test is the least useful sentence available: everything that can go wrong here goes wrong
- * inside a compiler or a package manager, and all of the diagnosis is in the output it
- * throws away.
- */
-async function runIn(
-  directory: string,
-  command: string,
-  args: string[],
-): Promise<string> {
-  try {
-    const { stdout } = await run(command, args, {
-      cwd: directory,
-      timeout: ACCEPTANCE_TIMEOUT,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    return stdout;
-  } catch (cause) {
-    const { stdout = "", stderr = "" } = cause as { stdout?: string; stderr?: string };
-    throw new Error(
-      `\`${command} ${args.join(" ")}\` failed in the generated Project.\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`,
-      { cause },
-    );
-  }
-}
-
 let registry: LocalRegistry;
 let workspace: string;
 let project: string;
@@ -82,7 +51,7 @@ beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "kobai-generated-"));
   project = join(workspace, "my-store");
   database = await createTestDatabase();
-}, ACCEPTANCE_TIMEOUT);
+}, PROJECT_TIMEOUT);
 
 afterAll(async () => {
   await database?.drop();
@@ -118,13 +87,13 @@ describe("a Project generated into a clean directory", () => {
         `@kobai:registry=${registry.url}\n//${registry.url.replace(/^https?:\/\//, "")}/:_authToken=kobai-local\n`,
       );
 
-      await runIn(project, "pnpm", ["install"]);
+      await runInProject(project, "pnpm", ["install"]);
       // The same command the Project's own `devbox run build` and its Dockerfile run —
       // `--include-workspace-root` included, because the Project is the root of its own
       // workspace and `pnpm -r` alone would silently build only the Admin.
-      await runIn(project, "pnpm", ["-r", "--include-workspace-root", "build"]);
+      await runInProject(project, "pnpm", ["-r", "--include-workspace-root", "build"]);
 
-      const served = await boot(project, database.url);
+      const served = await bootProject(project, database.url);
       try {
         // Criterion 10: it serves a request. `/health` is the one that also says whether
         // every migration set applied — Core's, the Plugin's, and the Project's own.
@@ -150,55 +119,6 @@ describe("a Project generated into a clean directory", () => {
         await served.stop();
       }
     },
-    ACCEPTANCE_TIMEOUT,
+    PROJECT_TIMEOUT,
   );
 });
-
-type Served = { readonly origin: string; stop(): Promise<void> };
-
-/**
- * Starts the generated Project the way its own Dockerfile does — `node dist/src/server.js`,
- * the built artifact, against a real database — and waits for it to say it is ready.
- *
- * Waits for the log rather than polling a port because the Project binds its listener
- * *before* migrations run, deliberately, so that `/health` can answer throughout. A port
- * that accepts connections therefore does not yet mean the schema is there.
- */
-async function boot(directory: string, databaseUrl: string): Promise<Served> {
-  const child = spawn("node", ["dist/src/server.js"], {
-    cwd: directory,
-    env: { ...process.env, DATABASE_URL: databaseUrl, PORT: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let output = "";
-  const collect = (chunk: Buffer) => {
-    output += chunk.toString();
-  };
-  child.stdout?.on("data", collect);
-  child.stderr?.on("data", collect);
-
-  const stop = async () => {
-    child.kill();
-    await new Promise((resolve) => child.once("exit", resolve));
-  };
-
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(
-        `The generated Project exited with ${child.exitCode} instead of serving. Its output:\n${output}`,
-      );
-    }
-
-    // `listening` carries the port it actually bound; `ready` means migrations applied.
-    const port = /"port":\s*(\d+)/.exec(output)?.[1];
-    if (port !== undefined && output.includes("ready")) {
-      return { origin: `http://127.0.0.1:${port}`, stop };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-
-  await stop();
-  throw new Error(`The generated Project never became ready. Its output:\n${output}`);
-}

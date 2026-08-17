@@ -19,3 +19,15 @@
 .env
 .env.*
 !.env.example
+
+# Credentials, which must never arrive as a file. If kobai comes from a private mirror,
+# `.npmrc` holds an auth token — and a token copied into a build context is in an image
+# layer forever, readable by anyone who can pull the image, however many `rm`s come after
+# it. The install still needs the file, so `Dockerfile` mounts it as a build secret that
+# exists only for the length of that one command:
+#
+#     docker build --secret id=npmrc,src=$HOME/.npmrc .
+#
+# This line is the half that makes an accident impossible; the mount is the half that keeps
+# the build working. Both, because either alone is a trap.
+.npmrc

@@ -14,7 +14,18 @@ COPY . .
 # and `--frozen-lockfile` fails rather than creating one — so `docker compose up` would fail
 # on a freshly generated Project, which is the first thing anyone does. Once the lockfile is
 # committed this honours it exactly as the stricter flag would.
-RUN pnpm install
+#
+# **`.npmrc` arrives as a build secret and never as a file.** If kobai comes from a private
+# mirror, that file holds an auth token — and a token that arrives through `COPY` is in an
+# image layer forever, readable by anyone who can pull the image, whatever a later `rm`
+# says. `.dockerignore` keeps it out of the build context; this mount is how the install
+# still sees it, for the length of this one command and no longer:
+#
+#     docker build --secret id=npmrc,src=$HOME/.npmrc .
+#
+# Optional, because most Projects install kobai from a public registry and need no token at
+# all. Pass nothing and the file simply is not there.
+RUN --mount=type=secret,id=npmrc,target=/app/.npmrc pnpm install
 # Builds the Admin's bundle and this Project's TypeScript. One command, because the Admin is
 # a workspace package of this Project with its own `build` script (ADR-0033).
 #
@@ -39,7 +50,11 @@ RUN pnpm -r --include-workspace-root build
 # written a `pnpm-lock.yaml` even if the Project arrived without one, so the production tree
 # is resolved from the same lockfile the tree that was just built came from. Without it the
 # image could ship a resolution nothing tested.
-RUN rm -rf node_modules admin/node_modules \
+#
+# The secret is mounted again because this is a second install and it reaches the same
+# registry. It is a mount rather than a file for the same reason, and it leaves nothing here
+# either.
+RUN --mount=type=secret,id=npmrc,target=/app/.npmrc rm -rf node_modules admin/node_modules \
   && pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # The Admin ships as the bytes `vite build` produced and nothing else. Its source is yours to

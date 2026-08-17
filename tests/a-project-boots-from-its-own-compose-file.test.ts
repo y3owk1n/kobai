@@ -34,6 +34,16 @@ import {
 /** Two installs, a Vite build and a boot, all inside a container, on a cold runner. */
 const CONTAINER_TIMEOUT = 1_500_000;
 
+/**
+ * A credential distinctive enough to find, so "the token did not ship" is a search rather
+ * than an inference.
+ *
+ * A Project installing kobai from a private mirror puts one of these in `.npmrc`, and until
+ * #12 that file arrived through `COPY . .` and stayed in a layer — readable by anyone who
+ * could pull the image, whatever a later `rm` said.
+ */
+const LEAKABLE_TOKEN = "kobai-gate-npm-token-do-not-ship-this";
+
 let registry: LocalRegistry;
 let workspace: string;
 let project: string;
@@ -53,16 +63,22 @@ beforeAll(async () => {
   project = join(workspace, "my-store");
   await scaffold({ directory: project });
 
-  // The one line a Developer would not write, spelled the way a container resolves it. The
-  // registry answers anonymously, so there is no token here and none is needed.
+  // The one line a Developer would not write, spelled the way a container resolves it —
+  // plus a token, which this registry does not check and which is here on purpose: it is
+  // what the assertions below look for in the built image.
   await writeFile(
     join(project, ".npmrc"),
-    `@kobai:registry=http://host.docker.internal:${registry.port}/\n`,
+    `@kobai:registry=http://host.docker.internal:${registry.port}/\n//host.docker.internal:${registry.port}/:_authToken=${LEAKABLE_TOKEN}\n`,
   );
 
   // Everything this overlay adds is about reaching a registry that only exists during this
   // test. It deliberately adds nothing else: the compose file under test is the Project's
   // own, unedited, and `docker compose` merges this on top of it.
+  //
+  // The `.npmrc` goes in as a **build secret**, which is not a convenience here — it is the
+  // supported way to give a Project's build a private registry credential, and the only one
+  // that does not end up in a layer. `.dockerignore` refuses the file, so this is also the
+  // only way the build sees it at all.
   const overlay = join(workspace, "compose.registry.yaml");
   await writeFile(
     overlay,
@@ -71,6 +87,11 @@ beforeAll(async () => {
     build:
       extra_hosts:
         - "host.docker.internal:host-gateway"
+      secrets:
+        - npmrc
+secrets:
+  npmrc:
+    file: ./.npmrc
 `,
   );
 
@@ -156,6 +177,34 @@ describe("a generated Project, brought up by its own compose file", () => {
       // The Admin ships as bytes, not as source (ADR-0033).
       await expect(image.has("/app/admin/dist/index.html")).resolves.toBe(true);
       await expect(image.has("/app/admin/src")).resolves.toBe(false);
+    },
+    CONTAINER_TIMEOUT,
+  );
+
+  it(
+    "ships no registry credential, though the build needed one",
+    async () => {
+      // The build that produced this image installed `@kobai/*` from a registry it had to
+      // authenticate to, with a token in `.npmrc`. Both halves of the fix are asserted here
+      // rather than read off the Dockerfile: `.dockerignore` keeps the file out of the build
+      // context, and the secret mount is what lets the install still see it — for the length
+      // of one command, in a stage the runtime image does not carry.
+      const image = imageAt(compose.appImage);
+
+      await expect(
+        image.has("/app/.npmrc"),
+        "The Project's `.npmrc` is in the shipped image. On a private mirror that file holds an auth token, and a token in a layer is readable by anyone who can pull the image.",
+      ).resolves.toBe(false);
+
+      await expect(
+        image.grep(LEAKABLE_TOKEN, "/app"),
+        "The npm auth token the build used is in the shipped image. `.dockerignore` should keep `.npmrc` out of the build context and `Dockerfile` should mount it as a build secret — check that both are still in place.",
+      ).resolves.toEqual([]);
+
+      // Where a stray copy would most plausibly land instead: the home directory of the user
+      // the container runs as, and root's.
+      await expect(image.has("/home/node/.npmrc")).resolves.toBe(false);
+      await expect(image.has("/root/.npmrc")).resolves.toBe(false);
     },
     CONTAINER_TIMEOUT,
   );

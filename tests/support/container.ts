@@ -44,6 +44,14 @@ export type BuiltImage = {
   kilobytesOf(path: string): Promise<number>;
   /** Every path inside the image matching a shell glob; empty when nothing matches. */
   list(glob: string): Promise<string[]>;
+  /**
+   * Every file under `within` whose bytes contain `text`.
+   *
+   * For asking whether a credential shipped. A container off an image sees that image's
+   * layers flattened, and a multi-stage build's earlier stages are not among them, so this
+   * reads exactly what somebody who pulled the image would be able to read.
+   */
+  grep(text: string, within: string): Promise<string[]>;
   remove(): Promise<void>;
 };
 
@@ -143,6 +151,20 @@ export function imageAt(tag: string): BuiltImage {
         throw new Error(`\`du -sk ${path}\` inside ${tag} reported nothing measurable.`);
       }
       return measured;
+    },
+
+    async grep(text, within) {
+      if (!/^[\w.@:/-]+$/.test(text)) {
+        // Every caller passes a constant, and keeping it that way is what lets this go
+        // through a shell at all.
+        throw new Error(
+          `Refusing to search the image for ${JSON.stringify(text)}: this runs through a shell and takes plain text only.`,
+        );
+      }
+      const found = await read(
+        `grep -rlI -F -- '${text}' '${within}' 2>/dev/null || true`,
+      );
+      return found.split("\n").filter(Boolean);
     },
 
     async list(glob) {
