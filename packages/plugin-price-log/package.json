@@ -1,10 +1,13 @@
 {
   "name": "@kobai/plugin-price-log",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "A deliberately trivial Plugin: it owns one table and proves that a Plugin can.",
   "license": "MIT",
+  "// publishConfig": "Published for the same reason as @kobai/core, and guarded the same way — a generated Project installs this Plugin as an ordinary dependency, so it has to exist in a registry (ADR-0034). `registry` pins publishing at a loopback address so reaching npmjs.com has to be deliberate rather than accidental. tests/publish-guard.test.ts fails the build if this pin goes missing.",
+  "publishConfig": {
+    "registry": "http://localhost:4873"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

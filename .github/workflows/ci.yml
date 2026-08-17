@@ -14,7 +14,11 @@ concurrency:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Generous because the gate now scaffolds a Project, installs it from a local registry,
+    # builds it and boots it — `tests/a-generated-project-boots.test.ts` allows itself 15
+    # minutes on a cold runner, and a job budget below that would kill the run rather than
+    # fail the test, which is a far worse signal.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 

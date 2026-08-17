@@ -1,0 +1,41 @@
+# This Project, as a Developer runs it: `devbox run up` (or `docker compose up`).
+#
+# Two services and nothing else — Postgres and the application. A first run must not be an
+# infrastructure exercise, so there is no cache, no proxy and no separate migration job:
+# Core applies its own migrations at boot (see `src/server.ts`).
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kobai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobai}
+      POSTGRES_DB: ${POSTGRES_DB:-kobai}
+    ports:
+      # Deliberately not 5432 — the Postgres you may already be running should not have to
+      # move. Change it in `.env` if this one is taken too.
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - kobai-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kobai} -d ${POSTGRES_DB:-kobai}"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      # This Project's own directory. kobai is an ordinary dependency installed from a
+      # registry, so there is nothing outside this folder to build from.
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
+      PORT: 3000
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  kobai-db:

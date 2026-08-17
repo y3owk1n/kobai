@@ -49,6 +49,7 @@ and no PR opens on a red one.
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
 | `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
 | `devbox run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
+| `devbox run template:generate` | Regenerate what `create-kobai` generates, from the reference Project. |
 
 **`devbox run -- <cmd>` runs from the project root and ignores a preceding `cd`.** So this:
 
@@ -181,10 +182,16 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/core/openapi.json` | The OpenAPI description. Generated, never hand-edited. |
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
+| `packages/create-kobai` | `create-kobai` — the scaffolder. Generates a Project a Developer owns (ADR-0001, ADR-0034). |
+| `packages/create-kobai/template/` | What it generates. **Generated** from `reference/`, checked in, never hand-edited. |
+| `packages/create-kobai/standalone/` | The few files a generated Project has and `reference/` does not. **Authored here**, not generated. |
+| `packages/create-kobai/src/adaptations.ts` | The complete list of ways a generated Project differs from the reference one. |
 | `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
+| `reference/src/db/schema.ts` | The Project's **own** tables, in its own migration set. |
 | `reference/admin/` | The **Admin**, vendored into the Project as source a Developer edits (ADR-0033). |
-| `compose.yaml`, `Dockerfile` | Postgres and the application, and nothing else. |
+| `reference/Dockerfile`, `reference/compose.yaml`, `reference/devbox.json` | The **Project's**, generated into what a Developer receives. |
+| `compose.yaml`, `Dockerfile`, `devbox.json` | The **workspace's** — what `devbox run ci` and `devbox run up` use. |
 
 ### The API contract
 
@@ -252,6 +259,58 @@ the API cannot do, that is a finding about the API (ADR-0010).
 the Admin's source and on any kobai path `openapi.json` does not carry. Interaction and
 visual testing of the Admin is deferred, not forgotten; that guardrail is what stands in for
 it.
+
+### The scaffolder, and the two trees it keeps in step
+
+**`reference/` is the source; `packages/create-kobai/template/` is generated from it.** Edit
+the Project the maintainers actually boot, then run `devbox run template:generate`. The gate
+fails until you do — `tests/create-kobai-matches-the-reference-project.test.ts` regenerates
+the template and byte-compares it with what is checked in, exactly as `openapi.test.ts` does
+for the description. **Never hand-edit anything under `template/`**; the next regeneration
+deletes it.
+
+Every legitimate difference between the two trees is a named entry in
+`packages/create-kobai/src/adaptations.ts`, and the test fails on any other difference in
+either direction, a file existing in only one tree included. **That list is the whole
+guarantee, so it is deliberately short and its length is asserted.** If a change seems to
+need a new entry, check first whether it belongs in the reference Project instead — anything
+shared should live where it is booted and tested, not in a template nobody runs.
+
+**kobai's packages are published** (ADR-0034). `@kobai/core`, `@kobai/plugin-price-log`,
+`@kobai/client` and `create-kobai` are at `0.1.0` and are no longer `private`, because a
+generated Project depends on them as ordinary versioned dependencies and `workspace:*`
+resolves nowhere outside this workspace. Nothing has actually been released; choosing a
+release process is a separate decision.
+
+What stands where `private: true` stood is `publishConfig.registry`, pinned at a loopback
+address in every publishable manifest, and `tests/publish-guard.test.ts`. **npm resolves the
+publish target from `publishConfig.registry` before it opens a connection, and that value
+beats both `--registry` and `npm_config_registry`** — so a publish to npmjs.com has to be
+deliberate, and CI publishes by packing a tarball and passing `--registry`, which is the one
+form that honours the flag.
+
+The acceptance test stands up a real registry — `tests/support/local-registry.ts`, verdaccio
+on an ephemeral port, holding this commit's packages — generates a Project, installs, builds
+and boots it. It is a module rather than a detail inside one test because **#12's upgrade
+gate reuses it** to bump Core across a synthetic major.
+
+**A generated Project is the root of its own two-package workspace**, so `pnpm -r` skips it:
+every recursive command in a Project needs `--include-workspace-root`, or it silently builds
+only the Admin and leaves no `dist/src/server.js` behind.
+
+**What is correct here is not automatically correct in the tarball.** npm strips a
+`.gitignore` out of every package it builds — silently, and regardless of `files` — so the
+Project's was present in this repository, asserted by every drift check, and missing from
+what a Developer would have installed. Dotfiles are therefore stored in `template/` *without*
+the leading dot and `scaffold` puts it back; `DOTFILES_STORED_DOTLESS` names them. The drift
+suite packs `create-kobai` for real and reads the tarball back, which is the only assertion
+that can see this class of bug at all.
+
+**`biome.json` excludes `packages/create-kobai/template`**, and cannot say why in itself — a
+comment in that file stops Biome parsing its own config. The reason: the template is a
+generated artifact like `openapi.json`, and `jsonc-parser` re-prints an edited `tsconfig`
+with slightly different wrapping than Biome would, so formatting it would fight the
+byte-comparison that keeps it honest.
 
 ### Writing tests
 

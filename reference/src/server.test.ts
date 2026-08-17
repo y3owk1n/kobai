@@ -45,12 +45,20 @@ describe("the reference Project's entrypoint", () => {
     const response = await fetch(`http://127.0.0.1:${listening.port}/health`);
 
     expect(response.status).toBe(200);
-    // Both sets, from the *built* artifact: a Plugin resolves its migrations folder
+    // All three sets, from the *built* artifact: a Plugin resolves its migrations folder
     // relative to its own module, so this is where a package that ships `dist` but forgets
     // to ship `migrations` would be caught. Source-resolved tests never see that.
+    //
+    // `project` is this Project's own set, and it is the one this assertion most needs to
+    // run against the built artifact. It resolves `migrations/` by asking Node where this
+    // Project's `package.json` is, precisely because `src/` and `dist/src/` sit at
+    // different depths — a path correct in source and wrong in `dist` would apply no
+    // migrations at all rather than throwing, and only a test of the built thing sees it.
     await expect(response.json()).resolves.toMatchObject({
       status: "ok",
-      migrations: { sets: [{ name: "core" }, { name: "plugin-price-log" }] },
+      migrations: {
+        sets: [{ name: "core" }, { name: "plugin-price-log" }, { name: "project" }],
+      },
     });
   });
 

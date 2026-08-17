@@ -1,10 +1,13 @@
 {
   "name": "@kobai/client",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "The typed TypeScript client, generated from kobai's OpenAPI description (ADR-0006).",
   "license": "MIT",
+  "// publishConfig": "Published for the same reason as @kobai/core, and guarded the same way (ADR-0034). A generated Project's vendored Admin dev-depends on this to talk to its own API, so it has to resolve from a registry rather than from a workspace. `registry` pins publishing at a loopback address so reaching npmjs.com has to be deliberate. tests/publish-guard.test.ts fails the build if this pin goes missing.",
+  "publishConfig": {
+    "registry": "http://localhost:4873"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

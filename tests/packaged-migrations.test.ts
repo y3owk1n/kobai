@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { TARBALL_ROOT, tarballEntries } from "./support/tarball.ts";
 
 /**
  * Core and every Plugin apply migrations from a `migrations/` directory resolved relative
@@ -27,8 +27,6 @@ const run = promisify(execFile);
 const MIGRATIONS = "migrations";
 /** What Drizzle reads first: no journal, no migrations, however many `.sql` files ship. */
 const JOURNAL = `${MIGRATIONS}/meta/_journal.json`;
-/** npm roots every tarball here, whatever the package is called. */
-const TARBALL_ROOT = "package/";
 
 /** A package that owns tables, and therefore ships migrations a Project must receive. */
 type TableOwningPackage = {
@@ -147,8 +145,9 @@ async function isDirectory(path: string): Promise<boolean> {
  * Every path inside the tarball `pnpm pack` produces for this package.
  *
  * `pnpm pack` and not a publish: this asks what the package *contains*, which needs no
- * registry, no credentials, and no answer to the separate question of whether these
- * packages should stop being `private: true`.
+ * registry and no credentials. These packages are publishable now (ADR-0034) and nothing
+ * has been published — deliberately, and to npmjs.com least of all — so packing stays the
+ * only honest way to ask.
  */
 async function entriesOfPackedTarball(pkg: TableOwningPackage): Promise<string[]> {
   const destination = await mkdtemp(join(tmpdir(), "kobai-pack-"));
@@ -174,63 +173,6 @@ async function entriesOfPackedTarball(pkg: TableOwningPackage): Promise<string[]
   } finally {
     await rm(destination, { recursive: true, force: true });
   }
-}
-
-/** A tar is a sequence of these, headers and file data alike. */
-const BLOCK = 512;
-/** The USTAR header layout, as `[offset, length]` — POSIX.1-1988, and unchanged since. */
-const HEADER = {
-  name: [0, 100],
-  /** Octal, and the only field that has to be right: it says where the next header is. */
-  size: [124, 12],
-  typeFlag: [156, 1],
-  /** A path too long for `name` is split, with everything up to the last `/` landing here. */
-  prefix: [345, 155],
-} as const;
-
-/**
- * The paths held in a gzipped tar, read from the bytes rather than through the `tar`
- * binary — whose flags and output differ between the GNU one on CI and the BSD one on a
- * Developer's Mac.
- */
-function tarballEntries(archive: Buffer): string[] {
-  const tar = gunzipSync(archive);
-  const entries: string[] = [];
-
-  let offset = 0;
-  while (offset + BLOCK <= tar.length) {
-    const header = tar.subarray(offset, offset + BLOCK);
-    const name = field(header, HEADER.name);
-    if (name === "") break; // A zeroed block ends the archive.
-
-    const type = field(header, HEADER.typeFlag);
-    if (type === "L" || type === "K" || type === "x" || type === "g") {
-      // These carry the real path in a following block instead of in the header. Nothing
-      // packed from this repository needs one, and guessing wrong would mean silently
-      // reporting a file as absent — the one way this check could lie.
-      throw new Error(
-        `Tar entry "${name}" is an extended header of type "${type}", which this reader does not decode.`,
-      );
-    }
-
-    const size = Number.parseInt(field(header, HEADER.size) || "0", 8);
-    if (!Number.isInteger(size) || size < 0) {
-      throw new Error(`Tar entry "${name}" declares an unreadable size.`);
-    }
-
-    const prefix = field(header, HEADER.prefix);
-    entries.push(prefix === "" ? name : `${prefix}/${name}`);
-    offset += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
-  }
-
-  return entries;
-}
-
-/** One NUL-terminated, space-padded tar header field. */
-function field(header: Buffer, [start, length]: readonly [number, number]): string {
-  const raw = header.subarray(start, start + length).toString("utf8");
-  const end = raw.indexOf("\0");
-  return (end === -1 ? raw : raw.slice(0, end)).trim();
 }
 
 /**
