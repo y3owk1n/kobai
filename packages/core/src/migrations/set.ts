@@ -30,7 +30,8 @@ export type MigrationSet = {
   readonly migrationsSchema: string;
 };
 
-const TABLE_PREFIX = "__drizzle_migrations_";
+/** What every kobai tracking table's name begins with, whoever owns it. */
+export const MIGRATIONS_TABLE_PREFIX = "__drizzle_migrations_";
 /** Postgres truncates identifiers at 63 bytes, and a truncated table is a shared table. */
 const MAX_IDENTIFIER_BYTES = 63;
 /**
@@ -54,7 +55,7 @@ export function migrationsTableFor(packageName: string): string {
     );
   }
 
-  const table = `${TABLE_PREFIX}${packageName.replaceAll("-", "_")}`;
+  const table = `${MIGRATIONS_TABLE_PREFIX}${packageName.replaceAll("-", "_")}`;
   if (table.length > MAX_IDENTIFIER_BYTES) {
     throw new Error(
       `Migration set name ${JSON.stringify(packageName)} is too long: its tracking table "${table}" exceeds Postgres's ${MAX_IDENTIFIER_BYTES}-byte identifier limit and would be truncated into a collision.`,

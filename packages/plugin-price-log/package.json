@@ -1,0 +1,28 @@
+{
+  "name": "@kobai/plugin-price-log",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A deliberately trivial Plugin: it owns one table and proves that a Plugin can.",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "migrations"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "// db:push": "There is deliberately no db:push script here either — the rule is the same for a Plugin as for Core, and a Plugin is where it bites hardest. `drizzle-kit push` diffs a schema against the LIVE database, so pushing this Plugin's schema at a Project's database reports success while silently dropping Core's tables and every other Plugin's, leaving their tracking rows behind so the migration runner believes the work is done and cannot repair it. Observed, not theorised: FINDINGS.md section E on branch prototype/drizzle-multi-migration, and docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md. `tablesFilter` mitigates it and is set in drizzle.config.ts anyway, but the primary control is that the dangerous command is never available."
+  },
+  "dependencies": {
+    "@kobai/core": "workspace:*",
+    "drizzle-orm": "^0.44.6"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.5"
+  }
+}

@@ -1,6 +1,5 @@
-import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
-import { type TestKobai, createTestKobai } from "../testing/index.ts";
+import { type TestKobai, createTestKobai, inspectSchema } from "../testing/index.ts";
 import { coreMigrationSet } from "./core-set.ts";
 import { runMigrations } from "./run.ts";
 import {
@@ -20,17 +19,8 @@ describe("migration tracking", () => {
   it("tracks Core's migrations in Core's own table, in an explicitly named schema", async () => {
     kobai = await createTestKobai();
 
-    const tracking = await kobai.db.execute<{
-      table_schema: string;
-      table_name: string;
-    }>(sql`
-      select table_schema, table_name from information_schema.tables
-      where table_name like '\\_\\_drizzle_migrations%'
-      order by table_schema, table_name
-    `);
-
-    expect(tracking.rows).toEqual([
-      { table_schema: "drizzle", table_name: "__drizzle_migrations_core" },
+    await expect(inspectSchema(kobai.database).migrationTracking()).resolves.toEqual([
+      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 2 },
     ]);
   });
 
@@ -40,12 +30,10 @@ describe("migration tracking", () => {
     // diverged and each will re-apply what the other already ran.
     kobai = await createTestKobai();
 
-    const inPublic = await kobai.db.execute(sql`
-      select table_name from information_schema.tables
-      where table_schema = 'public' and table_name like '\\_\\_drizzle%'
-    `);
+    const tracking = await inspectSchema(kobai.database).migrationTracking();
 
-    expect(inPublic.rows).toEqual([]);
+    expect(tracking.length).toBeGreaterThan(0);
+    expect(tracking.map((entry) => entry.schema)).not.toContain("public");
     expect(KOBAI_MIGRATIONS_SCHEMA).toBe("drizzle");
   });
 
@@ -79,16 +67,12 @@ describe("migration tracking", () => {
 
   it("creates only tables carrying Core's own prefix", async () => {
     kobai = await createTestKobai();
+    const schema = inspectSchema(kobai.database);
 
-    const tables = await kobai.db.execute<{ table_name: string }>(sql`
-      select table_name from information_schema.tables
-      where table_schema = 'public' and table_type = 'BASE TABLE'
-    `);
+    const everything = (await schema.tables()).map((table) => table.name);
 
-    expect(tables.rows.length).toBeGreaterThan(0);
-    for (const { table_name } of tables.rows) {
-      expect(table_name).toMatch(/^core_/);
-    }
+    expect(everything.length).toBeGreaterThan(0);
+    await expect(schema.tablesOwnedBy("core")).resolves.toEqual(everything);
   });
 });
 

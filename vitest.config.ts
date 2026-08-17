@@ -1,26 +1,19 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import ts from "typescript";
+import { type Alias, defineConfig } from "vitest/config";
 
 const from = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 /**
  * One config for the whole repository.
  *
- * `@kobai/core` resolves to source here, not to `dist`. The package's own `exports` point at
+ * Workspace packages resolve to source here, not to `dist`. Their own `exports` point at
  * `dist` so a Project gets built JavaScript, but a test run should not need a build step
  * first. The Dockerfile and the reference Project's own tests exercise the `dist` path.
  */
 export default defineConfig({
   resolve: {
-    // The same two mappings `tsconfig.base.json` declares under `paths`. Keep them in step:
-    // a new subpath export needs no edit here, but a new package does.
-    alias: [
-      {
-        find: /^@kobai\/core\/(.*)$/,
-        replacement: from("./packages/core/src/$1/index.ts"),
-      },
-      { find: /^@kobai\/core$/, replacement: from("./packages/core/src/index.ts") },
-    ],
+    alias: workspaceAliases(),
   },
   test: {
     include: [
@@ -34,3 +27,42 @@ export default defineConfig({
     hookTimeout: 30_000,
   },
 });
+
+/**
+ * The package mappings, read out of `tsconfig.base.json` rather than repeated here.
+ *
+ * They were once written twice — once as `paths` for the compiler and the editor, once as
+ * aliases for the test runner — and two hand-kept copies of the same list is one copy too
+ * many. Adding a package is now a single edit to `tsconfig.base.json`.
+ *
+ * Read through TypeScript's own parser because a `tsconfig` is JSON *with comments*, which
+ * `JSON.parse` refuses.
+ */
+function workspaceAliases(): Alias[] {
+  const path = from("./tsconfig.base.json");
+  const { config, error } = ts.readConfigFile(path, (file) => ts.sys.readFile(file));
+  if (error) {
+    throw new Error(
+      `Could not read ${path}, which is where the test runner's package aliases come from: ${ts.flattenDiagnosticMessageText(error.messageText, " ")}`,
+    );
+  }
+
+  const paths = (config as TsconfigShape)?.compilerOptions?.paths ?? {};
+  return Object.entries(paths).map(([specifier, targets]) => {
+    const target = targets[0];
+    if (target === undefined) {
+      throw new Error(`"${specifier}" in tsconfig.base.json maps to nothing.`);
+    }
+    return {
+      // `@kobai/core/*` → /^@kobai\/core\/(.*)$/, so a subpath export needs no edit.
+      find: new RegExp(`^${escapeRegExp(specifier).replace("\\*", "(.*)")}$`),
+      replacement: from(target.replace("*", "$1")),
+    };
+  });
+}
+
+type TsconfigShape = { compilerOptions?: { paths?: Record<string, string[]> } };
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
