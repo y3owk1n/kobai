@@ -472,8 +472,13 @@ pinning it live beside the ones for replacement. **Compensation** is a third arg
 `defineStep`; the runner unwinds the Steps that completed in reverse when a later one fails,
 handing each one the very value its `run` was given. That unwinding *order*, and that the
 value is the same one, are promises about the declaration and are asserted in
-`workflow.test.ts` like the rest of the Workflow seam. Whether a compensation actually
-undid anything is not — ask the database, as
+`workflow.test.ts` like the rest of the Workflow seam. So is what happens when a compensation
+itself throws (ADR-0036): **unwinding is exhaustive** — every completed Step's compensation is
+attempted, in reverse, and one that throws neither stops the ones before it nor replaces what
+stopped the run. The refusal still answers with its own `reason`, a Step's bug still travels
+as itself, and the compensations that threw are reported beside the outcome — as
+`uncompensated` on a refused `WorkflowRun`, or as the `UnwindFailure` a travelling bug becomes
+the `cause` of. Whether a compensation actually undid anything is not — ask the database, as
 `packages/plugin-price-log/src/record-price-resolution.test.ts` does, and never settle for a
 counter that says the callback was reached.
 

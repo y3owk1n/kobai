@@ -51,7 +51,13 @@ export {
 export type { Store } from "./store/read.ts";
 export type { WorkflowContext } from "./workflow/context.ts";
 export { openMetadata } from "./workflow/context.ts";
-export type { StepReport, WorkflowRun } from "./workflow/run.ts";
+export type { CompensationFailure, StepReport, WorkflowRun } from "./workflow/run.ts";
+/**
+ * Exported because it is what a Project catches. Unwinding never replaces what stopped a run
+ * (ADR-0036), so this is how the *other* fact — the Store may be inconsistent — reaches
+ * anything that wrapped a Workflow's `run` in a `try`.
+ */
+export { UnwindFailure } from "./workflow/run.ts";
 export type { Step } from "./workflow/step.ts";
 export { defineStep, StepFailure } from "./workflow/step.ts";
 /**
