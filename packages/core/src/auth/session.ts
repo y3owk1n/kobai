@@ -143,7 +143,7 @@ export async function createSession(
  * Resolving is the only thing that happens on every authenticated request, so it is where the
  * idle window is kept open; a separate `extendSession` for the gate to call would be a step a
  * future caller could forget, and forgetting it signs a working Merchant out. The extension is
- * the one write on this path and it is rate-limited — see {@link extend}.
+ * the one write on this path and it is rate-limited — see {@link slideDeadline}.
  *
  * An expired session is reported as expired every time it is presented, not once. The row is
  * deliberately **not** deleted here: deleting it would make the second request with the same
@@ -182,7 +182,7 @@ export async function resolveSession(
     ok: true,
     auth: {
       sessionId: row.sessionId,
-      expiresAt: await extend(db, row, deadline, now),
+      expiresAt: await slideDeadline(db, row, deadline, now),
       merchant: { id: row.merchantId, email: row.email },
       role: { name: row.roleName, permissions: row.permissions },
     },
@@ -200,51 +200,64 @@ export async function resolveSession(
  * only writer this database has.
  */
 function deadlineOf(row: { createdAt: Date; expiresAt: Date }): Date {
-  const cap = row.createdAt.getTime() + SESSION_ABSOLUTE_LIFETIME_MS;
-  return new Date(Math.min(row.expiresAt.getTime(), cap));
+  return new Date(Math.min(row.expiresAt.getTime(), capOf(row.createdAt)));
 }
 
 /** A fresh deadline for a session signed in at `createdAt`, never past its cap. */
 function extendedDeadline(createdAt: Date, now: Date): Date {
-  const cap = createdAt.getTime() + SESSION_ABSOLUTE_LIFETIME_MS;
-  return new Date(Math.min(now.getTime() + SESSION_IDLE_WINDOW_MS, cap));
+  return new Date(Math.min(now.getTime() + SESSION_IDLE_WINDOW_MS, capOf(createdAt)));
 }
 
 /**
- * Pushes the deadline out, and usually does nothing at all.
+ * The instant a session signed in at `createdAt` ends however hard it is used.
  *
- * **The write pattern in one condition.** The new deadline is written only once it would be
+ * One function rather than the same sum in both callers, because the *anchor* is the decision
+ * — the cap is measured from sign-in and not from the last request, which is the whole of what
+ * makes it a cap — and a decision belongs in one place.
+ */
+function capOf(createdAt: Date): number {
+  return createdAt.getTime() + SESSION_ABSOLUTE_LIFETIME_MS;
+}
+
+/**
+ * Slides the deadline, and usually writes nothing at all. Answers with the deadline that now
+ * stands, which is what the Merchant is told and what the next gate will enforce.
+ *
+ * **The write pattern in one condition.** A new deadline is written only once it is
  * {@link SESSION_EXTENSION_INTERVAL_MS} ahead of the stored one, so a session costs at most
  * one `UPDATE` a minute no matter how many requests the Admin makes — and the busiest session
  * in a deployment is the cheapest per request. The same condition retires the write entirely
  * near the cap: once the clamp holds the new deadline still, it stops being far enough ahead
  * and there is nothing left to write.
  *
- * The `expires_at` guard on the `UPDATE` is what keeps "expired" from being reversible. The
- * row was read a moment ago and the deadline can fall between the read and the write — under
- * a concurrent sign-out, the row can be gone entirely — so the write refuses to touch a
- * session that is no longer live rather than resurrecting one, and `returning` says which
- * happened instead of assuming.
+ * **It slides both ways.** A stored deadline *further* out than a whole idle window is one
+ * this code did not write — a session minted under #4's flat twelve hours, found in the table
+ * by the deployment that introduced the window, or a hand-run `UPDATE`. It is pulled in on
+ * first use rather than left to run out its original lifetime, because a session nobody can
+ * sign out by walking away is the exact bug the window exists to fix, and "for another twelve
+ * hours after the upgrade" is not an answer.
  *
- * What comes back is the deadline the Merchant is *told*, so every path answers with the one
- * the gate would enforce: `deadline` when nothing was written, which is the column already
- * held against the cap, and never the raw column.
+ * The `expires_at` guard on the `UPDATE` bounds what a write can do, not what this answers: it
+ * cannot revive a session that lapsed between the read and the write, and it matches no row at
+ * all when a concurrent sign-out has already deleted one. The request in flight was authorised
+ * by the read a moment earlier and stays authorised — what it does not do is leave a deadline
+ * behind for the next one.
  */
-async function extend(
+async function slideDeadline(
   db: Database,
   row: { sessionId: string; createdAt: Date; expiresAt: Date },
   deadline: Date,
   now: Date,
 ): Promise<Date> {
-  const extended = extendedDeadline(row.createdAt, now);
+  const slid = extendedDeadline(row.createdAt, now);
   // Measured against the column rather than against `deadline`, because the column is what a
   // write would change and the question here is only whether one is worth making.
-  const ahead = extended.getTime() - row.expiresAt.getTime();
-  if (ahead < SESSION_EXTENSION_INTERVAL_MS) return deadline;
+  const ahead = slid.getTime() - row.expiresAt.getTime();
+  if (ahead >= 0 && ahead < SESSION_EXTENSION_INTERVAL_MS) return deadline;
 
   const [updated] = await db
     .update(session)
-    .set({ expiresAt: extended })
+    .set({ expiresAt: slid })
     .where(and(eq(session.id, row.sessionId), gt(session.expiresAt, now)))
     .returning({ expiresAt: session.expiresAt });
 

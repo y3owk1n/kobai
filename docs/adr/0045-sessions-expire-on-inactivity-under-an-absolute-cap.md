@@ -61,6 +61,20 @@ trusting whoever last wrote the row to have clamped it. Under ADR-0004 Core is n
 writer this database has, and a rule enforced only on the write path is one a hand-run `UPDATE`
 can lift.
 
+## The window measures requests, so a poll would erase it
+
+An idle window is only as honest as the traffic it counts, and every authenticated request
+counts. The Admin makes none on a timer today — `reference/admin/src/app.tsx` asks
+`GET /admin/session` once after a page load, and everything else it sends is a Merchant doing
+something — so "no requests for 30 minutes" really does mean nobody is there.
+
+**A background poll added anywhere in the Admin would keep an unattended browser signed in
+until the 12-hour cap**, which is this ADR's own failure arriving from the other side, and
+nothing in Core could tell that request from a click. So if the Admin ever needs a heartbeat —
+a live dashboard, a notification feed — that is a decision to take here rather than an
+implementation detail of the screen that wants it: it needs either a path outside the gate or
+a rule that some requests do not extend.
+
 ## The write pattern
 
 The naive sliding window writes on every request, which turns a read path into a write path and
@@ -80,6 +94,17 @@ larger buys fewer writes and spends the window, smaller buys precision nobody ca
 
 The same condition retires the write near the cap: once the clamp stops the deadline moving,
 there is nothing far enough ahead to write, and the last half-hour of a capped session is free.
+
+**The deadline slides both ways, and that is what makes the upgrade honest.** A stored deadline
+*further* out than a whole idle window is one this code did not write: a session minted under
+#4's flat twelve hours and still in the table when the deployment that introduced the window
+comes up. Left alone it would never be touched — the extension only ever pushed deadlines
+forward, and this one is already past where a push would put it — so it would run out its
+original twelve hours with nobody using it, which is the bug, still running for half a day
+after the release that fixed it. Instead it is pulled in on first use, and the session becomes
+an ordinary one. **No migration does this**; a session is repaired by being used, and one that
+is never used again ends at its old deadline, which is no worse than what it had. The same
+correction covers a hand-run `UPDATE` that put a deadline somewhere impossible.
 
 The `UPDATE` carries `expires_at > now()` in its `WHERE`, so an extension cannot resurrect a
 session that lapsed between the read and the write, and it matches nothing at all if a

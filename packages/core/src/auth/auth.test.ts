@@ -20,9 +20,11 @@ import {
  * Merchant auth, through the seam a Merchant and the Admin actually use: the public HTTP API,
  * dispatched in-process against a real Postgres.
  *
- * Sign in, use the session, let it expire, sign out. Nothing here reaches into the auth
- * modules — a session that a test can only make work by calling an internal is a session the
- * Admin cannot use.
+ * Sign in, use the session, keep it alive, let it lapse, sign out. Nothing here *drives* the
+ * auth modules — a session that a test can only make work by calling an internal is a session
+ * the Admin cannot use. What the file does import from them is vocabulary: the permissions a
+ * Role can hold, and the windows a session lives by, so that a test about the idle window says
+ * "most of the window" rather than restating a number that would then have two homes.
  */
 
 let kobai: TestKobai | undefined;
@@ -580,6 +582,27 @@ describe("a session slides", () => {
     expect(remaining).toBeGreaterThan(remainder - SESSION_EXTENSION_INTERVAL_MS);
   });
 
+  it("takes in a session issued before the idle window existed", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // What an upgrade finds in the table: a row minted by #4, carrying a deadline twelve hours
+    // from sign-in because that was the whole rule when it was written. Left alone it would
+    // keep that deadline — an unattended browser open until evening, which is the bug, still
+    // running for half a day after the deployment that fixed it.
+    await mintedUnderTheOldRule(kobai);
+
+    const first = await kobai.request("/admin/store", { headers: merchant.headers });
+    // Having been used once under the new rule, it is now an ordinary session: an idle window
+    // ends it, rather than the twelve hours it was born with.
+    await idleFor(kobai, SESSION_IDLE_WINDOW_MS);
+    const afterwards = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(first.status).toBe(200);
+    expect(afterwards.status).toBe(401);
+    await expect(afterwards.json()).resolves.toMatchObject({ reason: "session-expired" });
+  });
+
   it("does not buy a database write with every request", async () => {
     kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
@@ -868,6 +891,20 @@ async function signedInAgo(harness: TestKobai, milliseconds: number): Promise<vo
   await harness.db.execute(
     sql`update core_session
         set created_at = now() - make_interval(secs => ${milliseconds / 1000})`,
+  );
+}
+
+/**
+ * Rewrites the session the way #4 would have written it: twelve hours from sign-in, flat.
+ *
+ * The only arrangement in this file that is about an *upgrade* rather than about time. A row
+ * already in the table when the idle window arrives is the one case no amount of idling or
+ * back-dating produces, because every row this code writes is already in the new shape.
+ */
+async function mintedUnderTheOldRule(harness: TestKobai): Promise<void> {
+  await harness.db.execute(
+    sql`update core_session
+        set expires_at = created_at + make_interval(secs => ${SESSION_ABSOLUTE_LIFETIME_MS / 1000})`,
   );
 }
 
