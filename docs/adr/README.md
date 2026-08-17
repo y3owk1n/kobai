@@ -58,12 +58,13 @@ New to the project? These five carry the shape of everything else:
 | [0030](./0030-generate-and-migrate-only-never-drizzle-kit-push.md) | `generate` and `migrate` only — never `drizzle-kit push` | Accepted |
 | [0031](./0031-the-runtime-shape-devbox-a-pnpm-workspace-hono-and-one-gate.md) | The runtime shape: devbox, a pnpm workspace, Hono, and one gate command | Accepted |
 | [0032](./0032-merchant-sessions-travel-in-an-httponly-cookie.md) | Merchant sessions travel in an httpOnly cookie, and SameSite is the CSRF answer | Accepted |
-| [0033](./0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md) | The Admin's shape: a vendored Vite SPA, built into the Project and served at a path | Accepted |
+| [0033](./0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md) | The Admin's shape: a vendored Vite SPA, built into the Project and served at a path | Accepted — its CSS exclusion lifted by 0039 |
 | [0034](./0034-kobai-is-published-and-the-reference-project-is-what-create-kobai-generates.md) | kobai's packages are published, and the reference Project is what `create-kobai` generates | Accepted |
 | [0035](./0035-upgrading-is-a-command-kobai-ships.md) | Upgrading is a command kobai ships, carried by the version being upgraded to | Accepted |
 | [0036](./0036-unwinding-is-exhaustive-and-never-replaces-what-stopped-the-run.md) | Unwinding is exhaustive, and a compensation that fails never replaces what stopped the run | Accepted — extends 0017 |
 | [0037](./0037-updated-at-is-a-trigger-because-core-does-not-mediate-every-write.md) | `updated_at` advances by trigger, because Core does not mediate every write | Accepted |
 | [0038](./0038-widening-a-populated-table-takes-three-migrations.md) | Widening a populated table takes three migrations, and the middle one is hand-written | Accepted |
+| [0039](./0039-the-lint-gate-fails-on-every-finding.md) | The lint gate fails on every finding, and `biome.json` says so out loud | Accepted — sharpens 0031 |
 | [0040](./0040-an-unrouted-path-is-a-refusal-and-the-gate-answers-before-it.md) | An unrouted path is a refusal like any other, and the gate answers before it | Accepted |
 
 ## Prototypes

@@ -38,6 +38,38 @@ pinned in `package.json`. Run every Node command through `devbox run …` or fro
 green: install, Postgres up, lint, typecheck, build, test. Nothing is done until it passes,
 and no PR opens on a red one.
 
+**The gate fails on every finding Biome reports, at any severity** (ADR-0039). `biome ci`
+exits *zero* on warnings by default, and Biome 2 re-tiered most of what Biome 1 called an
+error down to `warn` or `info` — so `devbox run lint` and the gate both pass
+`--error-on-warnings`, and `biome.json` lifts the 28 recommended rules that default to `info`
+up to `warn`, which no flag can do. **`devbox run lint` and the lint step of `devbox run ci`
+are the identical command**, deliberately: a gate stricter than the command you are told to
+run is a difference that shows up nowhere until CI goes red. `devbox run format` is the
+forgiving one — it rewrites rather than reports, so it is where a finding gets fixed. Reach
+for it first; most findings below `error` carry a safe fix.
+
+Three things follow, and each has a test rather than a convention behind it:
+
+- **A rule below the floor is a decision.** `tests/the-lint-gate-fails-below-error.test.ts`
+  asks Biome for every rule's default severity *at gate time* and fails naming any enabled
+  rule that resolves below `warn`. So a Biome upgrade that demotes a rule, or adds a
+  recommended one at `info`, turns the build red instead of quietly widening what passes —
+  which is exactly how the gate got loose in the first place (#28, #45). Answer it by
+  promoting the rule to `"warn"` under its group in `biome.json`, or by turning it `"off"`
+  on purpose. Do not delete the assertion.
+- **`biome.json` cannot explain itself.** A comment in it stops Biome parsing its own config:
+  it walks *up* to the parent checkout's and fails with "found a nested root configuration",
+  naming a directory you are not in. Every explanation lives in ADR-0039 or ADR-0033
+  instead. `devbox.json` is the opposite — HuJSON, real comments welcome, `"// …"` keys
+  never (ADR-0030).
+- **`devbox add` rewrites `devbox.json` into trailing-comma style.** `biome.json` expects
+  that, through an `overrides` entry matching `**/devbox.json` — the workspace's and the
+  reference Project's alike — so the result is an ordinary formatting difference
+  `devbox run format` repairs. Without the override it was a *parse* error, and `format`
+  cannot repair a file it cannot parse. The relaxation is deliberately not repo-wide: a
+  trailing comma in a `package.json` is a real defect, because npm requires strict JSON.
+  **Run `devbox run format` after any `devbox add`.**
+
 | Command | What it does |
 | --- | --- |
 | `devbox run ci` | **The gate.** Everything below, in order. |

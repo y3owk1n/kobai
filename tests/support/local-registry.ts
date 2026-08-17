@@ -212,7 +212,10 @@ export async function publishPackages(
   try {
     for (const directory of packageDirectories) {
       const absolute = join(repoRoot, directory);
-      await run("pnpm", ["pack", "--pack-destination", destination], { cwd: absolute });
+      await run("pnpm", ["pack", "--pack-destination", destination], {
+        cwd: absolute,
+        timeout: PUBLISH_TIMEOUT,
+      });
     }
 
     const tarballs = await readdir(destination);
@@ -231,6 +234,7 @@ export async function publishPackages(
       await run("npm", ["publish", published, "--registry", registry.url], {
         cwd: repoRoot,
         env: { ...process.env, npm_config_userconfig: registry.npmrc },
+        timeout: PUBLISH_TIMEOUT,
       });
     }
   } finally {

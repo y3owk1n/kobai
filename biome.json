@@ -9,7 +9,6 @@
       "!packages/core/openapi.json",
       "!packages/client/src/schema.ts",
       "!packages/create-kobai/template",
-      "!reference/admin/src/index.css",
       "!.devbox",
       "!pnpm-lock.yaml"
     ]
@@ -26,11 +25,42 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "complexity": {
+        "noExtraBooleanCast": "warn",
+        "noFlatMapIdentity": "warn",
+        "noUselessCatch": "warn",
+        "noUselessConstructor": "warn",
+        "noUselessContinue": "warn",
+        "noUselessEmptyExport": "warn",
+        "noUselessEscapeInRegex": "warn",
+        "noUselessFragments": "warn",
+        "noUselessLabel": "warn",
+        "noUselessLoneBlockStatements": "warn",
+        "noUselessRename": "warn",
+        "noUselessStringRaw": "warn",
+        "noUselessSwitchCase": "warn",
+        "noUselessTernary": "warn",
+        "noUselessThisAlias": "warn",
+        "noUselessTypeConstraint": "warn",
+        "noUselessUndefinedInitialization": "warn",
+        "useFlatMap": "warn",
+        "useIndexOf": "warn",
+        "useLiteralKeys": "warn"
+      },
+      "correctness": {
+        "useParseIntRadix": "warn"
+      },
       "style": {
-        "useNodejsImportProtocol": "error"
+        "useArrayLiterals": "warn",
+        "useExponentiationOperator": "warn",
+        "useNodejsImportProtocol": "warn",
+        "useShorthandFunctionType": "warn",
+        "useTemplate": "warn"
       },
       "suspicious": {
-        "noConsole": "off"
+        "noConsole": "off",
+        "noDuplicateFields": "warn",
+        "noQuickfixBiome": "warn"
       }
     }
   },
@@ -41,7 +71,18 @@
       "trailingCommas": "all"
     }
   },
+  "css": {
+    "parser": { "tailwindDirectives": true }
+  },
   "json": {
     "parser": { "allowComments": true }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/devbox.json"],
+      "json": {
+        "parser": { "allowComments": true, "allowTrailingCommas": true }
+      }
+    }
+  ]
 }

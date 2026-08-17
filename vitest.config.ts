@@ -73,8 +73,10 @@ function workspaceAliases(): Alias[] {
   const errors: ParseError[] = [];
   // `allowTrailingComma` because TypeScript accepts one and this is reading a `tsconfig`
   // the way TypeScript would. It is deliberately more permissive than `biome.json`'s
-  // `json.parser`, which allows comments only: being laxer than the linter can never let
-  // this fail *open*, and `biome ci` runs before the suite anyway.
+  // `json.parser`, which allows comments only — and still is for *this* file: ADR-0039
+  // relaxed trailing commas for `devbox.json` alone, because `devbox add` writes them, and
+  // left every other JSON file strict. Being laxer than the linter can never let this fail
+  // *open*, and `biome ci` runs before the suite anyway.
   const config: unknown = parse(text, errors, { allowTrailingComma: true });
   if (errors.length > 0) {
     const detail = errors
