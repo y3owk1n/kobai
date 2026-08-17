@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { coreMigrationSet } from "../migrations/core-set.ts";
 import { defineMigrationSet } from "../migrations/set.ts";
-import { createTestKobai, signInTestMerchant, type TestKobai } from "../testing/index.ts";
+import {
+  appliedMigrations,
+  createTestKobai,
+  declaredMigrations,
+  signInTestMerchant,
+  type TestKobai,
+} from "../testing/index.ts";
 
 let kobai: TestKobai | undefined;
 
@@ -25,11 +32,19 @@ describe("GET /health", () => {
             name: "core",
             migrationsSchema: "drizzle",
             migrationsTable: "__drizzle_migrations_core",
-            applied: 10,
+            // Derived, so a new migration no longer edits this file (#34, ADR-0049). The
+            // subject here is what /health *says*, and this pins it to what Core's journal
+            // declares.
+            applied: (await declaredMigrations(coreMigrationSet)).length,
           },
         ],
       },
     });
+    // The number is only worth reporting if it stands for work that happened, so this is
+    // said once beside it: every migration the count covers is really in the database.
+    await expect(appliedMigrations(kobai.database, coreMigrationSet)).resolves.toEqual(
+      await declaredMigrations(coreMigrationSet),
+    );
   });
 
   it("reports booting before migrations have run", async () => {

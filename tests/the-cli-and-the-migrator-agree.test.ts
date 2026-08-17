@@ -1,16 +1,14 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   coreMigrationSet,
   MIGRATIONS_TABLE_STEM,
-  type MigrationSet,
   runMigrations,
 } from "@kobai/core/migrations";
 import {
   createTestKobai,
+  declaredMigrations,
   inspectSchema,
   type MigrationTrackingFact,
 } from "@kobai/core/testing";
@@ -160,14 +158,6 @@ async function drizzleKitMigrate(
   }
 }
 
-/** How many migrations a set holds, read off its own journal rather than pinned here. */
-async function declaredMigrations(set: MigrationSet): Promise<number> {
-  const journal = JSON.parse(
-    await readFile(join(set.migrationsFolder, "meta", "_journal.json"), "utf8"),
-  ) as { entries: readonly unknown[] };
-  return journal.entries.length;
-}
-
 /**
  * One ordering, applied to both sides of every comparison below.
  *
@@ -186,7 +176,9 @@ function byLocation(facts: readonly MigrationTrackingFact[]): MigrationTrackingF
  *
  * The counts come from each set's own journal rather than from a number written here, so a
  * new migration does not turn this file red — it is about the two migrators agreeing, not
- * about how many migrations kobai has.
+ * about how many migrations kobai has. This file read the journal itself until #34 gave
+ * `@kobai/core/testing` the same question to answer for every test that had a count
+ * written into it (ADR-0049), so there is now one reader of it.
  */
 async function appliedExactlyOnce(
   sets: readonly TrackedSet[],
@@ -196,7 +188,7 @@ async function appliedExactlyOnce(
       sets.map(async ({ set }) => ({
         schema: set.migrationsSchema,
         table: set.migrationsTable,
-        applied: await declaredMigrations(set),
+        applied: (await declaredMigrations(set)).length,
       })),
     ),
   );
@@ -240,7 +232,7 @@ describe("the drizzle-kit CLI and the programmatic migrator", () => {
           name: set.name,
           migrationsTable: set.migrationsTable,
           migrationsSchema: set.migrationsSchema,
-          applied: await declaredMigrations(set),
+          applied: (await declaredMigrations(set)).length,
         })),
       ),
     });
