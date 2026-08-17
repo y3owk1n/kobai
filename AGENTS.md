@@ -434,6 +434,21 @@ database at all: that the `migrations/` directory each package resolves relative
 `migrations/` directory or names one in `files`, and reads the tarball back. The packages
 are discovered rather than listed, so the next Plugin is covered without an edit.
 
+The **image seam** is the last one, and its rule is: **ask the built image, never the
+Dockerfile.** Both Dockerfiles ran `pnpm install --prod` in their runtime stage, which looks
+exactly like the thing that drops devDependencies and is not — run over an existing
+`node_modules` it rewrites the symlink farm and leaves `node_modules/.pnpm`, every
+devDependency's bytes, where it was. It relinks; it does not prune, so `drizzle-kit`,
+`vitest`, `biome`, `typescript`, React, Vite and Tailwind all shipped, and no reading of the
+file said so (#12). Pruning therefore happens in the **build** stage, before anything is
+copied out of it: a `rm -rf` after a `COPY --from` hides the bytes in a lower layer and the
+image is the same size. `tests/support/container.ts` builds an image, reads inside it and
+boots it; `tests/the-runtime-image.test.ts` does that to the repository's, and
+`tests/a-project-boots-from-its-own-compose-file.test.ts` generates a Project and runs
+`docker compose up --build` on the compose file and Dockerfile a Developer receives.
+Inspecting is not enough on its own — a prune that removed something the runtime needs looks
+identical to one that worked until the container is made to serve a request.
+
 Real Postgres rather than a fake, because under
 [ADR-0004](docs/adr/0004-plugins-own-their-tables-core-tables-are-closed.md),
 [ADR-0011](docs/adr/0011-postgres-and-drizzle.md) and ADR-0030 the schema and its migrations

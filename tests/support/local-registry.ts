@@ -1,10 +1,10 @@
 import { execFile, spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { freePort } from "./free-port.ts";
 
 /**
  * A real npm registry, on this machine, holding the packages this commit builds.
@@ -32,9 +32,33 @@ const START_TIMEOUT = 60_000;
 /** Packing and publishing shells out per package; CI runners are slower than laptops. */
 const PUBLISH_TIMEOUT = 180_000;
 
+export type LocalRegistryOptions = {
+  /**
+   * Accept connections from a container as well as from this machine's loopback.
+   *
+   * A `docker build` that installs `@kobai/*` cannot use `127.0.0.1` — inside the container
+   * that address is the container. It reaches the host as `host.docker.internal`, which on
+   * Linux is the bridge gateway rather than loopback, so a registry bound to `127.0.0.1`
+   * refuses the connection and the build fails with `ECONNREFUSED` naming an address that
+   * looks right.
+   *
+   * Off by default because publishing here is anonymous: binding a writable registry to
+   * every interface on a laptop is a real, if small, exposure, and only the test that builds
+   * a Project's image needs it.
+   */
+  readonly reachableFromContainers?: boolean;
+};
+
 export type LocalRegistry = {
   /** Where it listens — `http://127.0.0.1:<port>`, on a port nothing else claimed. */
   readonly url: string;
+  /**
+   * The port it claimed, for a caller that has to spell the host differently.
+   *
+   * A container reaching this registry writes `http://host.docker.internal:<port>` — same
+   * process, same port, an address that resolves where it is being asked from.
+   */
+  readonly port: number;
   /**
    * An npm userconfig naming this registry and a token for it.
    *
@@ -48,33 +72,6 @@ export type LocalRegistry = {
   close(): Promise<void>;
   [Symbol.asyncDispose](): Promise<void>;
 };
-
-/**
- * A port the OS says is free, by asking it for one and letting go.
- *
- * There is a race between closing this and `verdaccio` binding it, and it is the right
- * trade: a *fixed* port would make two checkouts running `devbox run ci` at once fight over
- * one registry, which is the failure #21 spent a whole ticket removing for Postgres. The
- * Postgres port is derived from the checkout's path instead of being ephemeral because a
- * container outlives its run and has to be findable again; this process does not outlive
- * its test, so there is nothing to find.
- */
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        server.close();
-        reject(new Error("The OS gave no port for the local registry to use."));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 /**
  * `uplinks: {}` is load-bearing: this registry proxies **nothing**.
@@ -104,10 +101,17 @@ log:
 `;
 }
 
-export async function startLocalRegistry(): Promise<LocalRegistry> {
+export async function startLocalRegistry(
+  options: LocalRegistryOptions = {},
+): Promise<LocalRegistry> {
   const storage = await mkdtemp(join(tmpdir(), "kobai-registry-"));
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
+  // What it binds, which is not always what a caller dials: everything on this machine
+  // still reaches it at `url`, and a container reaches the same process by another name.
+  const listen = options.reachableFromContainers
+    ? `http://0.0.0.0:${port}`
+    : `http://127.0.0.1:${port}`;
 
   const configPath = join(storage, "config.yaml");
   await writeFile(configPath, configYaml(storage));
@@ -123,7 +127,7 @@ export async function startLocalRegistry(): Promise<LocalRegistry> {
   );
 
   const verdaccio = join(repoRoot, "node_modules/.bin/verdaccio");
-  const child = spawn(verdaccio, ["--config", configPath, "--listen", url], {
+  const child = spawn(verdaccio, ["--config", configPath, "--listen", listen], {
     stdio: ["ignore", "ignore", "pipe"],
   });
 
@@ -157,6 +161,7 @@ export async function startLocalRegistry(): Promise<LocalRegistry> {
       if (response.ok) {
         return {
           url,
+          port,
           npmrc,
           close,
           [Symbol.asyncDispose]: close,
