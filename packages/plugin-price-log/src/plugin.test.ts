@@ -185,9 +185,12 @@ describe("install order is not a hidden constraint", () => {
     ]);
     await expect(backwardsSchema.tablesOwnedBy("core")).resolves.toEqual([
       "core_merchant",
+      "core_price",
+      "core_product",
       "core_role",
       "core_session",
       "core_store",
+      "core_variant",
     ]);
     // And Core's own first migration ran: its seed row is there, applied after a Plugin's
     // table already existed.

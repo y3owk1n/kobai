@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   check,
   index,
@@ -148,3 +149,117 @@ export const session = pgTable(
 );
 
 export type SessionRow = typeof session.$inferSelect;
+
+/**
+ * A Product — a catalog entry a Merchant manages and a Shopper browses.
+ *
+ * It carries no price, no SKU and no stock, because it is **never sellable in itself**
+ * (ADR-0008). Everything a Shopper actually buys hangs off the Variant below, and a Product
+ * with no options at all still gets exactly one of those. That uniformity is the decision:
+ * a model where a Product is sometimes sold directly and sometimes through Variants buys one
+ * saved row and pays for it with a permanent branch in every catalog query, cart line,
+ * inventory check and report.
+ *
+ * No Store reference, for the same reason as every other table here (ADR-0005).
+ */
+export const product = pgTable("core_product", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /**
+   * A column, and a Translation table is what ADR-0022 and `CONTEXT.md` say translatable
+   * text eventually wants instead. This slice has no Translation in it — the ticket names
+   * Translations among the things that must not appear — so the column stands, and moving it
+   * is the migration that ADR pays for by being written now rather than after a catalog,
+   * a cart and an order history reference it.
+   */
+  title: text("title").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ProductRow = typeof product.$inferSelect;
+
+/**
+ * A Variant — **the sellable thing**, carrying the SKU (ADR-0008).
+ *
+ * Every Product has at least one, which is a rule the schema can only half state: the
+ * foreign key makes a Variant impossible without a Product, and the API is what makes a
+ * Product impossible without a Variant, because the two are created in one transaction and
+ * there is no route that creates a Product alone.
+ *
+ * The SKU is unique across the deployment, because story 20 asks for it in order to
+ * *identify* a Variant, and an identifier that two Variants can share identifies nothing.
+ */
+export const variant = pgTable(
+  "core_variant",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      // A deleted Product takes its Variants with it. The alternative is an orphan Variant,
+      // which is a sellable thing belonging to no catalog entry.
+      .references(() => product.id, { onDelete: "cascade" }),
+    sku: text("sku").notNull().unique(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Reading a Product reads its Variants by `product_id`, which is the catalog's hottest
+    // query and the one a storefront makes on every page.
+    index("core_variant_product_idx").on(table.productId),
+  ],
+);
+
+export type VariantRow = typeof variant.$inferSelect;
+
+/**
+ * A Price — **a row, not a column** (ADR-0008).
+ *
+ * This slice writes one row per Variant, and the shape is the whole point of the ticket: a
+ * second currency, a sale price, a quantity break, a Region- or Channel-constrained price
+ * are each one more row plus one more nullable constraint column, rather than a migration
+ * across a catalog, a cart, an order history and everything reporting on them. The cost of
+ * being right early is one join.
+ *
+ * Nothing here constrains *which* Price applies, because nothing in this slice can: Region,
+ * Channel, quantity and customer group are the constraint columns that arrive with them, and
+ * resolving a Price by best match is a Workflow rather than a column read.
+ */
+export const price = pgTable(
+  "core_price",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    variantId: uuid("variant_id")
+      .notNull()
+      // Prices belong to the Variant they price and outlive it in no useful sense.
+      .references(() => variant.id, { onDelete: "cascade" }),
+    /**
+     * The amount in the **minor units** of `currency` — 1250 is `USD` 12.50, and 1250 is
+     * `JPY` 1250, because how many minor units make a major one is a property of the
+     * currency rather than of this column.
+     *
+     * An integer rather than a float, because money in binary floating point is wrong by
+     * construction, and `bigint` rather than `integer` because a 32-bit column caps a
+     * two-decimal currency at about 21 million and a zero-decimal one much sooner.
+     */
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    /** ISO 4217, e.g. `USD`. In this slice, always the Store's default. */
+    currency: text("currency").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Resolution reads every Price of one Variant and picks among them, so this index is
+    // what makes "a row, not a column" cost a join rather than a scan.
+    index("core_price_variant_idx").on(table.variantId),
+    // No unique constraint on (variant, currency): several Prices per Variant is the
+    // representable shape ADR-0008 asks for, and what distinguishes them is constraint
+    // columns this slice does not have yet.
+    check("core_price_amount_is_not_negative", sql`${table.amount} >= 0`),
+    check("core_price_currency_is_iso4217", sql`char_length(${table.currency}) = 3`),
+  ],
+);
+
+export type PriceRow = typeof price.$inferSelect;

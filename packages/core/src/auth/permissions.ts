@@ -15,6 +15,10 @@ export const PERMISSIONS = {
   storeRead: "store:read",
   /** Create a Merchant. The permission that makes a deployment able to grow a team. */
   merchantWrite: "merchant:write",
+  /** Read the catalog — Products, their Variants, and those Variants' Prices. */
+  catalogRead: "catalog:read",
+  /** Change the catalog: create a Product with its Variants, price a Variant. */
+  catalogWrite: "catalog:write",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

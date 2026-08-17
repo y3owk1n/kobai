@@ -12,15 +12,22 @@ import { createTestKobai, inspectSchema } from "../testing/index.ts";
 /**
  * The principal entities — the rows a Plugin is most likely to want one more field on.
  *
- * Store, Merchant and Role so far. Product, Variant and Price join them with the catalog, and
- * each must arrive carrying `metadata`, because ADR-0004's bargain is that Core's tables are
- * closed *and* there is a cheap way to stash a field anyway. Adding an entity here without
- * the column fails this test, which is the point of the list.
+ * Store, Merchant, Role, and now the catalog's Product, Variant and Price. Each must arrive
+ * carrying `metadata`, because ADR-0004's bargain is that Core's tables are closed *and*
+ * there is a cheap way to stash a field anyway. Adding an entity here without the column
+ * fails this test, which is the point of the list.
  *
  * A session is deliberately absent: it is a Merchant's transient claim rather than a row
  * anybody would hang a field off, and it is deleted the moment it stops being useful.
  */
-const PRINCIPAL_ENTITIES = ["core_store", "core_merchant", "core_role"];
+const PRINCIPAL_ENTITIES = [
+  "core_store",
+  "core_merchant",
+  "core_role",
+  "core_product",
+  "core_variant",
+  "core_price",
+];
 
 describe("metadata, the cheap case", () => {
   it("exists as a JSON column on every principal entity", async () => {
