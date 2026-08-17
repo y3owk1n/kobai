@@ -14,11 +14,12 @@ concurrency:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    # Generous because the gate now scaffolds a Project, installs it from a local registry,
+    # Generous because the gate scaffolds a Project, installs it from a local registry,
     # builds it and boots it — `tests/a-generated-project-boots.test.ts` allows itself 15
     # minutes on a cold runner, and a job budget below that would kill the run rather than
-    # fail the test, which is a far worse signal.
-    timeout-minutes: 40
+    # fail the test, which is a far worse signal. #12 added two `docker build`s on top of
+    # that, each installing every dependency again inside the container.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
 

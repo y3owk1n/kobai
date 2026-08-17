@@ -50,12 +50,23 @@ description as well as the one that lets an image drop them.
 The one dependency that is *not* dev is `kobai-reference-admin` itself, in
 `reference/package.json`: the server resolves the built assets through it at runtime.
 
-**This does not currently make the image smaller, and that is a separate, older bug.** The
-Dockerfile's runtime stage copies the build stage's `/repo` — `node_modules` and all — and
-then runs `pnpm install --prod` over it, which relinks rather than prunes. `drizzle-kit`,
-`vitest`, `biome` and `typescript` are already in the shipped image for that reason, and the
-frontend toolchain now joins them. It is reported rather than fixed here: the declaration is
-what this ADR decides, and making the Dockerfile act on it is its own change.
+**This now makes the image smaller, which it did not when this ADR was written.** The
+separate, older bug it recorded was that both Dockerfiles' runtime stages copied the build
+stage's whole tree — `node_modules` and all — and then ran `pnpm install --prod` over it,
+which **relinks rather than prunes**: the symlink farm is rewritten and `node_modules/.pnpm`,
+holding every devDependency's bytes, stays exactly where it was. `drizzle-kit`, `vitest`,
+`biome` and `typescript` shipped for that reason, and the frontend toolchain joined them.
+
+#12 fixed it, and the shape of the fix is worth knowing because the obvious version does not
+work. The store is deleted and re-installed `--prod` **in the build stage**, before anything
+is copied out of it — a `rm -rf` in the runtime stage, after the `COPY`, hides the bytes in a
+lower layer and leaves the image exactly as large.
+
+The root image went from 933 MB to 270 MB and a generated Project's from 680 MB to 265 MB,
+with `/repo` going from 513 MB to 36 MB — all measured on arm64, where the same image #12
+recorded at 869 MB on amd64 measures 933 MB. `tests/the-runtime-image.test.ts` is what keeps
+it that way, and it **inspects the built image rather than the Dockerfile**, because this
+class of bug is invisible in the file.
 
 ## Why `/admin-ui`, and why not under `/admin`
 

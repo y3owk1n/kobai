@@ -138,9 +138,13 @@ to read in a review is what keeps it between those.
 - **A generated Project pins its own pnpm.** It has no workspace root to inherit one from,
   and the versions differ in ways that matter — pnpm 10 fails an install outright when a
   dependency has an unapproved build script.
-- **`reference/Dockerfile` and `reference/compose.yaml` are generated but not exercised
-  here.** The repository root's are what `devbox run up` and the test suite use. #12 builds
-  and boots the image, which is where the Project-shaped ones get run.
+- **`reference/Dockerfile` and `reference/compose.yaml` are now exercised**, which they were
+  not when this was written. `tests/a-project-boots-from-its-own-compose-file.test.ts`
+  generates a Project, points its `@kobai` scope at the local registry, and runs
+  `docker compose up --build` in it — so the two files a Developer receives are built and
+  booted rather than only byte-compared with the reference Project's. The registry has to
+  accept a connection from inside a build container for that, which is what
+  `startLocalRegistry({ reachableFromContainers: true })` is.
 - **The reference Project now owns tables**, in its own migration set with its own tracking
   table, so "a Project can add columns to its own tables freely" is exercised on every commit
   rather than described. A Project's set is named `project` rather than after the Project,
