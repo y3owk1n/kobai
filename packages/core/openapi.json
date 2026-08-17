@@ -147,22 +147,40 @@
           "applied"
         ]
       },
-      "Merchant": {
-        "allOf": [
-          {
+      "Session": {
+        "type": "object",
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "merchant": {
             "$ref": "#/components/schemas/MerchantIdentity"
           },
-          {
-            "type": "object",
-            "properties": {
-              "role": {
-                "$ref": "#/components/schemas/RoleSummary"
-              }
-            },
-            "required": [
-              "role"
-            ]
+          "role": {
+            "$ref": "#/components/schemas/RoleSummary"
           }
+        },
+        "required": [
+          "expiresAt",
+          "merchant",
+          "role"
+        ]
+      },
+      "MerchantIdentity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email"
         ]
       },
       "RoleSummary": {
@@ -184,22 +202,6 @@
           "permissions"
         ]
       },
-      "MerchantIdentity": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "email": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "email"
-        ]
-      },
       "Refusal": {
         "type": "object",
         "properties": {
@@ -215,6 +217,91 @@
         "required": [
           "error",
           "reason"
+        ]
+      },
+      "InvalidCredentials": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid-credentials"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "ServerError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Unavailable": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "booting",
+              "error"
+            ]
+          },
+          "migrations": {
+            "$ref": "#/components/schemas/MigrationState"
+          }
+        },
+        "required": [
+          "error",
+          "status",
+          "migrations"
+        ]
+      },
+      "SignInRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "Merchant": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MerchantIdentity"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "role": {
+                "$ref": "#/components/schemas/RoleSummary"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          }
         ]
       },
       "SessionRefusal": {
@@ -261,40 +348,6 @@
           "required"
         ]
       },
-      "ServerError": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "Unavailable": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "booting",
-              "error"
-            ]
-          },
-          "migrations": {
-            "$ref": "#/components/schemas/MigrationState"
-          }
-        },
-        "required": [
-          "error",
-          "status",
-          "migrations"
-        ]
-      },
       "CreateMerchantRequest": {
         "type": "object",
         "properties": {
@@ -307,59 +360,6 @@
           "role": {
             "type": "string",
             "description": "A Role by name. Defaults to `owner`."
-          }
-        },
-        "required": [
-          "email",
-          "password"
-        ]
-      },
-      "Session": {
-        "type": "object",
-        "properties": {
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "merchant": {
-            "$ref": "#/components/schemas/MerchantIdentity"
-          },
-          "role": {
-            "$ref": "#/components/schemas/RoleSummary"
-          }
-        },
-        "required": [
-          "expiresAt",
-          "merchant",
-          "role"
-        ]
-      },
-      "InvalidCredentials": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "invalid-credentials"
-            ]
-          }
-        },
-        "required": [
-          "error",
-          "reason"
-        ]
-      },
-      "SignInRequest": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
           }
         },
         "required": [
@@ -841,100 +841,6 @@
         }
       }
     },
-    "/admin/merchants": {
-      "post": {
-        "summary": "Create a Merchant",
-        "description": "Needs `merchant:write`, except on a deployment that holds no Merchant at all — the first Merchant claims it, anonymously and exactly once.",
-        "security": [
-          {},
-          {
-            "merchantSession": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateMerchantRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "The Merchant, and the Role they hold.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Merchant"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The request does not fit this endpoint's schema.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Refusal"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SessionRefusal"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The Merchant's Role does not hold the permission this route requires.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PermissionDenied"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Somebody got there first: the address is taken, or the deployment is already claimed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Refusal"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Something failed inside kobai.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ServerError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Unavailable"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/admin/session": {
       "post": {
         "summary": "Sign in",
@@ -1091,6 +997,99 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/merchants": {
+      "post": {
+        "summary": "Create a Merchant",
+        "description": "Adds a colleague. The deployment's *first* Merchant does not come from here — it is seeded at boot from the deployment's own configuration, because a deployment with no Merchant has nobody who could hold this permission.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMerchantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Merchant, and the Role they hold.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Merchant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A Merchant already holds that address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
                 }
               }
             }

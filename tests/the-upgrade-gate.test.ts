@@ -386,7 +386,13 @@ async function serve(
   databaseUrl: string,
   reach: (origin: string) => Promise<StoreKeys>,
 ): Promise<Snapshot> {
-  await using booted = await bootProject(directory, databaseUrl);
+  // Both boots are told the same first Merchant, which is what a redeployed compose file
+  // does. The second finds one already there and creates nothing — an ordinary restart is
+  // the commonest thing an upgrade is, so seeding has to survive being run twice here too.
+  await using booted = await bootProject(directory, databaseUrl, {
+    KOBAI_INITIAL_MERCHANT_EMAIL: MERCHANT.email,
+    KOBAI_INITIAL_MERCHANT_PASSWORD: MERCHANT.password,
+  });
 
   const health = (await (await fetch(`${booted.origin}/health`)).json()) as {
     status: string;
@@ -410,6 +416,19 @@ async function serve(
 const PRICED_AT = 1250;
 
 /**
+ * The Merchant both boots are configured with.
+ *
+ * A Project's first Merchant is seeded at boot from its environment and cannot be created
+ * over HTTP (#25), so this is the one credential in this file that does not come from the
+ * API — it goes *in*, as configuration, and everything below is arranged with the session it
+ * opens.
+ */
+const MERCHANT = {
+  email: "merchant@example.test",
+  password: "a merchant's very long password",
+};
+
+/**
  * A Store with one priced Variant, arranged through the public API.
  *
  * Through the API rather than by writing rows, because that is all a storefront or a Merchant
@@ -417,26 +436,12 @@ const PRICED_AT = 1250;
  * upgrade.
  */
 async function arrange(origin: string): Promise<StoreKeys> {
-  const credentials = {
-    email: "merchant@example.test",
-    password: "a merchant's very long password",
-  };
   const json = { "content-type": "application/json" };
-
-  await expectStatus(
-    await fetch(`${origin}/admin/merchants`, {
-      method: "POST",
-      headers: json,
-      body: JSON.stringify(credentials),
-    }),
-    201,
-    "creating the first Merchant",
-  );
 
   const signedIn = await fetch(`${origin}/admin/session`, {
     method: "POST",
     headers: json,
-    body: JSON.stringify(credentials),
+    body: JSON.stringify(MERCHANT),
   });
   await expectStatus(signedIn, 201, "signing in");
   // What a browser sends back: the first `name=value` pair, without its attributes.

@@ -10,8 +10,6 @@ import {
 import {
   type AdminEnv,
   authenticated,
-  authorise,
-  refuse,
   requirePermission,
   requireSession,
 } from "../auth/gate.ts";
@@ -19,14 +17,12 @@ import type { MerchantIdentity, RoleSummary } from "../auth/identity.ts";
 import {
   authenticateMerchant,
   createMerchant,
-  hasAnyMerchant,
   type MerchantCreation,
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import { createSession, revokeSession } from "../auth/session.ts";
 import {
   clearedSessionCookie,
-  presentedSessionToken,
   type Scheme,
   schemeOf,
   sessionCookie,
@@ -41,13 +37,7 @@ import {
 import type { Database } from "../db/client.ts";
 import { readStore } from "../store/read.ts";
 import * as contract from "./contract.ts";
-import {
-  invalidRequestHook,
-  json,
-  MERCHANT_SESSION,
-  OPTIONAL_MERCHANT_SESSION,
-  REFUSALS,
-} from "./openapi.ts";
+import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.ts";
 
 /**
  * The admin surface — everything a Merchant reaches, and the only thing the Admin consumes
@@ -55,14 +45,18 @@ import {
  *
  * It is in two halves, and the split is the security property:
  *
- * - **the way in**, which cannot require a session, because one route mints the very first
- *   Merchant and the other mints the session itself;
+ * - **the way in** — one route, `POST /admin/session`, which cannot require a session
+ *   because it is what mints one;
  * - **everything else**, on a sub-app carrying `requireSession`, so a route added there is
  *   authenticated by construction and each route names the one permission it needs.
  *
- * Registration order matters — the way in is registered first, so its handlers answer before
- * the guard below them is reached. Each of those two routes has a test that calls it with no
- * `Authorization` header, and every other route has one asserting the opposite.
+ * Registration order matters — the way in is registered first, so its handler answers before
+ * the guard below it is reached. That first half is deliberately as small as it can be: it
+ * held `POST /admin/merchants` too until #25, so that the first Merchant could be created
+ * anonymously, and **there is now no unauthenticated write path anywhere under `/admin`**.
+ * The first Merchant is seeded at boot instead (`auth/seed.ts`).
+ * `auth.test.ts` sweeps every operation the description carries and calls it with no cookie,
+ * so a route added to the wrong half fails the build rather than opening the surface.
  *
  * **Every route is a declaration.** A route is a `createRoute({…})` object naming its path,
  * its security scheme, the body it takes and every status it answers with, and
@@ -77,42 +71,6 @@ export type AdminDependencies = {
 };
 
 // ---- The way in --------------------------------------------------------------------------
-
-/**
- * Creates a Merchant.
- *
- * Normally this needs `merchant:write`, like any other change to the deployment. The one
- * exception is a deployment holding no Merchant at all: nobody could hold the permission,
- * so requiring it unconditionally would leave the Admin permanently unreachable. The first
- * Merchant therefore claims the deployment — and claiming it is possible exactly once, so
- * from the second request onwards this route behaves like every other guarded one.
- */
-const createMerchantRoute = createRoute({
-  method: "post",
-  path: "/merchants",
-  summary: "Create a Merchant",
-  description:
-    "Needs `merchant:write`, except on a deployment that holds no Merchant at all — the first Merchant claims it, anonymously and exactly once.",
-  security: OPTIONAL_MERCHANT_SESSION,
-  request: {
-    body: {
-      required: true,
-      content: { "application/json": { schema: contract.CreateMerchantRequest } },
-    },
-  },
-  responses: {
-    201: json("The Merchant, and the Role they hold.", contract.Merchant),
-    400: REFUSALS.invalid,
-    401: REFUSALS.noSession,
-    403: REFUSALS.forbidden,
-    409: json(
-      "Somebody got there first: the address is taken, or the deployment is already claimed.",
-      contract.Refusal,
-    ),
-    500: REFUSALS.serverError,
-    503: REFUSALS.unavailable,
-  },
-});
 
 /** Signs in: exchanges credentials for a session. */
 const signInRoute = createRoute({
@@ -143,6 +101,40 @@ const signInRoute = createRoute({
 });
 
 // ---- Everything else ---------------------------------------------------------------------
+
+/**
+ * Creates a Merchant — how a deployment grows a team.
+ *
+ * It is an ordinary guarded route, and that is the whole of what is interesting about it. It
+ * used to answer an anonymous request while the deployment held no Merchant, which was
+ * race-safe and still meant whoever reached a fresh deployment first owned the Store. The
+ * *first* Merchant is seeded at boot from what the deployment was configured with instead
+ * (`auth/seed.ts`), so there is nothing left here that a stranger may reach.
+ */
+const createMerchantRoute = createRoute({
+  method: "post",
+  path: "/merchants",
+  summary: "Create a Merchant",
+  description:
+    "Adds a colleague. The deployment's *first* Merchant does not come from here — it is seeded at boot from the deployment's own configuration, because a deployment with no Merchant has nobody who could hold this permission.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateMerchantRequest } },
+    },
+  },
+  responses: {
+    201: json("The Merchant, and the Role they hold.", contract.Merchant),
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    409: json("A Merchant already holds that address.", contract.Refusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
 
 const readSessionRoute = createRoute({
   method: "get",
@@ -376,28 +368,6 @@ const revokeApiKeyRoute = createRoute({
 export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv> {
   const admin = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
 
-  admin.openapi(createMerchantRoute, async (c) => {
-    const body = c.req.valid("json");
-
-    // A presented session means the caller is claiming to be somebody, so take them at their
-    // word and hold them to it — the bootstrap path is for a caller with no session on a
-    // deployment with no Merchant, and nothing else.
-    // "Missing" and not merely "not usable": a caller who sent the cookie and got it wrong
-    // is claiming to be somebody, and is told so rather than quietly handed the anonymous
-    // path — the same line `Authorization` drew before the cookie replaced it.
-    const cookie = c.req.header("cookie");
-    const presented = presentedSessionToken(cookie);
-    const bootstrap =
-      !presented.ok && presented.reason === "missing" && !(await hasAnyMerchant(deps.db));
-
-    if (!bootstrap) {
-      const gate = await authorise(deps.db, cookie, PERMISSIONS.merchantWrite);
-      if (!gate.ok) return refuse(c, gate);
-    }
-
-    return respondToCreation(c, await createMerchant(deps.db, body, { bootstrap }));
-  });
-
   admin.openapi(signInRoute, async (c) => {
     const body = c.req.valid("json");
 
@@ -425,6 +395,12 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
 
   const guarded = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
   guarded.use("*", requireSession(deps.db));
+
+  guarded.openapi(createMerchantRoute, async (c) => {
+    const created = await createMerchant(deps.db, c.req.valid("json"));
+    if (!created.ok) return refused(c, created, CREATION_STATUS);
+    return c.json(created.merchant, 201);
+  });
 
   guarded.openapi(readSessionRoute, (c) => {
     const auth = authenticated(c);
@@ -542,20 +518,14 @@ function sessionBody(merchant: MerchantIdentity, role: RoleSummary, expiresAt: D
 }
 
 /**
- * 400 when the request was wrong, 409 when the deployment's state is what refuses it — the
+ * 400 when the request was wrong, 409 when a row that already exists is what refuses it — the
  * distinction between "fix your request" and "somebody got there first".
  */
 const CREATION_STATUS = {
   invalid: 400,
   "unknown-role": 400,
   "email-taken": 409,
-  "already-claimed": 409,
 } as const satisfies Record<Exclude<MerchantCreation, { ok: true }>["reason"], 400 | 409>;
-
-function respondToCreation(c: Context<AdminEnv>, created: MerchantCreation) {
-  if (created.ok) return c.json(created.merchant, 201);
-  return refused(c, created, CREATION_STATUS);
-}
 
 /**
  * One shape for every refusal this surface makes: `{ error, reason }`, at the status its

@@ -28,17 +28,33 @@ export type MerchantCreation =
   | { readonly ok: true; readonly merchant: Merchant }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | "email-taken" | "unknown-role" | "already-claimed";
+      readonly reason: "invalid" | "email-taken" | "unknown-role";
       readonly detail: string;
     };
 
 /**
- * The advisory-lock key the bootstrap path serialises on.
+ * What {@link createFirstMerchant} answers with: everything {@link createMerchant} can say,
+ * plus the one refusal only the *first* Merchant can meet.
+ *
+ * Separate types rather than one widened union, because the extra reason is unreachable over
+ * HTTP: `POST /admin/merchants` is guarded like every other admin route, so a caller has
+ * already proved a Merchant exists by the time it runs. A shared union would make the route
+ * declare a 409 for a conflict it can never meet.
+ */
+export type FirstMerchantCreation =
+  | MerchantCreation
+  | { readonly ok: false; readonly reason: "already-present"; readonly detail: string };
+
+/**
+ * The advisory-lock key creating the first Merchant serialises on.
  *
  * Arbitrary but fixed — any two connections asking for the same key take it in turn. It is
  * held for the length of the transaction and released when that ends, however it ends.
  */
-const BOOTSTRAP_LOCK_KEY = 4_113_050_001;
+const FIRST_MERCHANT_LOCK_KEY = 4_113_050_001;
+
+/** One transaction, as the query builder hands it over. */
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * Unvalidated, because it arrives as a JSON body. Everything below narrows it before it
@@ -52,19 +68,74 @@ export type CreateMerchantInput = {
 };
 
 /**
- * Creates a Merchant against a named Role.
+ * Creates a Merchant against a named Role — what `POST /admin/merchants` does.
  *
- * `bootstrap` additionally requires that the deployment holds no Merchant at all. That path
- * exists because a brand new deployment has nobody who could hold `merchant:write`, so
- * requiring the permission unconditionally would leave the Admin permanently unreachable.
- * It runs under an advisory lock and re-checks emptiness inside the transaction, so two
- * requests racing to claim a fresh deployment cannot both win.
+ * It says nothing about who may do it: the route is guarded by `merchant:write` like every
+ * other admin route, so by the time this runs the caller has already been let in. The *first*
+ * Merchant on a deployment is {@link createFirstMerchant}, which is reached from boot rather
+ * than from HTTP.
  */
 export async function createMerchant(
   db: Database,
   input: CreateMerchantInput,
-  options: { readonly bootstrap: boolean },
 ): Promise<MerchantCreation> {
+  const usable = await usableCredentials(input);
+  if (!usable.ok) return usable;
+
+  return db.transaction((tx) => insertMerchant(tx, usable));
+}
+
+/**
+ * Creates the **first** Merchant, and only while there is none.
+ *
+ * A deployment with no Merchant has nobody who could hold `merchant:write`, so the way in has
+ * to come from outside the API: Core seeds it at boot from what the deployment was configured
+ * with (see `./seed.ts`). This is the half that talks to the database, and the property it
+ * holds is that it happens at most once — it takes an advisory lock and re-checks emptiness
+ * *inside* the transaction, so two processes booting against one database cannot both win,
+ * and a second boot finds a Merchant already there rather than creating another.
+ */
+export async function createFirstMerchant(
+  db: Database,
+  input: CreateMerchantInput,
+): Promise<FirstMerchantCreation> {
+  const usable = await usableCredentials(input);
+  if (!usable.ok) return usable;
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${FIRST_MERCHANT_LOCK_KEY})`);
+    const [existing] = await tx.select({ id: merchant.id }).from(merchant).limit(1);
+    if (existing) {
+      return {
+        ok: false,
+        reason: "already-present",
+        detail:
+          "This deployment already has a Merchant, so it was left exactly as it was found.",
+      } as const;
+    }
+
+    return insertMerchant(tx, usable);
+  });
+}
+
+/** Credentials that have been read and are worth hashing: the shape both paths insert from. */
+type UsableCredentials = {
+  readonly ok: true;
+  readonly email: string;
+  readonly passwordHash: string;
+  readonly roleName: string;
+};
+
+/**
+ * Narrows an unvalidated input and hashes its password — everything done *before* a
+ * transaction opens.
+ *
+ * argon2 is slow by design, so hashing inside the transaction would hold the claim lock for
+ * the length of it and let one caller stall every other.
+ */
+async function usableCredentials(
+  input: CreateMerchantInput,
+): Promise<UsableCredentials | Extract<MerchantCreation, { ok: false }>> {
   const email = normaliseEmail(input.email);
   if (!email) {
     return { ok: false, reason: "invalid", detail: "`email` must be an email address." };
@@ -83,64 +154,56 @@ export async function createMerchant(
     return { ok: false, reason: "invalid", detail: "`role` must be the name of a Role." };
   }
 
-  // Outside the transaction: argon2 is slow by design, and holding the bootstrap lock while
-  // it runs would let one request stall every other.
-  const passwordHash = await hashPassword(input.password);
-  const roleName = input.role ?? OWNER_ROLE;
+  return {
+    ok: true,
+    email,
+    passwordHash: await hashPassword(input.password),
+    roleName: input.role ?? OWNER_ROLE,
+  };
+}
 
-  return db.transaction(async (tx) => {
-    if (options.bootstrap) {
-      await tx.execute(sql`select pg_advisory_xact_lock(${BOOTSTRAP_LOCK_KEY})`);
-      const [existing] = await tx.select({ id: merchant.id }).from(merchant).limit(1);
-      if (existing) {
-        return {
-          ok: false,
-          reason: "already-claimed",
-          detail:
-            "This deployment already has a Merchant. Sign in and create further Merchants with a session.",
-        } as const;
-      }
-    }
-
-    const [assigned] = await tx
-      .select({ id: role.id, name: role.name, permissions: role.permissions })
-      .from(role)
-      .where(eq(role.name, roleName))
-      .limit(1);
-    if (!assigned) {
-      return {
-        ok: false,
-        reason: "unknown-role",
-        detail: `No Role named ${JSON.stringify(roleName)} exists.`,
-      } as const;
-    }
-
-    // No select-then-insert: two requests offering the same address would both find nothing
-    // and the loser's insert would surface as a 500 rather than as the conflict it is. The
-    // unique index is the check, and `on conflict` is how its answer is read.
-    const [created] = await tx
-      .insert(merchant)
-      .values({ email, passwordHash, roleId: assigned.id })
-      .onConflictDoNothing({ target: merchant.email })
-      .returning({ id: merchant.id, email: merchant.email });
-
-    if (!created) {
-      return {
-        ok: false,
-        reason: "email-taken",
-        detail: "A Merchant with that email address already exists.",
-      } as const;
-    }
-
+async function insertMerchant(
+  tx: Transaction,
+  { email, passwordHash, roleName }: UsableCredentials,
+): Promise<MerchantCreation> {
+  const [assigned] = await tx
+    .select({ id: role.id, name: role.name, permissions: role.permissions })
+    .from(role)
+    .where(eq(role.name, roleName))
+    .limit(1);
+  if (!assigned) {
     return {
-      ok: true,
-      merchant: {
-        id: created.id,
-        email: created.email,
-        role: { name: assigned.name, permissions: assigned.permissions },
-      },
-    } as const;
-  });
+      ok: false,
+      reason: "unknown-role",
+      detail: `No Role named ${JSON.stringify(roleName)} exists.`,
+    };
+  }
+
+  // No select-then-insert: two requests offering the same address would both find nothing
+  // and the loser's insert would surface as a 500 rather than as the conflict it is. The
+  // unique index is the check, and `on conflict` is how its answer is read.
+  const [created] = await tx
+    .insert(merchant)
+    .values({ email, passwordHash, roleId: assigned.id })
+    .onConflictDoNothing({ target: merchant.email })
+    .returning({ id: merchant.id, email: merchant.email });
+
+  if (!created) {
+    return {
+      ok: false,
+      reason: "email-taken",
+      detail: "A Merchant with that email address already exists.",
+    };
+  }
+
+  return {
+    ok: true,
+    merchant: {
+      id: created.id,
+      email: created.email,
+      role: { name: assigned.name, permissions: assigned.permissions },
+    },
+  };
 }
 
 /**

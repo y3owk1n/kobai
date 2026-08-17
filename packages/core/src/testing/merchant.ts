@@ -1,4 +1,5 @@
 import type { MerchantIdentity, RoleSummary } from "../auth/identity.ts";
+import { seedInitialMerchant } from "../auth/seed.ts";
 import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Kobai } from "../kobai.ts";
 
@@ -53,25 +54,39 @@ export const TEST_MERCHANT: TestCredentials = {
 };
 
 /**
- * Creates the deployment's first Merchant and signs them in.
+ * Seeds the deployment's first Merchant, the way a boot does.
+ *
+ * There is no HTTP way to do this and there is deliberately not going to be one: Core has no
+ * unauthenticated write path, so the first Merchant is the one thing a deployment is *given*
+ * rather than asked for (#25). This is the same call `Kobai.seedInitialMerchant()` makes, so
+ * a test arranging a Merchant is doing what a real deployment's first boot did.
+ */
+export async function seedTestMerchant(
+  kobai: Kobai,
+  credentials: TestCredentials = TEST_MERCHANT,
+): Promise<void> {
+  const seeded = await seedInitialMerchant(kobai.db, credentials);
+  if (seeded.status !== "seeded") {
+    throw new Error(
+      `seeding the first Merchant answered ${JSON.stringify(seeded)} — this deployment already had one, or the credentials were not usable.`,
+    );
+  }
+}
+
+/**
+ * Seeds the deployment's first Merchant and signs them in.
  *
  * The Merchant holds the seeded `owner` Role, so they hold every permission Core defines. A
  * test about *not* holding one should create a narrower Role and a second Merchant itself —
- * that is the thing under test, and hiding it in a helper would hide the point.
+ * that is the thing under test, and hiding it in a helper would hide the point. The second
+ * Merchant goes through `POST /admin/merchants` with this one's session, which is the only
+ * way there is.
  */
 export async function signInTestMerchant(
   kobai: Kobai,
   credentials: TestCredentials = TEST_MERCHANT,
 ): Promise<TestSession> {
-  await expectStatus(
-    await kobai.request("/admin/merchants", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(credentials),
-    }),
-    201,
-    "creating the first Merchant",
-  );
+  await seedTestMerchant(kobai, credentials);
 
   const response = await kobai.request("/admin/session", {
     method: "POST",

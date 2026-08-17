@@ -1,6 +1,11 @@
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { createTestKobai, sessionOf, signInTestMerchant } from "../testing/index.ts";
+import {
+  createTestKobai,
+  sessionOf,
+  signInTestMerchant,
+  type TestKobai,
+} from "../testing/index.ts";
 
 /**
  * What the whole surface does with a request no route wanted to see.
@@ -11,14 +16,24 @@ import { createTestKobai, sessionOf, signInTestMerchant } from "../testing/index
  * about a typo.
  */
 describe("a request body that will not parse", () => {
+  /**
+   * Signed in, because every route that takes a body is behind the gate (#25) and the gate
+   * answers first. That ordering is the subject of `auth.test.ts`; here it is only the
+   * reason these three have to get through the door before they can send a bad body.
+   */
+  async function post(kobai: TestKobai, body: string): Promise<Response> {
+    const merchant = await signInTestMerchant(kobai);
+    return kobai.request("/admin/merchants", {
+      method: "POST",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body,
+    });
+  }
+
   it("is the client's mistake, and is answered as one", async () => {
     await using kobai = await createTestKobai();
 
-    const response = await kobai.request("/admin/merchants", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "not json at all",
-    });
+    const response = await post(kobai, "not json at all");
 
     expect(response.status).toBe(400);
     // Distinct from the `invalid` a schema failure answers with: this body cannot be read
@@ -29,11 +44,7 @@ describe("a request body that will not parse", () => {
   it("is answered the same way when the body is empty", async () => {
     await using kobai = await createTestKobai();
 
-    const response = await kobai.request("/admin/merchants", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "",
-    });
+    const response = await post(kobai, "");
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ reason: "malformed-body" });
@@ -42,11 +53,7 @@ describe("a request body that will not parse", () => {
   it("is `invalid`, not `malformed-body`, when it parses and does not fit", async () => {
     await using kobai = await createTestKobai();
 
-    const response = await kobai.request("/admin/merchants", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify([]),
-    });
+    const response = await post(kobai, JSON.stringify([]));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });

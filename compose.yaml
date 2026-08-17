@@ -37,12 +37,27 @@ services:
       # The monorepo root: the reference Project depends on @kobai/core from this workspace.
       context: .
       dockerfile: Dockerfile
+    # A list rather than a map, and that is load-bearing for the last two entries. Compose
+    # forwards no variable a service does not name, and the two forms differ in what they do
+    # when one is unset: `KOBAI_…: ${KOBAI_…}` sets it to an empty string (and warns, on every
+    # `docker compose` this file is parsed by, `devbox run db` included), while a bare name
+    # sets it *not at all*. The second is what Core is owed — "nobody configured a Merchant"
+    # is an answer it reports (`not-configured`), not a blank one it has to interpret. Both
+    # forms read `.env` as well as the shell, which is where `.env.example` sends a Developer.
+    # A map cannot hold a bare name, so the whole block is a list. YAML allows no mixing.
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
       # Inside the container, and deliberately a literal. The container has a network
       # namespace to itself, so there is nothing in there to collide with — only the host
       # side, below, has to belong to this checkout.
-      PORT: 3000
+      - PORT=3000
+      # Who this deployment's first Merchant is (ADR-0041). Passed through with no default
+      # on purpose: a value written here would be a credential every checkout that never
+      # read this line shared, which is the failure seeding replaced wearing a different
+      # hat. Unset, the application boots, serves, and says in its log that it has no
+      # Merchant. See `.env.example`.
+      - KOBAI_INITIAL_MERCHANT_EMAIL
+      - KOBAI_INITIAL_MERCHANT_PASSWORD
     ports:
       # Derived, for the same reason the database's port above is: devbox hashes the
       # checkout's path into a port in 53000-53999, so two checkouts can run

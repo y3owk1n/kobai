@@ -62,6 +62,72 @@ describe("the reference Project's entrypoint", () => {
     });
   });
 
+  it("seeds the first Merchant from the environment, and can be signed in as", async () => {
+    database = await createTestDatabase();
+    child = start(database.url, INITIAL_MERCHANT);
+    const output = capture(child);
+
+    const listening = await waitForLog(child, output, "listening");
+    await waitForLog(child, output, "initial merchant seeded");
+
+    // The whole point of the exercise: those credentials open the Admin. Asked over HTTP,
+    // because a Merchant nobody can sign in as is not a Merchant.
+    const signedIn = await fetch(`http://127.0.0.1:${listening.port}/admin/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: INITIAL_MERCHANT.KOBAI_INITIAL_MERCHANT_EMAIL,
+        password: INITIAL_MERCHANT.KOBAI_INITIAL_MERCHANT_PASSWORD,
+      }),
+    });
+
+    expect(signedIn.status).toBe(201);
+    // It says which account exists, and never what opens it. The password arrived through
+    // an environment, so it is already in a compose file; the log is the copy that would
+    // fan out to every aggregator this deployment ships to.
+    expect(output()).toContain(INITIAL_MERCHANT.KOBAI_INITIAL_MERCHANT_EMAIL);
+    expect(output()).not.toContain(INITIAL_MERCHANT.KOBAI_INITIAL_MERCHANT_PASSWORD);
+  });
+
+  it("creates no second Merchant when the same deployment boots again", async () => {
+    database = await createTestDatabase();
+    child = start(database.url, INITIAL_MERCHANT);
+    await waitForLog(child, capture(child), "ready");
+    child.kill("SIGKILL");
+
+    // The commonest thing that happens to a deployment, and the one that must change
+    // nothing: a restart. Same database, same variables.
+    child = start(database.url, INITIAL_MERCHANT);
+    const output = capture(child);
+    await waitForLog(child, output, "ready");
+
+    expect(output()).toContain("initial merchant already present");
+    const [row] = await database.query<{ count: string }>(
+      "select count(*)::text as count from core_merchant",
+    );
+    expect(row?.count).toBe("1");
+  });
+
+  it("boots without them, keeps serving, and says the deployment has no Merchant", async () => {
+    database = await createTestDatabase();
+    child = start(database.url);
+    const output = capture(child);
+
+    const listening = await waitForLog(child, output, "listening");
+    // Not a crash and not a silence. It reaches `ready` — migrations applied, the Store is
+    // there — and says separately that nobody can administer it, which is the distinction
+    // `/health` draws for migrations and this draws for the Merchant.
+    await waitForLog(child, output, "ready");
+
+    expect(output()).toContain("no initial merchant");
+    const health = await fetch(`http://127.0.0.1:${listening.port}/health`);
+    expect(health.status).toBe(200);
+    // …and the admin surface is closed rather than open, which is what makes an
+    // unconfigured deployment survivable rather than a free-for-all.
+    const admin = await fetch(`http://127.0.0.1:${listening.port}/admin/store`);
+    expect(admin.status).toBe(401);
+  });
+
   it("exits non-zero, and serves nothing, when a migration fails", async () => {
     database = await createTestDatabase();
     // Core's first migration creates `core_store`. Getting there first makes it fail for a
@@ -81,12 +147,35 @@ describe("the reference Project's entrypoint", () => {
   });
 });
 
-function start(databaseUrl: string): ChildProcess {
+/** What a deployment is told its first Merchant is. Distinctive, so a log can be searched. */
+const INITIAL_MERCHANT = {
+  KOBAI_INITIAL_MERCHANT_EMAIL: "seeded-owner@example.test",
+  KOBAI_INITIAL_MERCHANT_PASSWORD: "a seeded owner's very long password",
+} as const;
+
+function start(
+  databaseUrl: string,
+  environment: Readonly<Record<string, string>> = {},
+): ChildProcess {
   return spawn(process.execPath, [entrypoint], {
     // PORT=0 lets the kernel pick, so concurrent test files never collide on a port.
-    env: { ...process.env, DATABASE_URL: databaseUrl, PORT: "0" },
+    // The seeding variables are *removed* rather than merely not added: a Developer running
+    // the suite may well have them set in their own shell, and a test of what an
+    // unconfigured deployment does must not inherit a configuration.
+    env: {
+      ...withoutInitialMerchant(process.env),
+      DATABASE_URL: databaseUrl,
+      PORT: "0",
+      ...environment,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function withoutInitialMerchant(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy = { ...environment };
+  for (const name of Object.keys(INITIAL_MERCHANT)) delete copy[name];
+  return copy;
 }
 
 function capture(process: ChildProcess): () => string {

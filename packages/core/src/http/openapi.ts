@@ -65,19 +65,6 @@ export const MERCHANT_SESSION: RouteConfig["security"] = [
 export const API_KEY: RouteConfig["security"] = [{ [SECURITY_SCHEMES.apiKey]: [] }];
 
 /**
- * Declared on the one route that is reachable both ways.
- *
- * `POST /admin/merchants` mints the *first* Merchant on a deployment nobody has claimed,
- * and needs `merchant:write` on every deployment after that. The empty requirement is
- * OpenAPI's way of saying the anonymous call is a real, supported one rather than an
- * oversight.
- */
-export const OPTIONAL_MERCHANT_SESSION: RouteConfig["security"] = [
-  {},
-  { [SECURITY_SCHEMES.merchantSession]: [] },
-];
-
-/**
  * A JSON response, as a route declares one.
  *
  * The schema is carried through unwidened, which is the whole point: the handler's

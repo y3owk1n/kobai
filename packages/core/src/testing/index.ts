@@ -15,6 +15,7 @@ export {
   type TestKobaiOptions,
 } from "./kobai.ts";
 export {
+  seedTestMerchant,
   sessionOf,
   signInTestMerchant,
   TEST_MERCHANT,

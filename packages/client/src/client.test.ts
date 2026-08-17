@@ -1,6 +1,7 @@
 import {
   createTestApiKey,
   createTestKobai,
+  seedTestMerchant,
   signInTestMerchant,
   type TestKobai,
 } from "@kobai/core/testing";
@@ -161,21 +162,37 @@ describe("consuming kobai through the generated client", () => {
     expect(error.workflow.failed).toBe("load-prices");
   });
 
-  it("needs no credential for the two routes that cannot require one", async () => {
+  it("needs no credential for the one route that cannot require one", async () => {
+    await using kobai = await createTestKobai();
+    const credentials = {
+      email: "first@example.test",
+      password: "a merchant's very long password",
+    };
+    // The first Merchant is seeded at boot and not created over HTTP (#25), so signing in is
+    // the only thing this client can do before it holds anything.
+    await seedTestMerchant(kobai, credentials);
+    const anonymous = clientFor(kobai);
+
+    const signedIn = await anonymous.POST("/admin/session", { body: credentials });
+
+    expect(signedIn.data?.role.permissions).toContain("catalog:write");
+    // The credential came back in a header a browser acts on and this client never reads.
+    expect(signedIn.response.headers.get("set-cookie")).toContain("kobai_session=");
+  });
+
+  it("cannot create a Merchant without one, whatever the deployment holds", async () => {
     await using kobai = await createTestKobai();
     const anonymous = clientFor(kobai);
 
     const created = await anonymous.POST("/admin/merchants", {
       body: { email: "first@example.test", password: "a merchant's very long password" },
     });
-    const signedIn = await anonymous.POST("/admin/session", {
-      body: { email: "first@example.test", password: "a merchant's very long password" },
-    });
 
-    expect(created.data?.email).toBe("first@example.test");
-    expect(signedIn.data?.role.permissions).toContain("catalog:write");
-    // The credential came back in a header a browser acts on and this client never reads.
-    expect(signedIn.response.headers.get("set-cookie")).toContain("kobai_session=");
+    // Generated from a description in which this route names the session scheme like every
+    // other admin route — the anonymous call it used to describe is gone from both.
+    expect(created.data).toBeUndefined();
+    expect(created.response.status).toBe(401);
+    expect(reasonOf(created.error)).toBe("session-missing");
   });
 
   it("is closed by default, and says which gate turned the caller back", async () => {

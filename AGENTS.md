@@ -396,10 +396,11 @@ registered on the wrong half of `admin.ts` — anonymous access to the admin sur
 nothing else here would notice. It stops at the status: the `session-*` and `api-key-*`
 *reasons* inside a `401` are pinned one level down, by the mapped `satisfies` on
 `SESSION_REASONS` and `API_KEY_REASONS` in `contract.ts`, which makes each declared set exactly
-the rejections its gate can produce. **One route is excused and only one**: `POST
-/admin/merchants` cannot carry the middleware, because the first Merchant has to be creatable
-with no session at all, so it asks the same question in its handler — it is named in
-`openapi.test.ts` and its 401 and 403 are pinned by behaviour in `auth.test.ts`.
+the rejections its gate can produce. **No route is excused.** `POST /admin/merchants` was the
+one that had to be, because the first Merchant had to be creatable with no session at all, so
+it asked the same question inside its handler; #25 moved the first Merchant to a boot-time
+seed and the route took the ordinary middleware, so every refusal every operation declares is
+now made by a gate this check can see.
 
 **The description is not served.** `/store` refuses an unauthenticated request *before*
 saying whether a path exists, and an endpoint handing out the whole surface anonymously would
@@ -569,14 +570,23 @@ const merchant = await signInTestMerchant(kobai);
 const response = await kobai.request("/admin/store", { headers: merchant.headers });
 ```
 
-The **admin surface is closed by default**: `/admin/*` sits behind a Merchant session, and
-each route names the one permission its Role must hold. `signInTestMerchant` creates the
-deployment's first Merchant and signs them in through the public API, which is what anything
-behind the gate needs before it can assert on the thing it actually cares about. A test about
-*not* holding a permission should create a narrower Role itself — that is the subject, and a
-helper would hide it; when it signs that narrower Merchant in, `sessionOf(response)` reads
-the session cookie off the sign-in response the way a browser would, and hands back the same
-`headers` shape.
+The **admin surface is closed by default, with no unauthenticated write path anywhere under
+it** (ADR-0041): `/admin/*` sits behind a Merchant session, each route names the one
+permission its Role must hold, and the *first* Merchant is the one thing a deployment is given
+rather than asked for — seeded at boot from `initialMerchant`, because on a deployment holding
+none there is nobody who could hold `merchant:write`. So `signInTestMerchant` **seeds** that
+Merchant, exactly as a boot does (`seedTestMerchant` is the same call without the sign-in),
+and then signs them in through the public API. There is no HTTP way to create the first one
+and a test that reaches for `POST /admin/merchants` anonymously is asserting against a 401. A
+test about *not* holding a permission should create a narrower Role itself — that is the
+subject, and a helper would hide it; that second Merchant goes through `POST /admin/merchants`
+with the seeded one's session, which is the only way there is, and `sessionOf(response)` reads
+the session cookie off their sign-in response the way a browser would.
+
+**`auth.test.ts` sweeps the whole admin surface** — every operation the generated description
+carries, called with no cookie, asserted 401 — so a route registered on the wrong half of
+`admin.ts` fails on the day it is written. Adding an admin route means moving the count that
+sweep asserts, and that is the moment to check which half it landed on.
 
 A session **is a cookie, not a bearer token** (ADR-0032). `merchant.headers` is
 `{ cookie: "kobai_session=…" }` and the token is in no response body, so a test that reaches

@@ -53,6 +53,13 @@ If they fail, the application exits rather than serving traffic against a half-m
 schema — `/health` says which it is. `devbox run ci` is the gate: lint, typecheck, build and
 the test suite.
 
+**The Admin needs a Merchant, and the first one is seeded at boot** from
+`KOBAI_INITIAL_MERCHANT_EMAIL` and `KOBAI_INITIAL_MERCHANT_PASSWORD` — see `.env.example`.
+kobai has no unauthenticated write path, so there is deliberately no way to create that first
+Merchant over HTTP: on a deployment holding none, nobody could hold the permission it would
+need ([ADR-0041](./docs/adr/0041-the-first-merchant-is-seeded-at-boot.md)). A deployment
+given neither variable still boots and says in its log that nobody can administer it.
+
 ## What it is
 
 - **Headless.** kobai ships an API and an Admin. The storefront is yours — see

@@ -129,9 +129,9 @@ describe("the description is generated from the routes", () => {
  *
  * Two operations name none, and both are named here rather than inferred from the absence:
  * `/health` is open on purpose, and `POST /admin/session` is what *mints* a session, so
- * requiring one would leave nobody able to obtain the first. Everything else is behind its
- * surface's gate — including `POST /admin/merchants`, which is reachable anonymously on a
- * deployment nobody has claimed and still names the scheme it needs on every other one.
+ * requiring one would leave nobody able to obtain the first. **Everything else is behind its
+ * surface's gate, with no exceptions** — `POST /admin/merchants` was one until #25, and the
+ * shortest way to say what changed is that this function no longer has a third case.
  */
 function expectedSchemes(operation: string): string[] {
   if (operation === "get /health" || operation === "post /admin/session") return [];
@@ -283,8 +283,15 @@ function declaredGateRefusals(responses: Record<string, { description?: string }
  * - **Registration order.** Hono runs matching handlers in the order they were registered and
  *   stops at the first one that answers without calling `next()`, so a gate registered *after*
  *   a route's own handler never runs for it. That is not a detail — it is exactly what makes
- *   `POST /admin/merchants` and `POST /admin/session` reachable without a session while sitting
- *   under the same `/admin/*` guard as everything else.
+ *   `POST /admin/session` reachable without a session while sitting under the same `/admin/*`
+ *   guard as everything else.
+ *
+ * **Nothing is excused from this.** `POST /admin/merchants` was, until #25: it could carry
+ * neither `requireSession` nor `requirePermission`, because the *first* Merchant had to be
+ * creatable with no session at all, so it asked the same question inside its handler and was
+ * named here on the strength of that. The first Merchant is seeded at boot now, the route
+ * carries the ordinary middleware, and every refusal every operation declares is made by a
+ * gate this function can see.
  */
 function refusalsGating(routes: readonly RouteEntry[]): Map<string, string[]> {
   const gates = routes.flatMap((route, index) => {
@@ -304,7 +311,7 @@ function refusalsGating(routes: readonly RouteEntry[]): Map<string, string[]> {
     // An operation is several rows — its middleware, its validators, its handler — and the
     // last of them is the handler, so setting on every row leaves the entry that saw the
     // whole chain.
-    gating.set(operation, [...answered, ...gatedInItsHandler(operation)].sort());
+    gating.set(operation, answered.sort());
   });
 
   return gating;
@@ -316,28 +323,6 @@ function covers(gate: RouteEntry, route: RouteEntry): boolean {
   return gate.path.endsWith("/*")
     ? route.path.startsWith(gate.path.slice(0, -1))
     : gate.path === route.path;
-}
-
-/**
- * The one operation whose gate is not middleware, and the refusals it makes for itself.
- *
- * `POST /admin/merchants` cannot carry `requireSession` or `requirePermission`, because the
- * *first* Merchant on a deployment has to be creatable with no session at all — a middleware
- * that refused would leave the Admin permanently unreachable. So the handler asks the very
- * same question the middlewares ask, by calling `authorise(db, cookie, PERMISSIONS.merchantWrite)`
- * itself and answering `refuse(c, gate)`, and it therefore answers both refusals for every
- * request after the deployment is claimed.
- *
- * It is named here rather than inferred, for the reason `expectedSchemes` names its two: an
- * exception that a rule works out for itself is a hole anything can fall through, and one
- * written down is a decision somebody has to change on purpose. What it claims is behaviour,
- * so behaviour is what pins it — `auth.test.ts` calls this route with no session and with a
- * Role that does not hold `merchant:write`, and asserts the 401 and the 403.
- */
-function gatedInItsHandler(operation: string): string[] {
-  return operation === "post /admin/merchants"
-    ? [labelled(GATE_REFUSALS.noSession), labelled(GATE_REFUSALS.forbidden)]
-    : [];
 }
 
 /**
@@ -418,8 +403,9 @@ describe("a declared refusal is one a gate actually makes", () => {
       expect(refusals, operation).toContain(labelled(GATE_REFUSALS.noSession));
     }
 
-    // The eight routes that name a permission, and `POST /admin/merchants`, which asks for one
-    // in its handler.
+    // The nine routes that name a permission — every admin route but `POST /admin/session`,
+    // which mints the session the other nine are read through, and `GET`/`DELETE
+    // /admin/session`, which need only a live one.
     expect(gated).toHaveLength(9);
   });
 });
