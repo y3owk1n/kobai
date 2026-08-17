@@ -511,6 +511,146 @@ export const PriceRefusal = z
   })
   .openapi("PriceRefusal");
 
+// ---- Carts ----------------------------------------------------------------------------
+
+/**
+ * Who a storefront has said this Cart is for — a *reference*, never a credential.
+ *
+ * ADR-0020 has Core store an email with an optional external identity and trust the identity a
+ * storefront asserts over a secret key. There is no password here and no Shopper table behind
+ * it, and `null` on the Cart is a guest, which is the ordinary path.
+ */
+export const CartShopper = z
+  .object({
+    email: z
+      .string()
+      .meta({ description: "The reference's key, as the storefront wrote it." }),
+    externalId: z.string().nullable().meta({
+      description:
+        "This Shopper in whatever system the storefront authenticates against.",
+    }),
+  })
+  .openapi("CartShopper");
+
+/**
+ * One line of a Cart: a Variant, and how many of it.
+ *
+ * It carries no price and no snapshot, which is the asymmetry ADR-0009 asks for — an Order's
+ * Line Items snapshot title, SKU and price as at capture so that history cannot be rewritten,
+ * and a Cart's are the opposite kind of row.
+ */
+export const CartLineItem = z
+  .object({
+    id: z.uuid(),
+    variant: VariantIdentity,
+    quantity: z.int(),
+    metadata: Metadata,
+  })
+  .openapi("CartLineItem");
+
+/**
+ * A Cart, and what every route on it answers with — creating one, changing it, or reading it.
+ *
+ * **No totals.** ADR-0009 makes a Cart unauthoritative: what a Shopper pays is resolved at
+ * Capture, and a figure here would be one nothing stands behind and the first thing anybody
+ * would mistake for one.
+ */
+export const Cart = z
+  .object({
+    id: z.uuid().meta({
+      description:
+        "The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart.",
+    }),
+    shopper: CartShopper.nullable().meta({
+      description: "`null` for a guest, which is the ordinary path.",
+    }),
+    lineItems: z.array(CartLineItem).readonly(),
+    metadata: Metadata,
+    expiresAt: z.iso.datetime().meta({
+      description:
+        "When this Cart stops being placeable. A lifetime fixed at creation, not an idle window — changing a Cart does not push it out.",
+    }),
+    expired: z.boolean().meta({
+      description:
+        "Whether that moment has passed, as the server judges it. Branch on this rather than comparing `expiresAt` against a browser's clock. An expired Cart still reads and refuses every change.",
+    }),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .openapi("Cart");
+
+/** Attaching a Shopper, or `null` to make the Cart a guest's again. */
+const AttachShopper = z.object({
+  email: z.string(),
+  externalId: z.string().nullable().optional(),
+});
+
+export const CreateCartRequest = z
+  .object({
+    shopper: AttachShopper.nullable().optional().meta({
+      description: "Needs a secret key. A publishable one is refused (ADR-0020).",
+    }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("CreateCartRequest");
+
+/** Name what should change; naming neither is refused rather than treated as a no-op. */
+export const UpdateCartRequest = z
+  .object({
+    shopper: AttachShopper.nullable().optional().meta({
+      description:
+        "Needs a secret key. `null` detaches the Shopper; absent leaves whoever is on the Cart alone.",
+    }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("UpdateCartRequest");
+
+export const AddCartLineItemRequest = z
+  .object({
+    variantId: z.string(),
+    quantity: z.int().optional().meta({ description: "At least 1. Defaults to 1." }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("AddCartLineItemRequest");
+
+export const UpdateCartLineItemRequest = z
+  .object({
+    quantity: z.int().optional().meta({
+      description: "At least 1. Removing a line is `DELETE`, not a quantity of zero.",
+    }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("UpdateCartLineItemRequest");
+
+/** The Cart, and the Line Item on it — a plain string each, for {@link IdParam}'s reason. */
+export const CartLineItemParams = IdParam.extend({
+  lineItemId: z
+    .string()
+    .meta({ description: "A Line Item of this Cart. Anything else is not found." }),
+});
+
+/**
+ * A Cart operation refused, in the shape every other kobai refusal uses.
+ *
+ * `reason` is a closed set here, unlike `PriceRefusal`'s: nothing a Project or a Plugin
+ * supplies runs on this path, so every refusal it can make is Core's own and a client can
+ * narrow on the lot. Each route declares only the ones it can actually make.
+ */
+export const CartRefusal = z
+  .object({
+    error: z.string(),
+    reason: z.enum([
+      "invalid",
+      "secret-key-required",
+      "cart-not-found",
+      "cart-expired",
+      "line-item-not-found",
+      "variant-not-found",
+      "variant-not-priced",
+    ]),
+  })
+  .openapi("CartRefusal");
+
 /**
  * There is deliberately no schema for an unrouted path's 404.
  *

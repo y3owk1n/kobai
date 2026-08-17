@@ -1062,19 +1062,90 @@ describe("there is no Shopper here", () => {
 
     const tables = await schema.tables();
     const columns = (
-      await Promise.all(tables.map(async (table) => await schema.columnsOf(table)))
+      await Promise.all(
+        tables.map(async (table) =>
+          (await schema.columnsOf(table)).map((column) => `${table.name}.${column.name}`),
+        ),
+      )
     ).flat();
-    const names = [
-      ...tables.map((table) => table.name),
-      ...columns.map((column) => column.name),
-    ];
 
     // Core stores no Shopper credential (ADR-0020), and a single `user` table serving both
     // audiences is the specific mistake this guards against — it would put a Shopper's
     // password in Core's care by accident.
-    for (const banned of ["shopper", "customer", "user", "account"]) {
-      expect(names.filter((name) => name.includes(banned))).toEqual([]);
+    for (const banned of ["customer", "user", "account"]) {
+      expect(tables.filter((table) => table.name.includes(banned))).toEqual([]);
+      expect(columns.filter((column) => column.includes(banned))).toEqual([]);
     }
+
+    // `shopper` is the one word that left this list, and only for columns: ADR-0020 has Core
+    // store a Shopper *reference*, so `core_cart.shopper_email` is the ADR working rather than
+    // the mistake. A `shopper` table would still be the mistake, and is still swept for above.
+    // What those columns may be is the subject of the next two tests.
+    expect(tables.filter((table) => table.name.includes("shopper"))).toEqual([]);
+  });
+
+  /**
+   * The half a table-name sweep cannot see, and the reason it is asked separately.
+   *
+   * ADR-0020 has Core store a Shopper **reference** — keyed by email, with an optional
+   * external identity, asserted by a storefront over a secret key — so `shopper_` columns are
+   * not the thing to ban; a `shopper_password_hash` is. What must stay true is that every
+   * Shopper column in the schema is a reference and that they live on the Cart, which is the
+   * one row a storefront tells kobai who it is for.
+   */
+  it("stores a Shopper reference, on the Cart, and never a Shopper credential", async () => {
+    kobai = await createTestKobai();
+    const schema = inspectSchema(kobai.database);
+
+    const shopperColumns = (
+      await Promise.all(
+        (
+          await schema.tables()
+        ).map(async (table) =>
+          (
+            await schema.columnsOf(table)
+          )
+            .filter((column) => column.name.includes("shopper"))
+            .map((column) => `${table.name}.${column.name}`),
+        ),
+      )
+    ).flat();
+
+    expect(shopperColumns.sort()).toEqual([
+      "core_cart.shopper_email",
+      "core_cart.shopper_external_id",
+    ]);
+  });
+
+  /**
+   * And no column anywhere holds a secret for anyone but a Merchant.
+   *
+   * The three that legitimately do are named, so a fourth — on a Cart, on a future Shopper
+   * row, anywhere — turns this red rather than passing because the word was not on a list.
+   */
+  it("keeps every stored secret on the three rows that are Core's to hold", async () => {
+    kobai = await createTestKobai();
+    const schema = inspectSchema(kobai.database);
+
+    const secrets = (
+      await Promise.all(
+        (
+          await schema.tables()
+        ).map(async (table) =>
+          (
+            await schema.columnsOf(table)
+          )
+            .filter((column) => /password|token|secret|credential/.test(column.name))
+            .map((column) => `${table.name}.${column.name}`),
+        ),
+      )
+    ).flat();
+
+    expect(secrets.sort()).toEqual([
+      "core_api_key.token_hash",
+      "core_merchant.password_hash",
+      "core_session.token_hash",
+    ]);
   });
 
   it("keeps auth off the Store, so it can never become a scoping key", async () => {

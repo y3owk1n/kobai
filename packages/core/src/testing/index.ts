@@ -4,6 +4,13 @@
  */
 export { createTestApiKey, type TestApiKey } from "./api-key.ts";
 export {
+  seedTestCart,
+  type TestCart,
+  type TestCartLineItem,
+  type TestCartLineSpec,
+  type TestCartOptions,
+} from "./cart.ts";
+export {
   seedTestCatalog,
   type TestCatalog,
   type TestCatalogOptions,

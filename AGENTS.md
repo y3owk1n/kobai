@@ -690,14 +690,58 @@ a Variant by SKU — `catalog.variant("MUG").id` — never by position: a Produc
 Variants in **SKU order**, not in the order they were asked for. `catalog.variantId` is the
 first one asked for, for the common case that has only one.
 
+**A Cart is the arrangement every ticket in the commerce spine starts from**, and
+`seedTestCart` is the one line that produces one. It seeds a catalog if it is not given one,
+starts a Cart over the store surface, and puts a line on it — so the common case is one call
+and the identifier is what comes back:
+
+```ts
+const cart = await seedTestCart(kobai);          // one POSTER-A2, quantity 1, for a guest
+
+const response = await kobai.request(`/store/carts/${cart.id}`, {
+  headers: cart.apiKey.headers,
+});
+```
+
+**The Cart's `id` is the whole of the authority to act on it** — there is no Shopper session
+to hang one off and there must never be one (ADR-0020) — so a test holds it exactly as a
+storefront does. The Cart it seeds is a **guest's**, because a guest is what Core assumes
+everywhere; a test whose subject is attribution asks for a Shopper, which needs a secret key:
+
+```ts
+await seedTestCart(kobai, { quantity: 3 });               // three of the one Variant
+await seedTestCart(kobai, { lines: [] });                 // an empty Cart
+await seedTestCart(kobai, { catalog });                   // one already seeded (ADR-0041)
+await seedTestCart(kobai, {                               // several Variants, named by SKU
+  catalog,
+  lines: [{ sku: "POSTER-A2" }, { sku: "MUG", quantity: 2 }],
+});
+await seedTestCart(kobai, { shopper: { email: "…" } });   // not a guest's (ADR-0020)
+await seedTestCart(kobai, { catalog, apiKey: publishable }); // a browser's key builds a Cart
+```
+
+`quantity` is the one-line shorthand for `lines` and naming both is a type error, exactly as
+`prices` and `variants` are. Ask for a line by SKU — `cart.lineItem("MUG").id` — never by
+position. `cart.catalog` is what the Cart was built from, so `cart.catalog.merchant` is the
+session for anything the test then does on the admin surface. **Passing `catalog` is how a
+test that has already signed in gets a Cart at all**, since a deployment has only ever one
+first Merchant.
+
+Two things this helper deliberately does not do. It never expires a Cart: a lifetime is
+measured in days, so time is passed by winding `expires_at` back on the row, the way the
+session tests do it — see the foot of `packages/core/src/cart/cart.test.ts`. And it is not
+what a test about *building* a Cart should reach for; `cart.test.ts` calls the routes by hand
+for the same reason a test about price selection names its own Prices.
+
 **The harness is promised surface** (ADR-0047): everything `@kobai/core/testing` exports is
 covered by ADR-0019's semver commitment, because it ships for the Plugin author who needs the
 same seam Core tests through — while the five Extension Points of ADR-0003 stay five, since
 nothing attaches to a test harness at runtime. So a helper added here is designed as public
 API and documented in this section, and what a helper does *internally* — which requests it
-makes, in what order — is promised to nobody. `seedTestCatalog`'s own contract, including
-every case above, is asserted in `packages/core/src/testing/catalog.test.ts` against the
-running application rather than against the object it returns.
+makes, in what order — is promised to nobody. `seedTestCatalog`'s and `seedTestCart`'s own
+contracts, including every case above, are asserted in
+`packages/core/src/testing/catalog.test.ts` and `packages/core/src/testing/cart.test.ts`
+against the running application rather than against the object each returns.
 
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive
