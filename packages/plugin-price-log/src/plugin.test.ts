@@ -184,6 +184,7 @@ describe("install order is not a hidden constraint", () => {
       "price_log_entry",
     ]);
     await expect(backwardsSchema.tablesOwnedBy("core")).resolves.toEqual([
+      "core_api_key",
       "core_merchant",
       "core_price",
       "core_product",

@@ -19,6 +19,8 @@ export const PERMISSIONS = {
   catalogRead: "catalog:read",
   /** Change the catalog: create a Product with its Variants, price a Variant. */
   catalogWrite: "catalog:write",
+  /** Mint and revoke API keys. The permission that hands out access to the store surface. */
+  apiKeyWrite: "api-key:write",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

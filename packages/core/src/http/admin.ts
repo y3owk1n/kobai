@@ -1,5 +1,6 @@
 import { type Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { type ApiKeyCreation, createApiKey, revokeApiKey } from "../auth/api-key.ts";
 import {
   type AdminEnv,
   authenticated,
@@ -194,6 +195,38 @@ export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
     },
   );
 
+  /**
+   * Mints an API key — the credential the store surface is gated by (ADR-0020).
+   *
+   * The value is in this response and in no other, ever: only a digest is stored, so there
+   * is nothing to show a second time. That is the same bargain the password column makes,
+   * and it is why the route answers with the key rather than making a Merchant fetch it.
+   */
+  guarded.post("/api-keys", requirePermission(PERMISSIONS.apiKeyWrite), async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return c.json(body.error, 400);
+
+    const created = await createApiKey(deps.db, body.value);
+    if (!created.ok) return refused(c, created, API_KEY_STATUS);
+    return c.json(created.apiKey, 201);
+  });
+
+  /** Revokes a key. It stops working on the very next request, like a deleted Session. */
+  guarded.delete(
+    "/api-keys/:id",
+    requirePermission(PERMISSIONS.apiKeyWrite),
+    async (c) => {
+      const revoked = await revokeApiKey(deps.db, c.req.param("id"));
+      if (!revoked) {
+        return c.json(
+          { error: "No such API key exists.", reason: "api-key-not-found" },
+          404,
+        );
+      }
+      return c.body(null, 204);
+    },
+  );
+
   admin.route("/", guarded);
 
   return admin;
@@ -204,6 +237,11 @@ const PRODUCT_STATUS = {
   invalid: 400,
   "sku-taken": 409,
 } as const satisfies Record<Exclude<ProductCreation, { ok: true }>["reason"], 400 | 409>;
+
+/** Only one way to get a key wrong, and it is the request's fault. */
+const API_KEY_STATUS = {
+  invalid: 400,
+} as const satisfies Record<Exclude<ApiKeyCreation, { ok: true }>["reason"], 400>;
 
 /** 422 for a currency this Store does not price in: well-formed, and still refused. */
 const PRICE_STATUS = {

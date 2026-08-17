@@ -1,6 +1,7 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
+import { isUuid } from "../db/uuid.ts";
 
 /**
  * Reading the catalog.
@@ -8,8 +9,8 @@ import { price, product, variant } from "../db/schema.ts";
  * The shapes here are what the admin surface answers with, and they are the shapes ADR-0008
  * insists on: a Product carries no amount and no SKU, a Variant carries the SKU, and a
  * Variant's Prices are a **list**, because a Price is a row. A storefront asking "what does
- * this cost" is not served from here at all — resolving a Price by best match is a Workflow,
- * and it is a later ticket's.
+ * this cost" is not served from here at all — resolving a Price by best match is the
+ * `resolve-price` Workflow, and it answers on the store surface (`pricing/resolve-price.ts`).
  *
  * There is no Store parameter and no scoping key, for the same reason `readStore` has none:
  * one deployment is one Store (ADR-0005).
@@ -131,16 +132,4 @@ export async function readVariants(db: Database, productId: string): Promise<Var
   }
 
   return variants.map((row) => ({ ...row, prices: byVariant.get(row.id) ?? [] }));
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Whether a path parameter could name a row at all.
- *
- * Postgres raises on a malformed uuid, and an unhandled raise is a 500 — which would report
- * a broken server for what is only a request for something that does not exist.
- */
-export function isUuid(value: string): boolean {
-  return UUID.test(value);
 }
