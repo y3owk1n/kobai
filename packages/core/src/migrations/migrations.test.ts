@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { type TestKobai, createTestKobai, inspectSchema } from "../testing/index.ts";
+import { createTestKobai, inspectSchema, type TestKobai } from "../testing/index.ts";
 import { coreMigrationSet } from "./core-set.ts";
 import { runMigrations } from "./run.ts";
 import {
-  KOBAI_MIGRATIONS_SCHEMA,
   defineMigrationSet,
+  KOBAI_MIGRATIONS_SCHEMA,
   migrationsTableFor,
 } from "./set.ts";
 

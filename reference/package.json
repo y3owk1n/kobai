@@ -12,7 +12,7 @@
     "// db:push": "There is deliberately no db:push script here either. A Project's database holds Core's tables and every wired Plugin's, so `drizzle-kit push` — which diffs against the LIVE database — reports success while silently dropping the tables of whichever packages the pushed schema does not know about, and leaves their tracking rows behind so the migration runner cannot repair it. Generate a migration instead. See docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
+    "@hono/node-server": "^2.1.1",
     "@kobai/core": "workspace:*",
     "@kobai/plugin-price-log": "workspace:*"
   }

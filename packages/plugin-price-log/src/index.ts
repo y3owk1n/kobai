@@ -6,5 +6,5 @@
  * table appears only once a Project wires the migration set below into its
  * `kobai.config.ts` (ADR-0017).
  */
-export { priceLogEntry, type PriceLogEntryRow } from "./db/schema.ts";
+export { type PriceLogEntryRow, priceLogEntry } from "./db/schema.ts";
 export { priceLogMigrationSet } from "./migration-set.ts";

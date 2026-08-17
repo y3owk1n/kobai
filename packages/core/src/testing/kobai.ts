@@ -1,7 +1,7 @@
 import type { KobaiProjectConfig, Logger } from "../config.ts";
-import { type Kobai, createKobai } from "../kobai.ts";
+import { createKobai, type Kobai } from "../kobai.ts";
 import type { MigrationOutcome } from "../migrations/run.ts";
-import { type TestDatabase, createTestDatabase } from "./database.ts";
+import { createTestDatabase, type TestDatabase } from "./database.ts";
 
 export type TestKobai = Kobai & {
   /** The throwaway database this instance is bound to. */

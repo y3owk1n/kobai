@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { type MigrationSet, defineMigrationSet } from "./set.ts";
+import { defineMigrationSet, type MigrationSet } from "./set.ts";
 
 /**
  * Core's own migration set — one entry in the same list a Plugin's set goes into, applied

@@ -3,9 +3,9 @@ import type { Database } from "../db/client.ts";
 import type { Permission } from "./permissions.ts";
 import {
   type Authenticated,
-  type SessionRejection,
   holdsPermission,
   resolveSession,
+  type SessionRejection,
 } from "./session.ts";
 
 /**

@@ -1,10 +1,10 @@
-import { type KobaiProjectConfig, type Logger, consoleLogger } from "./config.ts";
-import { type Database, createDatabaseHandle } from "./db/client.ts";
+import { consoleLogger, type KobaiProjectConfig, type Logger } from "./config.ts";
+import { createDatabaseHandle, type Database } from "./db/client.ts";
 import { createHttpApp } from "./http/app.ts";
 import { coreMigrationSet } from "./migrations/core-set.ts";
 import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
-import { type MigrationState, createMigrationStateHolder } from "./migrations/state.ts";
+import { createMigrationStateHolder, type MigrationState } from "./migrations/state.ts";
 
 export type KobaiOptions = KobaiProjectConfig & {
   /** Postgres connection string. */

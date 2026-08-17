@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { type TestDatabase, createTestDatabase } from "@kobai/core/testing";
+import { createTestDatabase, type TestDatabase } from "@kobai/core/testing";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 /**

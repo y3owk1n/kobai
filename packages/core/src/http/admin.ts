@@ -9,18 +9,18 @@ import {
 } from "../auth/gate.ts";
 import type { MerchantIdentity, RoleSummary } from "../auth/identity.ts";
 import {
-  type MerchantCreation,
   authenticateMerchant,
   createMerchant,
   hasAnyMerchant,
+  type MerchantCreation,
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import { createSession, revokeSession } from "../auth/session.ts";
 import { listProducts, readProduct } from "../catalog/read.ts";
 import {
+  createProduct,
   type PriceCreation,
   type ProductCreation,
-  createProduct,
   setPrice,
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";

@@ -2,10 +2,10 @@ import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import {
-  type TestKobai,
   createTestKobai,
   inspectSchema,
   signInTestMerchant,
+  type TestKobai,
 } from "../testing/index.ts";
 
 let kobai: TestKobai | undefined;

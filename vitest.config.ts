@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { type ViteUserConfig, defineConfig } from "vitest/config";
+import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 /**
  * One entry of Vite's `resolve.alias` array.
@@ -48,16 +49,38 @@ export default defineConfig({
  * aliases for the test runner — and two hand-kept copies of the same list is one copy too
  * many. Adding a package is now a single edit to `tsconfig.base.json`.
  *
- * Read through TypeScript's own parser because a `tsconfig` is JSON *with comments*, which
- * `JSON.parse` refuses.
+ * Read through a JSONC parser because a `tsconfig` is JSON *with comments*, which
+ * `JSON.parse` refuses. This was once TypeScript's own `ts.readConfigFile`; TypeScript 7
+ * ships no compiler API at all — its only root export is `version` — and 7.1 is expected to
+ * bring back a *different* one. Stripping comments by hand is not the alternative it looks
+ * like: `"$schema": "https://json.schemastore.org/tsconfig"` contains a `//` that any naive
+ * stripper eats. `jsonc-parser` is what TypeScript's own tooling reaches for, and unlike a
+ * compiler it is the whole of what this needs.
  */
 function workspaceAliases(): Alias[] {
   const path = from("./tsconfig.base.json");
-  const { config, error } = ts.readConfigFile(path, (file) => ts.sys.readFile(file));
-  if (error) {
-    throw new Error(
-      `Could not read ${path}, which is where the test runner's package aliases come from: ${ts.flattenDiagnosticMessageText(error.messageText, " ")}`,
-    );
+  // Written once, because every failure below is the same failure: this file is the only
+  // source of the aliases, so anything that stops it being read stops the run.
+  const because = "which is where the test runner's package aliases come from";
+
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (cause) {
+    throw new Error(`Could not read ${path}, ${because}.`, { cause });
+  }
+
+  const errors: ParseError[] = [];
+  // `allowTrailingComma` because TypeScript accepts one and this is reading a `tsconfig`
+  // the way TypeScript would. It is deliberately more permissive than `biome.json`'s
+  // `json.parser`, which allows comments only: being laxer than the linter can never let
+  // this fail *open*, and `biome ci` runs before the suite anyway.
+  const config: unknown = parse(text, errors, { allowTrailingComma: true });
+  if (errors.length > 0) {
+    const detail = errors
+      .map((e) => `${printParseErrorCode(e.error)} at offset ${e.offset}`)
+      .join(", ");
+    throw new Error(`Could not parse ${path}, ${because}: ${detail}.`);
   }
 
   const paths = (config as TsconfigShape)?.compilerOptions?.paths ?? {};
@@ -72,9 +95,15 @@ function workspaceAliases(): Alias[] {
   }
 
   return entries.map(([specifier, targets]) => {
-    const target = targets[0];
-    if (target === undefined) {
-      throw new Error(`"${specifier}" in tsconfig.base.json maps to nothing.`);
+    // `TsconfigShape` is an assertion about arbitrary JSON, not a guarantee about it, so
+    // the target is checked rather than trusted. Without this a `paths` entry mapping to
+    // `[42]` reaches `target.split` and dies with a bare `TypeError`, which names neither
+    // the file nor the entry — and this is the one file whose job is to fail legibly.
+    const target = Array.isArray(targets) ? targets[0] : undefined;
+    if (typeof target !== "string") {
+      throw new Error(
+        `"${specifier}" in tsconfig.base.json maps to nothing usable. A path mapping must be an array whose first entry is a string, e.g. ["./packages/core/src/index.ts"].`,
+      );
     }
     if (specifier.split("*").length > 2 || target.split("*").length > 2) {
       throw new Error(
@@ -83,8 +112,8 @@ function workspaceAliases(): Alias[] {
     }
     return {
       // `@kobai/core/*` → /^@kobai\/core\/(.*)$/, so a subpath export needs no edit.
-      // Targets are relative to the repository root, which is where this file sits, so
-      // `baseUrl: "."` needs no separate handling.
+      // Targets are relative to `tsconfig.base.json`, which sits beside this file, so
+      // resolving them against `import.meta.url` needs no separate handling.
       find: new RegExp(`^${escapeRegExp(specifier).replace("\\*", "(.*)")}$`),
       replacement: from(target.replace("*", "$1")),
     };

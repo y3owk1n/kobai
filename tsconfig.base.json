@@ -19,9 +19,13 @@
     "sourceMap": true,
     "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true,
-    "baseUrl": ".",
     // The one list of workspace package mappings. `vitest.config.ts` derives its resolver
     // aliases from this file rather than repeating it, so adding a package is one edit.
+    //
+    // Targets are relative to this file. TypeScript 7 removed `baseUrl` and now rejects a
+    // non-relative target outright (TS5090), so the leading `./` is load-bearing rather
+    // than stylistic — and it is also what lets `vitest.config.ts` resolve each target
+    // against its own URL without knowing anything else about the layout.
     "paths": {
       "@kobai/core": ["./packages/core/src/index.ts"],
       "@kobai/core/*": ["./packages/core/src/*/index.ts"],
