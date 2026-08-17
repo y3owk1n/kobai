@@ -28,12 +28,17 @@ describe("a Plugin owns its own tables", () => {
     await using kobai = await createTestKobai({ migrationSets: [priceLogMigrationSet] });
     const schema = inspectSchema(kobai.database);
 
+    const tracking = await schema.migrationTracking();
+
     // Two packages, two tracking tables, one database. Core and this Plugin never race,
     // and neither is in a position to re-apply the other's migrations.
-    await expect(schema.migrationTracking()).resolves.toEqual([
-      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 2 },
-      { schema: "drizzle", table: "__drizzle_migrations_plugin_price_log", applied: 1 },
+    expect(tracking.map((entry) => `${entry.schema}.${entry.table}`)).toEqual([
+      "drizzle.__drizzle_migrations_core",
+      "drizzle.__drizzle_migrations_plugin_price_log",
     ]);
+    // Only this Plugin's count is asserted. How many migrations Core has is Core's business
+    // and no reason for a Plugin's suite to go red.
+    expect(tracking.find((entry) => entry.table.endsWith("price_log"))?.applied).toBe(1);
   });
 
   it("scopes its migration config to its own table prefix", () => {
@@ -131,8 +136,10 @@ describe("an installed Plugin does nothing until the Project wires it", () => {
     const schema = inspectSchema(kobai.database);
 
     await expect(schema.tablesOwnedBy("price_log")).resolves.toEqual([]);
-    await expect(schema.migrationTracking()).resolves.toEqual([
-      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 2 },
+    // Not even a tracking table: an unwired Plugin leaves no trace of itself at all.
+    const tracking = await schema.migrationTracking();
+    expect(tracking.map((entry) => `${entry.schema}.${entry.table}`)).toEqual([
+      "drizzle.__drizzle_migrations_core",
     ]);
   });
 
@@ -171,6 +178,17 @@ describe("install order is not a hidden constraint", () => {
 
     const backwardsSchema = inspectSchema(backwards.database);
     const forwardsSchema = inspectSchema(forwards.database);
+
+    // Said outright before the comparison, because two empty databases are also equal.
+    await expect(backwardsSchema.tablesOwnedBy("price_log")).resolves.toEqual([
+      "price_log_entry",
+    ]);
+    await expect(backwardsSchema.tablesOwnedBy("core")).resolves.toEqual(["core_store"]);
+    // And Core's own first migration ran: its seed row is there, applied after a Plugin's
+    // table already existed.
+    await expect(
+      backwards.database.query("select name from core_store"),
+    ).resolves.toEqual([{ name: "kobai" }]);
 
     await expect(backwardsSchema.tables()).resolves.toEqual(
       await forwardsSchema.tables(),

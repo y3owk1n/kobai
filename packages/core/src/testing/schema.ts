@@ -1,5 +1,5 @@
 import { quoteIdentifier } from "../db/identifier.ts";
-import { MIGRATIONS_TABLE_PREFIX } from "../migrations/set.ts";
+import { MIGRATIONS_TABLE_STEM } from "../migrations/set.ts";
 
 /**
  * The second test seam: what the database *is*, rather than what it answers.
@@ -13,8 +13,8 @@ import { MIGRATIONS_TABLE_PREFIX } from "../migrations/set.ts";
  * Lifted from the inspector on branch `prototype/drizzle-multi-migration`, including its
  * mistake: the first version of that script queried only the `public` schema and reported
  * "migration tracking tables: (none)" while migrations were demonstrably applying — the
- * tracking tables were in `drizzle` the whole time. So {@link SchemaInspector.tables} scans
- * every non-system schema, and nothing here assumes where a table lives.
+ * tracking tables were in `drizzle` the whole time. So every sweep here covers every
+ * non-system schema, and a table is always named with the schema it is in.
  *
  * ```ts
  * await using kobai = await createTestKobai({ migrationSets: [pluginSet] });
@@ -26,9 +26,9 @@ import { MIGRATIONS_TABLE_PREFIX } from "../migrations/set.ts";
  */
 
 /**
- * Anything that runs one statement and hands back rows. {@link TestDatabase} satisfies it,
- * and so does a bare `pg.Client` wrapper — which is what lets this be pointed at a database
- * no test harness created, such as the one the upgrade gate boots.
+ * Anything that runs one statement and hands back rows. `TestDatabase` satisfies it, on its
+ * own connection rather than the application's — which is the point: this asks the database
+ * what it is holding, not what kobai believes it put there.
  */
 export type SchemaQuery = {
   query<T extends Record<string, unknown>>(
@@ -107,17 +107,34 @@ export type SchemaInspector = {
 };
 
 export function inspectSchema(source: SchemaQuery): SchemaInspector {
+  /**
+   * Every base table there is, in one query, partitioned in TypeScript rather than by two
+   * near-identical `like` clauses. Scanning every non-system schema is the point: the
+   * prototype's inspector looked only in `public` and concluded that migrations were not
+   * being tracked, while the tracking tables sat in `drizzle` the whole time.
+   */
+  const allBaseTables = async (): Promise<TableRef[]> => {
+    const rows = await source.query<{ table_schema: string; table_name: string }>(`
+      select table_schema, table_name
+      from information_schema.tables
+      where table_schema not in ('pg_catalog', 'information_schema')
+        and table_type = 'BASE TABLE'
+      order by table_schema, table_name
+    `);
+    return rows.map((row) => ({ schema: row.table_schema, name: row.table_name }));
+  };
+
+  /**
+   * Matched on the *stem*, not on kobai's `__drizzle_migrations_<pkg>` prefix, so the bare
+   * `__drizzle_migrations` that Drizzle falls back to when nobody names a table counts as
+   * tracking too. A test asserting which tracking tables exist should see that one arrive
+   * rather than mistake it for somebody's domain table (ADR-0030).
+   */
+  const isTracking = (table: TableRef) => table.name.startsWith(MIGRATIONS_TABLE_STEM);
+
   const inspector: SchemaInspector = {
     async tables() {
-      const rows = await source.query<{ table_schema: string; table_name: string }>(`
-        select table_schema, table_name
-        from information_schema.tables
-        where table_schema not in ('pg_catalog', 'information_schema')
-          and table_type = 'BASE TABLE'
-          and table_name not like '${escapeLike(MIGRATIONS_TABLE_PREFIX)}%' escape '\\'
-        order by table_schema, table_name
-      `);
-      return rows.map((row) => ({ schema: row.table_schema, name: row.table_name }));
+      return (await allBaseTables()).filter((table) => !isTracking(table));
     },
 
     async tablesOwnedBy(prefix) {
@@ -148,9 +165,9 @@ export function inspectSchema(source: SchemaQuery): SchemaInspector {
     },
 
     async columnsOwnedBy(prefix) {
-      const owned = await inspector.tables();
+      const everything = await inspector.tables();
       const entries = await Promise.all(
-        owned
+        everything
           .filter((table) => owns(prefix, table.name))
           .map(async (table) => [table.name, await inspector.columnsOf(table)] as const),
       );
@@ -196,7 +213,7 @@ export function inspectSchema(source: SchemaQuery): SchemaInspector {
         join pg_namespace to_namespace on to_namespace.oid = to_table.relnamespace
         where constraint_.contype = 'f'
           and from_namespace.nspname not in ('pg_catalog', 'information_schema')
-        order by from_table, constraint_name
+        order by from_namespace.nspname, from_table.relname, constraint_.conname
       `);
       return rows.map((row) => ({
         constraint: row.constraint_name,
@@ -211,26 +228,19 @@ export function inspectSchema(source: SchemaQuery): SchemaInspector {
     },
 
     async migrationTracking() {
-      const tracking = await source.query<{ table_schema: string; table_name: string }>(`
-        select table_schema, table_name
-        from information_schema.tables
-        where table_schema not in ('pg_catalog', 'information_schema')
-          and table_type = 'BASE TABLE'
-          and table_name like '${escapeLike(MIGRATIONS_TABLE_PREFIX)}%' escape '\\'
-        order by table_schema, table_name
-      `);
+      const tracking = (await allBaseTables()).filter(isTracking);
 
       return Promise.all(
-        tracking.map(async (row) => {
+        tracking.map(async (table) => {
           const [count] = await source.query<{ applied: string }>(
             // Identifiers cannot be bound, so they are quoted. They come from
             // information_schema rather than from a caller, but quoting is free.
             `select count(*)::text as applied
-             from ${quoteIdentifier(row.table_schema)}.${quoteIdentifier(row.table_name)}`,
+             from ${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`,
           );
           return {
-            schema: row.table_schema,
-            table: row.table_name,
+            schema: table.schema,
+            table: table.name,
             applied: Number(count?.applied ?? 0),
           };
         }),
@@ -248,9 +258,4 @@ function owns(prefix: string, tableName: string): boolean {
 
 function resolve(table: TableRef | string): TableRef {
   return typeof table === "string" ? { schema: "public", name: table } : table;
-}
-
-/** `_` is a single-character wildcard in `like`, and every tracking table's name starts with two. */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
 }

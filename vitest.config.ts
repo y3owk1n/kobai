@@ -48,13 +48,30 @@ function workspaceAliases(): Alias[] {
   }
 
   const paths = (config as TsconfigShape)?.compilerOptions?.paths ?? {};
-  return Object.entries(paths).map(([specifier, targets]) => {
+  const entries = Object.entries(paths);
+  if (entries.length === 0) {
+    // Failing open here would be worse than failing: with no aliases every `@kobai/*`
+    // import resolves through node_modules to `dist`, so the suite would quietly test the
+    // last build instead of the working tree, and pass while doing it.
+    throw new Error(
+      "tsconfig.base.json declares no compilerOptions.paths, so the test run has no package aliases and would resolve @kobai/* to stale `dist` output.",
+    );
+  }
+
+  return entries.map(([specifier, targets]) => {
     const target = targets[0];
     if (target === undefined) {
       throw new Error(`"${specifier}" in tsconfig.base.json maps to nothing.`);
     }
+    if (specifier.split("*").length > 2 || target.split("*").length > 2) {
+      throw new Error(
+        `"${specifier}" in tsconfig.base.json uses more than one "*". TypeScript allows at most one, and the alias below rewrites only the first.`,
+      );
+    }
     return {
       // `@kobai/core/*` → /^@kobai\/core\/(.*)$/, so a subpath export needs no edit.
+      // Targets are relative to the repository root, which is where this file sits, so
+      // `baseUrl: "."` needs no separate handling.
       find: new RegExp(`^${escapeRegExp(specifier).replace("\\*", "(.*)")}$`),
       replacement: from(target.replace("*", "$1")),
     };

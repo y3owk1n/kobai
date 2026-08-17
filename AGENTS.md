@@ -46,7 +46,7 @@ and no PR opens on a red one.
 | `devbox run db` | Just Postgres — what the test suite needs. |
 | `devbox run test` | Postgres up, build, then the whole suite. |
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
-| `devbox run db:generate` | Generate a migration from a change to Core's schema. |
+| `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
 
 There is deliberately **no `push` script** anywhere — not in Core, not in a Plugin, not in
 the reference Project. `drizzle-kit push` diffs against the live database and silently drops

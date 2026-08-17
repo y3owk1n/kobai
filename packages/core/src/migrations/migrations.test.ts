@@ -24,16 +24,19 @@ describe("migration tracking", () => {
     ]);
   });
 
-  it("does not track in the schema the drizzle-kit CLI would default to", async () => {
+  it("leaves nothing tracking where either tool would default to", async () => {
     // ADR-0030: the CLI reads `migrations.schema` from drizzle.config.ts while the
-    // programmatic migrator ignores it. If this ever lands in `public`, the two paths have
-    // diverged and each will re-apply what the other already ran.
+    // programmatic migrator ignores it and falls back to `drizzle`. Two paths, two
+    // defaults, no warning — so this names every tracking table in the database, in full.
+    // A bare `__drizzle_migrations`, or anything in `public`, means the paths have diverged
+    // and each is about to re-apply what the other already ran.
     kobai = await createTestKobai();
 
     const tracking = await inspectSchema(kobai.database).migrationTracking();
 
-    expect(tracking.length).toBeGreaterThan(0);
-    expect(tracking.map((entry) => entry.schema)).not.toContain("public");
+    expect(tracking.map((entry) => `${entry.schema}.${entry.table}`)).toEqual([
+      "drizzle.__drizzle_migrations_core",
+    ]);
     expect(KOBAI_MIGRATIONS_SCHEMA).toBe("drizzle");
   });
 

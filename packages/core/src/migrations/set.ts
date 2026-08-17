@@ -30,8 +30,17 @@ export type MigrationSet = {
   readonly migrationsSchema: string;
 };
 
-/** What every kobai tracking table's name begins with, whoever owns it. */
-export const MIGRATIONS_TABLE_PREFIX = "__drizzle_migrations_";
+/**
+ * What any Drizzle tracking table's name begins with — kobai's, and the bare
+ * `__drizzle_migrations` the tooling falls back to when nobody names one.
+ *
+ * kobai always names one. The stem is worth knowing anyway, because a table sitting at it
+ * is the signature of migrations having been applied through a path that did not set
+ * `migrationsTable`, which is the drift ADR-0030 is about.
+ */
+export const MIGRATIONS_TABLE_STEM = "__drizzle_migrations";
+/** What every *kobai* tracking table's name begins with, whoever owns it. */
+export const MIGRATIONS_TABLE_PREFIX = `${MIGRATIONS_TABLE_STEM}_`;
 /** Postgres truncates identifiers at 63 bytes, and a truncated table is a shared table. */
 const MAX_IDENTIFIER_BYTES = 63;
 /**
