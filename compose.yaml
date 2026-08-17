@@ -39,8 +39,16 @@ services:
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
+      # Inside the container, and deliberately a literal. The container has a network
+      # namespace to itself, so there is nothing in there to collide with — only the host
+      # side, below, has to belong to this checkout.
       PORT: 3000
     ports:
+      # Derived, for the same reason the database's port above is: devbox hashes the
+      # checkout's path into a port in 53000-53999, so two checkouts can run
+      # `devbox run up` at once with nothing passed by hand, and `devbox run up` prints the
+      # URL it lands on. See AGENTS.md § Development. The literal below is what a bare
+      # `docker compose` outside devbox falls back to.
       - "${PORT:-3000}:3000"
     depends_on:
       db:

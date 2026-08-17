@@ -73,7 +73,7 @@ Three things follow, and each has a test rather than a convention behind it:
 | Command | What it does |
 | --- | --- |
 | `devbox run ci` | **The gate.** Everything below, in order. |
-| `devbox run up` | Postgres and the reference Project. `http://localhost:3000/health`, Admin at `/admin-ui`. |
+| `devbox run up` | Postgres and the reference Project, on this checkout's own port — it prints the URL. `/health`, Admin at `/admin-ui`. |
 | `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
 | `devbox run admin:dev` | The Admin with a reload loop, beside `devbox run dev`. See [The Admin](#the-admin). |
 | `devbox run db` | Just Postgres — what the test suite needs, on this checkout's own port. |
@@ -106,27 +106,34 @@ explanation sits where the command would have been — a **real comment** in `de
 the build if a push script appears in either, or in a `run:` step under
 `.github/workflows/`, where no script name would give it away.
 
-### The Postgres port belongs to the checkout, not to kobai
+### The ports belong to the checkout, not to kobai
 
 **`devbox run db` publishes Postgres on a port derived from this checkout's path**, in the
 range **55000-55999** — so `docker ps` will show something like `55154`, not the `55432` the
-files fall back to. That is not a mystery, it is the point: two checkouts of kobai (a second
-clone, a git worktree) differ by their path and nothing else, so hashing the path gives each
-one a port of its own and lets both run `devbox run ci` at the same time with nothing passed
-by hand. A *random* port would do that too and would be worse — a path does not change
-between runs, so the container yesterday's run left behind is still findable at today's port.
+files fall back to. **`devbox run up` publishes the application the same way**, in
+**53000-53999**, from the same number and so with the same last three digits: `53154` beside
+`55154` is one checkout, not two unrelated stacks. Read both ranges as the port the service
+is known by with a `5` in front of it.
+
+That is not a mystery, it is the point: two checkouts of kobai (a second clone, a git
+worktree) differ by their path and nothing else, so hashing the path gives each one ports of
+its own — and lets one run `devbox run ci` while another serves `devbox run up`, with
+nothing passed by hand. A *random* port would do that too and would be worse: a path does
+not change between runs, so the container yesterday's run left behind is still findable at
+today's port.
 
 The derivation lives in `devbox.json`'s `init_hook`, in front of every script, and it sets
-four things from the one number:
+five things from the one number:
 
 | Variable | What it decides |
 | --- | --- |
 | `POSTGRES_PORT` | The host port `compose.yaml` publishes the `db` service on. |
+| `PORT` | The host port it publishes the `app` service on; the port `devbox run dev` binds; and the address `devbox run admin:dev` proxies to. |
 | `KOBAI_TEST_DATABASE_URL` | The address the test harness dials (`packages/core/src/testing/database.ts`). |
 | `DATABASE_URL` | Where `devbox run dev` reaches that container from the host. |
 | `COMPOSE_PROJECT_NAME` | `kobai-<hash>` — which containers and which volume this checkout owns. |
 
-**One source decides all four, and that is the property worth keeping.** They used to
+**One source decides all five, and that is the property worth keeping.** They used to
 default independently, so the port had to be passed twice and kept in step by whoever
 remembered; forgetting one brought the container up on one port while the suite dialled
 another, and neither error named the other (#21).
@@ -134,16 +141,33 @@ another, and neither error named the other (#21).
 The project name is set for the same reason. Compose otherwise names a project after the
 checkout directory's basename, so two checkouts both called `kobai` would share a project,
 and therefore a volume, and therefore a database — a far quieter failure than a port
-collision. Carrying the whole hash rather than the port keeps that true even for two
-checkouts that happen to derive the same port: they stay separate projects and collide
-loudly on the port, which is the failure you want.
+collision. Carrying the whole hash rather than a port keeps that true even for two checkouts
+that happen to derive the same pair: they stay separate projects and collide loudly on the
+ports, which is the failure you want.
+
+**A derived application port has to announce itself; a derived database port does not.**
+Nobody types a database port — the harness dials it and `docker ps` has it for anyone who
+wants it — but a Developer opens the application in a browser, and 3000 was the one thing
+about `devbox run up` you never had to look up. So `devbox run up` builds, prints where it
+is about to serve, and only then starts streaming logs:
+
+```
+  kobai is serving on http://localhost:53154 — health at /health, the Admin at /admin-ui
+```
+
+`devbox run dev` needs no such line: the Project logs `listening` with the port it bound, and
+`devbox run admin:dev` prints its own dev-server URL. **Inside the container the application
+is still on 3000 and always will be** — a container has a network namespace to itself, so
+only the host half of the mapping can collide — and 3000 remains what every file falls back
+to for a bare `docker compose` outside devbox (#61).
 
 **An explicit value still wins**, and from `.env` as well as from the environment, because
 `.env` is where `.env.example` sends a Developer and docker compose reads it too — a pin
 compose honoured while the harness ignored it would be this same bug in a new place. Pin
-`POSTGRES_PORT` and every address above follows it; pin `DATABASE_URL` and only that one
-moves. So CI can fix a port, and so can anyone who wants one they can type. The 5432 a
-Developer's own Postgres sits on is untouched either way.
+`POSTGRES_PORT` and every database address above follows it; pin `PORT` and the application
+serves there and the Admin's dev proxy follows; pin `DATABASE_URL` and only that one moves.
+So CI can fix a port, and so can anyone who wants one they can type. The 5432 a Developer's
+own Postgres sits on is untouched either way.
 
 ### Never use a `"// …"` key in `devbox.json`
 

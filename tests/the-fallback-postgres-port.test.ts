@@ -10,7 +10,7 @@ import { parse as parseYaml } from "yaml";
  * devbox's `init_hook` computes one port from this checkout's path and exports both
  * `POSTGRES_PORT` and `KOBAI_TEST_DATABASE_URL` from it, so the container's published port
  * and the address the harness dials come from one number and cannot drift apart
- * (AGENTS.md § The Postgres port belongs to the checkout). That is the derived path, and
+ * (AGENTS.md § The ports belong to the checkout). That is the derived path, and
  * the gate runs on it — which is exactly why the gate cannot see this.
  *
  * Underneath it, both files still carry a literal for a bare `docker compose` outside
