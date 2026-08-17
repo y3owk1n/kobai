@@ -8,7 +8,25 @@ without forking.
 > [`CONTEXT.md`](./CONTEXT.md) for the vocabulary and [`docs/adr/`](./docs/adr/) for the
 > decisions made so far.
 
-## Running it
+## Starting a Project
+
+```sh
+npm create kobai@latest my-store
+cd my-store && devbox run up
+```
+
+That generates a git repository you own outright, commits it, and brings up Postgres and the
+application. kobai is an ordinary versioned dependency in its `package.json`, so upgrading is
+a version bump rather than a merge — see
+[ADR-0001](./docs/adr/0001-customisation-lives-in-a-project-not-a-fork.md). Everything you
+customise is declared in one file, `kobai.config.ts`.
+
+The Project you get is the one in [`reference/`](./reference), which is also the Project this
+repository boots and tests on every commit ([ADR-0029](./docs/adr/0029-the-reference-project-is-the-release-gate-and-content-is-built-first.md));
+`create-kobai` generates it rather than something adjacent to it, and the build fails if the
+two drift.
+
+## Running this repository
 
 You need [devbox](https://www.jetify.com/devbox) and Docker. Nothing else — devbox brings
 its own Node.

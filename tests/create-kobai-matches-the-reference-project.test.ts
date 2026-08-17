@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -131,6 +131,32 @@ describe("the generated Project matches the reference Project", () => {
     );
 
     expect(offenders).toEqual([]);
+  });
+
+  it("holds nothing but what generation put there", async () => {
+    // `projectFiles` applies the same skip list to both trees, which is right for comparing
+    // them and leaves one hole: a file matching a skip — a `.test.ts`, a stray `.env` — that
+    // someone hand-added under `template/` would be invisible to every assertion above and
+    // would still be published, because npm packs the directory rather than the walk.
+    //
+    // So this walks the checked-in template with no skips at all. `syncTemplate` empties the
+    // directory before writing, so anything here that generation did not produce arrived by
+    // hand, and `template/` is not a directory to edit by hand.
+    const everything: string[] = [];
+    const walk = async (directory: string, prefix: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+        if (entry.isDirectory()) await walk(join(directory, entry.name), path);
+        else everything.push(path);
+      }
+    };
+    await walk(templateRoot, "");
+
+    const generated = new Set((await expected()).map((file) => file.path));
+    expect(
+      everything.filter((path) => !generated.has(path)).sort(),
+      "These files are inside the template but generation does not produce them. Run `devbox run template:generate`, which rewrites the directory from scratch.",
+    ).toEqual([]);
   });
 
   it("ships no test file, because the reference Project's tests are kobai's", async () => {
