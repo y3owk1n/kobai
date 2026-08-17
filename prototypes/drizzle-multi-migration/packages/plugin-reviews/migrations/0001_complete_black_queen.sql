@@ -1,0 +1,1 @@
+ALTER TABLE "reviews_review" ADD COLUMN "verified_purchase" boolean DEFAULT false NOT NULL;

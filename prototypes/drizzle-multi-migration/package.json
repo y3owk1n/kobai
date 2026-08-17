@@ -1,0 +1,17 @@
+{
+  "name": "kobai-prototype-drizzle-multi-migration",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE — throwaway. Answers the ADR-0011 open risk. Do not merge to main.",
+  "dependencies": {
+    "drizzle-orm": "^0.44.6",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "drizzle-kit": "^0.31.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

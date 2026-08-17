@@ -1,0 +1,19 @@
+# PROTOTYPE — WIPE ME. Throwaway Postgres for the drizzle multi-migration question.
+# Nothing here is production shape; it exists to be created and destroyed by run.sh.
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: kobai-prototype-wipe-me
+    environment:
+      POSTGRES_USER: prototype
+      POSTGRES_PASSWORD: prototype
+      POSTGRES_DB: kobai_prototype_wipe_me
+    ports:
+      - "55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prototype -d kobai_prototype_wipe_me"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
