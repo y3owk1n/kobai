@@ -27,10 +27,26 @@ services:
     volumes:
       - kobai-db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kobai} -d ${POSTGRES_DB:-kobai}"]
+      # Over TCP, and that `-h` is the whole of #80. `pg_isready` with no host dials the
+      # **unix socket**, and this image initialises a fresh volume by starting a temporary
+      # server on that socket with `listen_addresses=''`, running its init scripts, shutting
+      # it down and starting the real one. So a socket probe answers "accepting connections"
+      # while nothing is listening on TCP at all — and every caller of `docker compose up
+      # --wait db` (the gate among them) was released against a server about to be
+      # restarted. Naming a host asks the question a client actually has: is Postgres
+      # listening where I am about to dial? See ADR-0048.
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-kobai} -d ${POSTGRES_DB:-kobai}",
+        ]
       interval: 1s
       timeout: 3s
       retries: 30
+      # Failures before this do not count against `retries`, so a first boot on a loaded
+      # machine is given room to finish `initdb` instead of being declared unhealthy while
+      # it is still working. It is not a delay: a success inside the period is taken at once.
+      start_period: 60s
 
   app:
     build:

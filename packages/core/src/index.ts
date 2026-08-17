@@ -28,6 +28,12 @@ export {
   type Logger,
 } from "./config.ts";
 export type { Database } from "./db/client.ts";
+/**
+ * Exported because a Project reads the outcome and decides what it means, exactly as it does
+ * for a migration — and because keeping the two answers apart is the point of having two
+ * (ADR-0048).
+ */
+export type { DatabaseReadiness, WaitForDatabaseOptions } from "./db/readiness.ts";
 export type { HealthBody } from "./http/health.ts";
 /**
  * The OpenAPI description is on the surface because ADR-0002 makes the API the product:

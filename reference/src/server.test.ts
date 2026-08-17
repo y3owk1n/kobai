@@ -128,6 +128,32 @@ describe("the reference Project's entrypoint", () => {
     expect(admin.status).toBe(401);
   });
 
+  it("reports a database that is not up yet as booting, not as a failed migration", async () => {
+    // The other half of the test below, and the one #80 was about. A Postgres that has not
+    // finished starting used to reach `migrate()` and come back as *Core's migration set
+    // failed* — a refusal that was right and a reason that was wrong. Nothing is listening
+    // on port 1, which is the fastest honest version of "the database is not there yet".
+    child = start("postgres://kobai:kobai@127.0.0.1:1/kobai");
+    const output = capture(child);
+
+    const listening = await waitForLog(child, output, "listening");
+    await waitForLog(child, output, "waiting for the database");
+
+    const health = await fetch(`http://127.0.0.1:${listening.port}/health`);
+
+    // Booting, because that is what it is doing. `error` is reserved for the instance that
+    // will never work, and this one still might.
+    expect(health.status).toBe(503);
+    await expect(health.json()).resolves.toMatchObject({
+      status: "booting",
+      migrations: { status: "pending" },
+    });
+    expect(
+      output(),
+      "The boot blamed a migration for a database it never reached. No migration has run at this point — that is the confusion #80 removed.",
+    ).not.toContain("migrations failed");
+  });
+
   it("exits non-zero, and serves nothing, when a migration fails", async () => {
     database = await createTestDatabase();
     // Core's first migration creates `core_store`. Getting there first makes it fail for a
