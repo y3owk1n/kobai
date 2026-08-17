@@ -27,6 +27,7 @@
     // than stylistic — and it is also what lets `vitest.config.ts` resolve each target
     // against its own URL without knowing anything else about the layout.
     "paths": {
+      "@kobai/client": ["./packages/client/src/index.ts"],
       "@kobai/core": ["./packages/core/src/index.ts"],
       "@kobai/core/*": ["./packages/core/src/*/index.ts"],
       "@kobai/plugin-price-log": ["./packages/plugin-price-log/src/index.ts"]

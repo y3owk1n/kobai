@@ -33,6 +33,14 @@
       // docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md.
       // tests/no-push-script.test.ts fails the build if a push script appears here.
 
+      // openapi:generate needs neither a build nor a database: Node runs the TypeScript
+      // directly, and the description is a property of the routes rather than of anything
+      // behind them. Recursive, and the order is not incidental — pnpm walks the workspace
+      // in dependency order, so @kobai/core writes openapi.json and @kobai/client then
+      // regenerates itself from what Core wrote. Both files are checked in, and their
+      // tests fail the gate when either has drifted.
+      "openapi:generate": "pnpm -r openapi:generate",
+
       "up": "docker compose up --build",
       "down": "docker compose down",
       "build": "pnpm -r build",

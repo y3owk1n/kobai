@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    // Resolve @kobai/core the way anything outside this repository does — through
+    // node_modules and the package's own `exports` — rather than through the source paths
+    // the editor uses. Nothing under `src` imports it, which is the point: a storefront
+    // installs this package and never installs Core.
+    "paths": {}
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

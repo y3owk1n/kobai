@@ -47,6 +47,7 @@ and no PR opens on a red one.
 | `devbox run test` | Postgres up, build, then the whole suite. |
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
 | `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
+| `devbox run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
 
 There is deliberately **no `push` script** anywhere — not in Core, not in a Plugin, not in
 the reference Project. `drizzle-kit push` diffs against the live database and silently drops
@@ -105,6 +106,16 @@ Two escape hatches exist and were both rejected in #28: `@typescript/typescript6
 second, older compiler alongside the real one, and `typescript/unstable/sync` is unstable
 by name and spawns the Go binary to read a single file.
 
+**This rules out most OpenAPI client generators.** `openapi-typescript@7` and
+`@hey-api/openapi-ts` both build their output as a TypeScript AST and print it with
+`ts.factory`, so under TypeScript 7 they die on module load — `Cannot read properties of
+undefined` — before reading a byte of input. Both bugs are filed and open upstream
+(openapi-ts/openapi-typescript#2841, hey-api/hey-api#4235) and the only workaround offered is
+to pin a second compiler, which is what #28 rejected. `openapi-typescript@6` emits its
+TypeScript as **text** and declares no `typescript` dependency at all, so it is what
+`@kobai/client` pins — exactly, with a dependabot `ignore` on the major. When 7.1 brings an
+API back, that pin is a decision to revisit, not a bump to take.
+
 TypeScript 7.1 is expected to reintroduce an API, and it will be a **different** one. Treat
 anything written against the old shape as needing a rewrite rather than a version bump.
 
@@ -114,10 +125,45 @@ anything written against the old shape as needing a rewrite rather than a versio
 | --- | --- |
 | `packages/core` | `@kobai/core` — the package a Project depends on (ADR-0025). |
 | `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files. |
+| `packages/core/openapi.json` | The OpenAPI description. Generated, never hand-edited. |
+| `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, nothing else. |
 | `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
 | `compose.yaml`, `Dockerfile` | Postgres and the application, and nothing else. |
+
+### The API contract
+
+**A route is a declaration, and the description is generated from it.** Core's HTTP surface
+is an `OpenAPIHono` (`@hono/zod-openapi`): each route is a `createRoute({…})` object naming
+its path, its security scheme, the body it takes and every status it answers with, and
+`app.openapi(route, handler)` both serves it and puts it in the description. So `c.json(body,
+status)` is typechecked against the schema the route declared — **a response the description
+promises and the handler does not produce fails the build.** Do not add a route with a bare
+`app.get(…)`; it would be served and undescribed, and `openapi.test.ts` fails when the
+router's table and the description disagree.
+
+The schemas live in `packages/core/src/http/contract.ts` and are **structural** — names,
+types, presence, closed sets. Rules stay in the module that owns them: whether an address
+looks like one, whether a SKU is taken, whether this Store prices in that currency. A rule
+that moved into a schema would be one a client could be told about but Core could no longer
+change.
+
+**Drift fails the build, in two places.** `packages/core/openapi.json` and
+`packages/client/src/schema.ts` are both generated and both checked in.
+`packages/core/src/http/openapi.test.ts` regenerates the description and compares;
+`packages/client/src/schema.test.ts` regenerates the client and compares. Both run under
+`devbox run ci`. Regenerate with `devbox run openapi:generate` — Core first, then the client,
+because pnpm walks the workspace in dependency order.
+
+**The description is not served.** `/store` refuses an unauthenticated request *before*
+saying whether a path exists, and an endpoint handing out the whole surface anonymously would
+undo that. A Developer reads it from the package (`@kobai/core/openapi.json`); a TypeScript
+one installs `@kobai/client`.
+
+`openapi-typescript` is pinned to **6.7.6, exactly**, and `.github/dependabot.yml` holds the
+major back. Version 7 builds its output with the TypeScript compiler API and TypeScript 7
+ships none — see below.
 
 ### Writing tests
 

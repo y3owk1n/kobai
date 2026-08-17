@@ -67,6 +67,20 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
+      # DECISION: `openapi-typescript` never crosses a major here either, and the reason is
+      # the same shape as `@types/node`'s — a pin elsewhere in the repository is the real
+      # constraint. Version 7 emits its TypeScript through the **compiler API**, and
+      # TypeScript 7 ships none: the import resolves to `undefined` and it dies on
+      # `ts.factory` before it reads a byte of `openapi.json`
+      # (openapi-ts/openapi-typescript#2841, open; `@hey-api/openapi-ts` fails the same way
+      # in hey-api/hey-api#4235). Version 6 emits text and needs no compiler at all, which
+      # is why `@kobai/client` pins it exactly. A weekly 6 → 7 PR would be red every week
+      # and hand-closed every week. **Lift this the day TypeScript ships an API again and
+      # the generator uses it** — expected in 7.1, and a different API, so treat it as a
+      # decision rather than a bump. See AGENTS.md § "There is no TypeScript compiler API".
+      - dependency-name: "openapi-typescript"
+        update-types: ["version-update:semver-major"]
+
     cooldown:
       # DECISION: hold a release briefly before proposing it, so a version yanked or
       # hot-fixed within days never becomes a PR at all. Security updates ignore cooldown
