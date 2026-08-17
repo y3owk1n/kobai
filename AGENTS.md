@@ -107,6 +107,13 @@ It also reads `migrationTracking()`, `columnsOf()` and `indexedColumnsOf()`, and
 every non-system schema rather than only `public` — the prototype's inspector reported "no
 tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
 
+The **packaging seam** covers what none of those can, because it is not about a running
+database at all: that the `migrations/` directory each package resolves relative to its
+*built* output survives being packed, and so actually reaches a Project's `node_modules`.
+`tests/packaged-migrations.test.ts` packs every workspace package that ships a
+`migrations/` directory or names one in `files`, and reads the tarball back. The packages
+are discovered rather than listed, so the next Plugin is covered without an edit.
+
 Real Postgres rather than a fake, because under
 [ADR-0004](docs/adr/0004-plugins-own-their-tables-core-tables-are-closed.md),
 [ADR-0011](docs/adr/0011-postgres-and-drizzle.md) and ADR-0030 the schema and its migrations
