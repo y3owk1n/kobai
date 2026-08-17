@@ -28,7 +28,7 @@ afterEach(async () => {
 async function storeTable(schema: SchemaInspector): Promise<TableRef> {
   const matches = (await schema.tables()).filter((table) => table.name === "core_store");
   const [store] = matches;
-  if (store === undefined || matches.length !== 1) {
+  if (matches.length !== 1 || store === undefined) {
     throw new Error(`expected exactly one core_store table, found ${matches.length}`);
   }
   return store;
@@ -82,12 +82,10 @@ describe("the Store is a singleton", () => {
     const schema = inspectSchema(kobai.database);
 
     // A foreign key onto the Store is multi-tenancy arriving by the back door: it makes the
-    // Store a scoping key on whatever points at it (ADR-0005).
-    //
-    // Asked of the one table rather than of the `core` prefix: `foreignKeysCrossingInto`
-    // excludes a package's references to itself, so a `core_` table growing a `store_id`
-    // would read as Core's own business and pass. The Store is referenced by *nothing* —
-    // Core included — which is a strictly stronger rule than ADR-0004's.
+    // Store a scoping key on whatever points at it (ADR-0005). Asked of the one table rather
+    // than of the `core` prefix, because ADR-0005 is the stronger rule and
+    // `foreignKeysCrossingInto` would excuse a `core_` table pointing at the Store —
+    // `foreignKeysTargeting`'s own JSDoc has the argument.
     await expect(schema.foreignKeysTargeting(await storeTable(schema))).resolves.toEqual(
       [],
     );
@@ -98,11 +96,12 @@ describe("the Store is a singleton", () => {
    * say "no references" whatever the database held would let the scoping key it exists to
    * catch walk straight past it.
    *
-   * The table is created here rather than in a migration because that is exactly what the
+   * The tables are created here rather than in a migration because that is exactly what the
    * mistake looks like on the day somebody makes it — an ordinary table with a `store_id` on
-   * it, added by a Plugin or by Core, neither of which the sweep is allowed to excuse.
+   * it, added by a Plugin or by Core, neither of which the sweep is allowed to excuse. One
+   * sits in another schema, because "everywhere in the database" has to mean everywhere.
    */
-  it("names a table that arrives pointing at it", async () => {
+  it("has that proven by a sweep that names a foreign key when one arrives", async () => {
     kobai = await createTestKobai();
     const schema = inspectSchema(kobai.database);
     const store = await storeTable(schema);
@@ -117,8 +116,24 @@ describe("the Store is a singleton", () => {
         constraint core_scoped_store_fk foreign key (store_id) references core_store (singleton)
       )
     `);
+    // And one from a schema nobody thought to look in. A Project owns its own migrations and
+    // may put its tables wherever it likes; a sweep confined to `public` would call this
+    // database single-tenant while a `store_id` sat one schema over.
+    await kobai.database.query(`create schema a_project_of_its_own`);
+    await kobai.database.query(`
+      create table a_project_of_its_own.scoped (
+        store_id boolean not null,
+        constraint project_scoped_store_fk foreign key (store_id) references core_store (singleton)
+      )
+    `);
 
+    // Ordered by the schema and table a key points *from*, which `foreignKeys()` sorts on.
     await expect(schema.foreignKeysTargeting(store)).resolves.toEqual([
+      {
+        constraint: "project_scoped_store_fk",
+        from: { schema: "a_project_of_its_own", name: "scoped" },
+        to: store,
+      },
       {
         constraint: "core_scoped_store_fk",
         from: { schema: store.schema, name: "core_scoped" },
