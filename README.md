@@ -33,9 +33,20 @@ its own Node.
 
 ```sh
 devbox run up     # Postgres and the application, and nothing else
-curl localhost:3000/health
-open http://localhost:3000/admin-ui/   # the Admin, from the same process and the same origin
 ```
+
+That prints the URL it is serving on, because the port belongs to the checkout rather than to
+kobai — it is derived from this directory's path, in the range 53000-53999, so a second clone
+or a git worktree can serve at the same time without either being told about the other. Take
+the address from what it printed:
+
+```sh
+curl localhost:53154/health
+open http://localhost:53154/admin-ui/   # the Admin, from the same process and the same origin
+```
+
+Set `PORT` in the environment or in `.env` to pin one instead. The database's port works the
+same way, in 55000-55999.
 
 Migrations apply at boot, so a fresh database becomes a working Store with no separate step.
 If they fail, the application exits rather than serving traffic against a half-migrated

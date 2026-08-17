@@ -20,8 +20,8 @@ const ADMIN_BASE = "/admin-ui/";
 /**
  * Where the API is while a Developer is editing the Admin.
  *
- * `devbox run dev` runs the reference Project on `PORT` (3000 by default) and this dev
- * server proxies kobai's surfaces to it — so **the browser only ever sees one origin**, this
+ * `devbox run dev` runs the reference Project on whatever `PORT` says, and this dev server
+ * proxies kobai's surfaces to it — so **the browser only ever sees one origin**, this
  * one, exactly as it sees only one in production. That is the whole reason the proxy exists:
  * a second origin would need CORS, and ADR-0010 spends the single container to not have any.
  */

@@ -8,11 +8,12 @@
     "init_hook": [
       "corepack enable --install-directory \"$DEVBOX_PROJECT_ROOT/.devbox/virtenv/nodejs/corepack-bin\"",
 
-      // One number, derived from the checkout's path, decides the port compose publishes,
-      // the compose project the containers belong to, and the address the test harness
-      // dials. They are set here, in front of every script, because the failure this
-      // prevents is them disagreeing: the container comes up on one port while the suite
-      // dials another, and neither error names the other. See AGENTS.md § Development.
+      // One number, derived from the checkout's path, decides the two ports compose
+      // publishes, the compose project the containers belong to, and the address the test
+      // harness dials. They are set here, in front of every script, because the failure
+      // this prevents is them disagreeing: the container comes up on one port while the
+      // suite dials another, and neither error names the other. See AGENTS.md
+      // § Development.
       //
       // The path is what distinguishes two checkouts of kobai — a second clone, a git
       // worktree — and a path does not change between runs, so the container a run left
@@ -26,12 +27,25 @@
       // the closing quote or comment.
       "kobai_dotenv() { sed -n \"s/^[[:space:]]*$1[[:space:]]*=[^[:alnum:]]*\\([[:alnum:]_.-]*\\).*/\\1/p\" \"$DEVBOX_PROJECT_ROOT/.env\" 2>/dev/null | tail -n 1; }",
       "kobai_pinned_port=${POSTGRES_PORT:-$(kobai_dotenv POSTGRES_PORT)}",
+      "kobai_pinned_app_port=${PORT:-$(kobai_dotenv PORT)}",
       "kobai_pinned_project=${COMPOSE_PROJECT_NAME:-$(kobai_dotenv COMPOSE_PROJECT_NAME)}",
       "kobai_hash=$(printf %s \"$DEVBOX_PROJECT_ROOT\" | cksum | cut -d' ' -f1)",
 
       // 55000-55999: the neighbourhood of the 55432 this repo has always used, and
       // nowhere near the 5432 a Developer's own Postgres sits on.
       "export POSTGRES_PORT=\"${kobai_pinned_port:-$((55000 + kobai_hash % 1000))}\"",
+
+      // 53000-53999, and read it the way 55432 reads: the port the service is known by
+      // with a 5 in front of it. The application's 3000 is *not* left where it is, for the
+      // same reason the database's 5432 is not — 3000 is where every other dev server on
+      // the machine already sits, so a fixed one collides with a Developer's other work as
+      // well as with their other checkout (#61).
+      //
+      // Same `kobai_hash % 1000` as the database's on purpose. The two ports then carry
+      // the same three digits — 53154 beside 55154 — so a `docker ps` reads as one
+      // checkout rather than as two unrelated numbers, and two checkouts that collide
+      // collide on both at once rather than half-sharing a stack.
+      "export PORT=\"${kobai_pinned_app_port:-$((53000 + kobai_hash % 1000))}\"",
 
       // The project name carries the whole hash rather than the port, so two checkouts
       // that happened to derive the same port stay separate projects: they collide
@@ -49,7 +63,7 @@
       // environment, so exporting one unconditionally would silently beat a Developer's.
       "if ! grep -q \"^[[:space:]]*DATABASE_URL[[:space:]]*=\" \"$DEVBOX_PROJECT_ROOT/.env\" 2>/dev/null; then export DATABASE_URL=\"${DATABASE_URL:-postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@127.0.0.1:$POSTGRES_PORT/${POSTGRES_DB:-kobai}}\"; fi",
 
-      "unset kobai_pinned_port kobai_pinned_project kobai_hash",
+      "unset kobai_pinned_port kobai_pinned_app_port kobai_pinned_project kobai_hash",
       "unset -f kobai_dotenv"
     ],
     "scripts": {
@@ -94,7 +108,14 @@
       // regenerates is a generated artifact that has quietly stopped being true.
       "template:generate": "pnpm --filter create-kobai template:generate",
 
-      "up": "docker compose up --build",
+      // `build` then `up` rather than `up --build`, so the address is printed between the
+      // build output and the log stream rather than scrolling away above a cold build. It
+      // has to be printed at all because `PORT` is derived from this checkout's path
+      // (init_hook above): a Developer opens the application in a browser, and a port they
+      // have to work out from `docker ps` is a worse answer than one 3000 always gave.
+      // `${PORT:-3000}` covers a bare `docker compose` outside devbox, which falls back to
+      // the same literal `compose.yaml` does.
+      "up": "docker compose build && printf '\\n  kobai is serving on http://localhost:%s — health at /health, the Admin at /admin-ui\\n\\n' \"${PORT:-3000}\" && docker compose up",
       "down": "docker compose down",
       "build": "pnpm -r build",
       "dev": "pnpm -r build && pnpm --filter kobai-reference dev",
