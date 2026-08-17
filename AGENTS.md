@@ -604,6 +604,23 @@ Seed **before** asserting, and say the rows are there — a widening applies cle
 table that stayed empty, so the arrangement is the whole test. See ADR-0038 and
 `packages/plugin-price-log/src/migrations.test.ts`.
 
+**One migration test is not in-process, and that is the point.**
+`tests/the-cli-and-the-migrator-agree.test.ts` shells out to the real `drizzle-kit migrate`
+and then runs the programmatic migrator against the same database — CLI first, then the other
+way round, with Core's set and a Plugin's — and asserts that each recognises the other's work
+and applies nothing. ADR-0030 rests entirely on that agreement, and the two migrators are two
+*implementations* with different defaults, so nothing smaller than running both can see it.
+Until #46 it was checked by hand whenever somebody remembered, which is what a drizzle bump
+now arriving automatically made untenable.
+
+**It runs in `devbox run ci` like everything else, deliberately** (ADR-0044). It adds a few
+seconds to a gate that already builds images and stands up a registry, and the gate
+already provides both things it needs — Postgres, and the `pnpm -r build` whose `dist` a
+Plugin's `drizzle.config.ts` resolves `@kobai/core/migrations` through. A guardrail behind an
+opt-in step is not a faster guardrail, it is an optional one. The one visible consequence is
+that a bare `vitest` with no build ahead of it fails on this file; the failure says so and
+names `devbox run build`.
+
 The **schema seam** covers the rest of what HTTP cannot: ADR-0004's rules are properties of
 the schema, not behaviours. Ask Postgres what it is holding, through `inspectSchema` from
 `@kobai/core/testing` — never by hand-rolling another `information_schema` query, because

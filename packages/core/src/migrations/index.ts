@@ -17,6 +17,7 @@ export {
 export {
   defineMigrationSet,
   KOBAI_MIGRATIONS_SCHEMA,
+  MIGRATIONS_TABLE_STEM,
   type MigrationSet,
   migrationsTableFor,
 } from "./set.ts";
