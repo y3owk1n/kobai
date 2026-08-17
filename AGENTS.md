@@ -146,14 +146,19 @@ the one file compose reads is the password the suite signs in with. It did not u
 the harness was handed `kobai:kobai` whatever `.env` said, and the only symptom was an
 authentication failure naming neither file. Three things about it are easy to get wrong:
 
-- **`kobai_dotenv` is the reader, and there is one of it.** It follows docker compose's own
-  env-file grammar — quoted values, escapes inside double quotes, an inline comment needing
-  whitespace in front — because the file it is reading is compose's. A second parser would
-  be two answers to what `.env` says.
+- **`kobai_dotenv` is the reader, and there is one of it** — the `DATABASE_URL` line asks
+  through it too. It follows docker compose's own env-file grammar: a leading `export` is
+  stripped, `\n`/`\r`/`\t`/`\"`/`\\` are interpreted inside double quotes, single quotes are
+  raw, a bare value loses leading blanks and ends at a ` #`. Each clause was checked against
+  `docker compose config` reading the same file, which is how the first two were found at
+  all. The one piece deliberately *not* copied is compose's `${VAR}` interpolation inside a
+  value, so keep `$` out of a password. A second parser would be two answers to what `.env`
+  says.
 - **`kobai_urlencode` takes which half of the URL it is filling.** `pg` reads the user and
   password with `decodeURIComponent` and the database name with `decodeURI`, and the second
   never unescapes a reserved character — so an over-encoded `=` in a database name arrives
-  as a literal `%3D`. Encode against the driver, not against the RFC.
+  as a literal `%3D`. Encode against the driver, not against the RFC. It walks bytes rather
+  than lines, because a value can hold a newline and awk's record separator would eat it.
 - **The hook is sourced under `set -e`.** A line of it that returns non-zero takes down every
   `devbox run …` with a bare exit status and no message. A checkout with no `.env` is the
   ordinary case, so reading one that is not there must not be a failure — and

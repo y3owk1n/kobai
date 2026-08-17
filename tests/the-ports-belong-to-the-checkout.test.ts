@@ -1,8 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readDevbox, runInitHook } from "./support/init-hook.ts";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  checkoutPinning,
+  discardCheckouts,
+  readDevbox,
+  runInitHook,
+} from "./support/init-hook.ts";
 
 /**
  * The ports in `devbox.json`'s `init_hook`, run rather than read.
@@ -55,22 +57,7 @@ async function derive(options: {
   };
 }
 
-let workspace: string;
-
-/** A checkout that exists, because a pin in `.env` needs a file to be read out of. */
-async function checkoutPinning(dotenv: string): Promise<string> {
-  const root = await mkdtemp(join(workspace, "checkout-"));
-  await writeFile(join(root, ".env"), dotenv);
-  return root;
-}
-
-beforeAll(async () => {
-  workspace = await mkdtemp(join(tmpdir(), "kobai-derived-ports-"));
-});
-
-afterAll(async () => {
-  await rm(workspace, { recursive: true, force: true });
-});
+afterAll(discardCheckouts);
 
 describe("the ports a checkout derives", () => {
   it("gives the application a port of its own, in the range AGENTS.md promises", async () => {

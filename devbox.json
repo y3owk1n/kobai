@@ -27,14 +27,20 @@
       // Two helpers do that, and both are read the way docker compose reads `.env`, because
       // that is the file they are reading (ADR-0046):
       //
-      // `kobai_dotenv` takes the last assignment of a name and hands back its whole value:
-      // double-quoted with `\"` and `\\` interpreted, single-quoted raw, or bare — where an
-      // inline comment needs a space in front of it, exactly as compose has it. A port is a
-      // bare token and survived a much smaller reader; POSTGRES_PASSWORD is not, and reading
-      // one with that reader truncated it silently at the first punctuation mark, which is
-      // the whole reason #21 left the credentials alone. It returns rather than failing when
-      // there is no `.env` at all — devbox sources this file under `set -e`, so a non-zero
-      // status here stops every `devbox run …` with a bare exit code and no message.
+      // `kobai_dotenv` takes the last assignment of a name — with or without a leading
+      // `export` — and hands back its whole value: double-quoted with `\n`, `\r`, `\t`,
+      // `\"` and `\\` interpreted, single-quoted raw, or bare, where leading blanks go and
+      // an inline comment needs a space in front of it. Each of those was checked against
+      // `docker compose config` reading the same file rather than against its
+      // documentation. A port is a bare token and survived a much smaller reader;
+      // POSTGRES_PASSWORD is not, and reading one with that reader truncated it silently at
+      // the first punctuation mark, which is the whole reason #21 left the credentials
+      // alone. What is deliberately *not* copied is compose's interpolation of `${VAR}`
+      // inside a value — `.env.example` says to keep `$` out of a password, because a
+      // reader that expanded it and one that did not would be this ticket's bug again. It
+      // returns rather than failing when there is no `.env` at all — devbox sources this
+      // file under `set -e`, so a non-zero status here stops every `devbox run …` with a
+      // bare exit code and no message.
       //
       // `kobai_urlencode` puts one of those values into a URL, and takes which half of the
       // URL it is going into, because the `pg` driver decodes the two halves differently.
@@ -42,9 +48,11 @@
       // the password, which pg reads with decodeURIComponent. `reserved` leaves a reserved
       // character alone, for the database name in the path, which pg reads with decodeURI —
       // that one never unescapes a reserved character, so an over-encoded `=` would arrive
-      // as a literal `%3D` and Postgres would report a database nobody named.
-      "kobai_dotenv() { [ -r \"$DEVBOX_PROJECT_ROOT/.env\" ] || return 0; LC_ALL=C awk -v name=\"$1\" 'BEGIN { anchor = \"^[ \\t]*\" name \"[ \\t]*=\"; apostrophe = sprintf(\"%c\", 39) } $0 ~ anchor { line = $0; sub(/\\r$/, \"\", line); sub(anchor, \"\", line); quote = substr(line, 1, 1); if (quote == \"\\\"\" || quote == apostrophe) { value = \"\"; i = 2; while (i <= length(line)) { c = substr(line, i, 1); if (quote == \"\\\"\" && c == \"\\\\\" && i < length(line)) { value = value substr(line, i + 1, 1); i += 2; continue } if (c == quote) break; value = value c; i++ } } else { value = line; sub(/^[ \\t]+/, \"\", value); sub(/[ \\t]+#.*$/, \"\", value); sub(/[ \\t]+$/, \"\", value) } found = 1 } END { if (found) print value }' \"$DEVBOX_PROJECT_ROOT/.env\"; }",
-      "kobai_urlencode() { printf %s \"$2\" | LC_ALL=C awk -v keep=\"$1\" 'BEGIN { for (i = 0; i < 256; i++) byte[sprintf(\"%c\", i)] = i } { out = \"\"; for (i = 1; i <= length($0); i++) { c = substr($0, i, 1); out = out (byte[c] > 32 && byte[c] < 127 && index(\" \\\"<>\\\\^`{|}%?#/[]\", c) == 0 && (keep == \"reserved\" || c ~ /[A-Za-z0-9._~-]/) ? c : sprintf(\"%%%02X\", byte[c])) } printf \"%s\", out }'; }",
+      // as a literal `%3D` and Postgres would report a database nobody named. It walks
+      // bytes rather than lines: a value can hold a newline, since `\n` inside double
+      // quotes is one, and awk's own record separator would otherwise eat it.
+      "kobai_dotenv() { [ -r \"$DEVBOX_PROJECT_ROOT/.env\" ] || return 0; LC_ALL=C awk -v name=\"$1\" 'BEGIN { anchor = \"^[ \\t]*(export[ \\t]+)?\" name \"[ \\t]*=\"; apostrophe = sprintf(\"%c\", 39) } $0 ~ anchor { line = $0; sub(/\\r$/, \"\", line); sub(anchor, \"\", line); quote = substr(line, 1, 1); if (quote == \"\\\"\" || quote == apostrophe) { value = \"\"; i = 2; while (i <= length(line)) { c = substr(line, i, 1); if (quote == \"\\\"\" && c == \"\\\\\" && i < length(line)) { e = substr(line, i + 1, 1); value = value (e == \"n\" ? sprintf(\"%c\", 10) : (e == \"r\" ? sprintf(\"%c\", 13) : (e == \"t\" ? sprintf(\"%c\", 9) : e))); i += 2; continue } if (c == quote) break; value = value c; i++ } } else { value = line; sub(/^[ \\t]+/, \"\", value); sub(/[ \\t]+#.*$/, \"\", value); sub(/[ \\t]+$/, \"\", value) } found = 1 } END { if (found) print value }' \"$DEVBOX_PROJECT_ROOT/.env\"; }",
+      "kobai_urlencode() { printf %s \"$2\" | LC_ALL=C awk -v keep=\"$1\" 'BEGIN { for (i = 0; i < 256; i++) byte[sprintf(\"%c\", i)] = i } { out = NR > 1 ? \"%0A\" : \"\"; for (i = 1; i <= length($0); i++) { c = substr($0, i, 1); out = out (byte[c] > 32 && byte[c] < 127 && index(\" \\\"<>\\\\^`{|}%?#/[]\", c) == 0 && (keep == \"reserved\" || c ~ /[A-Za-z0-9._~-]/) ? c : sprintf(\"%%%02X\", byte[c])) } printf \"%s\", out }'; }",
       "kobai_pinned_port=${POSTGRES_PORT:-$(kobai_dotenv POSTGRES_PORT)}",
       "kobai_pinned_app_port=${PORT:-$(kobai_dotenv PORT)}",
       "kobai_pinned_project=${COMPOSE_PROJECT_NAME:-$(kobai_dotenv COMPOSE_PROJECT_NAME)}",
@@ -77,22 +85,24 @@
       "export COMPOSE_PROJECT_NAME=\"${kobai_pinned_project:-kobai-$(printf %08x \"$kobai_hash\")}\"",
 
       // Both addresses below are one string: what the container was started with, encoded
-      // once. `compose.yaml` falls back to the same three literals for a bare `docker
-      // compose` outside devbox, and the harness's fallback URL carries them a third time —
-      // tests/the-postgres-credentials-belong-to-dot-env.test.ts holds those two together,
-      // the way tests/the-fallback-postgres-port.test.ts holds the port.
-      "kobai_pg_authority=\"$(kobai_urlencode unreserved \"${kobai_pg_user:-kobai}\"):$(kobai_urlencode unreserved \"${kobai_pg_password:-kobai}\")@127.0.0.1:$POSTGRES_PORT/$(kobai_urlencode reserved \"${kobai_pg_database:-kobai}\")\"",
-      "export KOBAI_TEST_DATABASE_URL=\"${KOBAI_TEST_DATABASE_URL:-postgres://$kobai_pg_authority}\"",
+      // once. The `:-kobai` defaults here are a third copy of the literals `compose.yaml`
+      // falls back to and the harness's fallback URL carries — all three are held together
+      // by tests/the-postgres-credentials-belong-to-dot-env.test.ts, the way
+      // tests/the-fallback-postgres-port.test.ts holds the port.
+      "kobai_pg_address=\"$(kobai_urlencode unreserved \"${kobai_pg_user:-kobai}\"):$(kobai_urlencode unreserved \"${kobai_pg_password:-kobai}\")@127.0.0.1:$POSTGRES_PORT/$(kobai_urlencode reserved \"${kobai_pg_database:-kobai}\")\"",
+      "export KOBAI_TEST_DATABASE_URL=\"${KOBAI_TEST_DATABASE_URL:-postgres://$kobai_pg_address}\"",
 
       // `devbox run dev` runs the reference Project on the host against this same
       // container, so its DATABASE_URL is a third address that must not disagree either.
-      // A URL is not a bare token, so this asks `.env` whether it has one rather than
-      // trying to read it: `node --env-file` does not overwrite a variable already in the
-      // environment, so exporting one unconditionally would silently beat a Developer's.
-      "if ! grep -q \"^[[:space:]]*DATABASE_URL[[:space:]]*=\" \"$DEVBOX_PROJECT_ROOT/.env\" 2>/dev/null; then export DATABASE_URL=\"${DATABASE_URL:-postgres://$kobai_pg_authority}\"; fi",
+      // This asks `.env` whether it already has one rather than exporting over the top:
+      // `node --env-file` does not overwrite a variable already in the environment, so an
+      // unconditional export would silently beat a Developer's own. It asks through the
+      // same reader as everything else — a second one, with its own idea of what an
+      // assignment line looks like, would be two answers to what `.env` says.
+      "if [ -z \"$(kobai_dotenv DATABASE_URL)\" ]; then export DATABASE_URL=\"${DATABASE_URL:-postgres://$kobai_pg_address}\"; fi",
 
       "unset kobai_pinned_port kobai_pinned_app_port kobai_pinned_project kobai_hash",
-      "unset kobai_pg_user kobai_pg_password kobai_pg_database kobai_pg_authority",
+      "unset kobai_pg_user kobai_pg_password kobai_pg_database kobai_pg_address",
       "unset -f kobai_dotenv kobai_urlencode"
     ],
     "scripts": {

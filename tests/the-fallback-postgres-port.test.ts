@@ -23,14 +23,15 @@ import { parse as parseYaml } from "yaml";
  * There is deliberately no third copy of it here: a literal in this file to compare both
  * against would be the very thing it exists to forbid.
  *
- * **The credentials in those same two fallbacks are deliberately not covered**, and belong
- * to #63. They are not the same defect wearing different clothes: the ports disagree only
- * outside devbox, because the derived path ties them, while `POSTGRES_USER` and
- * `POSTGRES_PASSWORD` are not carried to the harness on *either* path — a Developer who
- * changes them in `.env` gets a container with the new ones and a suite dialling the old.
- * Two agreeing literals would not fix that, and would read as though something had. #63
- * decides whether the credentials flow through or are declared unconfigurable, and the
- * guardrail for whichever it picks belongs with it.
+ * **The credentials in those same two fallbacks are covered next door**, in
+ * `tests/the-postgres-credentials-belong-to-dot-env.test.ts`. They were left out of this
+ * file deliberately and are not the same defect wearing different clothes: the ports
+ * disagree only outside devbox, because the derived path ties them, while `POSTGRES_USER`
+ * and `POSTGRES_PASSWORD` used to be carried to the harness on *neither* path — a Developer
+ * who changed them in `.env` got a container with the new ones and a suite dialling the old.
+ * Two agreeing literals would not have fixed that, and would have read as though something
+ * had. #63 wired them through the derived path, which is what made the literals underneath
+ * worth holding together, and put that guardrail with the change that earned it.
  */
 const repoRoot = new URL("../", import.meta.url);
 

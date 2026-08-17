@@ -28,24 +28,46 @@ file is two answers to "what does `.env` say", and the pair drifts the way the a
 
 ## What the reader does, and why it reads compose's rules
 
-`kobai_dotenv` takes the **last** assignment of a name and hands back the whole value:
-double-quoted with `\"` and `\\` interpreted, single-quoted raw, or bare — where an inline
-comment must have whitespace in front of it. That is docker compose's own env-file grammar,
-and it is copied rather than chosen: this file *is* compose's `.env`, and a helper that
-disagreed with compose about what it said would be the original defect in a subtler form.
+`kobai_dotenv` takes the **last** assignment of a name — with or without a leading `export` —
+and hands back the whole value: double-quoted with `\n`, `\r`, `\t`, `\"` and `\\`
+interpreted, single-quoted raw, or bare, where leading blanks go and an inline comment must
+have whitespace in front of it. That is docker compose's own env-file grammar, and it is
+copied rather than chosen: this file *is* compose's `.env`, and a helper that disagreed with
+compose about what it said would be the original defect in a subtler form.
 
-Two limits are inherited from compose rather than introduced here, and `.env.example` states
-both next to the variables:
+**Every clause of that was checked against `docker compose config` reading the same file**,
+not against compose's documentation. Two of them were found that way rather than reasoned
+out: compose strips a leading `export `, and it expands `\n`/`\r`/`\t` inside double quotes.
+A reader that did neither left the container holding one password and the suite dialling
+another — this ticket's defect, on lines nobody would have thought to test. Both now have a
+case in the suite, and the second is why the encoder walks bytes rather than lines: a value
+really can contain a newline, and awk's own record separator had been quietly eating it.
+
+Three limits remain, and `.env.example` states the first two next to the variables:
 
 - **`$` is compose's, not ours.** Compose interpolates variables inside a quoted value in
-  `.env`, so a password containing `$` never reaches the container intact either. Nothing in
-  devbox can rescue that, and pretending to would make the two disagree again.
+  `.env` — verified: `POSTGRES_PASSWORD="pa${POSTGRES_USER}word"` reaches the container as
+  `pakobaiword` — so a password containing `$` never arrives intact there either. Copying
+  that expansion is the one piece of the grammar deliberately left out; keeping `$` out of
+  the value is the honest answer, and pretending either way would make the two disagree.
+- **A value may not *end* in a newline.** The shell's command substitution strips trailing
+  newlines before the encoder ever sees the value, so a password ending in one would reach
+  the container and not the suite. Nothing short of a different transport fixes it, and no
+  password ends in a newline; it is recorded here rather than left to be discovered.
 - **A missing `.env` is not a failure.** devbox sources the hook from a script that opens
   `set -e`, so a reader that reported "no such file" as a non-zero status took down every
   `devbox run …` in the repository — with a bare exit code and no message, because the
   file's stderr was suppressed. Observed while building this. The reader now checks for a
   readable file and returns nothing, and stderr is no longer thrown away, so a real awk
   failure says so instead of hiding behind the same silence.
+
+**There is one reader, and the `DATABASE_URL` line uses it too.** That line does not set the
+address from `.env` — `node --env-file` applies the file itself and will not overwrite a
+variable already in the environment, so exporting one unconditionally would silently beat a
+Developer's own. It only asks whether `.env` already carries one, and it used to ask with a
+`grep` of its own whose idea of an assignment line (`[[:space:]]`, no `export`) differed from
+the helper's. Two parsers of one file are two answers about what it says, which is this
+ticket's defect in miniature.
 
 ## Why the encoder takes which half of the URL it is filling
 
@@ -87,8 +109,12 @@ a `?` is created, and the **harness itself** signs in as it. The same file asser
 password truncated at its first punctuation mark is refused, because a test that only proves
 a string arrived would pass equally against a Postgres that never checked one.
 
-It also holds `compose.yaml`'s three fallback defaults and the harness's fallback URL to
-being the same credentials, which is what
+It also holds the **three** copies of the fallback credentials to being one set:
+`compose.yaml`'s `${POSTGRES_USER:-kobai}` defaults, the `:-kobai` defaults in the hook
+itself, and the harness's fallback URL. devbox's own copy is reached by running the hook
+against a checkout with nothing set at all, which is the only way those defaults are visible
+— guarding two of three would let the third be left behind while the check read as though
+nothing had. That is what
 `tests/the-fallback-postgres-port.test.ts` does for the port. That test deliberately left the
 credentials alone while they reached the harness on neither path — two agreeing literals
 would have fixed nothing and read as though they had. Now that they reach it on the derived

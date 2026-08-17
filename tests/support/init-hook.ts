@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
@@ -55,6 +57,41 @@ export async function readDevbox(): Promise<DevboxConfig> {
 }
 
 /**
+ * A checkout that exists, holding the `.env` given — which a pin needs a file to be read out
+ * of, and a path to be hashed from.
+ *
+ * Both files that run the hook need one, so it lives here rather than twice over. Everything
+ * it makes goes under one directory `discardCheckouts` removes.
+ */
+export async function checkoutPinning(dotenv: string): Promise<string> {
+  const root = await mkdtemp(join(await checkoutWorkspace(), "checkout-"));
+  await writeFile(join(root, ".env"), dotenv);
+  return root;
+}
+
+/**
+ * A path inside that same workspace where nothing has been written — a checkout with no
+ * `.env`, which is what most of them are.
+ */
+export async function checkoutWithNoDotenv(): Promise<string> {
+  return join(await checkoutWorkspace(), "no-such-checkout");
+}
+
+/** Drops every checkout made above. For an `afterAll`. */
+export async function discardCheckouts(): Promise<void> {
+  if (workspace === undefined) return;
+  await rm(workspace, { recursive: true, force: true });
+  workspace = undefined;
+}
+
+let workspace: string | undefined;
+
+async function checkoutWorkspace(): Promise<string> {
+  workspace ??= await mkdtemp(join(tmpdir(), "kobai-init-hook-"));
+  return workspace;
+}
+
+/**
  * Runs the hook against a checkout and reports the variables asked for.
  *
  * The environment is built from `PATH` and what the caller passes, and nothing else. Under
@@ -91,9 +128,12 @@ export async function runInitHook<const Names extends readonly string[]>(options
     "set -e",
     "corepack() { :; }",
     ...lines,
-    // One line each, in order. A value may hold spaces, quotes and `#` — this is the file
-    // that reads a password out of `.env` — so each is printed whole and split on newlines.
-    ...options.report.map((name) => `printf '%s\\n' "$${name}"`),
+    // NUL-delimited, in order. A newline is a character `.env` can put in a value — the
+    // reader interprets `\n` inside a double-quoted one, because compose does — and a
+    // line-delimited report would let a value holding one shift every value after it
+    // silently, in the file whose whole subject is awkward characters. NUL is the one byte
+    // that cannot appear.
+    ...options.report.map((name) => `printf '%s\\0' "$${name}"`),
   ].join("\n");
 
   const { stdout } = await run("sh", ["-c", script], {
@@ -104,16 +144,17 @@ export async function runInitHook<const Names extends readonly string[]>(options
     },
   });
 
-  const printed = stdout.split("\n");
+  // A trailing delimiter leaves one empty field behind it, and nothing else may.
+  const printed = stdout.split("\0");
+  if (printed.length !== options.report.length + 1) {
+    throw new Error(
+      `The hook reported ${printed.length - 1} values, not the ${options.report.length} asked of it (${options.report.join(", ")}). It printed:\n${stdout}`,
+    );
+  }
+
   const reported = {} as Record<Names[number], string>;
   options.report.forEach((name, index) => {
-    const value = printed[index];
-    if (value === undefined) {
-      throw new Error(
-        `The hook reported fewer than the ${options.report.length} values asked of it:\n${stdout}`,
-      );
-    }
-    reported[name as Names[number]] = value;
+    reported[name as Names[number]] = printed[index] ?? "";
   });
   return reported;
 }
