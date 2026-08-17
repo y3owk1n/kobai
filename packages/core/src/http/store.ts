@@ -6,6 +6,7 @@ import {
   type PriceResolutionRefusal,
   priceResolutionWorkflow,
 } from "../pricing/resolve-price.ts";
+import { openMetadata } from "../workflow/context.ts";
 import type { WorkflowRun } from "../workflow/run.ts";
 
 /**
@@ -41,7 +42,9 @@ export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
   store.get("/variants/:id/price", async (c) => {
     const run = await priceResolutionWorkflow.run(
       { variantId: c.req.param("id") },
-      { db: deps.db, metadata: openInputs(new URL(c.req.url)) },
+      // Everything the caller sent that Core does not model, carried through untouched —
+      // ADR-0013's open context, at the edge where it is filled.
+      { db: deps.db, metadata: openMetadata(new URL(c.req.url)) },
     );
 
     if (!run.ok) return c.json(refusal(run), statusFor(run.reason));
@@ -76,25 +79,6 @@ export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
   );
 
   return store;
-}
-
-/**
- * Whatever the caller sent that Core does not model, on its way to the Workflow's context.
- *
- * This is ADR-0013's openness made real at the edge rather than only in the types. The
- * price-resolution route models nothing in the query string — the Variant is in the path —
- * so every parameter here is by definition something Core has never heard of, and it is
- * carried through verbatim for a Project's Step to read. Lead-time pricing is the case the
- * ADR names, and it must be reachable *without changing Core*; if a Developer had to add a
- * parameter here to get their own input to their own Step, the extension surface would be
- * wrong.
- *
- * Values arrive as strings and are not parsed, because parsing implies a shape and Core has
- * no business having an opinion about one. A repeated parameter keeps its last value: an
- * array for some keys and a string for others would be a shape too.
- */
-export function openInputs(url: URL): Record<string, unknown> {
-  return Object.fromEntries(url.searchParams);
 }
 
 /**

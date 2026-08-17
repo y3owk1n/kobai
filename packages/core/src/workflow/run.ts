@@ -1,4 +1,5 @@
-import { StepFailure, type WorkflowContext } from "./step.ts";
+import type { WorkflowContext } from "./context.ts";
+import { StepFailure } from "./step.ts";
 import type { WorkflowStep } from "./workflow.ts";
 
 /**
@@ -10,13 +11,12 @@ import type { WorkflowStep } from "./workflow.ts";
  */
 
 /**
- * One Step, as the run reports it.
+ * One Step, as the run reports it: the slot it filled, and what filled it.
  *
- * Two names, because they stop being the same thing as soon as a Project replaces a Step
- * (ADR-0017): `step` is the slot the Workflow declared, and `implementation` is what the
- * Step that actually ran calls itself. Today they always agree, since nothing has been
- * replaced yet — and reporting both anyway is what will let a Developer see in the response
- * that *their* Step ran (spec story 33) without the response contract changing to say so.
+ * See {@link WorkflowStep} for why those are two things. Reporting both here — while they
+ * still always agree, because nothing has been replaced yet — is what will let a Developer
+ * see in the response that *their* Step ran (spec story 33) without the response contract
+ * having to change to say so.
  */
 export type StepReport = {
   readonly step: string;

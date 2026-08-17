@@ -1,5 +1,6 @@
+import type { WorkflowContext } from "./context.ts";
 import { runSteps, type WorkflowRun } from "./run.ts";
-import type { AnyStep, Step, WorkflowContext } from "./step.ts";
+import type { AnyStep, Step } from "./step.ts";
 
 /**
  * A **Workflow** — a named, declared commerce process composed of ordered Steps
@@ -44,8 +45,14 @@ export type WorkflowStep = {
   readonly step: AnyStep;
 };
 
-/** One Step, as a Developer inspecting the declaration sees it. */
-export type StepDescriptor = { readonly name: string };
+/**
+ * One Step, as a Developer inspecting the declaration sees it.
+ *
+ * `slot` rather than `name`, and deliberately the same word `WorkflowStep` and
+ * {@link StepReport} use: what a description names is the *position*, which is what stays
+ * put when a Project swaps the implementation filling it.
+ */
+export type StepDescriptor = { readonly slot: string };
 
 /**
  * A Workflow as plain data — what it is called and what it is made of, in order.
@@ -60,7 +67,14 @@ export type WorkflowDescription = {
 
 export type Workflow<In, Out, Shapes extends StepShapes = StepShapes> = {
   readonly name: string;
-  /** Every position, in declared order. */
+  /**
+   * Every position, in declared order.
+   *
+   * Read it; do not rebuild a Workflow by spreading one. `describe` and `run` close over
+   * this array as it was when `build()` ran, so `{ ...workflow, steps: mine }` would answer
+   * with the new list and still *execute* the old one. Rewiring a Workflow means declaring
+   * it again, which is what the next ticket's override machinery has to do.
+   */
   readonly steps: readonly WorkflowStep[];
   /** What this Workflow is made of, without reading Core's implementation. */
   describe(): WorkflowDescription;
@@ -140,7 +154,7 @@ function builder<In, Current, Shapes extends StepShapes>(
         steps,
         describe: () => ({
           name,
-          steps: steps.map((entry) => ({ name: entry.slot })),
+          steps: steps.map((entry) => ({ slot: entry.slot })),
         }),
         run: (input, context) => runSteps<Current>(steps, input, context),
       };

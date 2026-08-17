@@ -1,11 +1,6 @@
 import { type Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import {
-  type ApiKeyCreation,
-  createApiKey,
-  listApiKeys,
-  revokeApiKey,
-} from "../auth/api-key.ts";
+import { type ApiKeyCreation, createApiKey, revokeApiKey } from "../auth/api-key.ts";
 import {
   type AdminEnv,
   authenticated,
@@ -214,11 +209,6 @@ export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
     const created = await createApiKey(deps.db, body.value);
     if (!created.ok) return refused(c, created, API_KEY_STATUS);
     return c.json(created.apiKey, 201);
-  });
-
-  /** Every key this deployment has issued, named but not carried. */
-  guarded.get("/api-keys", requirePermission(PERMISSIONS.apiKeyRead), async (c) => {
-    return c.json({ apiKeys: await listApiKeys(deps.db) }, 200);
   });
 
   /** Revokes a key. It stops working on the very next request, like a deleted Session. */

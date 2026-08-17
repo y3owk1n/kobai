@@ -18,8 +18,9 @@ import type { TestSession } from "./merchant.ts";
  * ```
  *
  * It goes through the public API, like `signInTestMerchant`, so a test can never prove
- * something the API cannot actually do. A test about the *kinds* of key differing should ask
- * for each kind here and say so — that is the subject, and a default would hide it.
+ * something the API cannot actually do. The kind defaults to `secret`, which is what a test
+ * that does not care should take; a test whose subject *is* the difference between the kinds
+ * should name the one it means, because leaning on the default would hide the point.
  */
 export type TestApiKey = {
   readonly id: string;

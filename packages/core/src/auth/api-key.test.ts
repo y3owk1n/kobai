@@ -9,9 +9,10 @@ import {
 /**
  * API keys — the credential the store surface is gated by (ADR-0020).
  *
- * Everything here goes through the public HTTP API, because that is how a Developer creates
- * a key. The two exceptions reach into the database on purpose: what is *stored* is the
- * whole security property, and no response can show that a column does not hold a key.
+ * Everything a Developer does goes through the public HTTP API, because that is how they do
+ * it. The tests that reach into the database do so on purpose and for one reason: what is
+ * *stored* is the whole security property here, and no response can show that a column does
+ * not hold a key.
  */
 
 let kobai: TestKobai | undefined;
@@ -48,14 +49,8 @@ describe("creating an API key", () => {
     expect(key.key).toMatch(/^kobai_sk_[A-Za-z0-9_-]{43}$/);
     expect(key.name).toBe("storefront");
     expect(key.kind).toBe("secret");
-
-    // And never again: the list a Merchant reads back names the key without carrying it.
-    const listed = await kobai.request("/admin/api-keys", { headers: merchant.headers });
-    expect(listed.status).toBe(200);
-    const body = (await listed.json()) as { apiKeys: Record<string, unknown>[] };
-    expect(body.apiKeys).toHaveLength(1);
-    expect(body.apiKeys[0]).toMatchObject({ id: key.id, name: "storefront" });
-    expect(body.apiKeys[0]).not.toHaveProperty("key");
+    // The id outlives the value, which is what makes the key revocable after this response.
+    expect(key.id).toEqual(expect.any(String));
   });
 
   it("tells publishable and secret apart from the value itself", async () => {
@@ -176,10 +171,18 @@ describe("revoking an API key", () => {
     });
     expect(revoked.status).toBe(204);
 
-    const listed = await kobai.request("/admin/api-keys", { headers: merchant.headers });
-    const body = (await listed.json()) as { apiKeys: { revokedAt: string | null }[] };
-    const stoppedWorking = body.apiKeys[0]?.revokedAt;
-    expect(stoppedWorking).toEqual(expect.any(String));
+    // Read from the database, because there is no route that reports a key's state — a
+    // storefront finding out is what `/store` answering 401 means, and that is asserted
+    // where the store surface is (`http/store.test.ts`).
+    const revokedAt = async () =>
+      (
+        await kobai?.database.query<{ revoked_at: Date | null }>(
+          "select revoked_at from core_api_key",
+        )
+      )?.[0]?.revoked_at;
+
+    const stoppedWorking = await revokedAt();
+    expect(stoppedWorking).toBeInstanceOf(Date);
 
     // Revoking twice is idempotent, and does not move the moment it stopped working — which
     // is the fact anybody asks this column for after an incident.
@@ -187,10 +190,7 @@ describe("revoking an API key", () => {
       method: "DELETE",
       headers: merchant.headers,
     });
-    const again = (await (
-      await kobai.request("/admin/api-keys", { headers: merchant.headers })
-    ).json()) as { apiKeys: { revokedAt: string | null }[] };
-    expect(again.apiKeys[0]?.revokedAt).toBe(stoppedWorking);
+    expect(await revokedAt()).toEqual(stoppedWorking);
 
     const absent = await kobai.request(
       "/admin/api-keys/00000000-0000-4000-8000-000000000000",
@@ -202,13 +202,12 @@ describe("revoking an API key", () => {
 });
 
 describe("the owner Role", () => {
-  it("holds the API key permissions on a freshly migrated deployment", async () => {
+  it("holds the API key permission on a freshly migrated deployment", async () => {
     // The seeded Role gains each new permission through a migration of its own, so an
     // existing deployment's owner keeps holding everything Core defines (ADR-0027).
     kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai, TEST_MERCHANT);
 
-    expect(merchant.role.permissions).toContain("api-key:read");
     expect(merchant.role.permissions).toContain("api-key:write");
   });
 });

@@ -59,16 +59,27 @@ export type PriceCandidate = {
   readonly createdAt: Date;
 };
 
+/**
+ * The Variant a resolution is about — its identifier and its SKU, and nothing else.
+ *
+ * The SKU travels with the id because it is what a Developer reads in a log line or a
+ * response and recognises; the id alone identifies the row and nothing a person knows.
+ */
+export type VariantIdentity = {
+  readonly id: string;
+  readonly sku: string;
+};
+
 /** What `load-prices` produces and `select-price` chooses from. */
 export type LoadedPrices = {
-  readonly variant: { readonly id: string; readonly sku: string };
+  readonly variant: VariantIdentity;
   /** Every Price on the Variant, oldest first — a total order, so it never varies. */
   readonly prices: readonly PriceCandidate[];
 };
 
 /** The Workflow's output: one Price, and the Variant it prices. */
 export type ResolvedPrice = {
-  readonly variant: { readonly id: string; readonly sku: string };
+  readonly variant: VariantIdentity;
   readonly price: {
     readonly id: string;
     readonly amount: number;

@@ -1,4 +1,4 @@
-import type { Database } from "../db/client.ts";
+import type { WorkflowContext } from "./context.ts";
 
 /**
  * A **Step** — one named, typed unit inside a Workflow, individually replaceable by a Plugin
@@ -10,22 +10,6 @@ import type { Database } from "../db/client.ts";
  * ADR-0017 requires a replacement to *satisfy the original Step's input and output types*,
  * checked by the compiler, and a Step that did not declare them would leave nothing to check.
  */
-
-/**
- * What a Step runs against — the Workflow's context, and it is **open** (ADR-0013).
- *
- * `metadata` is the openness. Core writes into it and never reads from it: whatever the
- * caller sent that Core does not model arrives here verbatim, so a Project's Step can read
- * data Core has never heard of. ADR-0013 is explicit that this cannot be a closed typed
- * struct — if it were, lead-time pricing would be impossible without changing Core, and the
- * flagship mechanism would fail its first real test. The cost is type safety at this one
- * boundary, paid deliberately.
- */
-export type WorkflowContext = {
-  readonly db: Database;
-  /** Untyped by design. Core never reads a key out of this. */
-  readonly metadata: Readonly<Record<string, unknown>>;
-};
 
 /**
  * One Step: a name, and a typed function from `In` to `Out`.

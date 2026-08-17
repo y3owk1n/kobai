@@ -19,8 +19,6 @@ export const PERMISSIONS = {
   catalogRead: "catalog:read",
   /** Change the catalog: create a Product with its Variants, price a Variant. */
   catalogWrite: "catalog:write",
-  /** List the API keys this deployment has issued — never their values, which are gone. */
-  apiKeyRead: "api-key:read",
   /** Mint and revoke API keys. The permission that hands out access to the store surface. */
   apiKeyWrite: "api-key:write",
 } as const;

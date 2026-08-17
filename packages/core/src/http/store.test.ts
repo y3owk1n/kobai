@@ -5,7 +5,6 @@ import {
   signInTestMerchant,
   type TestKobai,
 } from "../testing/index.ts";
-import { openInputs } from "./store.ts";
 
 /**
  * The store surface — what a storefront calls, gated by an API key rather than by a Merchant
@@ -28,7 +27,7 @@ type Priced = {
   /** A secret key's headers, ready to ask the store surface with. */
   readonly headers: Record<string, string>;
   readonly keyId: string;
-  readonly merchant: Record<string, string>;
+  readonly merchantHeaders: Record<string, string>;
 };
 
 /**
@@ -62,7 +61,7 @@ async function priced(instance: TestKobai, amount = 1250): Promise<Priced> {
     variantId,
     headers: key.headers,
     keyId: key.id,
-    merchant: merchant.headers,
+    merchantHeaders: merchant.headers,
   };
 }
 
@@ -111,7 +110,7 @@ describe("the store surface is not open by default", () => {
     });
     await kobai.request(`/admin/api-keys/${store.keyId}`, {
       method: "DELETE",
-      headers: store.merchant,
+      headers: store.merchantHeaders,
     });
     const after = await kobai.request(`/store/variants/${store.variantId}/price`, {
       headers: store.headers,
@@ -127,7 +126,7 @@ describe("the store surface is not open by default", () => {
     const store = await priced(kobai);
 
     const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.merchant,
+      headers: store.merchantHeaders,
     });
 
     expect(response.status).toBe(401);
@@ -163,7 +162,7 @@ describe("the store surface exposes no Merchant-only capability", () => {
     kobai = await createTestKobai();
     const store = await priced(kobai);
 
-    for (const path of ["/admin/store", "/admin/products", "/admin/api-keys"]) {
+    for (const path of ["/admin/store", "/admin/products", "/admin/session"]) {
       const response = await kobai.request(path, { headers: store.headers });
       expect(response.status, path).toBe(401);
     }
@@ -213,7 +212,7 @@ describe("resolving a price", () => {
     const store = await priced(kobai);
     const publishable = await createTestApiKey(
       kobai,
-      { headers: store.merchant },
+      { headers: store.merchantHeaders },
       { name: "browser", kind: "publishable" },
     );
 
@@ -232,7 +231,7 @@ describe("resolving a price", () => {
     const store = await priced(kobai, 1250);
     await kobai.request(`/admin/variants/${store.variantId}/prices`, {
       method: "POST",
-      headers: { ...store.merchant, "content-type": "application/json" },
+      headers: { ...store.merchantHeaders, "content-type": "application/json" },
       body: JSON.stringify({ amount: 900 }),
     });
 
@@ -250,7 +249,7 @@ describe("resolving a price", () => {
     const unpriced = (await (
       await kobai.request("/admin/products", {
         method: "POST",
-        headers: { ...store.merchant, "content-type": "application/json" },
+        headers: { ...store.merchantHeaders, "content-type": "application/json" },
         body: JSON.stringify({ title: "Unpriced", variants: [{ sku: "UNPRICED" }] }),
       })
     ).json()) as { variants: { id: string }[] };
@@ -295,30 +294,5 @@ describe("resolving a price", () => {
         reason: "variant-not-found",
       });
     }
-  });
-});
-
-/**
- * What the store surface hands the Workflow that Core has never heard of.
- *
- * Tested here rather than through a response because there is nothing in Core that reads
- * it — by construction, since the whole point is that the *Project's* Step does (ADR-0013).
- * The alternative is to leave the one edge that makes lead-time pricing possible without
- * changing Core uncovered until the ticket that consumes it, which is the wrong ticket to
- * find out it was never wired.
- */
-describe("the Workflow's context is open at the edge", () => {
-  it("carries every query parameter through, unparsed", () => {
-    const url = new URL(
-      "http://kobai.test/store/variants/x/price?leadTimeDays=10&rush=yes",
-    );
-
-    // Strings, not numbers: parsing implies a shape, and Core has no business having an
-    // opinion about the shape of an input it does not model.
-    expect(openInputs(url)).toEqual({ leadTimeDays: "10", rush: "yes" });
-  });
-
-  it("is empty when the caller sent nothing extra", () => {
-    expect(openInputs(new URL("http://kobai.test/store/variants/x/price"))).toEqual({});
   });
 });

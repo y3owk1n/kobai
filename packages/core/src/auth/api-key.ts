@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { desc, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { apiKey } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -43,19 +43,19 @@ export const API_KEY_PREFIX = {
 /** 256 bits, like a session token, and for the same reason. */
 const KEY_BYTES = 32;
 
-/** A key, as it is reported once and never again. */
-export type IssuedApiKey = ApiKeySummary & {
-  /** The value itself. Shown at creation and unrecoverable afterwards. */
-  readonly key: string;
-};
-
-/** A key as the Admin lists it: enough to recognise and revoke, never enough to present. */
-export type ApiKeySummary = {
+/**
+ * A key, as it is reported once and never again.
+ *
+ * `id` is here because it is the only handle that survives this response: a Merchant who
+ * wants to revoke this key later needs it, and the key itself will be gone.
+ */
+export type IssuedApiKey = {
   readonly id: string;
   readonly name: string;
   readonly kind: ApiKeyKind;
   readonly createdAt: string;
-  readonly revokedAt: string | null;
+  /** The value itself. Shown at creation and unrecoverable afterwards. */
+  readonly key: string;
 };
 
 /** Unvalidated: it arrives as a JSON body and is narrowed in one place, below. */
@@ -124,27 +124,19 @@ export async function createApiKey(
       id: apiKey.id,
       name: apiKey.name,
       createdAt: apiKey.createdAt,
-      revokedAt: apiKey.revokedAt,
     });
   if (!created) throw new Error("Inserting an API key returned no row.");
 
-  return { ok: true, apiKey: { ...summary({ ...created, kind }), key } };
-}
-
-/** Every key, newest first. Names them; carries none of them. */
-export async function listApiKeys(db: Database): Promise<ApiKeySummary[]> {
-  const rows = await db
-    .select({
-      id: apiKey.id,
-      name: apiKey.name,
-      kind: apiKey.kind,
-      createdAt: apiKey.createdAt,
-      revokedAt: apiKey.revokedAt,
-    })
-    .from(apiKey)
-    .orderBy(desc(apiKey.createdAt), desc(apiKey.id));
-
-  return rows.map((row) => summary({ ...row, kind: asKind(row.kind) }));
+  return {
+    ok: true,
+    apiKey: {
+      id: created.id,
+      name: created.name,
+      kind,
+      createdAt: created.createdAt.toISOString(),
+      key,
+    },
+  };
 }
 
 /**
@@ -200,22 +192,6 @@ export async function resolveApiKey(
   return {
     ok: true,
     apiKey: { id: row.id, name: row.name, kind: asKind(row.kind) },
-  };
-}
-
-function summary(row: {
-  id: string;
-  name: string;
-  kind: ApiKeyKind;
-  createdAt: Date;
-  revokedAt: Date | null;
-}): ApiKeySummary {
-  return {
-    id: row.id,
-    name: row.name,
-    kind: row.kind,
-    createdAt: row.createdAt.toISOString(),
-    revokedAt: row.revokedAt?.toISOString() ?? null,
   };
 }
 

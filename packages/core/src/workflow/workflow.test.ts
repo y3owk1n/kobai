@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Database } from "../db/client.ts";
-import { defineStep, type Step, StepFailure, type WorkflowContext } from "./step.ts";
+import { openMetadata, type WorkflowContext } from "./context.ts";
+import { defineStep, type Step, StepFailure } from "./step.ts";
 import {
   defineWorkflow,
   type StepInput,
@@ -39,7 +40,7 @@ describe("declaring a Workflow", () => {
 
     expect(workflow.describe()).toEqual({
       name: "arithmetic",
-      steps: [{ name: "double" }, { name: "stringify" }],
+      steps: [{ slot: "double" }, { slot: "stringify" }],
     });
   });
 });
@@ -109,6 +110,18 @@ describe("running a Workflow", () => {
     await expect(workflow.run({ trail: [] }, CONTEXT)).rejects.toThrow(
       "undefined is not a function",
     );
+  });
+
+  it("fills the open half of a context from what the caller sent", () => {
+    // The edge ADR-0013 depends on: a Developer must be able to get their own input to
+    // their own Step without adding a parameter to a Core route. Strings, not numbers —
+    // parsing implies a shape, and Core has no opinion about the shape of what it does not
+    // model.
+    expect(
+      openMetadata(new URL("http://kobai.test/store/variants/x/price?leadTimeDays=10")),
+    ).toEqual({ leadTimeDays: "10" });
+
+    expect(openMetadata(new URL("http://kobai.test/store/variants/x/price"))).toEqual({});
   });
 
   it("carries inputs Core has never heard of to the Steps", async () => {
@@ -187,7 +200,7 @@ describe("the types a Step declares", () => {
   it("names every slot", () => {
     const slots: WorkflowSlots<Priced>[] = ["load", "select"];
 
-    expect(workflow.describe().steps.map((step) => step.name)).toEqual(slots);
+    expect(workflow.describe().steps.map((step) => step.slot)).toEqual(slots);
   });
 
   it("accepts a differently named Step that takes and gives what the slot does", async () => {
