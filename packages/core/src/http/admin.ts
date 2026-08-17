@@ -1,4 +1,5 @@
 import { type Context, Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   type AdminEnv,
   authenticated,
@@ -15,6 +16,13 @@ import {
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import { createSession, revokeSession } from "../auth/session.ts";
+import { listProducts, readProduct } from "../catalog/read.ts";
+import {
+  type PriceCreation,
+  type ProductCreation,
+  createProduct,
+  setPrice,
+} from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
 import { readStore } from "../store/read.ts";
 
@@ -131,10 +139,81 @@ export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
     return c.json(store, 200);
   });
 
+  /**
+   * Creates a Product and the Variants that make it sellable, in one transaction.
+   *
+   * There is deliberately no route that creates a Product on its own. A Product is never
+   * sellable in itself (ADR-0008), so one with no Variant is a catalog entry nothing can buy
+   * — and the cheapest way to guarantee that state never exists is to give the API no way to
+   * reach it, rather than to detect and repair it afterwards.
+   */
+  guarded.post("/products", requirePermission(PERMISSIONS.catalogWrite), async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return c.json(body.error, 400);
+
+    const created = await createProduct(deps.db, body.value);
+    if (!created.ok) return refused(c, created, PRODUCT_STATUS);
+    return c.json(created.product, 201);
+  });
+
+  /** Every Product, so a Merchant can confirm the one they just made is there. */
+  guarded.get("/products", requirePermission(PERMISSIONS.catalogRead), async (c) => {
+    return c.json({ products: await listProducts(deps.db) }, 200);
+  });
+
+  /** One Product, with its Variants and each Variant's Prices. */
+  guarded.get("/products/:id", requirePermission(PERMISSIONS.catalogRead), async (c) => {
+    const found = await readProduct(deps.db, c.req.param("id"));
+    if (!found) {
+      return c.json(
+        { error: "No such Product exists.", reason: "product-not-found" },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  /**
+   * Adds a Price to a Variant — an insert, never an update.
+   *
+   * The Variant is what the route addresses because the Variant is what is sellable. Calling
+   * this twice leaves a Variant with two Prices rather than one overwritten one, which is
+   * ADR-0008's shape working: sale prices, further currencies and quantity breaks are more
+   * rows here, not a migration.
+   */
+  guarded.post(
+    "/variants/:id/prices",
+    requirePermission(PERMISSIONS.catalogWrite),
+    async (c) => {
+      const body = await jsonBody(c);
+      if (!body.ok) return c.json(body.error, 400);
+
+      const created = await setPrice(deps.db, c.req.param("id"), body.value);
+      if (!created.ok) return refused(c, created, PRICE_STATUS);
+      return c.json(created.price, 201);
+    },
+  );
+
   admin.route("/", guarded);
 
   return admin;
 }
+
+/** 400 for a request that is wrong, 409 for one another row already answered. */
+const PRODUCT_STATUS = {
+  invalid: 400,
+  "sku-taken": 409,
+} as const satisfies Record<Exclude<ProductCreation, { ok: true }>["reason"], 400 | 409>;
+
+/** 422 for a currency this Store does not price in: well-formed, and still refused. */
+const PRICE_STATUS = {
+  invalid: 400,
+  "unsupported-currency": 422,
+  "variant-not-found": 404,
+} as const satisfies Record<
+  Exclude<PriceCreation, { ok: true }>["reason"],
+  400 | 404 | 422
+>;
 
 /** One shape for "you are signed in", whether it is being issued or merely reported. */
 function sessionBody(merchant: MerchantIdentity, role: RoleSummary, expiresAt: Date) {
@@ -158,9 +237,27 @@ const CREATION_STATUS = {
 
 function respondToCreation(c: Context<AdminEnv>, created: MerchantCreation) {
   if (created.ok) return c.json(created.merchant, 201);
+  return refused(c, created, CREATION_STATUS);
+}
+
+/**
+ * One shape for every refusal this surface makes: `{ error, reason }`, at the status its
+ * reason names.
+ *
+ * The gate answers in that shape (`auth/gate.ts`), so everything below it answers in the same
+ * one — a client parses refusals one way whether it was turned back at the door or by the
+ * handler. The status map is passed in rather than switched on here, so a module that grows a
+ * reason has one place to say what it means and the compiler asks for it: `satisfies Record<…>`
+ * on each map makes an unmapped reason a build failure rather than an `undefined` status.
+ */
+function refused<Reason extends string, Status extends ContentfulStatusCode>(
+  c: Context<AdminEnv>,
+  failure: { readonly reason: Reason; readonly detail: string },
+  statuses: Record<Reason, Status>,
+) {
   return c.json(
-    { error: created.detail, reason: created.reason },
-    CREATION_STATUS[created.reason],
+    { error: failure.detail, reason: failure.reason },
+    statuses[failure.reason],
   );
 }
 

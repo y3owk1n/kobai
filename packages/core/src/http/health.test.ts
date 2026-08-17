@@ -25,7 +25,7 @@ describe("GET /health", () => {
             name: "core",
             migrationsSchema: "drizzle",
             migrationsTable: "__drizzle_migrations_core",
-            applied: 4,
+            applied: 6,
           },
         ],
       },
