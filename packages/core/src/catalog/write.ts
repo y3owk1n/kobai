@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { readStore } from "../store/read.ts";
 import { type Price, type ProductDetail, readProduct } from "./read.ts";
 
@@ -291,32 +292,4 @@ function parseVariants(value: unknown): ParsedVariants {
   }
 
   return { ok: true, value: parsed };
-}
-
-/** A non-empty string, trimmed, or `undefined` when it is neither. */
-function trimmed(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const result = value.trim();
-  return result === "" ? undefined : result;
-}
-
-/** A JSON object — not an array, not null, not a primitive. */
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * ADR-0004's escape hatch, on the way in: any JSON object, absent meaning `{}`.
- *
- * Nothing is validated beyond "it is an object", which is the point — a shape here would be
- * a promise, and a Plugin that needs a promise needs its own table. `undefined` means the
- * caller sent something that is not an object at all.
- */
-function asMetadata(value: unknown): Record<string, unknown> | undefined {
-  if (value === undefined) return {};
-  return isJsonObject(value) ? value : undefined;
-}
-
-function metadataDetail(what: string): string {
-  return `${what} must be a JSON object. It is unindexed and untyped by design — anything needing an index or a type needs its own table.`;
 }

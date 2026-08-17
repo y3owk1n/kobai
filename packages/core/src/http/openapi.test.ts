@@ -87,7 +87,7 @@ const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "tr
  * it. Each check below asserts it, so a loop that stopped finding the operations fails rather
  * than quietly stops checking them.
  */
-const OPERATIONS = 14;
+const OPERATIONS = 20;
 
 /**
  * Every operation the description carries, paired with what the description says about it.

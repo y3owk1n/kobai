@@ -8,6 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -335,3 +336,94 @@ export const price = pgTable(
 );
 
 export type PriceRow = typeof price.$inferSelect;
+
+/**
+ * A Cart — a Shopper's **mutable, disposable, unauthoritative** selection before purchase
+ * (`CONTEXT.md`, ADR-0009).
+ *
+ * Its own table rather than an Order carrying a status, which is the whole of ADR-0009's
+ * first decision: the two are governed by opposite rules — one is expected to change and be
+ * thrown away, the other must never change again — and one table cannot enforce both.
+ *
+ * **`id` is the capability.** A storefront addresses a Cart by this value and holds no other
+ * authority over it, because there is no Shopper session to hang one off and there must never
+ * be one (ADR-0020). `gen_random_uuid()` is 122 bits from the platform CSPRNG, so the value
+ * encodes nothing, sorts by nothing, and cannot be walked from a Cart somebody does hold; and
+ * there is deliberately no route that lists Carts, so there is nothing to enumerate either.
+ *
+ * **The Shopper reference is two nullable columns and never a credential.** ADR-0020 has Core
+ * store a reference — keyed by email, with an optional external identity — and trust the
+ * identity a storefront asserts *over a secret key*. So there is no password here, no Shopper
+ * table, and no assumption anywhere that a Shopper is authenticated: both columns are null on
+ * the ordinary path, which is a guest.
+ */
+export const cart = pgTable("core_cart", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /**
+   * When this Cart stops being placeable — a **lifetime** fixed at creation, not an idle
+   * window (contrast `core_session`, ADR-0045). "Abandoned" is then measured from when the
+   * Cart was made, and no amount of touching it keeps one alive forever.
+   *
+   * Nothing deletes the row when it passes. ADR-0028 lists abandoned cart as a first-party
+   * Plugin and a Plugin cannot recover what Core has deleted, so expiry is a fact about the
+   * row rather than the absence of one.
+   */
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  /** The Shopper reference's key. Null for a guest, which is the ordinary case (ADR-0020). */
+  shopperEmail: text("shopper_email"),
+  /** The Shopper's identity in whatever system the storefront actually authenticates against. */
+  shopperExternalId: text("shopper_external_id"),
+  /**
+   * ADR-0004's escape hatch, and on a Cart it is load-bearing rather than cheap: ADR-0013
+   * has a Project's replaced Step read its inputs from here, so this is the door a Shopper's
+   * unmodelled choice comes through.
+   */
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type CartRow = typeof cart.$inferSelect;
+
+/**
+ * A Line Item on a Cart — one Variant, and how many of it.
+ *
+ * It carries **no snapshot**, which is the asymmetry ADR-0009 asks for: an Order's Line Items
+ * snapshot title, SKU and price as at capture precisely so history cannot be rewritten, and a
+ * Cart's are the opposite kind of row — unauthoritative, re-priced whenever they are read
+ * about, and free to follow a catalog that changes under them.
+ *
+ * **One line per Variant, in DDL.** Adding a Variant already on the Cart raises the quantity
+ * rather than writing a second line, and the unique constraint is what makes that an upsert
+ * instead of a read followed by a write — two requests adding the same Variant at the same
+ * instant would otherwise both find nothing and both insert.
+ */
+export const cartLineItem = pgTable(
+  "core_cart_line_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    cartId: uuid("cart_id")
+      .notNull()
+      // A Cart's lines are the Cart. Nothing outlives it, because nothing else refers to them.
+      .references(() => cart.id, { onDelete: "cascade" }),
+    variantId: uuid("variant_id")
+      .notNull()
+      // `cascade`, and it is safe here for the reason it would be wrong on an Order: a Cart
+      // Line Item *is* a live reference to the catalog, so a deleted Variant is a selection
+      // that no longer exists. ADR-0009 keeps catalog data freely deletable by making an
+      // Order's lines depend on none of it, and this row is not an Order's.
+      .references(() => variant.id, { onDelete: "cascade" }),
+    quantity: bigint("quantity", { mode: "number" }).notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Reading a Cart reads its lines by `cart_id`, and this is also what makes "the same
+    // Variant twice is one line" a constraint rather than a convention.
+    uniqueIndex("core_cart_line_item_cart_variant_idx").on(table.cartId, table.variantId),
+    check("core_cart_line_item_quantity_is_positive", sql`${table.quantity} > 0`),
+  ],
+);
+
+export type CartLineItemRow = typeof cartLineItem.$inferSelect;

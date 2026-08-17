@@ -71,6 +71,20 @@
       "when": 1786968641864,
       "tag": "0009_updated_at_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786989037332,
+      "tag": "0010_fresh_drax",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786989046751,
+      "tag": "0011_cart_updated_at_triggers",
+      "breakpoints": true
     }
   ]
 }

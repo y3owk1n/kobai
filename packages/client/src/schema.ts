@@ -655,6 +655,380 @@ export interface paths {
       };
     };
   };
+  "/store/carts": {
+    /**
+     * Start a Cart
+     * @description Works for a guest, because Core assumes an authenticated Shopper nowhere (ADR-0020). The `id` in the answer is the whole of the authority to act on this Cart — treat it as a credential. A Shopper may be attached here, but only over a secret key.
+     */
+    post: {
+      requestBody?: {
+        content: {
+          "application/json": components["schemas"]["CreateCartRequest"];
+        };
+      };
+      responses: {
+        /** @description The Cart, with its Line Items. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Cart"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or names a value it cannot use. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description This request asserts who the Shopper is, which needs a secret key (ADR-0020). Detaching one — `"shopper": null` — asserts nothing and does not. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/carts/{id}": {
+    /**
+     * Read a Cart
+     * @description An expired Cart reads like any other, with `expired` true — so a storefront can say what happened rather than showing nothing, and its Line Items are still there for an abandoned-cart Plugin to find (ADR-0028).
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Cart, with its Line Items. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Cart"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Cart exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Attach a Shopper, or change a Cart's own data
+     * @description What a storefront calls when a guest signs in half way through. `shopper` needs a secret key; `null` makes the Cart a guest's again.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateCartRequest"];
+        };
+      };
+      responses: {
+        /** @description The Cart, with its Line Items. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Cart"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or names a value it cannot use. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description This request asserts who the Shopper is, which needs a secret key (ADR-0020). Detaching one — `"shopper": null` — asserts nothing and does not. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description No such Cart exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/carts/{id}/line-items": {
+    /**
+     * Add a Variant to a Cart
+     * @description Adding a Variant the Cart already carries raises that Line Item's quantity rather than writing a second line. A Variant with no Price is refused: a Store cannot sell what it has not priced.
+     */
+    post: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["AddCartLineItemRequest"];
+        };
+      };
+      responses: {
+        /** @description The Cart, with its Line Items. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Cart"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or names a value it cannot use. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Cart exists, or no such Variant does. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: that Variant carries no Price. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/carts/{id}/line-items/{lineItemId}": {
+    /**
+     * Remove a Line Item
+     * @description Answers with what is left, so a storefront re-renders the Cart without a second request.
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+          /** @description A Line Item of this Cart. Anything else is not found. */
+          lineItemId: string;
+        };
+      };
+      responses: {
+        /** @description The Cart, with its Line Items. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Cart"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Cart exists, or this Cart carries no such Line Item. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Change a Line Item
+     * @description Its quantity, its own data, or both. A quantity of zero is refused rather than treated as a removal — removing a line is `DELETE`.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+          /** @description A Line Item of this Cart. Anything else is not found. */
+          lineItemId: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateCartLineItemRequest"];
+        };
+      };
+      responses: {
+        /** @description The Cart, with its Line Items. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Cart"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or names a value it cannot use. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Cart exists, or this Cart carries no such Line Item. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
 }
 
 export type webhooks = Record<string, never>;
@@ -894,6 +1268,91 @@ export interface components {
         /** @description The slot that refused. */
         failed: string;
         steps: components["schemas"]["StepReport"][];
+      };
+    };
+    Cart: {
+      /**
+       * Format: uuid
+       * @description The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart.
+       */
+      id: string;
+      shopper: components["schemas"]["CartShopper"];
+      lineItems: components["schemas"]["CartLineItem"][];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+      /**
+       * Format: date-time
+       * @description When this Cart stops being placeable. A lifetime fixed at creation, not an idle window — changing a Cart does not push it out.
+       */
+      expiresAt: string;
+      /** @description Whether that moment has passed, as the server judges it. Branch on this rather than comparing `expiresAt` against a browser's clock. An expired Cart still reads and refuses every change. */
+      expired: boolean;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+    };
+    /** @description `null` for a guest, which is the ordinary path. */
+    CartShopper: ({
+      /** @description The reference's key, as the storefront wrote it. */
+      email: string;
+      /** @description This Shopper in whatever system the storefront authenticates against. */
+      externalId: string | null;
+    }) | null;
+    CartLineItem: {
+      /** Format: uuid */
+      id: string;
+      variant: components["schemas"]["VariantIdentity"];
+      quantity: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    CartRefusal: {
+      error: string;
+      /** @enum {string} */
+      reason: "invalid" | "secret-key-required" | "cart-not-found" | "cart-expired" | "line-item-not-found" | "variant-not-found" | "variant-not-priced";
+    };
+    CreateCartRequest: {
+      /** @description Needs a secret key. A publishable one is refused (ADR-0020). */
+      shopper?: ({
+        email: string;
+        externalId?: string | null;
+      }) | null;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    UpdateCartRequest: {
+      /** @description Needs a secret key. `null` detaches the Shopper; absent leaves whoever is on the Cart alone. */
+      shopper?: ({
+        email: string;
+        externalId?: string | null;
+      }) | null;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    AddCartLineItemRequest: {
+      variantId: string;
+      /** @description At least 1. Defaults to 1. */
+      quantity?: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    UpdateCartLineItemRequest: {
+      /** @description At least 1. Removing a line is `DELETE`, not a quantity of zero. */
+      quantity?: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
       };
     };
   };
