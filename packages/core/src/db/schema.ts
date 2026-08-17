@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   boolean,
   check,
   index,
@@ -427,3 +428,121 @@ export const cartLineItem = pgTable(
 );
 
 export type CartLineItemRow = typeof cartLineItem.$inferSelect;
+
+/**
+ * An Order — the **immutable financial record of a completed purchase** (`CONTEXT.md`,
+ * ADR-0009).
+ *
+ * The opposite kind of row to the Cart above, and its own table for that reason: one is
+ * expected to change and be thrown away, the other must never change again, and a single
+ * table with a status column cannot enforce both. Nothing in Core updates a row here, and
+ * a Return is its own entity referencing this one rather than an edit to it.
+ *
+ * **It references the Cart it was placed from and nothing else that could restate it.** The
+ * Shopper reference, the currency and the total are copies taken at Capture, so a Cart edited
+ * — or, later, deleted by an abandoned-cart Plugin — leaves this record saying exactly what it
+ * said the day it was written.
+ *
+ * **`updated_at` is here on an immutable record on purpose.** Core writes this row once and
+ * never again, so the column should equal `created_at` forever — which is precisely what makes
+ * it worth carrying: ADR-0037 puts the advance in a trigger because the writers Core does not
+ * mediate are the normal case, so `updated_at > created_at` on an Order is visible evidence
+ * that somebody wrote to a row ADR-0009 says is never written to. A column nothing should ever
+ * move is a tamper detector rather than a formality.
+ */
+export const order = pgTable("core_order", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /**
+   * The **Order number** — human-facing, distinct from `id`, monotonic, and **not promised
+   * gapless** (`CONTEXT.md`).
+   *
+   * A sequence rather than a count of the rows: counting is a read followed by a write, which
+   * two simultaneous Captures both lose, and a sequence is the one mechanism Postgres will not
+   * hand the same value out of twice. What that costs is the gaps — a sequence advances even
+   * for a transaction that rolls back — and the gaps are exactly what is not promised, because
+   * gapless numbering is an invoicing requirement and invoicing is not Core's. Promising it
+   * would mean serialising every Capture behind one lock forever.
+   *
+   * Per Store, which needs no column: one deployment is one Store (ADR-0005).
+   */
+  number: bigserial("number", { mode: "number" }).notNull().unique(),
+  /**
+   * The Cart this Order was placed from — for navigation, never for arithmetic.
+   *
+   * `set null` rather than `cascade` or `restrict`: a Cart is disposable and an Order is not,
+   * so the Cart going away must leave this record whole, and it must not be able to hold a
+   * Cart's rows hostage either. Everything a person reads is copied onto this row and the
+   * Line Items below, so losing the reference loses nothing but the trail back.
+   */
+  cartId: uuid("cart_id").references(() => cart.id, { onDelete: "set null" }),
+  /** The Shopper reference as at Capture. Null for a guest, which is the ordinary case. */
+  shopperEmail: text("shopper_email"),
+  shopperExternalId: text("shopper_external_id"),
+  /** ISO 4217, copied at Capture — the currency every amount on this Order is in. */
+  currency: text("currency").notNull(),
+  /**
+   * What was charged, in the minor units of `currency`. The sum of the Line Items' totals
+   * today; Adjustments arrive as their own lines and are accounted for here (ADR-0022).
+   */
+  total: bigint("total", { mode: "number" }).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  /** The moment of **Capture** — when this Order came into existence and became immutable. */
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type OrderRow = typeof order.$inferSelect;
+
+/**
+ * A Line Item on an Order — and it holds a **snapshot** (ADR-0009).
+ *
+ * Title, SKU, unit price and tax as at Capture are columns here rather than a join, which is
+ * the whole of ADR-0009's second decision: a Line Item that read the catalog live would let
+ * renaming a Product rewrite history, deleting a Variant destroy an Order, and repricing
+ * falsify past revenue — the one failure this schema is most likely to be talked into and the
+ * one that cannot be repaired afterwards, because the original values are simply gone.
+ *
+ * `variant_id` is therefore nullable and `set null`, and the two facts are the same fact:
+ * catalog data stays freely deletable *because* an Order depends on none of it, and a
+ * reference that could refuse a delete — or take an Order's line with it — would be that
+ * dependency in a new place. It is for navigation only, never for display or arithmetic.
+ */
+export const orderLineItem = pgTable(
+  "core_order_line_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      // An Order's lines are the Order, exactly as a Cart's are the Cart.
+      .references(() => order.id, { onDelete: "cascade" }),
+    variantId: uuid("variant_id").references(() => variant.id, { onDelete: "set null" }),
+    /** The Product's title as at Capture. Renaming the Product does not reach this. */
+    title: text("title").notNull(),
+    /** The Variant's SKU as at Capture, for the same reason. */
+    sku: text("sku").notNull(),
+    /** What one of it cost, in minor units — the Price resolved at Capture, not read now. */
+    unitAmount: bigint("unit_amount", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    quantity: bigint("quantity", { mode: "number" }).notNull(),
+    /**
+     * Tax on this line, in minor units.
+     *
+     * Zero until the tax spec puts a real Step in `calculate-tax`, and modelled now rather
+     * than then (ADR-0022): a snapshot that gained a tax figure later would change what every
+     * Order written before it means, and there would be no honest value to backfill.
+     */
+    tax: bigint("tax", { mode: "number" }).notNull().default(0),
+    /** What this line came to. Stored rather than derived: a snapshot recomputed is not one. */
+    total: bigint("total", { mode: "number" }).notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Reading an Order reads its lines by `order_id`, which is every view of one.
+    index("core_order_line_item_order_idx").on(table.orderId),
+    check("core_order_line_item_quantity_is_positive", sql`${table.quantity} > 0`),
+  ],
+);
+
+export type OrderLineItemRow = typeof orderLineItem.$inferSelect;

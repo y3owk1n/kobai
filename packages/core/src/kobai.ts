@@ -17,6 +17,7 @@ import { coreMigrationSet } from "./migrations/core-set.ts";
 import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import { createMigrationStateHolder, type MigrationState } from "./migrations/state.ts";
+import { placeOrderWorkflow } from "./order/place-order.ts";
 import { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
 import type { WorkflowRegistry } from "./workflow/context.ts";
 import { rewireWorkflow } from "./workflow/workflow.ts";
@@ -126,7 +127,7 @@ export function createKobai(options: KobaiOptions): Kobai {
     ...(options.migrationSets ?? []),
   ];
 
-  // Where a Project's config becomes what actually runs. The declaration is rebuilt with the
+  // Where a Project's config becomes what actually runs. Each declaration is rebuilt with the
   // Steps this Project supplied — replacements in the slots they name, insertions around them
   // — per instance, so a customisation belongs to the deployment that declared it and to no
   // other, and Core's own default is left as it was found.
@@ -134,18 +135,28 @@ export function createKobai(options: KobaiOptions): Kobai {
     priceResolutionWorkflow,
     options.workflows?.["resolve-price"] ?? {},
   );
+  const placeOrder = rewireWorkflow(
+    placeOrderWorkflow,
+    options.workflows?.["place-order"] ?? {},
+  );
 
   // The declarations this deployment runs, gathered under the names they answer to. Built
   // here rather than assembled by each caller, because a second answer to "which
   // `resolve-price` is this deployment's" is how an override applies in one place and not in
-  // another (ADR-0054).
-  const workflows: WorkflowRegistry = { [priceWorkflow.name]: priceWorkflow };
+  // another (ADR-0054) — and `place-order`'s `price-lines` reaches `resolve-price` through
+  // exactly this map.
+  const workflows: WorkflowRegistry = {
+    [priceWorkflow.name]: priceWorkflow,
+    [placeOrder.name]: placeOrder,
+  };
 
   const app = createHttpApp({
     db: database.db,
     migrations,
     logger,
     priceWorkflow,
+    placeOrderWorkflow: placeOrder,
+    workflows,
     sessionPolicy,
   });
 

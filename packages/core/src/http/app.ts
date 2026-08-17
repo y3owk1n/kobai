@@ -5,7 +5,9 @@ import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
+import type { PlaceOrderWorkflow } from "../order/place-order.ts";
 import type { PriceResolutionWorkflow } from "../pricing/resolve-price.ts";
+import type { WorkflowRegistry } from "../workflow/context.ts";
 import { createAdminRoutes } from "./admin.ts";
 import * as contract from "./contract.ts";
 import { health, requireMigrationsApplied } from "./health.ts";
@@ -21,6 +23,13 @@ export type HttpDependencies = {
    * config rebuilt. Threaded through to the store surface rather than imported there.
    */
   readonly priceWorkflow: PriceResolutionWorkflow;
+  /** The `place-order` declaration this deployment runs, for the same reason. */
+  readonly placeOrderWorkflow: PlaceOrderWorkflow;
+  /**
+   * Every declaration this deployment runs, so a Step that invokes another Workflow reaches
+   * this deployment's version of it (ADR-0054).
+   */
+  readonly workflows: WorkflowRegistry;
   /**
    * How long this deployment's sessions live — the default, or what its `kobai.config.ts`
    * said (ADR-0050). Threaded through rather than imported by the modules that need it,
@@ -161,7 +170,15 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
   // neither credential is worth anything on the other surface (ADR-0020).
   const store = new OpenAPIHono();
   store.use("*", requireMigrationsApplied(deps.migrations));
-  store.route("/", createStoreRoutes({ db: deps.db, priceWorkflow: deps.priceWorkflow }));
+  store.route(
+    "/",
+    createStoreRoutes({
+      db: deps.db,
+      priceWorkflow: deps.priceWorkflow,
+      placeOrderWorkflow: deps.placeOrderWorkflow,
+      workflows: deps.workflows,
+    }),
+  );
   app.route("/store", store);
 
   // Registered after the sub-apps, because `route()` copies a child's registry at the moment

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSION_POLICY } from "../auth/session.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
+import { placeOrderWorkflow } from "../order/place-order.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { silentLogger } from "../testing/kobai.ts";
 import { createHttpApp, describeHttpApp } from "./app.ts";
@@ -28,10 +29,14 @@ function describeCore() {
     db: undefined as never,
     migrations: createMigrationStateHolder(),
     logger: silentLogger,
-    // Core's own, rather than a Project's rewiring of it. A replaced Step changes which
+    // Core's own, rather than a Project's rewiring of them. A replaced Step changes which
     // Step runs and never which routes exist, so the description does not move with it —
     // and a test that boots a Project's config to assert that would be asserting nothing.
     priceWorkflow: priceResolutionWorkflow,
+    placeOrderWorkflow,
+    // Empty for the same reason: composition decides what a Step reaches, never what is
+    // served, and nothing below dispatches a request.
+    workflows: {},
     // The default, because `packages/core/openapi.json` is the description of stock kobai.
     // What a *configured* window does to it is asserted through the running application, in
     // `auth/auth.test.ts`.
@@ -87,7 +92,7 @@ const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "tr
  * it. Each check below asserts it, so a loop that stopped finding the operations fails rather
  * than quietly stops checking them.
  */
-const OPERATIONS = 20;
+const OPERATIONS = 22;
 
 /**
  * Every operation the description carries, paired with what the description says about it.

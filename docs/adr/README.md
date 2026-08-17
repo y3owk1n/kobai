@@ -78,6 +78,7 @@ New to the project? These five carry the shape of everything else:
 | [0052](./0052-a-fulfilment-strategy-is-dependency-substitution.md) | A Fulfilment Strategy is dependency substitution, not a sixth Extension Point | Accepted — reconciles 0014 with 0003 |
 | [0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) | Core owns the Payment record and ships no provider | Accepted |
 | [0054](./0054-a-step-may-invoke-another-workflow.md) | A Step may invoke another Workflow, and the deployment's declaration is the one that runs | Accepted — extends 0017 |
+| [0055](./0055-placing-an-order-requires-a-secret-key.md) | Placing an Order requires a secret key, and that is a gate rather than a check | Accepted — extends 0020 |
 
 ## Prototypes
 

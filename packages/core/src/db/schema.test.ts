@@ -12,14 +12,18 @@ import { createTestKobai, inspectSchema } from "../testing/index.ts";
 /**
  * The principal entities — the rows a Plugin is most likely to want one more field on.
  *
- * Store, Merchant, Role, the catalog's Product, Variant and Price, and now the Cart and its
- * Line Items. Each must arrive carrying `metadata`, because ADR-0004's bargain is that Core's
- * tables are closed *and* there is a cheap way to stash a field anyway. Adding an entity here
- * without the column fails this test, which is the point of the list.
+ * Store, Merchant, Role, the catalog's Product, Variant and Price, the Cart and its Line
+ * Items, and now the Order and its own. Each must arrive carrying `metadata`, because
+ * ADR-0004's bargain is that Core's tables are closed *and* there is a cheap way to stash a
+ * field anyway. Adding an entity here without the column fails this test, which is the point of
+ * the list.
  *
  * On the Cart and the Line Item the column is more than cheap: ADR-0013 has a Project's
  * replaced pricing Step read its inputs from a Line Item's `metadata`, so it is the door a
- * Shopper's unmodelled choice comes through, and there is no other one.
+ * Shopper's unmodelled choice comes through, and there is no other one. On the Order it is the
+ * far end of that door — what came through it is copied onto the snapshot at Capture, because
+ * an immutable record that dropped it would be the one place the Shopper's choice is not
+ * recoverable.
  *
  * A session is deliberately absent: it is a Merchant's transient claim rather than a row
  * anybody would hang a field off, and it is deleted the moment it stops being useful. An
@@ -36,6 +40,8 @@ const PRINCIPAL_ENTITIES = [
   "core_price",
   "core_cart",
   "core_cart_line_item",
+  "core_order",
+  "core_order_line_item",
 ];
 
 describe("metadata, the cheap case", () => {

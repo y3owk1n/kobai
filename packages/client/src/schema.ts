@@ -1029,6 +1029,135 @@ export interface paths {
       };
     };
   };
+  "/store/orders": {
+    /**
+     * Turn a Cart into an Order
+     * @description Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards.
+     */
+    post: {
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["PlaceOrderRequest"];
+        };
+      };
+      responses: {
+        /** @description The Order, and the Steps that produced it. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["PlacedOrder"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description The API key is live and publishable, and this route requires a secret one. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["SecretKeyRequired"];
+          };
+        };
+        /** @description A Step refused: there is no such Cart. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["PlaceOrderRefusal"];
+          };
+        };
+        /** @description A Step refused: this Cart has expired and can no longer be placed. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["PlaceOrderRefusal"];
+          };
+        };
+        /** @description A Step refused. The request was well formed and the Workflow declined it — the Cart is empty, a line can no longer be priced, or a Step this build of Core does not know said no. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["PlaceOrderRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/orders/{id}": {
+    /**
+     * Read an Order
+     * @description So reloading a confirmation page needs no client-side cache. A secret key, like placing one: an Order names a Shopper and what they paid, which is not a browser's to read back (ADR-0055).
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Order, exactly as Capture reported it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Order"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description The API key is live and publishable, and this route requires a secret one. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["SecretKeyRequired"];
+          };
+        };
+        /** @description No such Order exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["OrderRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
 }
 
 export type webhooks = Record<string, never>;
@@ -1354,6 +1483,81 @@ export interface components {
       metadata?: {
         [key: string]: unknown;
       };
+    };
+    PlacedOrder: components["schemas"]["Order"] & {
+      workflow: {
+        name: string;
+        steps: components["schemas"]["StepReport"][];
+      };
+    };
+    OrderLineItem: {
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: uuid
+       * @description The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it.
+       */
+      variantId: string | null;
+      /** @description The Product's title as at Capture. */
+      title: string;
+      /** @description The Variant's SKU as at Capture. */
+      sku: string;
+      /** @description What one of it cost, in minor units — 1250 is USD 12.50. */
+      unitAmount: number;
+      quantity: number;
+      /** @description Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means. */
+      tax: number;
+      total: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    Order: {
+      /** Format: uuid */
+      id: string;
+      /** @description The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's. */
+      number: number;
+      shopper: components["schemas"]["CartShopper"];
+      /** @description ISO 4217. Every amount here is in it. */
+      currency: string;
+      /** @description What was charged, in minor units. */
+      total: number;
+      /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
+      lineItems: components["schemas"]["OrderLineItem"][];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+      /**
+       * Format: date-time
+       * @description The moment of Capture, when this Order became immutable.
+       */
+      createdAt: string;
+    };
+    SecretKeyRequired: {
+      error: string;
+      /** @enum {string} */
+      reason: "secret-key-required";
+    };
+    PlaceOrderRefusal: {
+      error: string;
+      reason: string;
+      workflow: {
+        name: string;
+        /** @description The slot that refused. */
+        failed: string;
+        steps: components["schemas"]["StepReport"][];
+      };
+    };
+    PlaceOrderRequest: {
+      /** @description The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020). */
+      cartId: string;
+    };
+    OrderRefusal: {
+      error: string;
+      /** @enum {string} */
+      reason: "order-not-found";
     };
   };
   responses: never;

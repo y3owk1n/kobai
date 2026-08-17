@@ -417,10 +417,14 @@ enumerated different paths per deployment is not a contract.
 `devbox run ci`. Regenerate with `devbox run openapi:generate` — Core first, then the client,
 because pnpm walks the workspace in dependency order.
 
-**A declared refusal must have the gate that makes it.** Four of the statuses a route
+**A declared refusal must have the gate that makes it.** Five of the statuses a route
 declares are not the handler's to answer — they are made above it, by middleware: `503` by the
-migration gate, `401` by the session gate at `/admin` and by the API-key gate at `/store`, and
-`403` by `requirePermission`. Nothing the compiler does can see those, so each gate is built
+migration gate, `401` by the session gate at `/admin` and by the API-key gate at `/store`,
+`403` by `requirePermission`, and `403` again by `requireSecretApiKey` on the `/store` routes
+that take money (ADR-0055). **The two `403`s are two entries in `GATE_REFUSALS`, deliberately**
+— one is a Merchant's Role being too narrow and the other is a browser's key on a route it may
+not open, so sharing an entry would let a route declare one and be gated by the other.
+Nothing the compiler does can see any of them, so each gate is built
 through `gateAnswering` (`packages/core/src/http/gate-refusals.ts`), which marks it with the
 refusal it makes, and `openapi.test.ts` reads the marks back off **Hono's own route table** —
 the thing dispatch reads — and holds every operation to declaring exactly the refusals its
@@ -430,7 +434,7 @@ generated client cannot narrow on. Gating a route stays `middleware:
 [requirePermission(…)] as const` on the declaration and nothing else — **nothing is registered
 twice**, and a new gate needs one entry in `GATE_REFUSALS`.
 
-The check deliberately covers **all four**, not just the `403` #56 asked for: the session and
+The check deliberately covers **all of them**, not just the `403` #56 asked for: the session and
 API-key gates are mounted per surface with `use("*")`, so the mistake they catch is a route
 registered on the wrong half of `admin.ts` — anonymous access to the admin surface, which
 nothing else here would notice. It stops at the status: the `session-*` and `api-key-*`

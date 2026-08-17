@@ -1090,8 +1090,8 @@ describe("there is no Shopper here", () => {
    * ADR-0020 has Core store a Shopper **reference** — keyed by email, with an optional
    * external identity, asserted by a storefront over a secret key — so `shopper_` columns are
    * not the thing to ban; a `shopper_password_hash` is. What must stay true is that every
-   * Shopper column in the schema is a reference and that they live on the Cart, which is the
-   * one row a storefront tells kobai who it is for.
+   * Shopper column in the schema is a reference and that they live on the two rows a storefront
+   * says who it is for: the Cart it asserts one on, and the Order that copies it at Capture.
    */
   it("stores a Shopper reference, on the Cart, and never a Shopper credential", async () => {
     kobai = await createTestKobai();
@@ -1114,6 +1114,10 @@ describe("there is no Shopper here", () => {
     expect(shopperColumns.sort()).toEqual([
       "core_cart.shopper_email",
       "core_cart.shopper_external_id",
+      // The same two, copied onto the Order at Capture rather than joined back to the Cart —
+      // still a reference, still no credential, and now immutable (ADR-0009).
+      "core_order.shopper_email",
+      "core_order.shopper_external_id",
     ]);
   });
 

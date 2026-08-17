@@ -16,6 +16,22 @@ import { isUuid } from "../db/uuid.ts";
  * nothing stands behind, and the first thing anybody would mistake for one.
  */
 
+/**
+ * Whether this Cart has passed its deadline, **as Postgres judges it**.
+ *
+ * One expression, exported, because there are now three places that ask — reading a Cart,
+ * changing one, and placing one — and a second spelling of it is a second answer to the
+ * question of whether a Cart is still alive. Judged in SQL rather than against `Date.now()` so
+ * that one clock both sets the deadline and decides it has passed.
+ *
+ * The table is named as well as the column because Drizzle renders a column inside a
+ * select-list `sql` template **unqualified** — `"expires_at"` — which resolves against whatever
+ * Postgres finds first the moment the query joins anything. That is not hypothetical: the first
+ * version of the Variant lookup in `write.ts` was written that way and silently compared
+ * `core_price.variant_id` to `core_price.id`.
+ */
+export const cartHasExpired = sql<boolean>`now() > ${cart}.${cart.expiresAt}`;
+
 /** One line of a Cart: a Variant, and how many of it. */
 export type CartLineItem = {
   readonly id: string;
@@ -82,15 +98,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
       shopperExternalId: cart.shopperExternalId,
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
-      // Judged by Postgres rather than by Node, so one clock decides both what `expires_at`
-      // was set to and whether it has passed.
-      //
-      // The table is named as well as the column, because Drizzle renders a column inside a
-      // select-list `sql` template **unqualified** — `"expires_at"` — which resolves against
-      // whatever Postgres finds first the moment this query joins anything. That is not a
-      // hypothetical: the first version of the Variant lookup in `write.ts` was written that
-      // way and silently compared `core_price.variant_id` to `core_price.id`.
-      expired: sql<boolean>`now() > ${cart}.${cart.expiresAt}`,
+      expired: cartHasExpired,
       createdAt: cart.createdAt,
       updatedAt: cart.updatedAt,
     })

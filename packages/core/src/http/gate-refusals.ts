@@ -39,20 +39,26 @@ export type GateRefusal = {
 /**
  * Every refusal a gate makes, and — the property the check leans on — the complete list.
  *
- * Each of the four is answered by exactly one middleware and by no handler, which is what
- * makes a route declaring one a statement about its chain rather than about its own code.
- * The other two `REFUSALS` are deliberately absent: `invalid` comes from the validation hook
- * and `serverError` from the catch-all, and both belong to a route whether or not anything
- * gates it.
+ * Each is answered by exactly one middleware and by no handler, which is what makes a route
+ * declaring one a statement about its chain rather than about its own code. The other two
+ * `REFUSALS` are deliberately absent: `invalid` comes from the validation hook and
+ * `serverError` from the catch-all, and both belong to a route whether or not anything gates
+ * it.
  *
- * A fifth gate added without an entry here is a gate whose refusal no route has to declare,
+ * A further gate added without an entry here is a gate whose refusal no route has to declare,
  * so add the entry in the same commit as the middleware.
+ *
+ * **Two of them are 403s, and they are two.** `forbidden` is a Merchant's Role being too
+ * narrow, on the admin surface; `secretKeyRequired` is a browser's key on a store route that
+ * takes money (ADR-0055). Sharing an entry would let a route declare one and be gated by the
+ * other, which is the class of mistake this module exists to catch.
  */
 export const GATE_REFUSALS = named({
   unavailable: { status: 503, declaredAs: REFUSALS.unavailable },
   noSession: { status: 401, declaredAs: REFUSALS.noSession },
   noApiKey: { status: 401, declaredAs: REFUSALS.noApiKey },
   forbidden: { status: 403, declaredAs: REFUSALS.forbidden },
+  secretKeyRequired: { status: 403, declaredAs: REFUSALS.secretKeyRequired },
 });
 
 /**

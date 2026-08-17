@@ -105,6 +105,18 @@ export const PermissionDenied = z
   .openapi("PermissionDenied");
 
 /**
+ * A 403 from the store surface's second gate — the credential is live and insufficient.
+ *
+ * Its own schema rather than {@link PermissionDenied}, because the two 403s are two things: a
+ * Merchant's Role being too narrow names the permission it lacks, and this one names nothing —
+ * what a caller has to do about it is mint the other kind of key, which no field could carry
+ * (ADR-0055).
+ */
+export const SecretKeyRequired = z
+  .object({ error: z.string(), reason: z.literal("secret-key-required") })
+  .openapi("SecretKeyRequired");
+
+/**
  * The header both gates send with a 401 — RFC 6750's challenge.
  *
  * Named here rather than described in prose on each response, so a client can act on it.
@@ -650,6 +662,123 @@ export const CartRefusal = z
     ]),
   })
   .openapi("CartRefusal");
+
+// ---- Orders ----------------------------------------------------------------------------
+
+/**
+ * One line of an Order — a **snapshot**, and the reason it looks nothing like a Cart's.
+ *
+ * `title`, `sku` and `unitAmount` were copied at Capture, so renaming a Product or repricing a
+ * Variant does not reach them and deleting one does not destroy this line (ADR-0009).
+ * `variantId` is here for navigation and is `null` once the Variant is gone — never for
+ * display, and never for arithmetic.
+ */
+export const OrderLineItem = z
+  .object({
+    id: z.uuid(),
+    variantId: z.uuid().nullable().meta({
+      description:
+        "The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it.",
+    }),
+    title: z.string().meta({ description: "The Product's title as at Capture." }),
+    sku: z.string().meta({ description: "The Variant's SKU as at Capture." }),
+    unitAmount: z.int().meta({
+      description: "What one of it cost, in minor units — 1250 is USD 12.50.",
+    }),
+    quantity: z.int(),
+    tax: z.int().meta({
+      description:
+        "Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means.",
+    }),
+    total: z.int(),
+    metadata: Metadata,
+  })
+  .openapi("OrderLineItem");
+
+/**
+ * An Order — the immutable financial record of a completed purchase.
+ *
+ * There is no `updatedAt`, deliberately: an Order is never edited (ADR-0009), so a second
+ * timestamp would be a field whose only honest value is `createdAt` and the first thing
+ * anybody would read as permission to write to the record.
+ */
+export const Order = z
+  .object({
+    id: z.uuid(),
+    number: z.int().meta({
+      description:
+        "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's.",
+    }),
+    shopper: CartShopper.nullable().meta({
+      description: "As at Capture. `null` for a guest, which is the ordinary path.",
+    }),
+    currency: z.string().meta({ description: "ISO 4217. Every amount here is in it." }),
+    total: z.int().meta({ description: "What was charged, in minor units." }),
+    lineItems: z.array(OrderLineItem).readonly().meta({
+      description:
+        "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position.",
+    }),
+    metadata: Metadata,
+    createdAt: z.iso.datetime().meta({
+      description: "The moment of Capture, when this Order became immutable.",
+    }),
+  })
+  .openapi("Order");
+
+/**
+ * The Order, and the Steps that produced it.
+ *
+ * `workflow.steps` is part of the contract rather than a debugging nicety, for the same reason
+ * it is on a resolved price: it is what lets a Developer who replaced a Step see that theirs
+ * ran. It is absent from {@link Order} because which Steps ran is a fact about one request and
+ * not about the record — so reading the Order back later answers with the record alone.
+ */
+export const PlacedOrder = Order.extend({
+  workflow: z.object({
+    name: z.string(),
+    steps: z.array(StepReport).readonly(),
+  }),
+}).openapi("PlacedOrder");
+
+export const PlaceOrderRequest = z
+  .object({
+    cartId: z.string().meta({
+      description:
+        "The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020).",
+    }),
+  })
+  .openapi("PlaceOrderRequest");
+
+/**
+ * A Workflow declining to place an Order, and how far it got.
+ *
+ * `reason` is a string rather than a closed set, exactly as `PriceRefusal`'s is: Core's own
+ * Steps refuse with reasons Core knows, and a Project's or a Plugin's Step refuses with
+ * whatever it likes — which is the point of being able to put one in this Workflow. Core
+ * answers 422 for a reason it does not know: the request was well formed and the Workflow
+ * declined it, which is the most that can honestly be said.
+ */
+export const PlaceOrderRefusal = z
+  .object({
+    error: z.string(),
+    reason: z.string(),
+    workflow: z.object({
+      name: z.string(),
+      failed: z.string().meta({ description: "The slot that refused." }),
+      steps: z.array(StepReport).readonly(),
+    }),
+  })
+  .openapi("PlaceOrderRefusal");
+
+/**
+ * Reading an Order that is not there.
+ *
+ * A closed set of one: nothing a Project or a Plugin supplies runs on this path, so the only
+ * refusal a reader can meet past the gates is that there is no such Order.
+ */
+export const OrderRefusal = z
+  .object({ error: z.string(), reason: z.enum(["order-not-found"]) })
+  .openapi("OrderRefusal");
 
 /**
  * There is deliberately no schema for an unrouted path's 404.
