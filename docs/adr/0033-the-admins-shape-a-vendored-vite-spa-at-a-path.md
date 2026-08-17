@@ -132,6 +132,12 @@ at `/admin-ui`, because it builds first — the Vite server is for editing, not 
   Biome**: it stops parsing its own config, walks up, and fails with "found a nested root
   configuration". `biome.json` therefore stays comment-free despite `json.parser.allowComments`
   being set for everything else.
+
+  > **No longer true as of [ADR-0039](./0039-the-lint-gate-fails-on-every-finding.md).**
+  > Biome 2.5.8 offers `css.parser.tailwindDirectives`, which is set, so the exclusion is
+  > gone and the stylesheet is linted and formatted like any other file. The point about
+  > `biome.json` being unable to carry a comment stands, and is why ADR-0039 exists as a
+  > document rather than as a note beside the setting.
 - **Node and browser TypeScript are checked under different configs.** The Admin's
   `tsconfig.json` replaces the base config's Node module settings with `bundler` resolution
   and `react-jsx`, and repeats the one workspace path mapping it uses. Two configs disagreeing

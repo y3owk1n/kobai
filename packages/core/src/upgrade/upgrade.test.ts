@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CODEMOD_SET_FORMAT, type Codemod } from "./codemods.ts";
+import type { Codemod } from "./codemods.ts";
 import { formatUpgradeReport } from "./report.ts";
 import { CodemodSetMissing } from "./set.ts";
 import { type LoadedCodemodSet, upgradeProject } from "./upgrade.ts";

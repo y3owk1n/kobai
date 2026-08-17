@@ -111,11 +111,23 @@
       // `devbox run dev` already serves the *built* Admin at /admin-ui, because it builds
       // first. This is what to run when the Admin is the thing being edited.
       "admin:dev": "pnpm --filter kobai-reference-admin dev",
-      "lint": "pnpm exec biome ci .",
+      // `--error-on-warnings` because `biome ci` exits *zero* on warnings without it, and
+      // Biome 2 re-tiered most of what Biome 1 called an error down to `warn` or `info`.
+      // The flag covers the `warn` tier and every rule Biome adds to it later; `biome.json`
+      // lifts the `info` tier up to `warn`, which no flag can do. Together they mean the
+      // gate fails on everything Biome reports. `lint` and `ci` run the identical
+      // invocation on purpose — a gate stricter than the command a Developer is told to run
+      // is the same invisible difference in a new place. See
+      // docs/adr/0039-the-lint-gate-fails-on-every-finding.md and AGENTS.md § Development;
+      // tests/the-lint-gate-fails-below-error.test.ts fails the build if either drifts.
+      //
+      // `format` is deliberately the forgiving one: it rewrites rather than reports, so it
+      // is where a finding gets fixed rather than tolerated.
+      "lint": "pnpm exec biome ci . --error-on-warnings",
       "format": "pnpm exec biome check --write .",
       "typecheck": "pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit",
       "test": "docker compose up -d --wait db && pnpm -r build && pnpm exec vitest run",
-      "ci": "pnpm install --frozen-lockfile && docker compose up -d --wait db && pnpm exec biome ci . && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit && pnpm -r build && pnpm exec vitest run"
+      "ci": "pnpm install --frozen-lockfile && docker compose up -d --wait db && pnpm exec biome ci . --error-on-warnings && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit && pnpm -r build && pnpm exec vitest run"
     }
   }
 }
