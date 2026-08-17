@@ -73,7 +73,9 @@ see ADR-0029.
 _Avoid_: example, demo, template, starter
 
 **Admin**:
-The pre-built UI a Merchant works in, shipped by Core and extensible by a Project.
+The pre-built UI a Merchant works in. Its source is **vendored into the Project** rather than
+shipped by Core: a Developer owns the files and edits them directly. It reaches Core only
+through the public API. See ADR-0010 and ADR-0033.
 _Avoid_: dashboard, backoffice, admin panel, CMS UI
 
 **Plugin**:

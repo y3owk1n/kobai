@@ -39,6 +39,9 @@ the test suite.
 - **Customised by replacing Workflow Steps.** Pricing, tax, shipping selection and
   fulfilment routing are declared processes whose individual steps you can swap — see
   [ADR-0003](./docs/adr/0003-the-extension-surface-and-what-we-promise.md).
+- **Stable on five surfaces, and no more.** What is safe to depend on, what Core's semver
+  does *not* cover, and which Extension Points are proven today rather than merely promised
+  — see [the five Extension Points](./docs/extension-points.md).
 - **Deployed with Docker.** One Project, one container.
 
 ## Release target
