@@ -276,6 +276,30 @@ change.
 `devbox run ci`. Regenerate with `devbox run openapi:generate` — Core first, then the client,
 because pnpm walks the workspace in dependency order.
 
+**A declared refusal must have the gate that makes it.** Four of the statuses a route
+declares are not the handler's to answer — they are made above it, by middleware: `503` by the
+migration gate, `401` by the session gate at `/admin` and by the API-key gate at `/store`, and
+`403` by `requirePermission`. Nothing the compiler does can see those, so each gate is built
+through `gateAnswering` (`packages/core/src/http/gate-refusals.ts`), which marks it with the
+refusal it makes, and `openapi.test.ts` reads the marks back off **Hono's own route table** —
+the thing dispatch reads — and holds every operation to declaring exactly the refusals its
+chain can answer. Both directions fail: a declared `403` with no `requirePermission` promises
+a check that does not exist, and a gate whose route declared no `403` hides a refusal a
+generated client cannot narrow on. Gating a route stays `middleware:
+[requirePermission(…)] as const` on the declaration and nothing else — **nothing is registered
+twice**, and a new gate needs one entry in `GATE_REFUSALS`.
+
+The check deliberately covers **all four**, not just the `403` #56 asked for: the session and
+API-key gates are mounted per surface with `use("*")`, so the mistake they catch is a route
+registered on the wrong half of `admin.ts` — anonymous access to the admin surface, which
+nothing else here would notice. It stops at the status: the `session-*` and `api-key-*`
+*reasons* inside a `401` are pinned one level down, by the mapped `satisfies` on
+`SESSION_REASONS` and `API_KEY_REASONS` in `contract.ts`, which makes each declared set exactly
+the rejections its gate can produce. **One route is excused and only one**: `POST
+/admin/merchants` cannot carry the middleware, because the first Merchant has to be creatable
+with no session at all, so it asks the same question in its handler — it is named in
+`openapi.test.ts` and its 401 and 403 are pinned by behaviour in `auth.test.ts`.
+
 **The description is not served.** `/store` refuses an unauthenticated request *before*
 saying whether a path exists, and an endpoint handing out the whole surface anonymously would
 undo that. A Developer reads it from the package (`@kobai/core/openapi.json`); a TypeScript

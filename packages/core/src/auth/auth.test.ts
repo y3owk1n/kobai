@@ -487,6 +487,43 @@ describe("permissions gate the endpoint", () => {
     expect(session.status).toBe(200);
   });
 
+  it("refuses a Role without merchant:write on the one route that gates itself", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await kobai.db.execute(
+      sql`insert into core_role (name, permissions) values ('bookkeeper', array[]::text[])`,
+    );
+    await kobai.request(
+      "/admin/merchants",
+      json(
+        { email: "books@example.test", password: PASSWORD, role: "bookkeeper" },
+        owner.headers,
+      ),
+    );
+    const { headers } = sessionOf(
+      await kobai.request(
+        "/admin/session",
+        json({ email: "books@example.test", password: PASSWORD }),
+      ),
+    );
+
+    const response = await kobai.request(
+      "/admin/merchants",
+      json({ email: "third@example.test", password: PASSWORD }, headers),
+    );
+
+    // `POST /admin/merchants` is the one route that cannot carry `requirePermission` — the
+    // *first* Merchant has to be creatable with no session at all — so it asks the same
+    // question in its handler instead. This is what says that detour actually refuses:
+    // `openapi.test.ts` excuses this route from the gate check on the strength of it, and an
+    // excused route that had quietly stopped checking would be the worst of both.
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "permission-denied",
+      required: PERMISSIONS.merchantWrite,
+    });
+  });
+
   it("gives the seeded owner Role exactly the permissions Core defines", async () => {
     kobai = await createTestKobai();
 

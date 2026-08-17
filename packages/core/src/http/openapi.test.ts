@@ -4,6 +4,7 @@ import { createMigrationStateHolder } from "../migrations/state.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { silentLogger } from "../testing/kobai.ts";
 import { createHttpApp, describeHttpApp } from "./app.ts";
+import { GATE_REFUSALS, type GateRefusal, refusalAnsweredBy } from "./gate-refusals.ts";
 import { OPENAPI_DOCUMENT_PATH, openApiJson, SECURITY_SCHEMES } from "./openapi.ts";
 
 /**
@@ -42,38 +43,70 @@ function describeCore() {
  * comparison below fails. That is the whole point: the description cannot be kept correct
  * by remembering to update it.
  */
-function servedOperations(routes: readonly { method: string; path: string }[]): string[] {
+function servedOperations(routes: readonly RouteEntry[]): string[] {
   const served = routes
     // `ALL` is what a wildcard mount registers as, and there are exactly two: `/admin/*`
     // and `/store/*`, carrying the migration gate, the two credential gates, and the store
     // surface's own JSON 404. None of them is a path a caller asks for by name, and a
     // description enumerates paths, so none belongs in one.
     .filter((route) => route.method !== "ALL")
-    .map(
-      (route) => `${route.method.toLowerCase()} ${route.path.replace(/:(\w+)/g, "{$1}")}`,
-    );
+    .map(operationOf);
 
   return [...new Set(served)].sort();
+}
+
+/** One row of Hono's route table: a method, a path, and what dispatch runs for it. */
+type RouteEntry = {
+  readonly method: string;
+  readonly path: string;
+  readonly handler: unknown;
+};
+
+/**
+ * How a route table row is named as an operation — OpenAPI's spelling of Hono's path.
+ *
+ * The two differ in one way: a parameter is `:id` in the router and `{id}` in a description.
+ */
+function operationOf(route: RouteEntry): string {
+  return `${route.method.toLowerCase()} ${route.path.replace(/:(\w+)/g, "{$1}")}`;
 }
 
 /** Every HTTP method OpenAPI lets a path item carry — everything else on one is metadata. */
 const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 
-function documentedOperations(paths: Record<string, object>): string[] {
-  return Object.entries(paths)
-    .flatMap(([path, item]) =>
-      Object.keys(item)
-        .filter((key) => METHODS.includes(key))
-        .map((method) => `${method} ${path}`),
-    )
-    .sort();
+/**
+ * How many operations this surface has.
+ *
+ * Written down because a scan that silently found none would pass every assertion made over
+ * it. Each check below asserts it, so a loop that stopped finding the operations fails rather
+ * than quietly stops checking them.
+ */
+const OPERATIONS = 14;
+
+/**
+ * Every operation the description carries, paired with what the description says about it.
+ *
+ * A path item holds metadata beside its methods, so the methods are picked out by name rather
+ * than by taking every key. What an operation *is* is the caller's to name: by the time it is
+ * in the document it is plain JSON, and each check below reads one field of it.
+ */
+function documentedOperations<Described>(
+  paths: Record<string, object>,
+): { operation: string; described: Described }[] {
+  return Object.entries(paths).flatMap(([path, item]) =>
+    Object.entries(item as Record<string, Described>)
+      .filter(([method]) => METHODS.includes(method))
+      .map(([method, described]) => ({ operation: `${method} ${path}`, described })),
+  );
 }
 
 describe("the description is generated from the routes", () => {
   it("describes every route the router serves, and no route it does not", () => {
     const { app, document } = describeCore();
 
-    expect(documentedOperations(document.paths ?? {})).toEqual(
+    const documented = documentedOperations(document.paths ?? {});
+
+    expect(documented.map(({ operation }) => operation).sort()).toEqual(
       servedOperations(app.routes),
     );
   });
@@ -136,24 +169,16 @@ describe("the description covers both surfaces, including how each is opened", (
     // Per operation rather than per surface: a union over `/admin` would stay unchanged
     // when one guarded route simply forgot to name its scheme, and that omission is
     // exactly the mistake worth catching on a surface that is closed by default.
-    const schemes = Object.entries(document.paths ?? {}).flatMap(([path, item]) =>
-      Object.entries(item as Record<string, { security?: object[] }>)
-        .filter(([method]) => METHODS.includes(method))
-        .map(([method, operation]) => ({
-          operation: `${method} ${path}`,
-          named: (operation.security ?? []).flatMap((requirement) =>
-            Object.keys(requirement),
-          ),
-        })),
-    );
+    const schemes = documentedOperations<{ security?: object[] }>(document.paths ?? {});
 
-    for (const { operation, named } of schemes) {
+    for (const { operation, described } of schemes) {
+      const named = (described.security ?? []).flatMap((requirement) =>
+        Object.keys(requirement),
+      );
       expect(named, operation).toEqual(expectedSchemes(operation));
     }
 
-    // The loop is only worth anything if it found the operations. A scan that silently
-    // found none would pass every assertion in it.
-    expect(schemes).toHaveLength(14);
+    expect(schemes).toHaveLength(OPERATIONS);
   });
 
   it("describes the refusal each gate makes, so a client can tell them apart", () => {
@@ -189,5 +214,211 @@ describe("the description covers both surfaces, including how each is opened", (
     expect(schemas.PermissionDenied).toMatchObject({
       required: expect.arrayContaining(["required"]),
     });
+  });
+});
+
+/**
+ * Every gate refusal, by the description a route declaring one carries.
+ *
+ * The description is the identity because it *is* the declaration: a route writes
+ * `403: REFUSALS.forbidden`, and the description that object holds is what reaches the
+ * generated document. So nothing here has to spell a schema name or a status twice, and a
+ * `REFUSALS` entry that gets reworded moves both sides of the comparison at once.
+ */
+const GATE_REFUSAL_BY_DESCRIPTION = new Map<string, GateRefusal>(
+  Object.values(GATE_REFUSALS).map((refusal) => [
+    refusal.declaredAs.description,
+    refusal,
+  ]),
+);
+
+/** One gate refusal, as the route table writes it: the status it makes, and which one it is. */
+function labelled(refusal: GateRefusal): string {
+  return labelledAt(String(refusal.status), refusal);
+}
+
+/**
+ * The same, at the status a route *declared* it.
+ *
+ * Separate from {@link labelled} because the two are not always the same number, and when
+ * they differ that is the finding: a route that declared `REFUSALS.forbidden` at some status
+ * other than 403 reads as a mismatch rather than as a match.
+ */
+function labelledAt(status: string, refusal: GateRefusal): string {
+  return `${status} ${refusal.name}`;
+}
+
+/**
+ * The gate refusals an operation **declares**, at the statuses it declares them.
+ *
+ * The status comes from the declaration rather than from the refusal, so a route that
+ * declared `REFUSALS.forbidden` at the wrong status is a mismatch rather than a match.
+ * Everything else in `responses` is the handler's own and is not this check's business —
+ * the compiler already holds a handler to what its route declared.
+ */
+function declaredGateRefusals(responses: Record<string, { description?: string }>) {
+  return Object.entries(responses)
+    .flatMap(([status, response]) => {
+      const refusal = GATE_REFUSAL_BY_DESCRIPTION.get(response.description ?? "");
+      return refusal === undefined ? [] : [labelledAt(status, refusal)];
+    })
+    .sort();
+}
+
+/**
+ * The gate refusals an operation **sits behind**, read off Hono's own route table.
+ *
+ * The table is the thing dispatch reads, which is why the answer is taken from it rather than
+ * from the `createRoute` objects: a gate mounted with a bare `use("*")` is in the table and in
+ * no declaration, and a `middleware: [requirePermission(…)]` that was deleted leaves the table
+ * exactly as if it had never been written.
+ *
+ * Two rules decide which gates are in front of a given operation, and both are properties of
+ * how Hono dispatches rather than guesses about it:
+ *
+ * - **Path and method**, with `ALL` matching every method and a trailing `/*` matching
+ *   everything below it. The only wildcards this application mounts are `/admin/*` and
+ *   `/store/*`.
+ * - **Registration order.** Hono runs matching handlers in the order they were registered and
+ *   stops at the first one that answers without calling `next()`, so a gate registered *after*
+ *   a route's own handler never runs for it. That is not a detail — it is exactly what makes
+ *   `POST /admin/merchants` and `POST /admin/session` reachable without a session while sitting
+ *   under the same `/admin/*` guard as everything else.
+ */
+function refusalsGating(routes: readonly RouteEntry[]): Map<string, string[]> {
+  const gates = routes.flatMap((route, index) => {
+    const refusal = refusalAnsweredBy(route.handler);
+    return refusal === undefined ? [] : [{ index, route, refusal }];
+  });
+
+  const gating = new Map<string, string[]>();
+
+  routes.forEach((route, index) => {
+    if (route.method === "ALL") return;
+    const operation = operationOf(route);
+    const answered = gates
+      .filter((gate) => gate.index <= index && covers(gate.route, route))
+      .map((gate) => labelled(gate.refusal));
+
+    // An operation is several rows — its middleware, its validators, its handler — and the
+    // last of them is the handler, so setting on every row leaves the entry that saw the
+    // whole chain.
+    gating.set(operation, [...answered, ...gatedInItsHandler(operation)].sort());
+  });
+
+  return gating;
+}
+
+/** Whether `gate` is in front of `route`: same method, and a path that reaches it. */
+function covers(gate: RouteEntry, route: RouteEntry): boolean {
+  if (gate.method !== "ALL" && gate.method !== route.method) return false;
+  return gate.path.endsWith("/*")
+    ? route.path.startsWith(gate.path.slice(0, -1))
+    : gate.path === route.path;
+}
+
+/**
+ * The one operation whose gate is not middleware, and the refusals it makes for itself.
+ *
+ * `POST /admin/merchants` cannot carry `requireSession` or `requirePermission`, because the
+ * *first* Merchant on a deployment has to be creatable with no session at all — a middleware
+ * that refused would leave the Admin permanently unreachable. So the handler asks the very
+ * same question the middlewares ask, by calling `authorise(db, cookie, PERMISSIONS.merchantWrite)`
+ * itself and answering `refuse(c, gate)`, and it therefore answers both refusals for every
+ * request after the deployment is claimed.
+ *
+ * It is named here rather than inferred, for the reason `expectedSchemes` names its two: an
+ * exception that a rule works out for itself is a hole anything can fall through, and one
+ * written down is a decision somebody has to change on purpose. What it claims is behaviour,
+ * so behaviour is what pins it — `auth.test.ts` calls this route with no session and with a
+ * Role that does not hold `merchant:write`, and asserts the 401 and the 403.
+ */
+function gatedInItsHandler(operation: string): string[] {
+  return operation === "post /admin/merchants"
+    ? [labelled(GATE_REFUSALS.noSession), labelled(GATE_REFUSALS.forbidden)]
+    : [];
+}
+
+/**
+ * The dimension #9's drift checks did not cover: that a refusal a route *declares* is one its
+ * gates can actually *make*.
+ *
+ * A `403` used to be a comment. Since #9 it is a published contract — it is in
+ * `packages/core/openapi.json` and in the union `@kobai/client` lets a storefront narrow on —
+ * so a route promising a permission check it does not have, or holding one it never declared,
+ * makes a generated client wrong in a way its types assert is right. Neither is visible to
+ * anything else here: the `satisfies Record<…>` maps cover reason → status, and the compiler
+ * covers handler → declaration, but no middleware appears in either.
+ *
+ * **It covers all four gate refusals, and not only the `403`.** The `401`s were worth the same
+ * check for a blunter reason than the `403` was: both credential gates are mounted per surface
+ * with `use("*")`, so the mistake to catch is not a forgotten decoration but a route registered
+ * on the wrong half of `admin.ts` — which is the whole admin surface answering anonymously, and
+ * nothing else here would notice. The `503` comes free with the same machinery. What the check
+ * deliberately stops at is the status: whether a `401` can really carry every `session-` or
+ * `api-key-` reason it declares is pinned one level down, by the mapped `satisfies` on
+ * `SESSION_REASONS` and `API_KEY_REASONS` in `contract.ts`, which the compiler enforces and a
+ * test could only repeat. Everything else a route declares — `400`, `404`, `409`, `422`, `500` —
+ * is the handler's own, and `app.openapi` already types the handler against it.
+ */
+describe("a declared refusal is one a gate actually makes", () => {
+  it("declares every refusal its gates make, and no refusal they do not", () => {
+    const { app, document } = describeCore();
+
+    const gating = refusalsGating(app.routes);
+    const operations = documentedOperations<{ responses?: Record<string, object> }>(
+      document.paths ?? {},
+    );
+
+    // Both directions, each named in words rather than left to be read off the sign of a
+    // diff: the label says which route, and the key says which half is missing.
+    for (const { operation, described } of operations) {
+      const declared = declaredGateRefusals(described.responses ?? {});
+      const gates = gating.get(operation) ?? [];
+
+      expect(
+        {
+          declaredWithNoGate: declared.filter((refusal) => !gates.includes(refusal)),
+          gatedButNotDeclared: gates.filter((refusal) => !declared.includes(refusal)),
+        },
+        operation,
+      ).toEqual({ declaredWithNoGate: [], gatedButNotDeclared: [] });
+    }
+
+    expect(operations).toHaveLength(OPERATIONS);
+  });
+
+  it("reads the whole chain, not just the route's own middleware", () => {
+    const { app } = describeCore();
+
+    // A worked example, so the loop above cannot pass by finding no gates at all: reading
+    // `app.ts` and `admin.ts`, `GET /admin/store` sits behind the migration gate, the session
+    // gate, and its own `requirePermission(store:read)` — three mounts in three files.
+    expect(refusalsGating(app.routes).get("get /admin/store")).toEqual([
+      "401 noSession",
+      "403 forbidden",
+      "503 unavailable",
+    ]);
+  });
+
+  it("puts no permission gate above the session gate that feeds it", () => {
+    const { app } = describeCore();
+
+    // The one way a declared 403 can still be a promise nothing keeps after the check above:
+    // `requirePermission` reads the Merchant off the context, and `authenticated` throws when
+    // there is none — so a route gated on a permission with no `requireSession` in front of it
+    // answers 500 where it declared 403, and both halves of the check would agree it was fine.
+    // `authenticated` says so at runtime; this says so at build, before anybody has to see it.
+    const gated = [...refusalsGating(app.routes)].filter(([, refusals]) =>
+      refusals.includes(labelled(GATE_REFUSALS.forbidden)),
+    );
+
+    for (const [operation, refusals] of gated) {
+      expect(refusals, operation).toContain(labelled(GATE_REFUSALS.noSession));
+    }
+
+    // The eight routes that name a permission, and `POST /admin/merchants`, which asks for one
+    // in its handler.
+    expect(gated).toHaveLength(9);
   });
 });
