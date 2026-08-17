@@ -2,11 +2,11 @@
 
 Open source e-commerce backend plus CMS.
 
-> **Status: greenfield.** At the time of writing this repo contains scaffolding only — no
-> application code, no chosen stack, no chosen database. Do not infer conventions that
-> aren't written down here, and do not invent them. If you need a decision that isn't
-> recorded, that's a signal to go resolve it (see [Working on kobai](#working-on-kobai))
-> rather than to guess.
+> **Status: walking skeleton in progress.** The stack is chosen and the first slice boots —
+> see [Development](#development). Everything not yet built is still undecided: do not infer
+> conventions that aren't written down here, and do not invent them. If you need a decision
+> that isn't recorded, that's a signal to go resolve it (see
+> [Working on kobai](#working-on-kobai)) rather than to guess.
 
 This file is the **single source of truth** for agent instructions. Every other agent
 config in this repo points back here — see [Agent tool scaffold](#agent-tool-scaffold).
@@ -26,6 +26,75 @@ Work flows through the engineering skills configured below:
 4. **Incoming** — bug reports and feature requests you didn't write go through `/triage`.
 
 Steps 1–3 assume a real issue tracker; this repo uses GitHub Issues.
+
+## Development
+
+**Prerequisites: [devbox](https://www.jetify.com/devbox) and Docker. Nothing else.** Node and
+pnpm are not expected on your PATH — devbox provides them, and corepack activates the pnpm
+pinned in `package.json`. Run every Node command through `devbox run …` or from inside
+`devbox shell`.
+
+**The gate is `devbox run ci`.** It is the single command that proves the repository is
+green: install, Postgres up, lint, typecheck, build, test. Nothing is done until it passes,
+and no PR opens on a red one.
+
+| Command | What it does |
+| --- | --- |
+| `devbox run ci` | **The gate.** Everything below, in order. |
+| `devbox run up` | Postgres and the reference Project. `http://localhost:3000/health`. |
+| `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
+| `devbox run db` | Just Postgres — what the test suite needs. |
+| `devbox run test` | Postgres up, build, then the whole suite. |
+| `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
+| `devbox run db:generate` | Generate a migration from a change to Core's schema. |
+
+There is deliberately **no `push` script** anywhere — not in Core, not in a Plugin, not in
+the reference Project. `drizzle-kit push` diffs against the live database and silently drops
+the tables of every package whose schema it was not given, leaving their tracking rows
+behind so the migration runner cannot repair it. See
+[ADR-0030](docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md). A `"// …"`
+key in `devbox.json` and in each package's `package.json` says so where the command would
+have been, and `tests/no-push-script.test.ts` fails the build if one appears in either.
+
+### Layout
+
+| Path | What |
+| --- | --- |
+| `packages/core` | `@kobai/core` — the package a Project depends on (ADR-0025). |
+| `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files. |
+| `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
+| `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
+| `compose.yaml`, `Dockerfile` | Postgres and the application, and nothing else. |
+
+### Writing tests
+
+The dominant seam is the **public HTTP API, dispatched in-process against a real Postgres**.
+Reach for `createTestKobai` from `@kobai/core/testing`: it creates a throwaway database, runs
+every migration set into it, and hands back an object you dispatch requests at.
+
+```ts
+import { createTestKobai } from "@kobai/core/testing";
+
+await using kobai = await createTestKobai(); // `using` drops the database on the way out
+const response = await kobai.request("/admin/store");
+```
+
+The **migration seam** covers what HTTP cannot — that sets apply independently, into
+separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive
+the runner yourself, then inspect the result through `kobai.database.query`:
+
+```ts
+await using kobai = await createTestKobai({ migrate: false });
+await runMigrations(kobai.db, [pluginSet, coreMigrationSet]); // order is yours to choose
+```
+
+Real Postgres rather than a fake, because under
+[ADR-0004](docs/adr/0004-plugins-own-their-tables-core-tables-are-closed.md),
+[ADR-0011](docs/adr/0011-postgres-and-drizzle.md) and ADR-0030 the schema and its migrations
+*are* part of the product — a fake skips the thing most likely to break. Assert on response
+bodies, status codes and database state; never on internal call sequences or module
+structure, which Core reserves the right to change
+([ADR-0019](docs/adr/0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md)).
 
 ## Agent skills
 
@@ -85,8 +154,8 @@ interface:
 
 - **Line endings** are LF everywhere (`.gitattributes` enforces `eol=lf`); Windows
   contributors should not let autocrlf rewrite them.
-- **Secrets** never enter the repo. `.env` is gitignored; document new variables in
-  `.env.example` when one exists.
+- **Secrets** never enter the repo. `.env` is gitignored; every variable kobai reads is
+  documented in `.env.example`, and a new one goes there in the same commit.
 - **Don't create `CONTEXT.md` or `docs/adr/` upfront.** `/domain-modeling` writes them
   lazily, when a term or decision is actually resolved. Their absence is not a problem to
   fix.

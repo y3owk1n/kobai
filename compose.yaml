@@ -1,0 +1,44 @@
+# The reference Project, as a Developer runs it: `devbox run up` (or `docker compose up`).
+#
+# Two services and nothing else — Postgres and the application. A first run must not be an
+# infrastructure exercise, so there is no cache, no proxy, and no separate migration job:
+# Core applies its own migrations at boot (see `reference/src/server.ts`).
+#
+# The `db` service is also what the test suite runs against. Tests need a real Postgres
+# because, under ADR-0004/0011/0030, the schema and its migrations *are* part of the
+# product — a fake would skip the thing most likely to break. `devbox run db` brings up
+# just this service.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kobai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobai}
+      POSTGRES_DB: ${POSTGRES_DB:-kobai}
+    ports:
+      # Deliberately not 5432 — a Developer's own Postgres should not have to move.
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - kobai-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kobai} -d ${POSTGRES_DB:-kobai}"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      # The monorepo root: the reference Project depends on @kobai/core from this workspace.
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
+      PORT: 3000
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  kobai-db:
