@@ -79,6 +79,12 @@ export type LocalRegistry = {
  * Only `@kobai/*` is ever asked of it — a generated Project's `.npmrc` scopes it to that,
  * and everything else comes from wherever npm normally looks. So it needs no network, and
  * cannot silently answer for a package this commit did not build.
+ *
+ * **Writing is scoped to `@kobai/*` too**, and the catch-all below grants read only. That
+ * matters more than it looks now that this can bind every interface for a build container
+ * (see {@link LocalRegistryOptions}): an anonymous-publish catch-all on a laptop is a
+ * writable registry anyone on the network can put any package name into, for as long as the
+ * test runs. Nothing here publishes anything outside the scope.
  */
 function configYaml(storage: string): string {
   return `storage: ${join(storage, "storage")}
@@ -93,7 +99,6 @@ packages:
     unpublish: $anonymous
   '**':
     access: $all
-    publish: $anonymous
 log:
   type: stdout
   format: pretty

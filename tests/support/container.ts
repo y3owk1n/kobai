@@ -3,17 +3,17 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 /**
- * Enough Docker to build an image, look inside the one that was built, and boot it.
+ * Enough Docker to build an image, ask the one that was built what it contains, and boot it.
  *
- * **Looking inside the built image is the point.** A Dockerfile can be read and believed;
- * an image is what actually ships. The 933 MB image #12 inherited passed every review of
- * its Dockerfile — `pnpm install --prod` is right there in the runtime stage — because the
- * bug was that the command *relinks rather than prunes*, which no reading of the file
- * reveals and one `ls` inside the image does.
+ * **Asking the built image is the point.** A Dockerfile can be read and believed; an image
+ * is what actually ships. The 933 MB image #12 inherited survived every reading of its
+ * Dockerfile — `pnpm install --prod` is right there in the runtime stage — because the bug
+ * was that the command *relinks rather than prunes*, which no reading of the file reveals
+ * and one `ls` inside the image does.
  *
  * A module rather than a detail inside one test file because two images are exercised: the
  * repository's, which `devbox run up` builds, and the one a generated Project builds for
- * itself from its own Dockerfile.
+ * itself from its own Dockerfile and brings up with its own compose file.
  */
 
 const run = promisify(execFile);
@@ -25,30 +25,55 @@ const BUILD_TIMEOUT = 900_000;
 const MAX_BUFFER = 64 * 1024 * 1024;
 /** Migrations against a real Postgres, from a container that has just started. */
 const READY_TIMEOUT = 120_000;
+/** What the application prints once every migration set has applied. */
+const READY = '"message":"ready"';
 
 export type BuiltImage = {
   readonly tag: string;
-  /** What the image weighs, in bytes, as `docker image inspect` reports it. */
-  size(): Promise<number>;
   /**
-   * Runs a shell command inside a throwaway container off this image and returns stdout.
+   * Whichever of these npm package names the image has installed.
    *
-   * The entrypoint is overridden, so this observes the filesystem the image ships without
-   * starting the application or needing a database.
+   * Asked as a set rather than one at a time so a failure names every offender at once —
+   * "these four build tools are in the image" is a finding, and four separate failures are
+   * four guesses at the same one.
    */
-  read(script: string): Promise<string>;
+  installs(names: readonly string[]): Promise<string[]>;
+  /** Whether a path exists inside the image. */
+  has(path: string): Promise<boolean>;
+  /** What a path weighs inside the image, in kilobytes. */
+  kilobytesOf(path: string): Promise<number>;
+  /** Every path inside the image matching a shell glob; empty when nothing matches. */
+  list(glob: string): Promise<string[]>;
   remove(): Promise<void>;
-  [Symbol.asyncDispose](): Promise<void>;
 };
 
-async function docker(args: string[], what: string): Promise<string> {
+type DockerOptions = {
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Return what the command wrote to stderr as well.
+   *
+   * `docker compose` writes progress there and interleaves `logs` output across both, so a
+   * caller reading either has to be handed both. Everything parsed rather than searched
+   * wants stdout alone, because a warning on stderr would land in the middle of it.
+   */
+  readonly includeStderr?: boolean;
+};
+
+async function docker(
+  args: string[],
+  what: string,
+  options: DockerOptions = {},
+): Promise<string> {
+  const { cwd = repoRoot, env, includeStderr = false } = options;
   try {
-    const { stdout } = await run("docker", args, {
-      cwd: repoRoot,
+    const { stdout, stderr } = await run("docker", args, {
+      cwd,
+      env: env === undefined ? process.env : { ...process.env, ...env },
       timeout: BUILD_TIMEOUT,
       maxBuffer: MAX_BUFFER,
     });
-    return stdout;
+    return includeStderr ? `${stdout}${stderr}` : stdout;
   } catch (cause) {
     const { stdout = "", stderr = "" } = cause as { stdout?: string; stderr?: string };
     throw new Error(`${what}\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`, { cause });
@@ -77,31 +102,60 @@ export async function buildImage(options: {
  * An image somebody else built, by tag — `docker compose build` among them.
  *
  * The same questions are worth asking of an image a Project's own compose file produced as
- * of one this file built directly, and the answers come from the same two commands.
+ * of one this module built directly, and the answers come from the same two commands.
  */
 export function imageAt(tag: string): BuiltImage {
-  const remove = async () => {
-    // `--force` because a container off this image may still be going away.
-    await run("docker", ["image", "rm", "--force", tag]).catch(() => undefined);
-  };
+  /**
+   * Runs a shell command inside a throwaway container off this image.
+   *
+   * The entrypoint is overridden, so this observes the filesystem the image ships without
+   * starting the application or needing a database.
+   */
+  const read = (script: string) =>
+    docker(
+      ["run", "--rm", "--entrypoint", "sh", tag, "-c", script],
+      `Could not read inside the image ${tag}: \`${script}\` failed.`,
+    );
 
   return {
     tag,
-    async size() {
-      const stdout = await docker(
-        ["image", "inspect", tag, "--format", "{{.Size}}"],
-        `\`docker image inspect\` could not read ${tag}.`,
-      );
-      return Number.parseInt(stdout.trim(), 10);
-    },
-    async read(script) {
-      return docker(
-        ["run", "--rm", "--entrypoint", "sh", tag, "-c", script],
-        `Could not read inside the image ${tag}: \`${script}\` failed.`,
+
+    async installs(names) {
+      // One directory per installed package version, named `<name>@<version>` with `/`
+      // written as `+`. Workspace packages are symlinked rather than stored here, which is
+      // right: those are the ones that *should* ship.
+      const entries = (await read("ls node_modules/.pnpm")).split("\n").filter(Boolean);
+      return names.filter((name) =>
+        entries.some((entry) => entry.startsWith(`${name.replace("/", "+")}@`)),
       );
     },
-    remove,
-    [Symbol.asyncDispose]: remove,
+
+    async has(path) {
+      return (await read(`test -e '${path}' && echo yes || echo no`)).trim() === "yes";
+    },
+
+    async kilobytesOf(path) {
+      const measured = Number.parseInt(
+        (await read(`du -sk '${path}'`)).trim().split(/\s+/)[0] ?? "",
+        10,
+      );
+      if (!Number.isFinite(measured)) {
+        throw new Error(`\`du -sk ${path}\` inside ${tag} reported nothing measurable.`);
+      }
+      return measured;
+    },
+
+    async list(glob) {
+      // `|| true` so a glob matching nothing is an empty list rather than a failed command:
+      // "the image has none of these" is an answer this asks for on purpose.
+      const listed = await read(`ls ${glob} 2>/dev/null || true`);
+      return listed.split("\n").filter(Boolean);
+    },
+
+    async remove() {
+      // `--force` because a container off this image may still be going away.
+      await run("docker", ["image", "rm", "--force", tag]).catch(() => undefined);
+    },
   };
 }
 
@@ -117,39 +171,34 @@ export type RunningContainer = {
 /**
  * Starts a container off an image and waits until it says it is ready.
  *
- * Waits for the log line rather than for the port, because a Project binds its listener
- * *before* migrations run so that `/health` can answer throughout (`reference/src/server.ts`).
- * A port that accepts connections therefore does not yet mean the schema is there, and a
- * request sent at that moment would be answered 503 by Core's own gate.
+ * `host.docker.internal` is always named, because the Postgres the gate runs against is
+ * published on the host and Linux provides no such name of its own. Without it the container
+ * fails to resolve an address and the error is about DNS rather than about kobai.
  */
 export async function startContainer(options: {
   readonly image: string;
   readonly name: string;
   readonly env: Readonly<Record<string, string>>;
-  /**
-   * Names the host reachable as `host.docker.internal` from inside.
-   *
-   * Docker Desktop provides it; Linux does not, and the Postgres the gate runs against is
-   * published on the host. Without this the container resolves nothing and the failure is a
-   * DNS error rather than anything about kobai.
-   */
-  readonly hostGateway?: boolean;
 }): Promise<RunningContainer> {
-  const { image, name, env, hostGateway = true } = options;
+  const { image, name, env } = options;
 
-  const args = ["run", "--detach", "--name", name, "--publish", "127.0.0.1::3000"];
-  if (hostGateway) args.push("--add-host", "host.docker.internal:host-gateway");
+  const args = [
+    "run",
+    "--detach",
+    "--name",
+    name,
+    "--publish",
+    "127.0.0.1::3000",
+    "--add-host",
+    "host.docker.internal:host-gateway",
+  ];
   for (const [key, value] of Object.entries(env)) args.push("--env", `${key}=${value}`);
   args.push(image);
 
   await docker(args, `\`docker run\` could not start ${image}.`);
 
-  const logs = async () => {
-    const { stdout, stderr } = await run("docker", ["logs", name], {
-      maxBuffer: MAX_BUFFER,
-    }).catch(() => ({ stdout: "", stderr: "" }));
-    return `${stdout}${stderr}`;
-  };
+  const logs = async () =>
+    docker(["logs", name], "", { includeStderr: true }).catch(() => "");
 
   const stop = async () => {
     await run("docker", ["rm", "--force", name]).catch(() => undefined);
@@ -164,58 +213,38 @@ export async function startContainer(options: {
     if (port === undefined) {
       throw new Error(`${name} published no host port for 3000: ${published}`);
     }
-    const origin = `http://127.0.0.1:${port}`;
 
-    const deadline = Date.now() + READY_TIMEOUT;
-    while (Date.now() < deadline) {
-      const output = await logs();
-      if (output.includes('"message":"ready"')) {
-        return { origin, logs, stop, [Symbol.asyncDispose]: stop };
-      }
-
-      const { stdout: state } = await run("docker", [
-        "inspect",
-        name,
-        "--format",
-        "{{.State.Status}} {{.State.ExitCode}}",
-      ]);
-      if (state.startsWith("exited")) {
-        throw new Error(
-          `The container exited (${state.trim()}) instead of becoming ready. Its output:\n${output}`,
+    await waitForReady({
+      what: "The container",
+      logs,
+      exited: async () => {
+        const state = await docker(
+          ["inspect", name, "--format", "{{.State.Status}} {{.State.ExitCode}}"],
+          `\`docker inspect\` could not read the state of ${name}.`,
         );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
+        return state.startsWith("exited") ? state.trim() : undefined;
+      },
+    });
 
-    throw new Error(
-      `The container never printed \`ready\` within ${READY_TIMEOUT}ms. Its output:\n${await logs()}`,
-    );
+    return {
+      origin: `http://127.0.0.1:${port}`,
+      logs,
+      stop,
+      [Symbol.asyncDispose]: stop,
+    };
   } catch (cause) {
     await stop();
     throw cause;
   }
 }
 
-/**
- * A database URL a container can dial, from one that only works on this machine.
- *
- * The gate's Postgres is published on the host on a port derived from the checkout's path
- * (#21), so `127.0.0.1` inside a container is the container itself and reaches nothing.
- */
-export function fromContainer(databaseUrl: string): string {
-  const url = new URL(databaseUrl);
-  url.hostname = "host.docker.internal";
-  return url.toString();
-}
-
 export type ComposeProject = {
   /** Where the `app` service answers, from this machine. */
   readonly origin: string;
-  /** The image compose built for `app`, so it can be inspected like any other. */
+  /** The image compose built for `app`, so it can be asked what it contains. */
   readonly appImage: string;
   logs(): Promise<string>;
   down(): Promise<void>;
-  [Symbol.asyncDispose](): Promise<void>;
 };
 
 /**
@@ -250,7 +279,7 @@ export async function composeUp(options: {
   for (const file of files) base.push("--file", file);
 
   const compose = (args: string[], what: string) =>
-    composeDocker(directory, env, [...base, ...args], what);
+    docker([...base, ...args], what, { cwd: directory, env, includeStderr: true });
 
   const down = async () => {
     await run("docker", [...base, "down", "--volumes", "--remove-orphans"], {
@@ -269,57 +298,74 @@ export async function composeUp(options: {
       "`docker compose up --build` failed on the Project's own compose file. Nothing below it ran.",
     );
 
-    const deadline = Date.now() + READY_TIMEOUT;
-    while (Date.now() < deadline) {
-      const output = await logs();
-      if (output.includes('"message":"ready"')) {
-        return {
-          origin: `http://127.0.0.1:${appPort}`,
-          appImage: `${projectName}-app`,
-          logs,
-          down,
-          [Symbol.asyncDispose]: down,
-        };
-      }
-      const state = await compose(
-        ["ps", "--all", "--format", "{{.Service}} {{.State}}"],
-        "",
-      );
-      if (/^app exited/m.test(state)) {
-        throw new Error(
-          `The Project's \`app\` service exited instead of becoming ready.\n\n${state}\n\nIts output:\n${output}`,
+    await waitForReady({
+      what: "The Project's `app` service",
+      logs,
+      exited: async () => {
+        const state = await compose(
+          ["ps", "--all", "--format", "{{.Service}} {{.State}}"],
+          "`docker compose ps` could not read the Project's services.",
         );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+        return /^app exited/m.test(state) ? state.trim() : undefined;
+      },
+    });
 
-    throw new Error(
-      `The Project's \`app\` service never printed \`ready\` within ${READY_TIMEOUT}ms. Its output:\n${await logs()}`,
-    );
+    return {
+      origin: `http://127.0.0.1:${appPort}`,
+      appImage: `${projectName}-app`,
+      logs,
+      down,
+    };
   } catch (cause) {
     await down();
     throw cause;
   }
 }
 
-async function composeDocker(
-  cwd: string,
-  env: Readonly<Record<string, string>>,
-  args: string[],
-  what: string,
-): Promise<string> {
-  try {
-    const { stdout, stderr } = await run("docker", args, {
-      cwd,
-      env: { ...process.env, ...env },
-      timeout: BUILD_TIMEOUT,
-      maxBuffer: MAX_BUFFER,
-    });
-    // Compose writes progress to stderr and `logs` output to both, so a caller reading
-    // either has to be handed both.
-    return `${stdout}${stderr}`;
-  } catch (cause) {
-    const { stdout = "", stderr = "" } = cause as { stdout?: string; stderr?: string };
-    throw new Error(`${what}\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`, { cause });
+/**
+ * Waits for the application to print `ready`, rather than for its port to accept.
+ *
+ * A Project binds its listener *before* migrations run so that `/health` can answer
+ * throughout (`reference/src/server.ts`), so a port that accepts connections does not yet
+ * mean the schema is there — a request sent at that moment is answered 503 by Core's own
+ * gate. Every way out of this loop says which of the three things happened: it became ready,
+ * it exited, or it never did either — and the last two carry the output, because a bare
+ * timeout is the least useful sentence available here.
+ */
+async function waitForReady(options: {
+  readonly what: string;
+  readonly logs: () => Promise<string>;
+  readonly exited: () => Promise<string | undefined>;
+}): Promise<void> {
+  const { what, logs, exited } = options;
+  const deadline = Date.now() + READY_TIMEOUT;
+
+  while (Date.now() < deadline) {
+    const output = await logs();
+    if (output.includes(READY)) return;
+
+    const state = await exited();
+    if (state !== undefined) {
+      throw new Error(
+        `${what} exited (${state}) instead of becoming ready. Its output:\n${output}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
+
+  throw new Error(
+    `${what} never printed \`ready\` within ${READY_TIMEOUT}ms. Its output:\n${await logs()}`,
+  );
+}
+
+/**
+ * A database URL a container can dial, from one that only works on this machine.
+ *
+ * The gate's Postgres is published on the host on a port derived from the checkout's path
+ * (#21), so `127.0.0.1` inside a container is the container itself and reaches nothing.
+ */
+export function databaseUrlForContainer(databaseUrl: string): string {
+  const url = new URL(databaseUrl);
+  url.hostname = "host.docker.internal";
+  return url.toString();
 }

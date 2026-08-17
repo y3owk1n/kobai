@@ -60,9 +60,13 @@ holding every devDependency's bytes, stays exactly where it was. `drizzle-kit`, 
 #12 fixed it, and the shape of the fix is worth knowing because the obvious version does not
 work. The store is deleted and re-installed `--prod` **in the build stage**, before anything
 is copied out of it — a `rm -rf` in the runtime stage, after the `COPY`, hides the bytes in a
-lower layer and leaves the image exactly as large. The root image went from 933 MB to 270 MB
-on arm64, `/repo` from 513 MB to 36 MB, and `tests/the-image-ships-no-devdependencies.test.ts`
-inspects the built image rather than the Dockerfile.
+lower layer and leaves the image exactly as large.
+
+The root image went from 933 MB to 270 MB and a generated Project's from 680 MB to 265 MB,
+with `/repo` going from 513 MB to 36 MB — all measured on arm64, where the same image #12
+recorded at 869 MB on amd64 measures 933 MB. `tests/the-runtime-image.test.ts` is what keeps
+it that way, and it **inspects the built image rather than the Dockerfile**, because this
+class of bug is invisible in the file.
 
 ## Why `/admin-ui`, and why not under `/admin`
 

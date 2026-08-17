@@ -34,8 +34,13 @@ RUN pnpm -r --include-workspace-root build
 # `drizzle-kit`, React, Vite and Tailwind to production and made no difference to the size
 # (#12). Deleting the store first is what makes the second install production-only, and a
 # `rm -rf` after the `COPY` would not do it either — a lower layer still carries the bytes.
+#
+# `--frozen-lockfile` here and not on the install above: by this point the install above has
+# written a `pnpm-lock.yaml` even if the Project arrived without one, so the production tree
+# is resolved from the same lockfile the tree that was just built came from. Without it the
+# image could ship a resolution nothing tested.
 RUN rm -rf node_modules admin/node_modules \
-  && pnpm install --prod --ignore-scripts
+  && pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # The Admin ships as the bytes `vite build` produced and nothing else. Its source is yours to
 # edit (ADR-0033) and its config and toolchain are build inputs, so what the running process

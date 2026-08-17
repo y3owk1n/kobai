@@ -1,15 +1,16 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createTestDatabase, type TestDatabase } from "@kobai/core/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { devOnlyDependencies } from "./support/build-tooling.ts";
 import {
   type BuiltImage,
   buildImage,
-  fromContainer,
+  databaseUrlForContainer,
   startContainer,
 } from "./support/container.ts";
 
@@ -48,20 +49,16 @@ const IMAGE_TIMEOUT = 900_000;
  */
 const RUNTIME_TREE_BUDGET_KB = 150_000;
 
-/**
- * The four the ticket named, measured in the 933 MB image.
- *
- * Every other forbidden name is read out of the Admin's manifest rather than copied here,
- * because ADR-0033 declares that package's entire toolchain a devDependency for exactly this
- * reason — so a component added with `shadcn add`, which drags in its own dependencies, is
- * covered without an edit to this file.
- */
-const NAMED_IN_THE_TICKET = ["drizzle-kit", "vitest", "@biomejs/biome", "typescript"];
+/** The build tools #12 named, each measured in the 933 MB image it was filed against. */
+const BUILD_TOOLS_THE_TICKET_NAMED = [
+  "drizzle-kit",
+  "vitest",
+  "@biomejs/biome",
+  "typescript",
+];
 
 let image: BuiltImage;
 let database: TestDatabase;
-/** Every directory name under `node_modules/.pnpm` — one per installed package version. */
-let installed: string[];
 
 beforeAll(async () => {
   // Unique per run so two checkouts building the gate at once cannot overwrite each other's
@@ -71,7 +68,6 @@ beforeAll(async () => {
     context: repoRoot,
     dockerfile: join(repoRoot, "Dockerfile"),
   });
-  installed = (await image.read("ls node_modules/.pnpm")).split("\n").filter(Boolean);
   database = await createTestDatabase();
 }, IMAGE_TIMEOUT);
 
@@ -84,16 +80,17 @@ describe("the image the repository ships", () => {
   it(
     "installs no devDependency",
     async () => {
-      const forbidden = [...NAMED_IN_THE_TICKET, ...(await adminBuildTooling())];
+      const forbidden = await devOnlyDependencies();
 
-      const shipped = forbidden.filter((name) =>
-        installed.some((entry) => entry.startsWith(`${name.replace("/", "+")}@`)),
-      );
+      // The derivation subtracts the production closure from every declared devDependency,
+      // so a bug in it fails *open* — an empty list would make the assertion below pass by
+      // checking nothing. The four #12 measured are what it has to contain at minimum.
+      expect(forbidden).toEqual(expect.arrayContaining(BUILD_TOOLS_THE_TICKET_NAMED));
 
-      expect(
-        shipped,
+      await expect(
+        image.installs(forbidden),
         "These are build tools, and they are in the runtime image. `pnpm install --prod` in the runtime stage does not remove them — it relinks over `node_modules/.pnpm` and leaves every byte where it was. The prune has to happen in the build stage, before anything is copied out of it. See the Dockerfile and #12.",
-      ).toEqual([]);
+      ).resolves.toEqual([]);
     },
     IMAGE_TIMEOUT,
   );
@@ -101,12 +98,8 @@ describe("the image the repository ships", () => {
   it(
     "keeps the runtime tree within its budget",
     async () => {
-      const kilobytes = Number.parseInt(
-        (await image.read("du -sk /repo")).trim().split(/\s+/)[0] ?? "",
-        10,
-      );
+      const kilobytes = await image.kilobytesOf("/repo");
 
-      expect(Number.isFinite(kilobytes)).toBe(true);
       expect(
         kilobytes,
         `/repo is ${Math.round(kilobytes / 1024)} MB in the image. It was 513 MB before #12 pruned it and 36 MB after, so this is the dependency store coming back rather than a dependency being added.`,
@@ -126,12 +119,9 @@ describe("the image the repository ships", () => {
 
       const missing: string[] = [];
       for (const owner of owners) {
-        const listed = await image
-          .read(`ls ${owner.pathInImage}/*.sql 2>/dev/null || true`)
-          .then((stdout) => stdout.split("\n").filter(Boolean));
-
+        const shipped = await image.list(`${owner.pathInImage}/*.sql`);
         for (const file of owner.sqlFiles) {
-          if (!listed.some((path) => path.endsWith(`/${file}`))) {
+          if (!shipped.some((path) => path.endsWith(`/${file}`))) {
             missing.push(`${owner.name}: ${file}`);
           }
         }
@@ -148,15 +138,16 @@ describe("the image the repository ships", () => {
   it(
     "ships the Admin as built bytes and not as source",
     async () => {
-      const present = async (path: string) =>
-        (await image.read(`test -e ${path} && echo yes || echo no`)).trim() === "yes";
-
-      await expect(present("/repo/reference/admin/dist/index.html")).resolves.toBe(true);
+      await expect(image.has("/repo/reference/admin/dist/index.html")).resolves.toBe(
+        true,
+      );
       await expect(
-        present("/repo/reference/admin/src"),
+        image.has("/repo/reference/admin/src"),
         "The Admin's source is in the runtime image. It is a Developer's to edit and a browser bundle is what runs (ADR-0033); only `dist/` and the manifest that resolves it should ship.",
       ).resolves.toBe(false);
-      await expect(present("/repo/reference/admin/vite.config.ts")).resolves.toBe(false);
+      await expect(image.has("/repo/reference/admin/vite.config.ts")).resolves.toBe(
+        false,
+      );
     },
     IMAGE_TIMEOUT,
   );
@@ -167,17 +158,30 @@ describe("the image the repository ships", () => {
       await using served = await startContainer({
         image: image.tag,
         name: `kobai-gate-runtime-${randomBytes(6).toString("hex")}`,
-        env: { DATABASE_URL: fromContainer(database.url), PORT: "3000" },
+        env: { DATABASE_URL: databaseUrlForContainer(database.url), PORT: "3000" },
       });
 
       const health = await fetch(`${served.origin}/health`);
-      expect(health.status).toBe(200);
-      await expect(health.json()).resolves.toMatchObject({
-        status: "ok",
-        migrations: {
-          sets: [{ name: "core" }, { name: "plugin-price-log" }, { name: "project" }],
-        },
-      });
+      expect(
+        health.status,
+        `The container answered /health with ${health.status}. Its output:\n${await served.logs()}`,
+      ).toBe(200);
+      const body = (await health.json()) as {
+        migrations: { sets: { name: string; applied: number }[] };
+      };
+      expect(body).toMatchObject({ status: "ok" });
+
+      // Not merely that the three sets are listed: that each of them applied something. A
+      // set whose `migrations/` directory the prune removed reports zero and is otherwise
+      // silent, which is the quietest way for a Plugin's tables to never exist.
+      expect(
+        body.migrations.sets.map((set) => [set.name, set.applied > 0]),
+        `A migration set applied nothing inside the container. Its output:\n${await served.logs()}`,
+      ).toEqual([
+        ["core", true],
+        ["plugin-price-log", true],
+        ["project", true],
+      ]);
 
       // The Admin, served by the Project's own process from the bytes `vite build` produced.
       const admin = await fetch(`${served.origin}/admin-ui/`);
@@ -191,25 +195,6 @@ describe("the image the repository ships", () => {
     IMAGE_TIMEOUT,
   );
 });
-
-/** Everything the Admin declares as a devDependency, minus the workspace links. */
-async function adminBuildTooling(): Promise<string[]> {
-  const manifest = JSON.parse(
-    await readFile(join(repoRoot, "reference/admin/package.json"), "utf8"),
-  ) as { devDependencies?: Record<string, string> };
-
-  const declared = Object.keys(manifest.devDependencies ?? {});
-  if (declared.length === 0) {
-    // Failing open would make the assertion above pass over an empty list forever.
-    throw new Error(
-      "The Admin declares no devDependencies, so the runtime image was checked for almost nothing. ADR-0033 says its whole toolchain belongs there.",
-    );
-  }
-
-  // `@kobai/*` are workspace packages: pnpm links them rather than storing them under
-  // `.pnpm`, so asking whether they are installed there answers nothing either way.
-  return declared.filter((name) => !name.startsWith("@kobai/"));
-}
 
 type MigrationOwner = {
   readonly name: string;
@@ -229,18 +214,13 @@ async function migrationOwners(): Promise<MigrationOwner[]> {
   const owners: MigrationOwner[] = [];
   for (const { name, path } of JSON.parse(stdout) as { name: string; path: string }[]) {
     const directory = join(path, "migrations");
+    // The journal is what the runner reads first, so a package that has one owns a set and
+    // a package that has none owns nothing — which is the same question `stat` would answer
+    // and one fewer call to make.
     const journal = await readFile(join(directory, "meta/_journal.json"), "utf8").catch(
       () => null,
     );
     if (journal === null) continue;
-    if (
-      !(await stat(directory).then(
-        (entry) => entry.isDirectory(),
-        () => false,
-      ))
-    ) {
-      continue;
-    }
 
     const { entries = [] } = JSON.parse(journal) as { entries?: { tag?: string }[] };
     owners.push({
@@ -251,6 +231,7 @@ async function migrationOwners(): Promise<MigrationOwner[]> {
   }
 
   if (owners.length === 0) {
+    // Failing open would make the assertion above pass by checking nothing.
     throw new Error(
       "No workspace package was found to own a migration set, so the image was checked for none. Core always owns one.",
     );
