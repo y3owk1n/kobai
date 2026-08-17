@@ -7,6 +7,15 @@
     "node": ">=22.18"
   },
   "// scripts": "There are none here on purpose. Every command lives in devbox.json, so there is one list rather than two that drift — see AGENTS.md § Development. `devbox run ci` is the gate.",
+  "// pnpm.overrides": "Overrides, and only ever for a security advisory Dependabot cannot fix by itself — see AGENTS.md § Dependency updates. Each entry is SCOPED to the one parent that pulls the vulnerable copy, so it moves that copy forward and nothing else, and a future advisory in the same package still surfaces as its own alert. An override is a forward bump; never write one that pins a package backwards. Delete an entry the moment its parent ships a release that no longer needs it, and check that first — an override outliving its reason is a pin nobody chose.",
+  "// pnpm.overrides.openapi-typescript>undici": "openapi-typescript@6.7.6 is the last 6.x and depends on `undici: ^5.28.4`, so no 6.x release exists for Dependabot to bump to and the whole undici 5 advisory backlog (#69: twelve alerts, three of them high) could never close on its own. 6 is pinned exactly because 7 needs a TypeScript compiler API that TypeScript 7 does not ship — see AGENTS.md § 'There is no TypeScript compiler API' — so the parent cannot move either. ^7.29.0 is above the first patched version of every one of the twelve advisories, and it is the copy @dotenvx/dotenvx and shadcn already resolve to, so this removes undici 5 from the tree rather than adding a third copy. Safe on three counts, one for each place openapi-typescript touches undici. dist/utils.js and its CJS twin dist/index.cjs reach for one value, `fetch`, and only as a fallback when `globalThis.fetch` is undefined — which under the Node 22 of ADR-0031 it never is, so undici issues no request of any kind and none of the twelve advisories (WebSocket, cookie, CRLF, keep-alive alike) has a path to run. `packages/client/generate.ts` never gives the generator a URL anyway; it hands it a parsed object read off disk. dist/types.d.ts imports three TYPES — RequestInfo, RequestInit, Response — and undici 7 still declares all three, which `devbox run ci` proves by typechecking @kobai/client against it rather than by anyone's reading.",
+  "// pnpm.overrides.@esbuild-kit/core-utils>esbuild": "drizzle-kit@0.31.10 — still the latest 0.31.x, and 1.0 is beta/rc only, so #28's and #9's 'unfixable, already latest' still holds — declares the deprecated @esbuild-kit/esm-loader, which pins `esbuild: ~0.18.20` and so carried GHSA-67mh-4wv8-2f99. drizzle-kit imports it nowhere (it only appears in that package's own manifest; the code uses its own esbuild ^0.25.4 and tsx), so this bump deduplicates onto the 0.25.x copy drizzle-kit already resolves rather than installing anything new. ^0.25.0 is the advisory's first patched version.",
+  "pnpm": {
+    "overrides": {
+      "openapi-typescript>undici": "^7.29.0",
+      "@esbuild-kit/core-utils>esbuild": "^0.25.0"
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
     "@types/node": "^22.18.0",

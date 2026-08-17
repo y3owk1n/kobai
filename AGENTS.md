@@ -132,8 +132,9 @@ would generate over another one.
 
 ### Dependency updates
 
-Dependabot is configured by [`.github/dependabot.yml`](.github/dependabot.yml), which
-carries the reasoning in full. Three parts of it are durable enough to belong here:
+Dependencies move by **two** mechanisms, and it takes both to keep the alert list empty.
+[`.github/dependabot.yml`](.github/dependabot.yml) carries the reasoning for the first in
+full; the second lives in the root `package.json`. What is durable enough to belong here:
 
 - **Weekly, on Monday** — not daily. A merged bump rewrites `pnpm-lock.yaml` and every
   open branch has to rebase onto it, so updates arrive as one predictable batch.
@@ -144,6 +145,37 @@ carries the reasoning in full. Three parts of it are durable enough to belong he
 - **`@types/node` is held at the major `devbox.json` provides.** Typing against a newer
   Node than the one that runs means typechecking against functions that do not exist at
   runtime. The Node pin is recorded in ADR-0031; when it moves, lift the `ignore`.
+- **Security updates are the second mechanism, and no key in that file turns them on.**
+  They are a repository setting, and they were already on throughout #69. What the file
+  can do — shape them through the options that reach them, and batch them with a group
+  carrying `applies-to: "security-updates"` — is recorded there, along with the one
+  hazard worth knowing before you edit it: **an `ignore` entry suppresses a security fix
+  as well as a version one**, and cannot be scoped to version updates alone.
+
+**When Dependabot cannot fix an advisory, the lever is `pnpm.overrides`.** An advisory
+against a *transitive* dependency that no release of its parent moves off produces no
+pull request at all — Dependabot has nothing to bump — so it sits in the alert list
+indefinitely rather than arriving as work. #69 is the worked example: thirteen alerts,
+three of them high, every one a transitive pin under a parent already at its latest
+release. Write the override **scoped to the parent** (`parent>child`), never as a bare
+package name, so it moves the one vulnerable copy and a future advisory in the same
+package still surfaces as its own alert. Never write one that pins backwards — that
+silences an alert instead of fixing it. Each entry carries a `"// pnpm.overrides.…"` key
+in `package.json` saying what it is for and when it can go; **delete it the moment its
+parent ships a release that no longer needs it**, and check that before adding a new one.
+
+Taking an override rests on a reachability argument, and **an argument that a package is
+unreachable expires when the code changes** — so it is written down with the day it
+expires, next to the override in `package.json` rather than only in a pull request.
+#69's is the shape to copy: undici was reachable only as `openapi-typescript`'s fallback
+for a `globalThis.fetch` that ADR-0031's Node 22 always provides, and kobai has no direct
+`undici` use and no WebSocket use anywhere in `packages/*/src` or `reference/src`. **The
+day kobai opens a WebSocket, or depends on `undici` directly, recheck that override
+rather than trusting it.** The same goes for a dismissal that rests on "kobai does not
+use X" — there are none open, and if one is ever taken it belongs here, with its trigger.
+
+One thing not to trust while triaging: **the `"scope"` an alert reports.** All thirteen
+of #69's said `runtime` while every one was reached only through a devDependency.
 
 ### There is no TypeScript compiler API
 
