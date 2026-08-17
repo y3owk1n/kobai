@@ -135,7 +135,7 @@ describe("consuming kobai through the generated client", () => {
     // `/admin` arrives in a header that surface stopped reading when the session moved into
     // a cookie (ADR-0032), so it is no session at all rather than an unrecognised one. A
     // session sent at `/store` is a cookie that gate never looks at — and a browser would
-    // not even send it there, because the cookie is scoped `Path=/admin`.
+    // not even send it there, because the cookie is scoped to the admin surface.
     expect(reasonOf(adminWithKey.error)).toBe("session-missing");
     expect(reasonOf(storeWithSession.error)).toBe("api-key-missing");
   });

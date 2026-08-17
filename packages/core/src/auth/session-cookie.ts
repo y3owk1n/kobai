@@ -20,29 +20,11 @@ import { parse, serialize } from "hono/utils/cookie";
  *
  * Both prefixes make `Secure` mandatory, which would mean the cookie could not be set at all
  * over the plain HTTP a Developer runs `devbox run up` on — and `__Host-` additionally forces
- * `Path=/`, which is the opposite of what is wanted below. A prefix buys a guarantee against
- * a *sibling origin* overwriting the cookie; local development working at all is worth more,
- * and ADR-0032 records the trade rather than leaving it to be discovered.
+ * `Path=/`, which is the opposite of the scoping described below. A prefix buys a guarantee
+ * against a *sibling origin* overwriting the cookie; local development working at all is
+ * worth more, and ADR-0032 records the trade rather than leaving it to be discovered.
  */
 export const SESSION_COOKIE = "kobai_session";
-
-/**
- * `Path=/admin`, so the cookie is sent to the admin surface and to nothing else.
- *
- * Path is not a security boundary between origins, and it is not claimed as one. What it does
- * is keep the credential out of requests that have no use for it — `/store`, `/health`, and
- * whatever else a Project serves from the same origin. That is the same argument the cookie
- * itself is here for: a value that never reaches a handler is a value that handler cannot log.
- * It says nothing about the Admin's *own* assets, which ADR-0010 serves at a path this module
- * does not know; if that path turns out to be under `/admin`, they carry the cookie like any
- * other request there.
- *
- * The consequence is worth knowing: kobai's admin surface has to actually be at `/admin`. A
- * Project that mounted `createKobai(...).fetch` under a prefix would sign in successfully and
- * be refused on the very next request — loudly, and at the first attempt, rather than
- * silently and insecurely.
- */
-export const SESSION_COOKIE_PATH = "/admin";
 
 /** Which scheme a request arrived over — the one thing `Secure` depends on. */
 export type Scheme = "http" | "https";
@@ -84,6 +66,19 @@ export function presentedSessionToken(
  *
  * **`HttpOnly`**, so script cannot read it, which is the property the switch was made for.
  *
+ * **No `Path` at all**, which is how the cookie follows wherever a Project mounted Core. A
+ * `Set-Cookie` that names no `Path` is filed by the browser under RFC 6265's *default-path*:
+ * the directory of the URI it arrived from. Signing in at `/admin/session` scopes it to
+ * `/admin`; signing in at `/api/admin/session` scopes it to `/api/admin`. Both are the admin
+ * surface of that deployment and neither reaches `/store` or `/health`.
+ *
+ * Naming a `Path` here cannot do that, and the reason is worth keeping: Core hands back a
+ * `fetch` for the Project to bind (ADR-0031), and a Project is equally free to mount it under
+ * a prefix. A Hono `mount` — like a reverse proxy that rewrites a prefix away — strips that
+ * prefix *before* Core sees the request. Core is handed `/admin/session` either way, so the
+ * prefix is not a fact any handler here can read. The browser is the one party that knows the
+ * URI it asked for, so the browser is what computes the scope. See ADR-0032.
+ *
  * **No `Expires` and no `Max-Age`**, deliberately. A cookie that expired in the browser would
  * simply stop being sent, and the request that followed would be indistinguishable from an
  * anonymous one — the Admin would render an empty page where it should render a sign-in
@@ -104,6 +99,11 @@ export function sessionCookie(token: string, scheme: Scheme): string {
  * Every attribute matches {@link sessionCookie}'s: a browser matches a deletion to a stored
  * cookie by name, domain and path, so a clear that disagreed about `Path` would leave the old
  * cookie in place and sign-out would only look like it had worked.
+ *
+ * With no `Path` on either, that agreement is structural rather than maintained. Both cookies
+ * are computed from the URI they arrived from, and both arrive at `…/admin/session` — the
+ * same URI, since sign-in and sign-out are the same route under different methods. There is
+ * no second constant to keep in step, at any mount depth.
  */
 export function clearedSessionCookie(scheme: Scheme): string {
   return serialize(SESSION_COOKIE, "", { ...attributes(scheme), maxAge: 0 });
@@ -127,11 +127,17 @@ export function schemeOf(url: string, forwardedProto: string | undefined): Schem
   return new URL(url).protocol === "https:" ? "https" : "http";
 }
 
+/**
+ * Every attribute both cookies carry, in one place, so the clear cannot drift from the set.
+ *
+ * **No `path`.** RFC 6265 then files the cookie under the directory of the URI it was set
+ * from — `/admin` when Core is mounted at the root, `/api/admin` when a Project mounted it at
+ * `/api` — and sends it back to exactly that subtree. See {@link sessionCookie}.
+ */
 function attributes(scheme: Scheme) {
   return {
     httpOnly: true,
     sameSite: "Strict",
-    path: SESSION_COOKIE_PATH,
     secure: scheme === "https",
   } as const;
 }

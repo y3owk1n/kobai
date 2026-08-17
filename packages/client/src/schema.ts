@@ -136,7 +136,7 @@ export interface paths {
         /** @description Who you now are. The credential itself is in the cookie. */
         201: {
           headers: {
-            /** @description `kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to. */
+            /** @description `kobai_session`, httpOnly, SameSite=Strict, and Secure whenever the request arrived over HTTPS. It names no Path, so a browser scopes it to the admin surface this request reached — `/admin`, or `/api/admin` for a Project that mounted kobai at `/api`. A browser sends it back by itself; nothing else has to. */
             "set-cookie": string;
           };
           content: {

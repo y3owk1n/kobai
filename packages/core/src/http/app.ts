@@ -125,7 +125,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       in: "cookie",
       name: SESSION_COOKIE,
       description:
-        "A Merchant session, set by `POST /admin/session` as an httpOnly cookie and sent back by the browser by itself. Opens `/admin` and nothing else. httpOnly, `SameSite=Strict`, `Path=/admin`, and `Secure` whenever the request arrived over HTTPS — so the token is in no response body and reachable by no script (ADR-0032).",
+        "A Merchant session, set by `POST /admin/session` as an httpOnly cookie and sent back by the browser by itself. Opens `/admin` and nothing else. httpOnly, `SameSite=Strict`, and `Secure` whenever the request arrived over HTTPS — so the token is in no response body and reachable by no script (ADR-0032). It names no `Path`, so the browser scopes it to the admin surface it was issued from, wherever the Project mounted kobai.",
     },
   );
   app.openAPIRegistry.registerComponent("securitySchemes", SECURITY_SCHEMES.apiKey, {
