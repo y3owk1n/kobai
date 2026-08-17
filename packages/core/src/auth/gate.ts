@@ -1,5 +1,6 @@
 import type { Context, Env, MiddlewareHandler } from "hono";
 import type { Database } from "../db/client.ts";
+import { GATE_REFUSALS, gateAnswering } from "../http/gate-refusals.ts";
 import type { Permission } from "./permissions.ts";
 import {
   type Authenticated,
@@ -104,26 +105,33 @@ export function refuse<E extends Env>(c: Context<E>, refusal: Refusal) {
   return refusal.status === 401 ? c.json(refusal.body, 401) : c.json(refusal.body, 403);
 }
 
+/**
+ * Both gates are built through `gateAnswering`, which marks the middleware with the refusal
+ * it makes so that `openapi.test.ts` can hold a route's declaration to its actual chain — a
+ * declared `401` or `403` with no gate behind it, or a gate whose route declared neither,
+ * fails the build. The mark is put on here rather than at the mounting site so that there is
+ * no unmarked gate to mount by accident. See `http/gate-refusals.ts`.
+ */
 export function requireSession(db: Database): MiddlewareHandler<AdminEnv> {
-  return async (c, next) => {
+  return gateAnswering(GATE_REFUSALS.noSession, async (c, next) => {
     // No permission is asked for here, so only the 401 arm is ever reachable.
     const result = await authorise(db, c.req.header("cookie"));
     if (!result.ok) return refuse(c, result);
 
     c.set("auth", result.auth);
     await next();
-  };
+  });
 }
 
 /** Only usable below {@link requireSession}, which is what puts `auth` on the context. */
 export function requirePermission(permission: Permission): MiddlewareHandler<AdminEnv> {
-  return async (c, next) => {
+  return gateAnswering(GATE_REFUSALS.forbidden, async (c, next) => {
     const auth = authenticated(c);
     if (!holdsPermission(auth, permission)) {
       return c.json(denial(auth, permission).body, 403);
     }
     await next();
-  };
+  });
 }
 
 /**

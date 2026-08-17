@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Database } from "../db/client.ts";
+import { GATE_REFUSALS, gateAnswering } from "../http/gate-refusals.ts";
 import {
   type ApiKeyRejection,
   type AuthenticatedApiKey,
@@ -41,8 +42,13 @@ import { bearerToken } from "./bearer.ts";
 /** Hono's typing for the store sub-app: `c.get("apiKey")` is available below the gate. */
 export type StoreEnv = { Variables: { apiKey: AuthenticatedApiKey } };
 
+/**
+ * Built through `gateAnswering`, like the admin gate: the middleware carries the refusal it
+ * makes, so a `/store` route declaring a `401` it is not behind — or sitting behind this and
+ * declaring none — fails the build. See `http/gate-refusals.ts`.
+ */
 export function requireApiKey(db: Database): MiddlewareHandler<StoreEnv> {
-  return async (c, next) => {
+  return gateAnswering(GATE_REFUSALS.noApiKey, async (c, next) => {
     const presented = bearerToken(c.req.header("authorization"));
     if (!presented.ok) return refuse(c, presented.reason);
 
@@ -51,7 +57,7 @@ export function requireApiKey(db: Database): MiddlewareHandler<StoreEnv> {
 
     c.set("apiKey", lookup.apiKey);
     await next();
-  };
+  });
 }
 
 /**

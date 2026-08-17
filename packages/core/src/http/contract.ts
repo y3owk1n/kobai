@@ -1,5 +1,6 @@
 import { z } from "@hono/zod-openapi";
-import { API_KEY_KINDS } from "../auth/api-key.ts";
+import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
+import type { SessionRejection } from "../auth/session.ts";
 
 /**
  * Every shape kobai's HTTP surface accepts or answers with, as one set of schemas.
@@ -53,30 +54,42 @@ export const Refusal = z
   })
   .openapi("Refusal");
 
+/**
+ * The reasons each gate's 401 can carry, keyed by the rejection the gate answers with.
+ *
+ * The mapped `satisfies` is what makes each of these the *complete and exact* set rather than
+ * a remembered one: a fifth way for a session to be rejected has no key here and does not
+ * compile, and a key spelled `session-gone` for the rejection `expired` does not either. That
+ * is the same guarantee `openapi.test.ts` gives one level up — that a refusal a route declares
+ * is one its gate can make — applied to the reasons *inside* a refusal, which is where a
+ * client actually branches.
+ *
+ * They are prefixed rather than shared because the two gates are two (ADR-0020): `missing` at
+ * `/admin` and `missing` at `/store` have different fixes, and a client that branched on the
+ * bare word would be told the same thing about two different credentials.
+ */
+const SESSION_REASONS = {
+  missing: "session-missing",
+  malformed: "session-malformed",
+  unknown: "session-unknown",
+  expired: "session-expired",
+} as const satisfies { [Reason in SessionRejection]: `session-${Reason}` };
+
+const API_KEY_REASONS = {
+  missing: "api-key-missing",
+  malformed: "api-key-malformed",
+  unknown: "api-key-unknown",
+  revoked: "api-key-revoked",
+} as const satisfies { [Reason in ApiKeyRejection]: `api-key-${Reason}` };
+
 /** A 401 from the admin gate. The four reasons have four different fixes. */
 export const SessionRefusal = z
-  .object({
-    error: z.string(),
-    reason: z.enum([
-      "session-missing",
-      "session-malformed",
-      "session-unknown",
-      "session-expired",
-    ]),
-  })
+  .object({ error: z.string(), reason: z.enum(SESSION_REASONS) })
   .openapi("SessionRefusal");
 
 /** A 401 from the store gate — a *different* gate, and so a different set of reasons. */
 export const ApiKeyRefusal = z
-  .object({
-    error: z.string(),
-    reason: z.enum([
-      "api-key-missing",
-      "api-key-malformed",
-      "api-key-unknown",
-      "api-key-revoked",
-    ]),
-  })
+  .object({ error: z.string(), reason: z.enum(API_KEY_REASONS) })
   .openapi("ApiKeyRefusal");
 
 /**

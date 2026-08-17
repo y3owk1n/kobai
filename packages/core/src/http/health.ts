@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 import type { MigrationState, MigrationStateHolder } from "../migrations/state.ts";
+import { GATE_REFUSALS, gateAnswering } from "./gate-refusals.ts";
 
 /** What `GET /health` answers with. Shaped so a probe can act on `status` alone. */
 export type HealthBody = {
@@ -31,15 +32,20 @@ const REFUSAL = {
  *
  * It runs *before* authentication, deliberately: a booting instance cannot check a session,
  * because the table it would check against may not exist yet.
+ *
+ * It is a gate like the credential ones, so it is built through `gateAnswering` like them:
+ * the middleware carries the `503` it makes, and a route that sits behind it and declares no
+ * `503` — or declares one without sitting behind it — fails the build. See
+ * `./gate-refusals.ts`.
  */
 export function requireMigrationsApplied(
   migrations: MigrationStateHolder,
 ): MiddlewareHandler {
-  return async (c, next) => {
+  return gateAnswering(GATE_REFUSALS.unavailable, async (c, next) => {
     const body = health(migrations.get());
     if (body.status !== "ok") {
       return c.json({ error: REFUSAL[body.status], ...body }, 503);
     }
     await next();
-  };
+  });
 }
