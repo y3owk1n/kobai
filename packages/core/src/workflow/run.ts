@@ -49,6 +49,12 @@ export type WorkflowRun<Out> =
 /** What a Step's `run` looks like once the declaration's types have been discharged. */
 type Erased = (input: unknown, context: WorkflowContext) => unknown;
 
+/** Likewise a Step's compensation, together with what it is owed: the value its Step ran on. */
+type Undo = {
+  readonly compensate: (input: unknown, context: WorkflowContext) => void | Promise<void>;
+  readonly input: unknown;
+};
+
 /**
  * Runs the given Steps in order, threading each one's output into the next.
  *
@@ -64,12 +70,19 @@ export async function runSteps<Out>(
   context: WorkflowContext,
 ): Promise<WorkflowRun<Out>> {
   const ran: StepReport[] = [];
+  const undo: Undo[] = [];
   let value = input;
 
   for (const entry of steps) {
+    const given = value;
     try {
-      value = await (entry.step.run as Erased)(value, context);
+      value = await (entry.step.run as Erased)(given, context);
     } catch (cause) {
+      // Unwound before the answer is composed, and before a bug is allowed to travel: what
+      // the caller is told is a different question from whether the Store is left consistent,
+      // and a refusal and a bug leave exactly the same mess behind.
+      await unwind(undo, context);
+
       // Only a refusal is an answer. Anything else is a bug in a Step, and a bug must not be
       // dressed up as a decision the Workflow made — it keeps travelling, and surfaces as
       // the 500 it is.
@@ -85,7 +98,31 @@ export async function runSteps<Out>(
     }
 
     ran.push({ step: entry.slot, implementation: entry.step.name });
+    // The failing Step is not among these: it did not complete, so there is nothing of its
+    // to undo, and calling its compensation would be asking it to unwind work it never did.
+    const compensate = entry.step.compensate as Undo["compensate"] | undefined;
+    if (compensate) undo.push({ compensate, input: given });
   }
 
   return { ok: true, output: value as Out, steps: ran };
+}
+
+/**
+ * Undoes the completed Steps, newest first.
+ *
+ * Reverse because a later Step's work may rest on an earlier one's — undoing in declaration
+ * order would pull the ground out from under a compensation that had not run yet. Each Step
+ * is handed the value it ran on, so a Step that wrote something can find what it wrote.
+ *
+ * A compensation that throws is a bug like any other, and it travels: unwinding stops there
+ * rather than continuing over a machine that has just proved it does not understand its own
+ * state. It travels *in place of* whatever stopped the run — the caller learns that the
+ * cleanup failed rather than which Step refused, which is the more urgent of the two and the
+ * only one that cannot be inferred from a Workflow that claims to have tidied up after
+ * itself.
+ */
+async function unwind(undo: readonly Undo[], context: WorkflowContext): Promise<void> {
+  for (const entry of [...undo].reverse()) {
+    await entry.compensate(entry.input, context);
+  }
 }

@@ -23,6 +23,19 @@ import type { WorkflowContext } from "./context.ts";
 export type Step<Name extends string, In, Out> = {
   readonly name: Name;
   readonly run: (input: In, context: WorkflowContext) => Out | Promise<Out>;
+  /**
+   * How to undo what `run` did — a Step's **compensating action** (ADR-0017).
+   *
+   * Optional, because most Steps read and decide rather than write, and a Step that changed
+   * nothing has nothing to unwind. When a later Step fails, Core calls this on every Step
+   * that completed, newest first, and hands each one **the very value its `run` was given**.
+   * That identity is the promise a Step's own bookkeeping rests on: a Step that wrote a row
+   * can key what it wrote by the value it wrote it for, and find it again here.
+   *
+   * It answers nothing. A Workflow that has failed produces no output, and a compensation
+   * returning a value would suggest it could still contribute to one.
+   */
+  readonly compensate?: (input: In, context: WorkflowContext) => void | Promise<void>;
 };
 
 /**
@@ -45,6 +58,13 @@ export type AnyStep = Step<string, never, unknown>;
  * const selectPrice = defineStep("select-price", (loaded: LoadedPrices): ResolvedPrice => …);
  * ```
  *
+ * A Step that changes something outside the Workflow declares how to undo it as a third
+ * argument, and Core runs it if a later Step fails — see {@link Step.compensate}:
+ *
+ * ```ts
+ * defineStep("record", write, (input, context) => unwrite(input, context));
+ * ```
+ *
  * The return type is `Awaited<R>` rather than an inferred `Out | Promise<Out>`: given an
  * `async` function, that union leaves TypeScript two equally good candidates — `Out = X` and
  * `Out = Promise<X>` — and which one it picks is not something a public interface should
@@ -53,8 +73,9 @@ export type AnyStep = Step<string, never, unknown>;
 export function defineStep<Name extends string, In, R>(
   name: Name,
   run: (input: In, context: WorkflowContext) => R,
+  compensate?: (input: In, context: WorkflowContext) => void | Promise<void>,
 ): Step<Name, In, Awaited<R>> {
-  return { name, run: run as Step<Name, In, Awaited<R>>["run"] };
+  return { name, run: run as Step<Name, In, Awaited<R>>["run"], compensate };
 }
 
 /**

@@ -7,7 +7,7 @@ import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import { createMigrationStateHolder, type MigrationState } from "./migrations/state.ts";
 import { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
-import { overrideSteps } from "./workflow/workflow.ts";
+import { rewireWorkflow } from "./workflow/workflow.ts";
 
 export type KobaiOptions = KobaiProjectConfig & {
   /** Postgres connection string. */
@@ -62,11 +62,12 @@ export function createKobai(options: KobaiOptions): Kobai {
   ];
 
   // Where a Project's config becomes what actually runs. The declaration is rebuilt with the
-  // Steps this Project supplied — per instance, so an override belongs to the deployment that
-  // declared it and to no other, and Core's own default is left as it was found.
-  const priceWorkflow = overrideSteps(
+  // Steps this Project supplied — replacements in the slots they name, insertions around them
+  // — per instance, so a customisation belongs to the deployment that declared it and to no
+  // other, and Core's own default is left as it was found.
+  const priceWorkflow = rewireWorkflow(
     priceResolutionWorkflow,
-    options.workflows?.["resolve-price"]?.steps ?? {},
+    options.workflows?.["resolve-price"] ?? {},
   );
 
   const app = createHttpApp({ db: database.db, migrations, logger, priceWorkflow });

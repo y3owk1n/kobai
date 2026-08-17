@@ -136,6 +136,9 @@ describe("the Step this Project replaced", () => {
         steps: [
           { step: "load-prices", implementation: "load-prices" },
           { step: "select-price", implementation: "everything-costs-one-cent" },
+          // The Plugin's Step, in a position of its own rather than in one of Core's slots:
+          // it fills no slot, so it answers to its own name on both sides.
+          { step: "record-price-resolution", implementation: "record-price-resolution" },
         ],
       },
     });
@@ -183,6 +186,52 @@ describe("the Step this Project replaced", () => {
 });
 
 /**
+ * The Step this Project did not write, and chose to run anyway.
+ *
+ * `@kobai/plugin-price-log` offers `recordPriceResolution`; nothing about installing the
+ * Plugin runs it. The one line in `kobai.config.ts` is what does — beside the replacement
+ * rather than inside it, because watching a Step and owning one are different things
+ * (ADR-0017).
+ */
+describe("the Step this Project wired from a Plugin", () => {
+  it("records each resolution to the Plugin's own table", async () => {
+    await using kobai = await createTestKobai(config);
+    const store = await priced(kobai, 1250);
+
+    await kobai.request(`/store/variants/${store.variantId}/price`, {
+      headers: store.headers,
+    });
+
+    // One cent, because this Project also replaced the rule — the Plugin records what was
+    // *served*, which is the point of watching the Workflow rather than the database.
+    await expect(
+      kobai.database.query("select variant_id, amount, currency from price_log_entry"),
+    ).resolves.toEqual([{ variant_id: store.variantId, amount: 1, currency: "USD" }]);
+  });
+
+  it("records nothing when the same Project boots without that line", async () => {
+    // The same Project, the same installed Plugin, the same wired tables. One entry removed
+    // from one file, and the Step that was offered stays offered.
+    await using kobai = await createTestKobai({
+      ...config,
+      workflows: {
+        "resolve-price": { steps: config.workflows?.["resolve-price"]?.steps },
+      },
+    });
+    const store = await priced(kobai, 1250);
+
+    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+      headers: store.headers,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(kobai.database.query("select id from price_log_entry")).resolves.toEqual(
+      [],
+    );
+  });
+});
+
+/**
  * What the compiler refuses to let this Project wire.
  *
  * Checked by `pnpm -r typecheck`, which includes this file — ADR-0017's "a replacement must
@@ -221,6 +270,28 @@ describe("what this Project could not have wired", () => {
     };
 
     expect(fussy).toBeDefined();
+  });
+
+  it("rejects an inserted Step that would change the price it was shown", () => {
+    // Insertion is the weaker mechanism and this is the weakness, at the surface a Developer
+    // writes it at. A Step in `after` may read what `select-price` decided and must hand back
+    // the same shape, so a Project that wants to charge double has to *own* the slot and say
+    // so in `steps` — observation cannot quietly become mutation (spec story 29).
+    const doubling: CoreWorkflowOverrides = {
+      "resolve-price": {
+        after: {
+          "select-price": [
+            // @ts-expect-error a resolved Price in, and this gives back a bare number.
+            defineStep(
+              "doubles-the-price",
+              (resolved: ResolvedPrice) => resolved.price.amount * 2,
+            ),
+          ],
+        },
+      },
+    };
+
+    expect(doubling).toBeDefined();
   });
 });
 

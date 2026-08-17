@@ -4,10 +4,12 @@ import { openMetadata, type WorkflowContext } from "./context.ts";
 import { defineStep, type Step, StepFailure } from "./step.ts";
 import {
   defineWorkflow,
-  overrideSteps,
+  rewireWorkflow,
   type StepInput,
   type StepOutput,
   type StepOverrides,
+  type StepsAfter,
+  type StepsBefore,
   type WorkflowSlots,
 } from "./workflow.ts";
 
@@ -179,7 +181,7 @@ describe("overriding a Workflow's Steps", () => {
   );
 
   it("runs the supplied Step in the slot it names, and inherits the rest", async () => {
-    const overridden = overrideSteps(visits(), { second: instead });
+    const overridden = rewireWorkflow(visits(), { steps: { second: instead } });
 
     const run = await overridden.run({ trail: [] }, CONTEXT);
 
@@ -200,7 +202,7 @@ describe("overriding a Workflow's Steps", () => {
     // execute the old one — a Workflow claiming a Project's Step ran while Core's did. These
     // three are the three ways of asking what a Workflow is made of, and this fails the
     // moment they stop agreeing.
-    const overridden = overrideSteps(visits(), { second: instead });
+    const overridden = rewireWorkflow(visits(), { steps: { second: instead } });
     const run = await overridden.run({ trail: [] }, CONTEXT);
 
     expect(overridden.describe().steps.map((step) => step.slot)).toEqual([
@@ -222,7 +224,7 @@ describe("overriding a Workflow's Steps", () => {
     // for everybody in the process.
     const original = visits();
 
-    overrideSteps(original, { second: instead });
+    rewireWorkflow(original, { steps: { second: instead } });
     const run = await original.run({ trail: [] }, CONTEXT);
 
     expect(run.ok).toBe(true);
@@ -234,10 +236,278 @@ describe("overriding a Workflow's Steps", () => {
     // A typo the compiler cannot see — a map assembled at runtime — would otherwise be an
     // override that silently does nothing, discovered as a price that never changed.
     expect(() =>
-      overrideSteps(visits(), { third: instead } as StepOverrides<
-        ReturnType<typeof visits>
-      >),
+      rewireWorkflow(visits(), {
+        steps: { third: instead } as StepOverrides<ReturnType<typeof visits>>,
+      }),
     ).toThrow(/has no Step "third"/);
+  });
+});
+
+/**
+ * Insertion — the weaker mechanism, and weak on purpose (ADR-0017).
+ *
+ * A Developer inserts a Step to *observe* what a Workflow does without owning it. It cannot
+ * alter the output contract, and that is the feature rather than a limitation: if insertion
+ * could change the output there would be no reason to ever replace a Step. The types are
+ * where that is enforced — see the compile-time assertions further down — and these cover
+ * what running one does.
+ */
+describe("inserting a Step around another", () => {
+  const visits = () =>
+    defineWorkflow<Trail>("visits").step(visit("first")).step(visit("second")).build();
+
+  const instead = defineStep(
+    "instead",
+    (input: Trail): Trail => ({ trail: [...input.trail, "instead"] }),
+  );
+
+  it("runs an inserted Step after the one it names, without replacing it", async () => {
+    const rewired = rewireWorkflow(visits(), { after: { first: [visit("watching")] } });
+
+    const run = await rewired.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    // `first` still ran, and `watching` saw what it produced. Observation, not ownership.
+    expect(run.output).toEqual({ trail: ["first", "watching", "second"] });
+  });
+
+  it("runs an inserted Step before the one it names", async () => {
+    const rewired = rewireWorkflow(visits(), { before: { second: [visit("watching")] } });
+
+    const run = await rewired.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ trail: ["first", "watching", "second"] });
+  });
+
+  it("runs several inserted Steps in the order they were declared", async () => {
+    const rewired = rewireWorkflow(visits(), {
+      after: { first: [visit("watching"), visit("also-watching")] },
+    });
+
+    const run = await rewired.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({
+      trail: ["first", "watching", "also-watching", "second"],
+    });
+  });
+
+  it("shows an inserted Step in the declaration and in the run", async () => {
+    // A Workflow's account of itself has to include what a Project inserted, or `describe()`
+    // stops answering "what does this system do" for the deployment that is actually running.
+    const rewired = rewireWorkflow(visits(), {
+      before: { first: [visit("watching")] },
+    });
+
+    const run = await rewired.run({ trail: [] }, CONTEXT);
+
+    expect(rewired.describe()).toEqual({
+      name: "visits",
+      steps: [{ slot: "watching" }, { slot: "first" }, { slot: "second" }],
+    });
+    expect(run.steps).toEqual([
+      { step: "watching", implementation: "watching" },
+      { step: "first", implementation: "first" },
+      { step: "second", implementation: "second" },
+    ]);
+  });
+
+  it("inserts around the slot rather than around the Step that fills it", async () => {
+    // Replacement and insertion in the same config, on the same slot. What `after` names is
+    // the *position*, so an insertion keeps pointing at the right place when a Project also
+    // replaces what fills it.
+    const rewired = rewireWorkflow(visits(), {
+      steps: { second: instead },
+      after: { second: [visit("watching")] },
+    });
+
+    const run = await rewired.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ trail: ["first", "instead", "watching"] });
+  });
+
+  it("refuses to insert around a slot the Workflow does not declare", () => {
+    expect(() =>
+      rewireWorkflow(visits(), {
+        after: { third: [visit("watching")] } as StepsAfter<ReturnType<typeof visits>>,
+      }),
+    ).toThrow(/has no Step "third"/);
+  });
+
+  it("refuses an inserted Step that takes the name of a declared slot", () => {
+    // Slots are what an override map is keyed by, so two positions answering to `second`
+    // would make `steps: { second: … }` replace both — an override doing twice what it says.
+    expect(() =>
+      rewireWorkflow(visits(), { after: { first: [visit("second")] } }),
+    ).toThrow(/already declares a Step "second"/);
+  });
+});
+
+/**
+ * Compensation — what a Workflow does about the Steps that already succeeded when a later one
+ * does not (ADR-0017).
+ *
+ * A Step declares how to undo itself, beside how to do itself, and Core unwinds in reverse
+ * when the run stops. Reverse because a later Step's work may rest on an earlier one's, so
+ * undoing in declaration order would take the ground out from under a compensation that had
+ * not run yet.
+ */
+describe("compensating a Workflow that failed", () => {
+  const refuses = defineStep("refuses", (_input: Trail): Trail => {
+    throw new StepFailure("nothing-doing", "This Step declines to proceed.");
+  });
+
+  /** A Step that records having run and, given the chance, records having been undone. */
+  const undoable = <Name extends string>(name: Name, unwound: string[]) =>
+    defineStep(
+      name,
+      (input: Trail): Trail => ({ trail: [...input.trail, name] }),
+      () => {
+        unwound.push(name);
+      },
+    );
+
+  it("runs the compensations of the Steps that completed, in reverse", async () => {
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(undoable("second", unwound))
+      .step(refuses)
+      .build();
+
+    const run = await workflow.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(false);
+    expect(unwound).toEqual(["second", "first"]);
+  });
+
+  it("does not compensate the Step that refused, because it never completed", async () => {
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(
+        defineStep(
+          "refuses",
+          (_input: Trail): Trail => {
+            throw new StepFailure("nothing-doing", "This Step declines to proceed.");
+          },
+          () => {
+            unwound.push("refuses");
+          },
+        ),
+      )
+      .build();
+
+    await workflow.run({ trail: [] }, CONTEXT);
+
+    expect(unwound).toEqual(["first"]);
+  });
+
+  it("hands a compensation the very value its Step ran on", async () => {
+    // The promise a Step's own bookkeeping rests on: whatever a Step did with the value it
+    // was given, it is handed that same value back to undo it. Identity rather than equality,
+    // because a Step may key what it wrote by the value itself.
+    const seen: Trail[] = [];
+    const input: Trail = { trail: [] };
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(
+        defineStep(
+          "watching",
+          (given: Trail): Trail => given,
+          (given: Trail) => {
+            seen.push(given);
+          },
+        ),
+      )
+      .step(refuses)
+      .build();
+
+    await workflow.run(input, CONTEXT);
+
+    expect(seen[0]).toBe(input);
+  });
+
+  it("unwinds when a Step throws a bug too, and still lets the bug travel", async () => {
+    // A refusal and a bug are different answers to give the caller, and the same mess to
+    // leave behind. What the caller is told is not a reason to leave a half-done Workflow.
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(
+        defineStep("broken", (_input: Trail): Trail => {
+          throw new TypeError("undefined is not a function");
+        }),
+      )
+      .build();
+
+    await expect(workflow.run({ trail: [] }, CONTEXT)).rejects.toThrow(
+      "undefined is not a function",
+    );
+    expect(unwound).toEqual(["first"]);
+  });
+
+  it("lets a failing compensation travel, in place of the refusal it was unwinding", async () => {
+    // The deliberate limit of this mechanism, pinned so it is a decision rather than a
+    // surprise: a compensation that throws stops the unwinding where it stands, and what the
+    // caller gets is the cleanup's failure rather than the refusal. That is the more urgent
+    // of the two — a Workflow that could not tidy up after itself is worse news than the
+    // Step that asked it to.
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(
+        defineStep(
+          "second",
+          (input: Trail): Trail => ({ trail: [...input.trail, "second"] }),
+          () => {
+            throw new TypeError("the compensation is itself broken");
+          },
+        ),
+      )
+      .step(refuses)
+      .build();
+
+    await expect(workflow.run({ trail: [] }, CONTEXT)).rejects.toThrow(
+      "the compensation is itself broken",
+    );
+    // `first` is earlier, so its turn never came.
+    expect(unwound).toEqual([]);
+  });
+
+  it("compensates nothing when every Step succeeds", async () => {
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(undoable("second", unwound))
+      .build();
+
+    const run = await workflow.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    expect(unwound).toEqual([]);
+  });
+
+  it("unwinds the Steps a Project inserted alongside Core's own", async () => {
+    // Insertion and compensation are one mechanism from the runner's side: an inserted Step
+    // is a position like any other, so what it did is undone like anything else's.
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(refuses)
+      .build();
+
+    const rewired = rewireWorkflow(workflow, {
+      after: { first: [undoable("watching", unwound)] },
+    });
+    await rewired.run({ trail: [] }, CONTEXT);
+
+    expect(unwound).toEqual(["watching", "first"]);
   });
 });
 
@@ -325,13 +595,15 @@ describe("the types a Step declares", () => {
    * so neither can regress into a runtime surprise silently.
    */
   it("accepts an override whose Step takes and gives what the slot does", async () => {
-    const overridden = overrideSteps(workflow, {
-      select: defineStep(
-        "cheapest-price",
-        (input: { readonly amounts: readonly number[] }) => ({
-          amount: Math.min(...input.amounts),
-        }),
-      ),
+    const overridden = rewireWorkflow(workflow, {
+      steps: {
+        select: defineStep(
+          "cheapest-price",
+          (input: { readonly amounts: readonly number[] }) => ({
+            amount: Math.min(...input.amounts),
+          }),
+        ),
+      },
     });
 
     const run = await overridden.run({ sku: "POSTER-A2" }, CONTEXT);
@@ -372,5 +644,75 @@ describe("the types a Step declares", () => {
     const overrides: StepOverrides<Priced> = { discount: defineStep("free", () => ({})) };
 
     expect(overrides).toBeDefined();
+  });
+
+  /**
+   * Why insertion is the weaker mechanism, in types.
+   *
+   * An inserted Step's input and output are pinned to the *same* type — what the slot is
+   * given, for a Step going before it, and what the slot produces, for one going after. So a
+   * Step may look at the value and must hand back the same shape: observation cannot quietly
+   * become mutation (spec story 29). No new machinery does this; it is the same check that
+   * rejects a bad replacement, applied to a narrower shape.
+   */
+  it("accepts an inserted Step that hands back what it was given", async () => {
+    const after: StepsAfter<Priced> = {
+      select: [
+        defineStep("watching", (input: { readonly amount: number }) => ({
+          amount: input.amount,
+        })),
+      ],
+    };
+
+    const rewired = rewireWorkflow(workflow, { after });
+    const run = await rewired.run({ sku: "POSTER-A2" }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ amount: 1250 });
+  });
+
+  it("rejects an inserted Step that alters the Workflow's output", () => {
+    const after: StepsAfter<Priced> = {
+      select: [
+        // @ts-expect-error `select` gives `{ amount }`, so a Step after it must give one too.
+        defineStep("doubles-the-total", (input: { readonly amount: number }) => ({
+          total: input.amount * 2,
+        })),
+      ],
+    };
+
+    expect(after).toBeDefined();
+  });
+
+  it("rejects an inserted Step that alters what the Step it precedes is given", () => {
+    const before: StepsBefore<Priced> = {
+      select: [
+        // @ts-expect-error `select` is given `{ amounts }`, so a Step before it must give one.
+        defineStep(
+          "drops-the-amounts",
+          (_input: { readonly amounts: readonly number[] }) => ({ amount: 0 }),
+        ),
+      ],
+    };
+
+    expect(before).toBeDefined();
+  });
+
+  it("rejects an inserted Step that demands more than the position provides", () => {
+    const before: StepsBefore<Priced> = {
+      select: [
+        // @ts-expect-error `select` is given `{ amounts }` alone.
+        defineStep(
+          "fussy-observer",
+          (input: {
+            readonly amounts: readonly number[];
+            readonly quantity: number;
+          }) => ({ amounts: input.amounts.slice(0, input.quantity) }),
+        ),
+      ],
+    };
+
+    expect(before).toBeDefined();
   });
 });

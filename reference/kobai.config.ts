@@ -1,13 +1,14 @@
 import { defineKobaiConfig } from "@kobai/core";
-import { priceLogMigrationSet } from "@kobai/plugin-price-log";
+import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
 
 /**
  * Everything this Project has customised, in one file.
  *
  * A Developer should be able to read this and know what their deployment does differently
- * from stock kobai. Two things, and nothing else: one Plugin is wired, and one Step of Core's
- * price-resolution Workflow is somebody else's now.
+ * from stock kobai. Three things, and nothing else: one Plugin's tables are wired, one Step
+ * of Core's price-resolution Workflow is somebody else's now, and one Step the same Plugin
+ * offers watches what that Workflow decided.
  *
  * `@kobai/core` is an ordinary versioned dependency in this Project's `package.json`, at the
  * same version it would be without either line. There is no fork, no copied service and no
@@ -34,10 +35,19 @@ export default defineKobaiConfig({
    * A Step named here must satisfy the types of the slot it fills, checked by the compiler
    * rather than by a Merchant noticing wrong prices. Deliberately wrong prices are what this
    * one serves — see `src/pricing/everything-costs-one-cent.ts`.
+   *
+   * `after` is the weaker mechanism, and it sits beside `steps` rather than inside it so that
+   * owning a Step and watching one are told apart at a glance. `recordPriceResolution` is a
+   * Step `@kobai/plugin-price-log` **offers**; installing the Plugin did not install it, and
+   * this line is what makes it run. Take the line out and the Plugin is still a dependency,
+   * still imported by this file's neighbour above, and still writes nothing (ADR-0017). It
+   * cannot change the price it watches — an inserted Step takes and gives the same type, so
+   * observation cannot quietly become mutation.
    */
   workflows: {
     "resolve-price": {
       steps: { "select-price": everythingCostsOneCent },
+      after: { "select-price": [recordPriceResolution] },
     },
   },
 });
