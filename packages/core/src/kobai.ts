@@ -18,6 +18,7 @@ import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import { createMigrationStateHolder, type MigrationState } from "./migrations/state.ts";
 import { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
+import type { WorkflowRegistry } from "./workflow/context.ts";
 import { rewireWorkflow } from "./workflow/workflow.ts";
 
 export type KobaiOptions = KobaiProjectConfig & {
@@ -59,6 +60,17 @@ export type Kobai = {
    */
   openapi(): OpenApiDocument;
   readonly db: Database;
+  /**
+   * Every Workflow declaration this deployment runs, by name — Core's, rebuilt with whatever
+   * this Project's config replaced or inserted (ADR-0054).
+   *
+   * Two audiences. A Developer reads it to see what their deployment actually runs, which is
+   * the same question `describe()` answers for one Workflow. And whatever builds a
+   * {@link WorkflowContext} puts it there, because that is how a Step invoking another
+   * Workflow reaches *this* deployment's version of it rather than Core's default — an
+   * override written once, applying wherever that Workflow is reached from.
+   */
+  readonly workflows: WorkflowRegistry;
   /** Core's set first, then each set the Project wired, in the order it wired them. */
   readonly migrationSets: readonly MigrationSet[];
   /**
@@ -123,6 +135,12 @@ export function createKobai(options: KobaiOptions): Kobai {
     options.workflows?.["resolve-price"] ?? {},
   );
 
+  // The declarations this deployment runs, gathered under the names they answer to. Built
+  // here rather than assembled by each caller, because a second answer to "which
+  // `resolve-price` is this deployment's" is how an override applies in one place and not in
+  // another (ADR-0054).
+  const workflows: WorkflowRegistry = { [priceWorkflow.name]: priceWorkflow };
+
   const app = createHttpApp({
     db: database.db,
     migrations,
@@ -136,6 +154,7 @@ export function createKobai(options: KobaiOptions): Kobai {
     request: async (input, init) => app.request(input, init),
     openapi: () => describeHttpApp(app),
     db: database.db,
+    workflows,
     migrationSets,
     migrationState: () => migrations.get(),
 

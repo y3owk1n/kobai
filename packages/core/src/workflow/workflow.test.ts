@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Database } from "../db/client.ts";
+import {
+  type PriceResolutionRequest,
+  priceResolutionWorkflow,
+  type ResolvedPrice,
+} from "../pricing/resolve-price.ts";
+import { createTestKobai, seedTestCatalog } from "../testing/index.ts";
 import { openMetadata, type WorkflowContext } from "./context.ts";
-import { UnwindFailure } from "./run.ts";
+import { runWorkflow, UnwindFailure } from "./run.ts";
 import { defineStep, type Step, StepFailure } from "./step.ts";
 import {
   defineWorkflow,
@@ -9,8 +15,10 @@ import {
   type StepInput,
   type StepOutput,
   type StepOverrides,
+  type StepShapes,
   type StepsAfter,
   type StepsBefore,
+  type Workflow,
   type WorkflowSlots,
 } from "./workflow.ts";
 
@@ -582,6 +590,464 @@ describe("compensating a Workflow that failed", () => {
 });
 
 /**
+ * Composition — a Step invoking another declared Workflow (ADR-0054).
+ *
+ * The Workflow seam is where this belongs for the same reason replacement is here: what
+ * composition promises is about the declarations, and no response body carries it. Three
+ * promises, and they are separable — the deployment's version of the inner Workflow is what
+ * runs; an inner refusal is a value the invoking Step decides about while a bug still travels;
+ * and an inner Workflow that completed is unwound when a later outer Step fails, which is the
+ * one nothing outside the runner could arrange.
+ */
+describe("invoking another Workflow from a Step", () => {
+  /** A Step that records having run and, given the chance, records having been undone. */
+  const undoable = <Name extends string>(name: Name, unwound: string[]) =>
+    defineStep(
+      name,
+      (input: Trail): Trail => ({ trail: [...input.trail, name] }),
+      () => {
+        unwound.push(name);
+      },
+    );
+
+  const refuses = defineStep("refuses", (_input: Trail): Trail => {
+    throw new StepFailure("nothing-doing", "This Step declines to proceed.");
+  });
+
+  /** The Workflow being invoked, in the shape Core's own will take: named, and declared once. */
+  const inner = defineWorkflow<Trail>("inner")
+    .step(visit("inner-first"))
+    .step(visit("inner-second"))
+    .build();
+
+  /** The ordinary invoking Step: run the inner Workflow, pass its refusal on, use its output. */
+  const invokes = defineStep("invokes", async (input: Trail, context): Promise<Trail> => {
+    const run = await runWorkflow(inner, input, context);
+    if (!run.ok) throw new StepFailure(run.reason, run.detail);
+    return run.output;
+  });
+
+  /**
+   * The same Step over any inner Workflow, for the tests whose subject is the unwinding rather
+   * than what the invoking Step decides. It carries on past a refusal, so nothing below is
+   * asserting the unwinding of a run that was stopped by the Step it is about.
+   */
+  const invoking = <Shapes extends StepShapes>(
+    workflow: Workflow<Trail, Trail, Shapes>,
+    compensate?: () => void,
+  ) =>
+    defineStep(
+      "invokes",
+      async (input: Trail, context): Promise<Trail> => {
+        const run = await runWorkflow(workflow, input, context);
+        return run.ok ? run.output : input;
+      },
+      compensate,
+    );
+
+  it("runs the invoked Workflow's Steps, and the invoking Step answers with its output", async () => {
+    const outer = defineWorkflow<Trail>("outer")
+      .step(visit("outer-first"))
+      .step(invokes)
+      .step(visit("outer-last"))
+      .build();
+
+    const run = await outer.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    // Order proved by the value itself, as everywhere else here: the inner Steps appended
+    // their names in the middle, so the inner Workflow ran where the invoking Step sat.
+    expect(run.output).toEqual({
+      trail: ["outer-first", "inner-first", "inner-second", "outer-last"],
+    });
+  });
+
+  it("keeps the outer run's account of itself to its own Steps", async () => {
+    // The inner Workflow is not flattened into the outer one. `steps` names the positions the
+    // outer declaration has, and an inner Step fills none of them — a Workflow's report of
+    // which Steps ran has to keep meaning "the Steps this declaration declares".
+    const outer = defineWorkflow<Trail>("outer").step(invokes).build();
+
+    const run = await outer.run({ trail: [] }, CONTEXT);
+
+    expect(run.steps).toEqual([{ step: "invokes", implementation: "invokes" }]);
+  });
+
+  it("runs the deployment's declaration of that Workflow rather than the one it was handed", async () => {
+    // The whole point. The Step imports Core's declaration because that is the only one it
+    // can name; the registry is how the deployment's rebuilt version of it is found from it.
+    const deployed = rewireWorkflow(inner, {
+      steps: { "inner-second": visit("the-projects-own") },
+    });
+    const outer = defineWorkflow<Trail>("outer").step(invokes).build();
+
+    const run = await outer.run(
+      { trail: [] },
+      { ...CONTEXT, workflows: { inner: deployed } },
+    );
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ trail: ["inner-first", "the-projects-own"] });
+  });
+
+  it("runs the declaration it was handed when the deployment declares no such Workflow", async () => {
+    // Absent is a working answer, not a broken one: a Workflow assembled outside a deployment
+    // — in a test, in a script — has no registry behind it and still runs.
+    const outer = defineWorkflow<Trail>("outer").step(invokes).build();
+
+    const run = await outer.run(
+      { trail: [] },
+      { ...CONTEXT, workflows: { "some-other-workflow": inner } },
+    );
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ trail: ["inner-first", "inner-second"] });
+  });
+
+  it("hands an inner Workflow's refusal to the Step that invoked it, as a refusal", async () => {
+    // A value rather than a throw, because the invoking Step is the only thing in a position
+    // to say what an inner Workflow declining means for the process around it.
+    const refusing = rewireWorkflow(inner, { steps: { "inner-second": refuses } });
+    const seen: unknown[] = [];
+    const watching = defineStep(
+      "watching",
+      async (input: Trail, context): Promise<Trail> => {
+        const run = await runWorkflow(refusing, input, context);
+        seen.push(run);
+        return input;
+      },
+    );
+
+    await defineWorkflow<Trail>("outer")
+      .step(watching)
+      .build()
+      .run({ trail: [] }, CONTEXT);
+
+    expect(seen).toEqual([
+      {
+        ok: false,
+        // The *inner* slot that refused, named by the inner declaration.
+        failed: "inner-second",
+        reason: "nothing-doing",
+        detail: "This Step declines to proceed.",
+        steps: [{ step: "inner-first", implementation: "inner-first" }],
+        uncompensated: [],
+      },
+    ]);
+  });
+
+  it("refuses the outer run with the inner reason, at the outer slot, when the Step passes it on", async () => {
+    // Passing it on is one `StepFailure` away, and this is what the caller then sees: the
+    // reason is the inner Workflow's, and the slot is the outer position that stopped — which
+    // is the only one the outer declaration has a name for.
+    const refusing = rewireWorkflow(inner, { steps: { "inner-second": refuses } });
+    const passesItOn = defineStep(
+      "passes-it-on",
+      async (input: Trail, context): Promise<Trail> => {
+        const run = await runWorkflow(refusing, input, context);
+        if (!run.ok) throw new StepFailure(run.reason, run.detail);
+        return run.output;
+      },
+    );
+    const outer = defineWorkflow<Trail>("outer")
+      .step(visit("outer-first"))
+      .step(passesItOn)
+      .build();
+
+    const run = await outer.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(false);
+    if (run.ok) return;
+    expect(run.reason).toBe("nothing-doing");
+    expect(run.failed).toBe("passes-it-on");
+    expect(run.steps).toEqual([{ step: "outer-first", implementation: "outer-first" }]);
+  });
+
+  it("lets a bug in an inner Step travel as itself", async () => {
+    // ADR-0036 across the boundary: a bug is not a decision the inner Workflow made, so it is
+    // not dressed up as one on the way out of the outer Step either.
+    const broken = rewireWorkflow(inner, {
+      steps: {
+        "inner-second": defineStep("broken", (_input: Trail): Trail => {
+          throw new TypeError("undefined is not a function");
+        }),
+      },
+    });
+    await expect(
+      defineWorkflow<Trail>("outer")
+        .step(invoking(broken))
+        .build()
+        .run({ trail: [] }, CONTEXT),
+    ).rejects.toThrow("undefined is not a function");
+  });
+
+  it("unwinds a completed inner Workflow when a later outer Step fails", async () => {
+    // The promise composition could most easily have failed to make. The inner Workflow
+    // succeeded, so it unwound nothing of its own; a later outer Step then fails, and what the
+    // inner Steps did is undone all the same — newest first, across the boundary.
+    const unwound: string[] = [];
+    const writing = defineWorkflow<Trail>("inner")
+      .step(undoable("inner-first", unwound))
+      .step(undoable("inner-second", unwound))
+      .build();
+    const outer = defineWorkflow<Trail>("outer")
+      .step(undoable("outer-first", unwound))
+      .step(invoking(writing))
+      .step(refuses)
+      .build();
+
+    await outer.run({ trail: [] }, CONTEXT);
+
+    expect(unwound).toEqual(["inner-second", "inner-first", "outer-first"]);
+  });
+
+  it("undoes the invoking Step before the Workflow it invoked", async () => {
+    // A Step sits *outside* what it called, so the nesting decides the order rather than the
+    // instant each thing happened at. Its own compensation undoes its own work; the Workflow
+    // it delegated to unwinds after, in reverse, exactly as it would anywhere else.
+    const unwound: string[] = [];
+    const writing = defineWorkflow<Trail>("inner")
+      .step(undoable("inner-first", unwound))
+      .step(undoable("inner-second", unwound))
+      .build();
+    const outer = defineWorkflow<Trail>("outer")
+      .step(
+        invoking(writing, () => {
+          unwound.push("invokes");
+        }),
+      )
+      .step(refuses)
+      .build();
+
+    await outer.run({ trail: [] }, CONTEXT);
+
+    expect(unwound).toEqual(["invokes", "inner-second", "inner-first"]);
+  });
+
+  it("unwinds what a Step delegated even when that Step is the one that fails", async () => {
+    // The Step never completed, so it has no compensation of its own to run — and the
+    // Workflow it had already finished is exactly the work that would otherwise be reached by
+    // nothing at all.
+    const unwound: string[] = [];
+    const writing = defineWorkflow<Trail>("inner")
+      .step(undoable("inner-first", unwound))
+      .build();
+    const outer = defineWorkflow<Trail>("outer")
+      .step(
+        defineStep(
+          "invokes-then-refuses",
+          async (input: Trail, context): Promise<Trail> => {
+            await runWorkflow(writing, input, context);
+            throw new StepFailure("nothing-doing", "This Step declines to proceed.");
+          },
+          () => {
+            unwound.push("invokes-then-refuses");
+          },
+        ),
+      )
+      .build();
+
+    const run = await outer.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(false);
+    expect(unwound).toEqual(["inner-first"]);
+  });
+
+  it("does not unwind an inner Workflow twice when it refused and undid itself", async () => {
+    // An inner Workflow that refuses unwinds its own completed Steps there and then, and
+    // hands nothing up. Compensation is attempted exactly once per Step, and a boundary is no
+    // reason for that to stop being true.
+    const unwound: string[] = [];
+    const refusing = defineWorkflow<Trail>("inner")
+      .step(undoable("inner-first", unwound))
+      .step(refuses)
+      .build();
+    const outer = defineWorkflow<Trail>("outer")
+      .step(undoable("outer-first", unwound))
+      .step(
+        defineStep("invokes", async (input: Trail, context): Promise<Trail> => {
+          const run = await runWorkflow(refusing, input, context);
+          if (!run.ok) throw new StepFailure(run.reason, run.detail);
+          return run.output;
+        }),
+      )
+      .build();
+
+    await outer.run({ trail: [] }, CONTEXT);
+
+    expect(unwound).toEqual(["inner-first", "outer-first"]);
+  });
+
+  it("hands an inner Step's compensation the very value its run was given", async () => {
+    // The promise a Step's bookkeeping rests on, held across the boundary: an entry unwound by
+    // a run that is not the one it was made in is still handed its own input.
+    const seen: Trail[] = [];
+    const writing = defineWorkflow<Trail>("inner")
+      .step(
+        defineStep(
+          "remembers",
+          (given: Trail): Trail => given,
+          (given: Trail) => {
+            seen.push(given);
+          },
+        ),
+      )
+      .build();
+    const entered: Trail = { trail: [] };
+    const outer = defineWorkflow<Trail>("outer")
+      .step(invoking(writing))
+      .step(refuses)
+      .build();
+
+    await outer.run(entered, CONTEXT);
+
+    expect(seen[0]).toBe(entered);
+  });
+
+  it("hands an inner Step's compensation the context its own run was given", async () => {
+    // The other half of that promise, and the half only composition makes visible: the entry
+    // is unwound by the *outer* run, and still sees what the inner run was told rather than
+    // what the outer one was. `metadata` is ADR-0013's open half, so a Step that read a lead
+    // time on the way in reads the same one on the way back out.
+    const seen: unknown[] = [];
+    const writing = defineWorkflow<Trail>("inner")
+      .step(
+        defineStep(
+          "remembers",
+          (given: Trail): Trail => given,
+          (_given: Trail, context) => {
+            seen.push(context.metadata.leadTimeDays);
+          },
+        ),
+      )
+      .build();
+    const outer = defineWorkflow<Trail>("outer")
+      .step(
+        defineStep("invokes", async (input: Trail, context): Promise<Trail> => {
+          // Narrowing what the inner Workflow is told is the ordinary thing for an invoking
+          // Step to do — a Step composing per Line Item will do exactly this.
+          const run = await runWorkflow(writing, input, {
+            ...context,
+            metadata: { leadTimeDays: "10" },
+          });
+          return run.ok ? run.output : input;
+        }),
+      )
+      .step(refuses)
+      .build();
+
+    await outer.run({ trail: [] }, { ...CONTEXT, metadata: { leadTimeDays: "outer" } });
+
+    expect(seen).toEqual(["10"]);
+  });
+
+  it("reports an inner run's failed compensations to the Step that invoked it", async () => {
+    // ADR-0036's second fact, at the boundary. The inner Workflow refused and unwound itself,
+    // and one of its compensations threw — news about whether the Store is consistent, and it
+    // arrives on the run the invoking Step is handed. Core deliberately does not merge it into
+    // the outer run's list (ADR-0054), so this is the only place it can be read.
+    const refusing = defineWorkflow<Trail>("inner")
+      .step(
+        defineStep(
+          "uncompensatable",
+          (given: Trail): Trail => given,
+          () => {
+            throw new TypeError("the compensation of uncompensatable is itself broken");
+          },
+        ),
+      )
+      .step(refuses)
+      .build();
+    const seen: unknown[] = [];
+    const outer = defineWorkflow<Trail>("outer")
+      .step(
+        defineStep("invokes", async (input: Trail, context): Promise<Trail> => {
+          const run = await runWorkflow(refusing, input, context);
+          if (!run.ok) seen.push(run.uncompensated);
+          return input;
+        }),
+      )
+      .build();
+
+    await outer.run({ trail: [] }, CONTEXT);
+
+    expect(seen).toEqual([[{ slot: "uncompensatable", cause: expect.any(TypeError) }]]);
+  });
+});
+
+/**
+ * The same promise at the seam a Developer experiences it at: a booted deployment.
+ *
+ * `resolve-price` is the Workflow the spine will invoke per Line Item, and the reason
+ * composition is being built before anything needs it is that a Project which replaced
+ * `select-price` should not have to wire the same rule a second time to get it at Capture. So
+ * the assertion is on a price a booted kobai produces through composition, not on a
+ * declaration read back — booting is what puts the Project's config into the registry, and
+ * the registry is the only thing standing between Core's Step and the Project's.
+ */
+describe("a Project's override of an inner Workflow's Step", () => {
+  /** A Step that ignores every Price a Merchant entered and charges the same for everything. */
+  const flatRate = defineStep(
+    "flat-rate",
+    (input: { readonly variant: ResolvedPrice["variant"] }): ResolvedPrice => ({
+      variant: input.variant,
+      price: { id: "flat-rate", amount: 4200, currency: "XTS" },
+    }),
+  );
+
+  /** A Project's Step of its own, reaching `resolve-price` the one way there is. */
+  const resolvesAPrice = defineStep(
+    "resolves-a-price",
+    async (input: PriceResolutionRequest, context): Promise<ResolvedPrice> => {
+      const run = await runWorkflow(priceResolutionWorkflow, input, context);
+      if (!run.ok) throw new StepFailure(run.reason, run.detail);
+      return run.output;
+    },
+  );
+
+  const composing = defineWorkflow<PriceResolutionRequest>("composing")
+    .step(resolvesAPrice)
+    .build();
+
+  it("applies when that Workflow is reached from inside another one", async () => {
+    await using kobai = await createTestKobai({
+      workflows: { "resolve-price": { steps: { "select-price": flatRate } } },
+    });
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
+
+    const run = await composing.run(
+      { variantId: catalog.variantId },
+      { db: kobai.db, metadata: {}, workflows: kobai.workflows },
+    );
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    // Not the 1250 in the database, and nothing here named `flat-rate`: the Project said so
+    // once, in its config, and composition is what carried it to a second caller.
+    expect(run.output.price).toEqual({ id: "flat-rate", amount: 4200, currency: "XTS" });
+  });
+
+  it("is the only reason the price differs — the same composition inherits Core's Step", async () => {
+    // The other half of the assertion above, so that neither is a claim about a run that was
+    // never going to answer anything else.
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
+
+    const run = await composing.run(
+      { variantId: catalog.variantId },
+      { db: kobai.db, metadata: {}, workflows: kobai.workflows },
+    );
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output.price).toMatchObject({ amount: 1250 });
+  });
+});
+
+/**
  * What a Step declares, as the compiler sees it.
  *
  * These assertions are checked by `pnpm -r typecheck`, which includes this file — a design
@@ -767,6 +1233,34 @@ describe("the types a Step declares", () => {
     };
 
     expect(before).toBeDefined();
+  });
+
+  /**
+   * What composition promises in types (ADR-0054).
+   *
+   * A Workflow is entered with the type it declared, and its answer is a refusal *or* an
+   * output — so the second of these is the whole reason a run is a union rather than a value
+   * with an optional error on it. A Step that forgot an inner Workflow could decline would
+   * otherwise read `undefined` and carry it into the outer output.
+   */
+  it("rejects an input the invoked Workflow does not take", async () => {
+    const run = await runWorkflow(
+      workflow,
+      // @ts-expect-error `priced` is entered with `{ sku }`, and this is a list of amounts.
+      { amounts: [1250] },
+      CONTEXT,
+    );
+
+    expect(run.ok).toBe(true);
+  });
+
+  it("refuses to read an invoked Workflow's output before the refusal is dealt with", async () => {
+    const run = await runWorkflow(workflow, { sku: "POSTER-A2" }, CONTEXT);
+
+    // @ts-expect-error a run may have refused, so there is no `output` until `ok` is narrowed.
+    const output: unknown = run.output;
+
+    expect(output).toEqual({ amount: 1250 });
   });
 
   it("rejects an inserted Step that demands more than the position provides", () => {

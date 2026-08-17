@@ -1,4 +1,21 @@
 import type { Database } from "../db/client.ts";
+import type { AnyWorkflow } from "./workflow.ts";
+
+/**
+ * The Workflow declarations one deployment runs, by name (ADR-0054).
+ *
+ * A Step that invokes another Workflow names Core's exported declaration, because that is the
+ * only one it can import; what has to *run* is the deployment's version of it, rebuilt from
+ * whatever the Project replaced or inserted. This map is how the second is found from the
+ * first, so an override written once applies everywhere that Workflow is reached — including
+ * from inside another one.
+ *
+ * Keyed by the declaration's own `name`, and it holds **that** Workflow: putting some other
+ * Workflow under a name is a lie no compiler here can see, and `runWorkflow` would run it.
+ * Core builds this at boot from its own declarations, which is why nothing on the promised
+ * surface hands a Project a way to assemble a dishonest one.
+ */
+export type WorkflowRegistry = Readonly<Record<string, AnyWorkflow>>;
 
 /**
  * What a Step runs against — the Workflow's context, and it is **open** (ADR-0013).
@@ -14,6 +31,16 @@ export type WorkflowContext = {
   readonly db: Database;
   /** Untyped by design. Core never reads a key out of this. */
   readonly metadata: Readonly<Record<string, unknown>>;
+  /**
+   * The declarations this deployment runs, for a Step that invokes another Workflow — read
+   * by `runWorkflow` and by nothing else (ADR-0054).
+   *
+   * Optional, and absent is a working answer rather than a broken one: `runWorkflow` then
+   * runs the declaration it was handed. That is right for a Workflow assembled in a test and
+   * wrong for a deployment, which is why whatever builds a context for a request fills it
+   * from the registry `createKobai` publishes as `Kobai.workflows`.
+   */
+  readonly workflows?: WorkflowRegistry;
 };
 
 /**
