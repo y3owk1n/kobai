@@ -1,4 +1,5 @@
 import type { MerchantIdentity, RoleSummary } from "../auth/identity.ts";
+import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Kobai } from "../kobai.ts";
 
 /**
@@ -18,10 +19,23 @@ import type { Kobai } from "../kobai.ts";
  * ```
  */
 export type TestSession = {
-  /** The bearer token itself. */
+  /**
+   * The session token itself, read out of the cookie.
+   *
+   * Nothing but a test wants this: the token is in no response body, and a browser never sees
+   * it either — it stores the cookie and sends it back without reading it. It is here for the
+   * one test whose subject *is* the token, which is that `core_session` holds only a hash of
+   * it.
+   */
   readonly token: string;
-  /** Ready to spread into a `RequestInit` — `{ headers: merchant.headers }`. */
-  readonly headers: Record<string, string>;
+  /**
+   * Ready to spread into a `RequestInit` — `{ headers: merchant.headers }`.
+   *
+   * Spelled as the one header it is rather than as a bag of them, so a caller that wants the
+   * cookie value itself — the generated client's tests, which play the browser by hand — reads
+   * `merchant.headers.cookie` and gets a `string`.
+   */
+  readonly headers: { readonly cookie: string };
   readonly merchant: MerchantIdentity;
   readonly role: RoleSummary;
   readonly expiresAt: string;
@@ -50,7 +64,7 @@ export async function signInTestMerchant(
   credentials: TestCredentials = TEST_MERCHANT,
 ): Promise<TestSession> {
   await expectStatus(
-    kobai.request("/admin/merchants", {
+    await kobai.request("/admin/merchants", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(credentials),
@@ -59,25 +73,50 @@ export async function signInTestMerchant(
     "creating the first Merchant",
   );
 
-  const session = (await expectStatus(
-    kobai.request("/admin/session", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(credentials),
-    }),
-    201,
-    "signing in",
-  )) as Omit<TestSession, "headers">;
+  const response = await kobai.request("/admin/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(credentials),
+  });
+  const session = (await expectStatus(response, 201, "signing in")) as Omit<
+    TestSession,
+    "headers" | "token"
+  >;
 
-  return { ...session, headers: { authorization: `Bearer ${session.token}` } };
+  return { ...session, ...sessionOf(response) };
+}
+
+/**
+ * The `Cookie` header a browser would send back, taken off a sign-in response.
+ *
+ * A test that signs a *second* Merchant in — the narrower Role a permission test is about —
+ * needs this, because `signInTestMerchant` above also claims the deployment and can only be
+ * the first. Doing by hand what a browser does is the honest way to drive a cookie session,
+ * and it is two lines rather than a cookie jar.
+ *
+ * ```ts
+ * const signedIn = await kobai.request("/admin/session", …);
+ * const response = await kobai.request("/admin/store", { headers: sessionOf(signedIn).headers });
+ * ```
+ */
+export function sessionOf(response: Response): Pick<TestSession, "headers" | "token"> {
+  const setCookie = response.headers.get("set-cookie") ?? "";
+  // The name comes from the module that sets the cookie, so renaming it moves both halves
+  // together rather than leaving a test to discover the mismatch at runtime.
+  const token = new RegExp(`(?:^|[;\\s])${SESSION_COOKIE}=([^;]*)`).exec(setCookie)?.[1];
+  if (token === undefined || token === "") {
+    throw new Error(
+      `that response set no ${SESSION_COOKIE} cookie: ${setCookie === "" ? "(no set-cookie header)" : setCookie}`,
+    );
+  }
+  return { token, headers: { cookie: `${SESSION_COOKIE}=${token}` } };
 }
 
 async function expectStatus(
-  pending: Promise<Response>,
+  response: Response,
   status: number,
   what: string,
 ): Promise<unknown> {
-  const response = await pending;
   const body: unknown = await response.json().catch(() => undefined);
   if (response.status !== status) {
     throw new Error(

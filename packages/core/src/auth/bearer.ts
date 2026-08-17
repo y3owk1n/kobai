@@ -1,9 +1,12 @@
 /**
- * How a credential is presented on a request: `Authorization: Bearer <token>`.
+ * How an API key is presented on a request: `Authorization: Bearer <key>`.
  *
- * One parser, because kobai has two authenticated surfaces and they should disagree about
- * *which* credential they accept, never about how one arrives. What each surface does with a
- * missing or malformed header is its own business — see `gate.ts` and `store-gate.ts`.
+ * The **store** surface's business alone. It was both surfaces' until ADR-0032 moved Merchant
+ * sessions into an httpOnly cookie (`session-cookie.ts`), and the argument that kept it here
+ * is the one that never applied to the Admin: a key is a server-to-server credential held by
+ * a caller in any language, sent deliberately on a request it composed itself, and a header
+ * is how that caller has one. What the store gate does with a missing or malformed header is
+ * its own business — see `store-gate.ts`.
  */
 
 const SCHEME = "bearer";

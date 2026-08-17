@@ -13,6 +13,9 @@ import type { Permission } from "./permissions.ts";
  * SHA-256 of it, so the table is not a list of credentials. SHA-256 rather than argon2 here
  * on purpose: the input already has full entropy, so there is nothing to brute-force and
  * nothing for a slow hash to buy, while a slow hash on the read path would tax every request.
+ *
+ * How the token reaches a request is not this module's business — it is `session-cookie.ts`'s,
+ * and since ADR-0032 the answer is an httpOnly cookie rather than a bearer header.
  */
 
 /**
@@ -24,7 +27,12 @@ export const SESSION_LIFETIME_MS = 12 * 60 * 60 * 1000;
 
 const TOKEN_BYTES = 32;
 
-/** What a sign-in hands back. The token appears here and nowhere else, ever again. */
+/**
+ * What a sign-in hands back.
+ *
+ * The token goes straight into the `Set-Cookie` header and into nothing else — no response
+ * body carries it, which is the exposure ADR-0032 closed.
+ */
 export type IssuedSession = {
   readonly token: string;
   readonly expiresAt: Date;

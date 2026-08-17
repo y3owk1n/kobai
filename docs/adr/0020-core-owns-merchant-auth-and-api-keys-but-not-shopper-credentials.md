@@ -3,6 +3,11 @@
 > **"One Merchant role" superseded by [ADR-0027](./0027-holds-roles-and-bundles-re-decided-on-platform-terms.md).**
 > Named roles carrying permission sets are in. Everything else below — Core owning Merchant
 > auth and API keys, and not owning Shopper credentials — stands.
+>
+> **How a Merchant session travels is settled by
+> [ADR-0032](./0032-merchant-sessions-travel-in-an-httponly-cookie.md):** an httpOnly cookie,
+> not a bearer token. That is transport rather than ownership, so nothing here changes — API
+> keys are still bearer credentials, and both are still Core's.
 
 Three audiences authenticate against kobai and they are not one system. **Merchant** auth
 is Core's, because ADR-0010 makes Core ship the Admin. **API keys** are Core's, following

@@ -38,23 +38,24 @@ import type { components, paths } from "./schema.ts";
 export type KobaiClient = Client<paths>;
 
 /**
- * Which credential this client carries.
+ * The credential this client carries: an API key, and only an API key.
  *
- * The two are kept apart because the surfaces are (ADR-0020). A Merchant session opens
- * `/admin`; an API key opens `/store`; neither is worth anything on the other. A single
- * `token` option would have made presenting the wrong one at the wrong surface look like an
- * ordinary call, and it is not — it is a 401 with `reason: "api-key-malformed"`, which is
- * the API telling you that you brought the other key.
+ * This was a union of two, one per surface, while a Merchant session was a bearer token the
+ * caller had to hold and re-present. Under ADR-0032 it is an httpOnly cookie: the browser
+ * stores it and sends it back on every same-origin admin request without being asked, and
+ * nothing in this package can read it or would be any use if it could. So the session is not
+ * modelled here at all — not as an option, not as a type — and what is left is the one
+ * credential a caller genuinely has to carry.
+ *
+ * That leaves `/admin` reachable from this client in exactly the case it is meant to be
+ * reached from: a browser on the same origin as the API (ADR-0010), where `fetch` defaults to
+ * sending same-origin cookies and there is nothing to configure. A server-side script driving
+ * `/admin` signs in and keeps the cookie itself, the way a browser does.
  */
-export type KobaiCredential =
-  | {
-      /** A Merchant session token, from `POST /admin/session`. Opens `/admin`. */
-      readonly session: string;
-    }
-  | {
-      /** An API key — `kobai_pk_…` or `kobai_sk_…`. Opens `/store`. */
-      readonly apiKey: string;
-    };
+export type KobaiCredential = {
+  /** An API key — `kobai_pk_…` or `kobai_sk_…`. Opens `/store`. */
+  readonly apiKey: string;
+};
 
 export type KobaiClientOptions = {
   /** Where kobai is served, e.g. `https://shop.example.com`. */
@@ -62,9 +63,10 @@ export type KobaiClientOptions = {
   /**
    * Presented as `Authorization: Bearer …` on every request.
    *
-   * Optional, because two routes are reachable without one: `POST /admin/merchants` on a
-   * deployment nobody has claimed, and `POST /admin/session`, which is how a session is
-   * obtained in the first place.
+   * Optional, and omitted entirely by an Admin: `/store` is what a key opens, and `/admin` is
+   * opened by the session cookie the browser carries. Two admin routes are reachable with no
+   * credential at all — `POST /admin/merchants` on a deployment nobody has claimed, and
+   * `POST /admin/session`, which is how a session is obtained in the first place.
    */
   readonly credential?: KobaiCredential;
   /**
@@ -88,10 +90,9 @@ export function createKobaiClient(options: KobaiClientOptions): KobaiClient {
 
   const credential = options.credential;
   if (credential) {
-    const bearer = "session" in credential ? credential.session : credential.apiKey;
     const authorise: Middleware = {
       onRequest: ({ request }) => {
-        request.headers.set("authorization", `Bearer ${bearer}`);
+        request.headers.set("authorization", `Bearer ${credential.apiKey}`);
         return request;
       },
     };
@@ -116,7 +117,6 @@ export type Variant = components["schemas"]["Variant"];
 export type Price = components["schemas"]["Price"];
 export type Merchant = components["schemas"]["Merchant"];
 export type Session = components["schemas"]["Session"];
-export type IssuedSession = components["schemas"]["IssuedSession"];
 export type IssuedApiKey = components["schemas"]["IssuedApiKey"];
 export type ApiKeyKind = components["schemas"]["ApiKeyKind"];
 export type ResolvedPrice = components["schemas"]["ResolvedPrice"];

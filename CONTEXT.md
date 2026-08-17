@@ -47,11 +47,12 @@ Core owns these; Shopper credentials it does not (ADR-0020).
 _Avoid_: token, secret (that is one *kind* of key), credential, access key, API token
 
 **Session**:
-A signed-in Merchant, held as a row with an expiry, presented on a request as a bearer
-token. Ending one is deleting the row, so signing out takes effect immediately. There is no
-Shopper session — Core holds no Shopper credential at all (ADR-0020). The *token* is how a
-Session is presented, and is not another word for the Session itself.
-_Avoid_: login, cookie, JWT
+A signed-in Merchant, held as a row with an expiry, presented on a request as an httpOnly
+`kobai_session` cookie (ADR-0032). Ending one is deleting the row, so signing out takes
+effect immediately. There is no Shopper session — Core holds no Shopper credential at all
+(ADR-0020). The *token* is the value the cookie carries, and the *cookie* is how a Session
+travels; neither is another word for the Session itself.
+_Avoid_: login, cookie (for the Session), JWT, bearer token (that is the store surface)
 
 ## Structure
 

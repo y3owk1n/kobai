@@ -4,6 +4,7 @@ import { PERMISSIONS } from "../auth/permissions.ts";
 import {
   createTestKobai,
   inspectSchema,
+  sessionOf,
   signInTestMerchant,
   type TestKobai,
 } from "../testing/index.ts";
@@ -222,7 +223,7 @@ describe("the catalog is behind the Merchant session", () => {
           role: "bookkeeper",
         }),
       });
-      const signedIn = (await (
+      const bookkeeper = sessionOf(
         await kobai.request("/admin/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -230,13 +231,13 @@ describe("the catalog is behind the Merchant session", () => {
             email: "books@example.test",
             password: "a bookkeeper's very long password",
           }),
-        })
-      ).json()) as { token: string };
+        }),
+      );
 
       const response = await kobai.request(path, {
         method,
         headers: {
-          authorization: `Bearer ${signedIn.token}`,
+          ...bookkeeper.headers,
           "content-type": "application/json",
         },
         body: method === "POST" ? "{}" : undefined,

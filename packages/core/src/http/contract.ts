@@ -195,14 +195,26 @@ export const Session = z
   .openapi("Session");
 
 /**
- * A session at the moment it is issued.
+ * The header a sign-in answers with, and the reason there is no `IssuedSession` schema.
  *
- * `token` appears here and in no other response. It is presented as
- * `Authorization: Bearer <token>` on every later admin request.
+ * There used to be one: `Session` plus the `token` to present on every later request. The
+ * token now leaves in this header instead and appears in no body at all (ADR-0032), which
+ * left `IssuedSession` identical to `Session` — so it is gone, and signing in answers with
+ * the same shape as asking who you are.
  */
-export const IssuedSession = Session.extend({ token: z.string() }).openapi(
-  "IssuedSession",
+export const SessionCookieSet = setCookie(
+  "`kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to.",
 );
+
+/** The header a sign-out answers with: the same cookie, emptied and expired. */
+export const SessionCookieCleared = setCookie(
+  "`kobai_session`, emptied and expired, so the browser drops it.",
+);
+
+/** A `Set-Cookie` a route promises to send. Two routes do, and they say different things. */
+function setCookie(description: string) {
+  return z.object({ "set-cookie": z.string().meta({ description }) });
+}
 
 export const CreateMerchantRequest = z
   .object({
