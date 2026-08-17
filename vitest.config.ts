@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { type ViteUserConfig, defineConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 /**
  * One entry of Vite's `resolve.alias` array.

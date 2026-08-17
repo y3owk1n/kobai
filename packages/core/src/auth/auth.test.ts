@@ -1,12 +1,12 @@
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  TEST_MERCHANT,
-  type TestKobai,
-  type TestSession,
   createTestKobai,
   inspectSchema,
   signInTestMerchant,
+  TEST_MERCHANT,
+  type TestKobai,
+  type TestSession,
 } from "../testing/index.ts";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./permissions.ts";
 

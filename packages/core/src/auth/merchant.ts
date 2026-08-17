@@ -2,9 +2,9 @@ import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { merchant, role } from "../db/schema.ts";
 import {
-  MINIMUM_PASSWORD_LENGTH,
   digestOfNoMerchant,
   hashPassword,
+  MINIMUM_PASSWORD_LENGTH,
   verifyPassword,
 } from "./credentials.ts";
 import type { MerchantIdentity, RoleSummary } from "./identity.ts";

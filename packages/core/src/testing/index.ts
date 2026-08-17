@@ -8,15 +8,6 @@ export {
   testPostgresUrl,
 } from "./database.ts";
 export {
-  type ColumnFact,
-  type ForeignKeyFact,
-  inspectSchema,
-  type MigrationTrackingFact,
-  type SchemaInspector,
-  type SchemaQuery,
-  type TableRef,
-} from "./schema.ts";
-export {
   createTestKobai,
   silentLogger,
   type TestKobai,
@@ -28,3 +19,12 @@ export {
   type TestCredentials,
   type TestSession,
 } from "./merchant.ts";
+export {
+  type ColumnFact,
+  type ForeignKeyFact,
+  inspectSchema,
+  type MigrationTrackingFact,
+  type SchemaInspector,
+  type SchemaQuery,
+  type TableRef,
+} from "./schema.ts";

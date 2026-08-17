@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { type MigrationSet, defineMigrationSet } from "@kobai/core/migrations";
+import { defineMigrationSet, type MigrationSet } from "@kobai/core/migrations";
 
 /**
  * This Plugin's migration set — built by the same `defineMigrationSet` Core builds its own

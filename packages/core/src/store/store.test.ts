@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { defineMigrationSet } from "../migrations/set.ts";
-import { type TestKobai, createTestKobai, signInTestMerchant } from "../testing/index.ts";
+import { createTestKobai, signInTestMerchant, type TestKobai } from "../testing/index.ts";
 
 let kobai: TestKobai | undefined;
 
