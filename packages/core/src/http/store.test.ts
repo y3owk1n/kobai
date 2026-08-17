@@ -132,7 +132,7 @@ describe("the store surface is not open by default", () => {
 
     const asCookie = await kobai.request(path, { headers: store.merchantHeaders });
     // And the value inside the cookie, handed over the way a key is. A browser would never
-    // do this — the cookie is scoped `Path=/admin` — but the gate must refuse it anyway,
+    // do this — the cookie is scoped to the admin surface — but the gate must refuse it,
     // because "neither credential is worth anything on the other surface" (ADR-0020) is a
     // property of the gate rather than of the browser that usually calls it.
     const asBearer = await kobai.request(path, {

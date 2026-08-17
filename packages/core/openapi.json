@@ -15,7 +15,7 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "kobai_session",
-        "description": "A Merchant session, set by `POST /admin/session` as an httpOnly cookie and sent back by the browser by itself. Opens `/admin` and nothing else. httpOnly, `SameSite=Strict`, `Path=/admin`, and `Secure` whenever the request arrived over HTTPS — so the token is in no response body and reachable by no script (ADR-0032)."
+        "description": "A Merchant session, set by `POST /admin/session` as an httpOnly cookie and sent back by the browser by itself. Opens `/admin` and nothing else. httpOnly, `SameSite=Strict`, and `Secure` whenever the request arrived over HTTPS — so the token is in no response body and reachable by no script (ADR-0032). It names no `Path`, so the browser scopes it to the admin surface it was issued from, wherever the Project mounted kobai."
       },
       "apiKey": {
         "type": "http",
@@ -908,10 +908,10 @@
               "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "description": "`kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to."
+                  "description": "`kobai_session`, httpOnly, SameSite=Strict, and Secure whenever the request arrived over HTTPS. It names no Path, so a browser scopes it to the admin surface this request reached — `/admin`, or `/api/admin` for a Project that mounted kobai at `/api`. A browser sends it back by itself; nothing else has to."
                 },
                 "required": true,
-                "description": "`kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to."
+                "description": "`kobai_session`, httpOnly, SameSite=Strict, and Secure whenever the request arrived over HTTPS. It names no Path, so a browser scopes it to the admin surface this request reached — `/admin`, or `/api/admin` for a Project that mounted kobai at `/api`. A browser sends it back by itself; nothing else has to."
               }
             },
             "content": {

@@ -6,10 +6,9 @@ A Merchant session is presented as an httpOnly `kobai_session` cookie, set by
 decision. **The store surface is untouched**: an API key still travels as
 `Authorization: Bearer kobai_pk_… | kobai_sk_…`.
 
-The cookie is `HttpOnly`, `SameSite=Strict`, `Path=/admin`, `Secure` whenever the request
-arrived over HTTPS, and carries **no** `Expires` or `Max-Age`. `SameSite=Strict` is the whole
-of the CSRF defence, and this record exists mostly to say why that is enough and what it does
-not cover.
+The cookie is `HttpOnly`, `SameSite=Strict`, `Secure` whenever the request arrived over HTTPS,
+and carries **no** `Path`, `Expires` or `Max-Age`. `SameSite=Strict` is the whole of the CSRF
+defence, and this record exists mostly to say why that is enough and what it does not cover.
 
 ## Why the transport moved
 
@@ -70,15 +69,48 @@ the second makes it urgent.
 
 **`HttpOnly`** is the property the change was made for.
 
-**`Path=/admin`** keeps the credential out of requests that have no use for it — `/store`,
-`/health`, and whatever else a Project serves from the same origin. It claims nothing about
-the Admin's *own* assets: ADR-0010 serves those at a path Core does not choose, and if that
-path sits under `/admin` they will carry the cookie like everything else there. Path is not a
-boundary between origins and is not claimed as one; it is the same argument the cookie itself
-makes, that a value which never reaches a handler is a value that handler cannot log. The cost
-is that kobai's admin surface must actually be at `/admin`: a
-Project mounting `createKobai(...).fetch` under a prefix would sign in and be refused on the
-very next request — loudly, at the first attempt, rather than silently and insecurely.
+**No `Path`, so the browser scopes it to the admin surface it was issued from.** The intent is
+unchanged from the first version of this record: keep the credential out of requests that have
+no use for it — `/store`, `/health`, and whatever else a Project serves from the same origin.
+Path is not a boundary between origins and is not claimed as one; it is the same argument the
+cookie itself makes, that a value which never reaches a handler is a value that handler cannot
+log. What changed is how the scope is arrived at, and #65 is why.
+
+A `Set-Cookie` naming no `Path` is filed by the browser under RFC 6265's **default-path**: the
+directory of the URI it arrived from. Sign-in is `POST …/admin/session`, so the cookie is
+scoped to `…/admin` — `/admin` at the root, `/api/admin` for a Project that mounted kobai at
+`/api` — and RFC 6265's path-match then sends it to that subtree and nowhere else. The scope
+follows the mount without anyone declaring the mount.
+
+**The literal `Path=/admin` could not do that, and no attribute Core computes can.** ADR-0031
+hands a Project Core's `fetch` to bind, and a Project is equally free to mount it under a
+prefix — this record is where that becomes a promise. Both ways of mounting a `fetch` handler
+under a prefix — a Hono `mount`, a reverse proxy that rewrites the prefix away — strip the
+prefix *before* Core sees the request. Core is handed `/admin/session` either way; the request
+and the routed path are identical, so there is no difference to read a prefix out of. The
+browser is the only party that knows the URI it asked for, so the browser is what computes the
+scope. The alternative was a `basePath` in `kobai.config.ts`, which would make a Project
+declare its mount twice and be a defect the moment the two disagreed — the failure it was
+meant to prevent, moved into config.
+
+Two consequences are worth stating.
+
+- **Sign-in and sign-out agree by construction.** A browser matches a deletion to a stored
+  cookie by name, domain and path, so a clear that disagreed about `Path` would leave the old
+  cookie in place and sign-out would only look like it had worked. With neither naming a
+  `Path`, both are scoped from the URI they arrived at — and that is the *same* URI, since
+  sign-in and sign-out are one route under two methods. There is no second constant to keep in
+  step.
+- **The depth of `POST /admin/session` is now load-bearing.** The cookie covers the admin
+  surface because sign-in sits one segment below it. Moving sign-in deeper, to
+  `/admin/auth/session`, would silently narrow the cookie to `/admin/auth` and refuse every
+  other admin request. `packages/core/src/auth/session-cookie.test.ts` drives a cookie jar
+  against a mounted Core precisely so that stays a failing test rather than a production
+  discovery.
+
+It still claims nothing about the Admin's *own* assets: ADR-0010 serves those at a path Core
+does not choose, and if that path sits under the admin surface they carry the cookie like
+everything else there.
 
 **`Secure` follows the scheme the request arrived over**, honouring `X-Forwarded-Proto` and
 falling back to the request URL. A fixed `Secure` would make `devbox run up` — plain HTTP on
@@ -98,7 +130,9 @@ get the empty page an anonymous request gets, where the Admin owes them a sign-i
 `core_session` row keeps the database the single authority on it.
 
 **No `__Host-` or `__Secure-` prefix.** Both make `Secure` mandatory, which would break local
-HTTP; `__Host-` additionally forces `Path=/`, which is the opposite of what is wanted above.
+HTTP; `__Host-` additionally forces `Path=/`, which would send the session to everything the
+Project serves — the opposite of the scoping above, and not something the browser could then
+narrow.
 
 ## Consequences
 
@@ -115,7 +149,7 @@ HTTP; `__Host-` additionally forces `Path=/`, which is the opposite of what is w
   meanings.** No cookie is `missing`; a `kobai_session` carrying nothing is `malformed`.
 - **A session presented at `/store` now reads as `api-key-missing`** rather than
   `api-key-malformed`. It arrives in a header that gate does not read — and a browser would
-  not send it there at all, given `Path=/admin`.
+  not send it there at all, since `/store` is outside the cookie's scope.
 - **The Admin (#10) has no credential to store, and must not try.** It signs in, and every
   later request carries the cookie because it is same-origin. `fetch` defaults to sending
   same-origin cookies, so there is nothing to configure — which is the same thing ADR-0010

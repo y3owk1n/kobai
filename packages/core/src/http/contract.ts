@@ -203,7 +203,7 @@ export const Session = z
  * the same shape as asking who you are.
  */
 export const SessionCookieSet = setCookie(
-  "`kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to.",
+  "`kobai_session`, httpOnly, SameSite=Strict, and Secure whenever the request arrived over HTTPS. It names no Path, so a browser scopes it to the admin surface this request reached — `/admin`, or `/api/admin` for a Project that mounted kobai at `/api`. A browser sends it back by itself; nothing else has to.",
 );
 
 /** The header a sign-out answers with: the same cookie, emptied and expired. */

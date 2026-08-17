@@ -228,7 +228,7 @@ describe("the session cookie's attributes", () => {
     return cookie;
   }
 
-  it("is httpOnly and SameSite=Strict, scoped to the surface it opens", async () => {
+  it("is httpOnly and SameSite=Strict, and names no Path of its own", async () => {
     kobai = await createTestKobai();
 
     const cookie = await cookieFrom(kobai);
@@ -240,8 +240,12 @@ describe("the session cookie's attributes", () => {
     // every request it makes is same-site anyway and nothing enters this surface from another
     // site. Lax would keep a hole open for a flow that does not exist.
     expect(cookie).toContain("SameSite=Strict");
-    // Not sent to `/store`, `/health`, or anything else a Project serves from this origin.
-    expect(cookie).toContain("Path=/admin");
+    // No `Path`, so the browser files it under the directory it was set from — `/admin` here,
+    // `/api/admin` for a Project that mounted Core at `/api`, and never `/store` or `/health`.
+    // A named `Path` could only be right for one of those, because a mount prefix is stripped
+    // before Core sees the request (ADR-0031, ADR-0032). Where the cookie is then *sent* is
+    // `session-cookie.test.ts`; this is only that the attribute is absent.
+    expect(cookie).not.toMatch(/;\s*Path=/i);
   });
 
   it("does not expire in the browser, so the server stays the authority on when it does", async () => {
@@ -423,12 +427,14 @@ describe("signing out", () => {
 
     // A browser matches a deletion to a stored cookie by name, domain and path, so a clear
     // that disagreed about `Path` would leave the old cookie sitting there and sign-out would
-    // only look like it had worked.
+    // only look like it had worked. Neither names one, and both are set from the same URI —
+    // `/admin/session`, which sign-in and sign-out share — so they agree by construction at
+    // any mount depth. `session-cookie.test.ts` drives that through a cookie jar.
     const cleared = signOut.headers.get("set-cookie") ?? "";
     expect(cleared).toContain("kobai_session=");
     expect(cleared).not.toContain(merchant.token);
     expect(cleared).toContain("Max-Age=0");
-    expect(cleared).toContain("Path=/admin");
+    expect(cleared).not.toMatch(/;\s*Path=/i);
   });
 
   it("ends that session and no other", async () => {
