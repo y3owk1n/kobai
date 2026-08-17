@@ -402,6 +402,14 @@ looks like one, whether a SKU is taken, whether this Store prices in that curren
 that moved into a schema would be one a client could be told about but Core could no longer
 change.
 
+**One schema and two routes are built per instance, and only these.** `Session`'s description
+carries the deployment's own session lifetimes, which a Project may set (ADR-0050), so
+`contract.sessionSchema(policy)` is a function and `admin.ts`'s two `/admin/session` routes
+take the schema it returns. Everything else on the surface stays a module-level constant —
+reach for this only for a route whose *description* depends on how the deployment was
+configured, and never as a way to make a route's shape conditional: a description that
+enumerated different paths per deployment is not a contract.
+
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.
 `packages/core/src/http/openapi.test.ts` regenerates the description and compares;
@@ -784,7 +792,12 @@ await using kobai = await createTestKobai({
 ```
 
 That is the same `kobai.config.ts` shape a Developer writes, so a test of the override
-mechanism is a test of the thing they actually do.
+mechanism is a test of the thing they actually do. **Every key of that file the harness
+accepts works the same way**, `session: { idleWindowMs }` included (ADR-0050) — and a value
+Core will not serve rejects the `createTestKobai` promise rather than booting, because
+`createKobai` refuses it. Time is passed by winding the row back rather than by waiting; the
+helpers at the foot of `auth.test.ts` are the only honest way to test a window measured in
+minutes.
 
 **Inserting a Step** sits beside `steps` rather than inside it, so replacement and
 observation are distinguishable at a glance, and a list because observing composes:

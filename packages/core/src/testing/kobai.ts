@@ -55,15 +55,30 @@ export const silentLogger: Logger = { info: () => {}, error: () => {} };
  */
 export async function createTestKobai(options?: TestKobaiOptions): Promise<TestKobai> {
   const database = await createTestDatabase();
-  const kobai = createKobai({
-    databaseUrl: database.url,
-    initialMerchant: options?.initialMerchant,
-    migrationSets: options?.migrationSets,
-    // A Project's Step overrides, so a test can boot with one swapped and ask the API what
-    // changed — the seam ADR-0017's promise is actually experienced at.
-    workflows: options?.workflows,
-    logger: options?.logger ?? silentLogger,
-  });
+
+  // `createKobai` refuses a configuration it cannot serve, so a test whose subject is one has
+  // a database already standing behind it. Dropped here rather than left for whatever runs
+  // next, exactly as the migration failure below does it — a suite that leaks a database per
+  // rejected config is a suite that gets slower the more of them it asserts.
+  let kobai: Kobai;
+  try {
+    kobai = createKobai({
+      databaseUrl: database.url,
+      initialMerchant: options?.initialMerchant,
+      migrationSets: options?.migrationSets,
+      // A Project's Step overrides, so a test can boot with one swapped and ask the API what
+      // changed — the seam ADR-0017's promise is actually experienced at.
+      workflows: options?.workflows,
+      // Likewise for a deployment that sets its own session idle window (ADR-0050): a test
+      // boots with the same key a `kobai.config.ts` carries, and an unusable one is refused
+      // here exactly as it would be at a Project's boot.
+      session: options?.session,
+      logger: options?.logger ?? silentLogger,
+    });
+  } catch (cause) {
+    await database.drop();
+    throw cause;
+  }
 
   let migration: MigrationOutcome | undefined;
   try {

@@ -20,7 +20,7 @@ import {
   type MerchantCreation,
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
-import { createSession, revokeSession } from "../auth/session.ts";
+import { createSession, revokeSession, type SessionPolicy } from "../auth/session.ts";
 import {
   clearedSessionCookie,
   type Scheme,
@@ -68,37 +68,47 @@ import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.
 
 export type AdminDependencies = {
   readonly db: Database;
+  /**
+   * How long this deployment's sessions live (ADR-0050). The gate below enforces it, and the
+   * two routes that answer with a `Session` describe it — which is why those two are declared
+   * per instance and every other route on this surface is a module-level constant.
+   */
+  readonly sessionPolicy: SessionPolicy;
 };
 
 // ---- The way in --------------------------------------------------------------------------
 
-/** Signs in: exchanges credentials for a session. */
-const signInRoute = createRoute({
-  method: "post",
-  path: "/session",
-  summary: "Sign in",
-  description:
-    "The session travels back as an httpOnly `kobai_session` cookie, which a browser then sends on every admin request by itself; it is in no response body. An unknown address and a wrong password are answered identically, and in the same time — distinguishing them would turn this into a way to ask who works here.",
-  request: {
-    body: {
-      required: true,
-      content: { "application/json": { schema: contract.SignInRequest } },
+/**
+ * Signs in: exchanges credentials for a session.
+ *
+ * A function of the schema rather than a constant, because `Session` carries this
+ * deployment's own idle window in its description (`contract.sessionSchema`). The route is
+ * still one declaration in one place; it is just built when the app is, like the gate.
+ */
+const signInRoute = (Session: contract.SessionSchema) =>
+  createRoute({
+    method: "post",
+    path: "/session",
+    summary: "Sign in",
+    description:
+      "The session travels back as an httpOnly `kobai_session` cookie, which a browser then sends on every admin request by itself; it is in no response body. An unknown address and a wrong password are answered identically, and in the same time — distinguishing them would turn this into a way to ask who works here.",
+    request: {
+      body: {
+        required: true,
+        content: { "application/json": { schema: contract.SignInRequest } },
+      },
     },
-  },
-  responses: {
-    201: {
-      ...json(
-        "Who you now are. The credential itself is in the cookie.",
-        contract.Session,
-      ),
-      headers: contract.SessionCookieSet,
+    responses: {
+      201: {
+        ...json("Who you now are. The credential itself is in the cookie.", Session),
+        headers: contract.SessionCookieSet,
+      },
+      400: REFUSALS.invalid,
+      401: json("Those credentials are not valid.", contract.InvalidCredentials),
+      500: REFUSALS.serverError,
+      503: REFUSALS.unavailable,
     },
-    400: REFUSALS.invalid,
-    401: json("Those credentials are not valid.", contract.InvalidCredentials),
-    500: REFUSALS.serverError,
-    503: REFUSALS.unavailable,
-  },
-});
+  });
 
 // ---- Everything else ---------------------------------------------------------------------
 
@@ -136,20 +146,22 @@ const createMerchantRoute = createRoute({
   },
 });
 
-const readSessionRoute = createRoute({
-  method: "get",
-  path: "/session",
-  summary: "Who the caller is",
-  description:
-    "What the Admin asks first after a page load: who am I, and what may I do.",
-  security: MERCHANT_SESSION,
-  responses: {
-    200: json("The caller's Merchant and Role.", contract.Session),
-    401: REFUSALS.noSession,
-    500: REFUSALS.serverError,
-    503: REFUSALS.unavailable,
-  },
-});
+/** The other route answering with a `Session`, and so the other one built per instance. */
+const readSessionRoute = (Session: contract.SessionSchema) =>
+  createRoute({
+    method: "get",
+    path: "/session",
+    summary: "Who the caller is",
+    description:
+      "What the Admin asks first after a page load: who am I, and what may I do.",
+    security: MERCHANT_SESSION,
+    responses: {
+      200: json("The caller's Merchant and Role.", Session),
+      401: REFUSALS.noSession,
+      500: REFUSALS.serverError,
+      503: REFUSALS.unavailable,
+    },
+  });
 
 const signOutRoute = createRoute({
   method: "delete",
@@ -368,7 +380,12 @@ const revokeApiKeyRoute = createRoute({
 export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv> {
   const admin = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
 
-  admin.openapi(signInRoute, async (c) => {
+  // Built once, here, and given to both routes that answer with one: the schema carries this
+  // deployment's idle window in its description, and two schemas registered under the same
+  // component name would be two answers to the same question.
+  const Session = contract.sessionSchema(deps.sessionPolicy);
+
+  admin.openapi(signInRoute(Session), async (c) => {
     const body = c.req.valid("json");
 
     const merchant = await authenticateMerchant(deps.db, body.email, body.password);
@@ -384,7 +401,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
       );
     }
 
-    const issued = await createSession(deps.db, merchant.id);
+    const issued = await createSession(deps.db, merchant.id, deps.sessionPolicy);
 
     // The credential leaves in a header and not in the body. That is the whole switch: a
     // token in a response body is a token every logging integration is one `JSON.stringify`
@@ -394,7 +411,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   const guarded = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
-  guarded.use("*", requireSession(deps.db));
+  guarded.use("*", requireSession(deps.db, deps.sessionPolicy));
 
   guarded.openapi(createMerchantRoute, async (c) => {
     const created = await createMerchant(deps.db, c.req.valid("json"));
@@ -402,7 +419,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(created.merchant, 201);
   });
 
-  guarded.openapi(readSessionRoute, (c) => {
+  guarded.openapi(readSessionRoute(Session), (c) => {
     const auth = authenticated(c);
     return c.json(sessionBody(auth.merchant, auth.role, auth.expiresAt), 200);
   });

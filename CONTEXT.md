@@ -48,11 +48,13 @@ _Avoid_: token, secret (that is one *kind* of key), credential, access key, API 
 
 **Session**:
 A signed-in Merchant, held as a row with an expiry, presented on a request as an httpOnly
-`kobai_session` cookie (ADR-0032). It ends after **30 minutes with no requests** and never
-lives longer than **12 hours** from sign-in whatever the Merchant does (ADR-0045) — so the
-window is an *idle* one, and a Merchant at work never meets it. Ending one is deleting the
-row, so signing out takes effect immediately. There is no Shopper session — Core holds no
-Shopper credential at all (ADR-0020). The *token* is the value the cookie carries, and the
+`kobai_session` cookie (ADR-0032). It ends after an **idle window** with no requests —
+**30 minutes** unless the Project set its own in `kobai.config.ts` (ADR-0050) — and never
+lives longer than **12 hours** from sign-in whatever the Merchant does (ADR-0045), which is
+Core's cap and not a Project's to move. So the window is an *idle* one, and a Merchant at
+work never meets it. Ending one is deleting the row, so signing out takes effect
+immediately. There is no Shopper session — Core holds no Shopper credential at all
+(ADR-0020). The *token* is the value the cookie carries, and the
 *cookie* is how a Session travels; neither is another word for the Session itself.
 _Avoid_: login, cookie (for the Session), JWT, bearer token (that is the store surface),
 timeout (say *idle window* or *cap*, and mean the one you say)

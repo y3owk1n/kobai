@@ -1,3 +1,4 @@
+import type { SessionOptions } from "./auth/session.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import type { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
 import type { WorkflowOverrides } from "./workflow/workflow.ts";
@@ -33,6 +34,31 @@ export type KobaiProjectConfig = {
    * wires them, in this file, deliberately — so load order never silently decides behaviour.
    */
   readonly workflows?: CoreWorkflowOverrides;
+  /**
+   * What this Project has changed about how long a signed-in Merchant stays signed in.
+   *
+   * ```ts
+   * session: { idleWindowMs: 45 * 60 * 1000 }
+   * ```
+   *
+   * **A subject, not a scalar.** Every key in this file names something a Project customised
+   * — its migration sets, its Workflows — and reads as a heading with the details beneath it.
+   * A bare `sessionIdleWindowMs` at the top level would be the first key that is a number
+   * instead, and it would spell that grouping into its own name; the next thing a deployment
+   * needs to say about its sessions would then either add a second top-level key or force
+   * this shape after the fact, and a config file whose shape has to be reorganised is one
+   * every Project has to rewrite.
+   *
+   * Note what is deliberately *not* here: the twelve-hour absolute cap. It is Core's ceiling
+   * rather than a Project's setting, because an idle window protects a deployment against an
+   * abandoned browser and nothing against a stolen token — the thief's own traffic is what
+   * keeps that one alive, and the cap is the only bound left (ADR-0045, ADR-0050).
+   *
+   * A window Core will not enforce stops the boot, with a message naming this key. Nothing is
+   * clamped: a deployment whose sessions quietly last something other than what this file
+   * says is worse than one that refuses to start.
+   */
+  readonly session?: SessionOptions;
 };
 
 /**
