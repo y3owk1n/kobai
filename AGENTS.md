@@ -263,9 +263,12 @@ the slot produced, after it — so it cannot alter the output contract. That is 
 same compiler check that rejects a bad replacement, and the `@ts-expect-error` assertions
 pinning it live beside the ones for replacement. **Compensation** is a third argument to
 `defineStep`; the runner unwinds the Steps that completed in reverse when a later one fails,
-handing each one the very value its `run` was given. Test it the way
-`packages/plugin-price-log/src/record-price-resolution.test.ts` does — by asking the database
-whether the row is still there, never by counting calls.
+handing each one the very value its `run` was given. That unwinding *order*, and that the
+value is the same one, are promises about the declaration and are asserted in
+`workflow.test.ts` like the rest of the Workflow seam. Whether a compensation actually
+undid anything is not — ask the database, as
+`packages/plugin-price-log/src/record-price-resolution.test.ts` does, and never settle for a
+counter that says the callback was reached.
 
 The **packaging seam** covers what none of those can, because it is not about a running
 database at all: that the `migrations/` directory each package resolves relative to its

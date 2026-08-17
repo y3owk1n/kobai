@@ -27,8 +27,12 @@ import { priceLogEntry } from "./db/schema.ts";
  * failure now can only ever undo what this run did. Weak, so a run that succeeds leaves
  * nothing behind to collect; and outside the Step rather than on the value, because the value
  * belongs to the Workflow and a Step that watches may not write on what it passes along.
+ *
+ * A stack rather than one id, because nothing stops a Project wiring this Step into the same
+ * Workflow twice. Both writes key on the same resolved Price, and Core unwinds in reverse, so
+ * each compensation takes back the row its own `run` put on top.
  */
-const written = new WeakMap<ResolvedPrice, string>();
+const written = new WeakMap<ResolvedPrice, string[]>();
 
 export const recordPriceResolution: InsertedStep<ResolvedPrice> = defineStep(
   "record-price-resolution",
@@ -46,20 +50,23 @@ export const recordPriceResolution: InsertedStep<ResolvedPrice> = defineStep(
       })
       .returning({ id: priceLogEntry.id });
 
-    if (row) written.set(resolved, row.id);
+    if (row) {
+      const rows = written.get(resolved) ?? [];
+      rows.push(row.id);
+      written.set(resolved, rows);
+    }
 
     // Handed straight back, untouched. This Step is here to watch.
     return resolved;
   },
 
   async (resolved, context) => {
-    const id = written.get(resolved);
+    const id = written.get(resolved)?.pop();
     // Nothing recorded, nothing to unwind — the Workflow may have failed before this Step
     // ever ran, in which case Core would not be here at all, but a compensation should not
     // assume it is being called for the reason it expects.
     if (id === undefined) return;
 
-    written.delete(resolved);
     await context.db.delete(priceLogEntry).where(eq(priceLogEntry.id, id));
   },
 );

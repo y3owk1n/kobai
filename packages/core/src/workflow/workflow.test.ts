@@ -452,6 +452,34 @@ describe("compensating a Workflow that failed", () => {
     expect(unwound).toEqual(["first"]);
   });
 
+  it("lets a failing compensation travel, in place of the refusal it was unwinding", async () => {
+    // The deliberate limit of this mechanism, pinned so it is a decision rather than a
+    // surprise: a compensation that throws stops the unwinding where it stands, and what the
+    // caller gets is the cleanup's failure rather than the refusal. That is the more urgent
+    // of the two — a Workflow that could not tidy up after itself is worse news than the
+    // Step that asked it to.
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(
+        defineStep(
+          "second",
+          (input: Trail): Trail => ({ trail: [...input.trail, "second"] }),
+          () => {
+            throw new TypeError("the compensation is itself broken");
+          },
+        ),
+      )
+      .step(refuses)
+      .build();
+
+    await expect(workflow.run({ trail: [] }, CONTEXT)).rejects.toThrow(
+      "the compensation is itself broken",
+    );
+    // `first` is earlier, so its turn never came.
+    expect(unwound).toEqual([]);
+  });
+
   it("compensates nothing when every Step succeeds", async () => {
     const unwound: string[] = [];
     const workflow = defineWorkflow<Trail>("visits")

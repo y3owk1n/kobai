@@ -116,8 +116,10 @@ export async function runSteps<Out>(
  *
  * A compensation that throws is a bug like any other, and it travels: unwinding stops there
  * rather than continuing over a machine that has just proved it does not understand its own
- * state, and the failure is reported rather than swallowed into a Workflow that claims to
- * have cleaned up after itself.
+ * state. It travels *in place of* whatever stopped the run — the caller learns that the
+ * cleanup failed rather than which Step refused, which is the more urgent of the two and the
+ * only one that cannot be inferred from a Workflow that claims to have tidied up after
+ * itself.
  */
 async function unwind(undo: readonly Undo[], context: WorkflowContext): Promise<void> {
   for (const entry of [...undo].reverse()) {

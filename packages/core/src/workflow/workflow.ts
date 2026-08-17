@@ -73,7 +73,7 @@ export type Workflow<In, Out, Shapes extends StepShapes = StepShapes> = {
    * Read it; do not rebuild a Workflow by spreading one. `describe` and `run` close over
    * this array as it was when the Workflow was made, so `{ ...workflow, steps: mine }` would
    * answer with the new list and still *execute* the old one. Rewiring a Workflow means
-   * declaring it again — {@link overrideSteps} is how, and the only way that exists.
+   * declaring it again — {@link rewireWorkflow} is how, and the only way that exists.
    */
   readonly steps: readonly WorkflowStep[];
   /** What this Workflow is made of, without reading Core's implementation. */
@@ -231,7 +231,7 @@ export type WorkflowOverrides<W extends AnyWorkflow> =
  * already rejects it for a config written as a literal; this catches the map built at
  * runtime, where the alternative is an override that silently does nothing. So does an
  * inserted Step that answers to a name the Workflow already uses for a slot — see
- * {@link position}.
+ * {@link insertedAt}.
  */
 export function rewireWorkflow<In, Out, Shapes extends StepShapes>(
   workflow: Workflow<In, Out, Shapes>,
@@ -264,18 +264,18 @@ export function rewireWorkflow<In, Out, Shapes extends StepShapes>(
     // keyed by. Insertion is anchored to the *slot*, not to what fills it, so a Project may
     // replace a Step and watch the same position in one config.
     for (const step of before[entry.slot] ?? [])
-      rewired.push(position(workflow.name, step, slots));
+      rewired.push(insertedAt(workflow.name, step, slots));
     const replacement = replacements[entry.slot];
     rewired.push(replacement ? { slot: entry.slot, step: replacement } : entry);
     for (const step of after[entry.slot] ?? [])
-      rewired.push(position(workflow.name, step, slots));
+      rewired.push(insertedAt(workflow.name, step, slots));
   }
 
   return createWorkflow<In, Out, Shapes>(workflow.name, rewired);
 }
 
-/** One inserted Step as a position, refusing to squat on a slot the Workflow declares. */
-function position(
+/** Puts one inserted Step in a position of its own, refusing a name a slot already answers to. */
+function insertedAt(
   workflow: string,
   step: AnyStep,
   slots: ReadonlySet<string>,
@@ -335,7 +335,7 @@ function builder<In, Current, Shapes extends StepShapes>(
 }
 
 /**
- * The one place a Workflow object is made, from `build()` and from {@link overrideSteps}
+ * The one place a Workflow object is made, from `build()` and from {@link rewireWorkflow}
  * alike.
  *
  * One constructor rather than two is what keeps the trap on `steps` closed: everything that
