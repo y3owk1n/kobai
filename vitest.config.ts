@@ -1,6 +1,19 @@
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { type Alias, defineConfig } from "vitest/config";
+import { type ViteUserConfig, defineConfig } from "vitest/config";
+
+/**
+ * One entry of Vite's `resolve.alias` array.
+ *
+ * Reached through the config type rather than imported by name: `vitest/config` re-exports
+ * Vite's `UserConfig` as `ViteUserConfig` but not its `Alias`, and `vite` itself is a
+ * transitive dependency this package does not declare. `Extract` picks the array form of
+ * `resolve.alias` out of its union with the `{ find: replacement }` object form.
+ */
+type Alias = Extract<
+  NonNullable<NonNullable<ViteUserConfig["resolve"]>["alias"]>,
+  readonly unknown[]
+>[number];
 
 const from = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 

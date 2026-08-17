@@ -21,9 +21,9 @@
       "dev": "pnpm -r build && pnpm --filter kobai-reference dev",
       "lint": "pnpm exec biome ci .",
       "format": "pnpm exec biome check --write .",
-      "typecheck": "pnpm -r typecheck",
+      "typecheck": "pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit",
       "test": "docker compose up -d --wait db && pnpm -r build && pnpm exec vitest run",
-      "ci": "pnpm install --frozen-lockfile && docker compose up -d --wait db && pnpm exec biome ci . && pnpm -r typecheck && pnpm -r build && pnpm exec vitest run"
+      "ci": "pnpm install --frozen-lockfile && docker compose up -d --wait db && pnpm exec biome ci . && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit && pnpm -r build && pnpm exec vitest run"
     }
   }
 }
