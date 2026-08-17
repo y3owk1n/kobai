@@ -690,7 +690,10 @@ export interface components {
       applied: number;
     };
     Session: {
-      /** Format: date-time */
+      /**
+       * Format: date-time
+       * @description When this session ends if no further request is made. Every authenticated request pushes it out by another 30 minutes of idleness, so read it from the most recent response rather than caching the one sign-in returned. It is never later than 12 hours after sign-in, however active the session is; past that the Merchant signs in again.
+       */
       expiresAt: string;
       merchant: components["schemas"]["MerchantIdentity"];
       role: components["schemas"]["RoleSummary"];

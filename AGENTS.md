@@ -289,10 +289,11 @@ anything written against the old shape as needing a rewrite rather than a versio
 `$onUpdate` was rejected: it fires only for writes going through Core's own query builder,
 and under ADR-0004 the writers Core does not mediate — a Project, a Plugin, a hand-run
 `UPDATE`, a raw `db.execute` inside Core — are the normal case rather than the
-exception. Core's whole HTTP surface performs exactly **one** `UPDATE` today, so a mechanism
-covering only Core's writes would cover almost nothing. The column had defaulted to `now()`
-and never moved since the first table shipped, which is why the bar here is a value that
-moves rather than a schema that looks right (#32).
+exception. Core's whole HTTP surface performs **two** `UPDATE`s today — one from a handler,
+and one on the authentication path, where a request slides its session's deadline (ADR-0045)
+— so a mechanism covering only Core's writes would cover almost nothing. The column had
+defaulted to `now()` and never moved since the first table shipped, which is why the bar here
+is a value that moves rather than a schema that looks right (#32).
 
 So **adding a Core table with `updated_at` is two steps, not one**: the column in
 `packages/core/src/db/schema.ts`, then a `--custom` migration attaching the trigger, the way
