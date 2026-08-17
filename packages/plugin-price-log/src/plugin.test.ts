@@ -1,5 +1,10 @@
 import { coreMigrationSet, runMigrations } from "@kobai/core/migrations";
-import { createTestKobai, inspectSchema } from "@kobai/core/testing";
+import {
+  appliedMigrations,
+  createTestKobai,
+  declaredMigrations,
+  inspectSchema,
+} from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
 import drizzleConfig from "../drizzle.config.ts";
 import { priceLogMigrationSet } from "./migration-set.ts";
@@ -36,13 +41,22 @@ describe("a Plugin owns its own tables", () => {
       "drizzle.__drizzle_migrations_core",
       "drizzle.__drizzle_migrations_plugin_price_log",
     ]);
-    // Only this Plugin's count is asserted. How many migrations Core has is Core's business
-    // and no reason for a Plugin's suite to go red. Four of its own, because this package
-    // widened its table when it needed to — on its own timetable, in its own set, with no
-    // Core migration involved. Four rather than two because widening a table that may
-    // already hold rows takes three migrations, not one: add nullable, backfill, then
-    // constrain (ADR-0038, and `migrations.test.ts` beside this file).
-    expect(tracking.find((entry) => entry.table.endsWith("price_log"))?.applied).toBe(4);
+    // Only this Plugin's set is asserted on here. How many migrations Core has is Core's
+    // business, and not something this assertion should have an opinion about — and since
+    // #34 how many this Plugin has is not written here either: it comes off its own
+    // journal, and what makes the assertion worth anything is that each of them is named
+    // as having actually run. This package widened its table when it needed to, on its own
+    // timetable, in its own set, with no Core migration involved — which takes three
+    // migrations rather than one, because the table may already hold rows: add nullable,
+    // backfill, then constrain (ADR-0038, and `migrations.test.ts` beside this file).
+    const declared = await declaredMigrations(priceLogMigrationSet);
+    expect(declared.length).toBeGreaterThan(0);
+    expect(tracking.find((entry) => entry.table.endsWith("price_log"))?.applied).toBe(
+      declared.length,
+    );
+    await expect(
+      appliedMigrations(kobai.database, priceLogMigrationSet),
+    ).resolves.toEqual(declared);
   });
 
   it("scopes its migration config to its own table prefix", () => {
@@ -184,19 +198,19 @@ describe("install order is not a hidden constraint", () => {
     const forwardsSchema = inspectSchema(forwards.database);
 
     // Said outright before the comparison, because two empty databases are also equal.
+    // This Plugin's one table by name — it is the subject, and it is one line. Core's
+    // tables used to be listed here too, and every Core migration that added one edited a
+    // Plugin's test to say so (#34). What that list was for is "the backwards database is
+    // not empty", and naming every migration of both sets as applied says it better: a
+    // missing table now comes with the migration that should have created it.
     await expect(backwardsSchema.tablesOwnedBy("price_log")).resolves.toEqual([
       "price_log_entry",
     ]);
-    await expect(backwardsSchema.tablesOwnedBy("core")).resolves.toEqual([
-      "core_api_key",
-      "core_merchant",
-      "core_price",
-      "core_product",
-      "core_role",
-      "core_session",
-      "core_store",
-      "core_variant",
-    ]);
+    for (const set of [coreMigrationSet, priceLogMigrationSet]) {
+      const declared = await declaredMigrations(set);
+      expect(declared.length).toBeGreaterThan(0);
+      await expect(appliedMigrations(backwards.database, set)).resolves.toEqual(declared);
+    }
     // And Core's own first migration ran: its seed row is there, applied after a Plugin's
     // table already existed.
     await expect(

@@ -719,6 +719,36 @@ Seed **before** asserting, and say the rows are there — a widening applies cle
 table that stayed empty, so the arrangement is the whole test. See ADR-0038 and
 `packages/plugin-price-log/src/migrations.test.ts`.
 
+**Never write down how many migrations a set has** (ADR-0049). Five assertions did, across
+three packages, and every ticket that added a migration edited all of them — which is how a
+Core migration ended up editing a Plugin's test. Ask the journal instead, and pair it with
+the question the count cannot answer:
+
+```ts
+const declared = await declaredMigrations(coreMigrationSet); // by tag, in journal order
+expect(declared.length).toBeGreaterThan(0);                  // two empty lists are equal
+await expect(appliedMigrations(kobai.database, coreMigrationSet)).resolves.toEqual(declared);
+```
+
+**The count and the pairing are not the same assertion, and both are wanted.** A count taken
+from the journal and compared against rows written from that same journal agrees with itself;
+it still catches a row the set does not account for, which is Drizzle having applied
+something twice (ADR-0030). `appliedMigrations` asks the database *which* of a set's
+migrations it holds, matching each row by the sha256 Drizzle stores of the `.sql` — so a
+migration that never ran is named rather than subtracted, and the failure reads as a missing
+tag instead of `expected 9 to be 10`. A set this database has never seen is `[]`, not an
+error.
+
+What a derived count gives up is a migration deleted from the journal along with its `.sql`:
+both sides shrink and nothing here disagrees. That is caught by the test that owns the
+migration's **effect** — dropping `0009_updated_at_triggers` reddens `updated-at.test.ts`,
+dropping a seed migration reddens `auth.test.ts` — which is also the only place that can say
+what actually went missing. So **a migration whose effect no test asserts is the real gap**,
+and it was never a number's job to close it.
+`packages/core/src/testing/migrations.test.ts` watches the pairing fail against a database
+that is deliberately one migration short, because an assertion nobody has seen fail is not
+yet known to be able to.
+
 **One migration test is not in-process, and that is the point.**
 `tests/the-cli-and-the-migrator-agree.test.ts` shells out to the real `drizzle-kit migrate`
 and then runs the programmatic migrator against the same database — CLI first, then the other

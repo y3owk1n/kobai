@@ -31,6 +31,8 @@ export {
   type TestSession,
 } from "./merchant.ts";
 export {
+  appliedMigrations,
+  declaredMigrations,
   migrationSetUpTo,
   type PartialMigrationSet,
 } from "./migrations.ts";

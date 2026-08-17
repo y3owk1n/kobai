@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createTestKobai, inspectSchema, type TestKobai } from "../testing/index.ts";
+import {
+  appliedMigrations,
+  createTestKobai,
+  declaredMigrations,
+  inspectSchema,
+  type TestKobai,
+} from "../testing/index.ts";
 import { coreMigrationSet } from "./core-set.ts";
 import { runMigrations } from "./run.ts";
 import {
@@ -19,9 +25,35 @@ describe("migration tracking", () => {
   it("tracks Core's migrations in Core's own table, in an explicitly named schema", async () => {
     kobai = await createTestKobai();
 
+    // `applied` derived rather than pinned: a new migration used to turn four unrelated
+    // assertions red, and the number was never what any of them was about (#34, ADR-0049).
+    // What the number still buys is the other direction — a row this set does not account
+    // for, which is Drizzle having applied something twice. The direction it *cannot* buy
+    // is below.
     await expect(inspectSchema(kobai.database).migrationTracking()).resolves.toEqual([
-      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 10 },
+      {
+        schema: "drizzle",
+        table: "__drizzle_migrations_core",
+        applied: (await declaredMigrations(coreMigrationSet)).length,
+      },
     ]);
+  });
+
+  it("has actually applied every migration Core's journal declares", async () => {
+    // Where the strength went when the counts stopped being hardcoded. A count taken from
+    // the journal and compared against rows written from that same journal agrees with
+    // itself; this asks the database which of Core's migrations it holds, by the digest
+    // Drizzle stores of each `.sql`, so a migration that never ran is named rather than
+    // subtracted. `packages/core/src/testing/migrations.test.ts` watches it fail.
+    kobai = await createTestKobai();
+
+    const declared = await declaredMigrations(coreMigrationSet);
+
+    // Said outright, because two empty lists are also equal.
+    expect(declared.length).toBeGreaterThan(0);
+    await expect(appliedMigrations(kobai.database, coreMigrationSet)).resolves.toEqual(
+      declared,
+    );
   });
 
   it("leaves nothing tracking where either tool would default to", async () => {
@@ -95,9 +127,14 @@ describe("the runner is reachable on its own", () => {
         name: "core",
         migrationsTable: "__drizzle_migrations_core",
         migrationsSchema: "drizzle",
-        applied: 10,
+        applied: (await declaredMigrations(coreMigrationSet)).length,
       },
     ]);
+    // What the runner *reported* is one claim; what the database holds is another, and the
+    // count above cannot tell them apart on its own.
+    await expect(appliedMigrations(harness.database, coreMigrationSet)).resolves.toEqual(
+      await declaredMigrations(coreMigrationSet),
+    );
   });
 });
 
