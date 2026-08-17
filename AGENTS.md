@@ -210,7 +210,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | Path | What |
 | --- | --- |
 | `packages/core` | `@kobai/core` — the package a Project depends on (ADR-0025). |
-| `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files. |
+| `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files — see [Adding a required column](#adding-a-required-column-to-a-table-that-already-exists) for the one case that needs both. |
 | `packages/core/openapi.json` | The OpenAPI description. Generated, never hand-edited. |
 | `packages/core/src/upgrade` | `kobai-upgrade` — the command that moves a Project across a kobai version, and the codemod set it consults (ADR-0035). |
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
@@ -251,6 +251,51 @@ that wants the same guarantee writes its own function and trigger in its own mig
 never by calling `core_set_updated_at()`, which is a detail of a schema Core promises nothing
 about. `@kobai/plugin-price-log` carries `resolved_at` and no `updated_at` at all, because
 its rows are never updated.
+
+### Adding a required column to a table that already exists
+
+**Never ship `ALTER TABLE … ADD COLUMN … NOT NULL` with no default.** Postgres refuses it
+against a table holding one row, and that is the *one* statement `drizzle-kit generate`
+writes from a new `.notNull()` field on an existing table — so the hazard arrives by itself,
+from an ordinary declaration, and nothing here notices. Every test database is created
+seconds before it is migrated, so the statement is green in this repository and red at the
+first Project with traffic; under ADR-0030 the set runs against a live database at boot, so
+that Project gets no service rather than a bad column.
+
+The shape is **three migrations, and only the middle one is written by hand** (ADR-0038).
+`packages/plugin-price-log/migrations/0001`–`0003` is the worked example:
+
+1. **Generated** — write the field *without* `.notNull()` and `devbox run db:generate`. A
+   nullable column is safe to add at any size.
+2. **Hand-written**, via `drizzle-kit generate --custom`: the backfill, an `UPDATE` giving
+   every existing row a value.
+3. **Generated** — put `.notNull()` back and generate again, which emits `ALTER COLUMN …
+   SET NOT NULL`.
+
+**This does not bend "generated, never hand-edited".** Both schema steps *are* generated,
+from `schema.ts`, with their snapshots and journal entries; the hand-written one carries no
+schema change at all. drizzle-kit diffs schemas, so a data change is invisible to it in both
+directions — it will neither write a backfill nor notice one is missing — which is the same
+reason Core's seed migrations and `0009_updated_at_triggers.sql` are hand-written. Do not
+reach for `--custom` to make a *schema* change by hand: its snapshot is a copy of the
+previous one, so drizzle-kit would believe the change never happened and generate it again.
+
+**`ADD COLUMN … NOT NULL DEFAULT v` is the right answer when the value is right for future
+rows too** — it is one statement and, on Postgres 11 and later, needs no table rewrite. Then
+the default belongs in `schema.ts` as an ordinary `.default()`, where it is visible. A
+default that has to be dropped once it has done its job was never a default; it was a
+backfill. And **a backfill value has to say the fact was never recorded, not guess at it** —
+`price_log_entry` uses ISO 4217's `XXX`, the code for "no currency involved", precisely
+because no real currency code could be told apart from one the Plugin had actually observed.
+If no such value exists, that is a finding about the column, not something to solve in SQL.
+
+Two tests hold this. `packages/plugin-price-log/src/migrations.test.ts` seeds a row and then
+applies the rest of the set — the only place in this repository a migration meets data —
+using `migrationSetUpTo` from `@kobai/core/testing`.
+`tests/migrations-are-safe-against-populated-tables.test.ts` reads every migration in the
+repository for the statement itself. Core's own set is clear and stays clear that way: every
+`NOT NULL` in it is inside a `CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to
+tables created in the same migration.
 
 ### The API contract
 
@@ -507,6 +552,25 @@ the runner yourself:
 await using kobai = await createTestKobai({ migrate: false });
 await runMigrations(kobai.db, [pluginSet, coreMigrationSet]); // order is yours to choose
 ```
+
+It also covers the thing every other seam here cannot: a migration meeting **rows that are
+already there**. A test database is created seconds before it is migrated, so a migration
+that cannot survive existing data passes everywhere in this repository and fails at the
+first Project with traffic. `migrationSetUpTo` truncates a set at a named migration, which
+puts the database where a real deployment is on the day the next one reaches it — apply what
+had shipped, write rows through it, then apply the rest:
+
+```ts
+await using before = await migrationSetUpTo(pluginSet, "0000_creates_the_table");
+await runMigrations(kobai.db, [before]);
+await kobai.database.query("insert into … values (…)");
+
+const upgrade = await runMigrations(kobai.db, [pluginSet]); // onto rows, as it will be
+```
+
+Seed **before** asserting, and say the rows are there — a widening applies cleanly to a
+table that stayed empty, so the arrangement is the whole test. See ADR-0038 and
+`packages/plugin-price-log/src/migrations.test.ts`.
 
 The **schema seam** covers the rest of what HTTP cannot: ADR-0004's rules are properties of
 the schema, not behaviours. Ask Postgres what it is holding, through `inspectSchema` from

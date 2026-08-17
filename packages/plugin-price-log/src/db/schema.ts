@@ -27,10 +27,32 @@ import { integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 /**
  * One record of a price having been resolved — written by the Step this Plugin offers.
  *
- * `amount` and `currency` arrived in this package's **second** migration, added when the
- * Step that writes rows here was built. Nothing in Core moved to make room for them, and no
- * Core migration mentions them: a Plugin's schema evolves on its own timetable, in its own
- * migration set, which is the property the whole no-foreign-key rule buys (ADR-0004).
+ * `amount` and `currency` arrived after this table shipped, added when the Step that writes
+ * rows here was built. Nothing in Core moved to make room for them, and no Core migration
+ * mentions them: a Plugin's schema evolves on its own timetable, in its own migration set,
+ * which is the property the whole no-foreign-key rule buys (ADR-0004).
+ *
+ * They arrived in **three** migrations, and that is the part worth copying (ADR-0038). Both
+ * columns are `notNull()` here, but `ALTER TABLE … ADD COLUMN … NOT NULL` — which is the one
+ * statement drizzle-kit generates from a declaration like this — is refused by Postgres
+ * against a table that already holds a single row, because the column must have a value for
+ * each of them and the statement offers none. Under ADR-0030 this set runs against a live
+ * database at boot, and a failed migration refuses to start the application, so the Project
+ * that hit it would get no service rather than a bad column. So:
+ *
+ * 1. `0001_widen_with_amount_and_currency` — **generated**, from these two fields written
+ *    without `.notNull()`. Adding a nullable column is safe at any size.
+ * 2. `0002_backfill_amount_and_currency` — **hand-written**, as a `--custom` migration,
+ *    because it changes data rather than schema and drizzle-kit's diff can neither write it
+ *    nor miss it. It sets the rows that predate the columns to `0` and ISO 4217's `XXX`,
+ *    the code for "no currency involved" — the only honest thing to say about a resolution
+ *    recorded before anything recorded amounts.
+ * 3. `0003_require_amount_and_currency` — **generated**, from `.notNull()` going back on.
+ *
+ * That leaves no column DEFAULT behind, which is deliberate: a default would silently supply
+ * `0 XXX` to a future row whose writer forgot the amount, and a log that invents prices is
+ * worse than one that refuses to be written. `migrations.test.ts` beside this file proves
+ * the whole sequence against a table seeded with a row first.
  *
  * `resolved_at` and no `updated_at`, which is this Plugin's answer to the question above
  * rather than an omission: a row here records that something happened, and is never updated.

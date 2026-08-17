@@ -1,6 +1,6 @@
 {
-  "id": "abd1da8c-c975-477c-9520-7e813ca73fec",
-  "prevId": "d035ca9f-acd9-483e-b9c3-2305f9a2077a",
+  "id": "35502df9-0ec2-40ad-ac4c-20b08203a23e",
+  "prevId": "4292fadd-011e-4618-bab3-9c847d240898",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -25,13 +25,13 @@
           "name": "amount",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "currency": {
           "name": "currency",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "resolved_at": {
           "name": "resolved_at",
