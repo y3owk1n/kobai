@@ -194,6 +194,32 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `reference/Dockerfile`, `reference/compose.yaml`, `reference/devbox.json` | The **Project's**, generated into what a Developer receives. |
 | `compose.yaml`, `Dockerfile`, `devbox.json` | The **workspace's** — what `devbox run ci` and `devbox run up` use. |
 
+### `updated_at` is a trigger, and a new Core table needs one
+
+**Every Core table carrying `updated_at` has a `before update` trigger calling
+`core_set_updated_at()`, and none of that is in `schema.ts`** (ADR-0037). Drizzle's
+`$onUpdate` was rejected: it fires only for writes going through Core's own query builder,
+and under ADR-0004 the writers Core does not mediate — a Project, a Plugin, a hand-run
+`UPDATE`, a raw `db.execute` inside Core — are the normal case rather than the
+exception. Core's whole HTTP surface performs exactly **one** `UPDATE` today, so a mechanism
+covering only Core's writes would cover almost nothing. The column had defaulted to `now()`
+and never moved since the first table shipped, which is why the bar here is a value that
+moves rather than a schema that looks right (#32).
+
+So **adding a Core table with `updated_at` is two steps, not one**: the column in
+`packages/core/src/db/schema.ts`, then a `--custom` migration attaching the trigger, the way
+`packages/core/migrations/0009_updated_at_triggers.sql` does. `drizzle-kit` has no trigger in
+its schema model, so `generate` will neither write that for you nor notice it is missing —
+and a later migration that drops and recreates a table takes the trigger with it, silently.
+`packages/core/src/db/updated-at.test.ts` is the guardrail: it asks Postgres for every
+`core_` table carrying the column and fails naming any without a trigger.
+
+**A Plugin's tables are the Plugin's business.** Core attaches nothing to them and a Plugin
+that wants the same guarantee writes its own function and trigger in its own migration set —
+never by calling `core_set_updated_at()`, which is a detail of a schema Core promises nothing
+about. `@kobai/plugin-price-log` carries `resolved_at` and no `updated_at` at all, because
+its rows are never updated.
+
 ### The API contract
 
 **A route is a declaration, and the description is generated from it.** Core's HTTP surface
@@ -429,7 +455,9 @@ await expect(schema.foreignKeysCrossingInto("core")).resolves.toEqual([]);
 await expect(schema.columnsOwnedBy("core")).resolves.toEqual(stockCoreColumns);
 ```
 
-It also reads `migrationTracking()`, `columnsOf()` and `indexedColumnsOf()`, and it scans
+It also reads `migrationTracking()`, `columnsOf()`, `indexedColumnsOf()` and `triggersOf()`
+— that last one because Core advances `updated_at` in the database rather than in TypeScript
+(ADR-0037), so "does this table have the trigger" is a question about Postgres. It scans
 every non-system schema rather than only `public` — the prototype's inspector reported "no
 tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
 

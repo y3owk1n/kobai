@@ -51,6 +51,17 @@ export type ColumnFact = {
   readonly hasDefault: boolean;
 };
 
+export type TriggerFact = {
+  readonly name: string;
+  /**
+   * `pg_get_triggerdef` — the whole `CREATE TRIGGER` statement Postgres would emit, so the
+   * timing, the events and the function it calls are all in it. A test that matched only on
+   * the name would accept a trigger of the same name that fired on the wrong event or ran
+   * something else entirely.
+   */
+  readonly definition: string;
+};
+
 export type ForeignKeyFact = {
   readonly constraint: string;
   readonly from: TableRef;
@@ -91,6 +102,16 @@ export type SchemaInspector = {
    * and a Plugin that needs an index needs its own table.
    */
   indexedColumnsOf(table: TableRef | string): Promise<string[]>;
+  /**
+   * The triggers on a table, sorted by name — the ones somebody declared, not the hidden
+   * ones Postgres attaches to enforce a foreign key.
+   *
+   * Core advances `updated_at` with a trigger rather than an ORM hook (ADR-0037), which
+   * makes "does this table have one" a question about the database and not about the
+   * TypeScript. It is the guardrail's question: a new Core table carrying the column and
+   * missing the trigger is exactly the omission that put this repository here once.
+   */
+  triggersOf(table: TableRef | string): Promise<TriggerFact[]>;
   /** Every foreign key in the database. */
   foreignKeys(): Promise<ForeignKeyFact[]>;
   /**
@@ -190,6 +211,27 @@ export function inspectSchema(source: SchemaQuery): SchemaInspector {
         [ref.schema, ref.name],
       );
       return rows.map((row) => row.column_name);
+    },
+
+    async triggersOf(table) {
+      const ref = resolve(table);
+      const rows = await source.query<{ trigger_name: string; definition: string }>(
+        // pg_trigger rather than information_schema.triggers, which reports one row per
+        // event and would count `before insert or update` twice. `tgisinternal` is what
+        // hides the triggers Postgres creates for a foreign key: they are not anybody's
+        // declaration and a test asserting on them should never see them.
+        `select
+           trigger_.tgname as trigger_name,
+           pg_get_triggerdef(trigger_.oid) as definition
+         from pg_trigger trigger_
+         join pg_class table_ on table_.oid = trigger_.tgrelid
+         join pg_namespace namespace on namespace.oid = table_.relnamespace
+         where namespace.nspname = $1 and table_.relname = $2
+           and not trigger_.tgisinternal
+         order by trigger_name`,
+        [ref.schema, ref.name],
+      );
+      return rows.map((row) => ({ name: row.trigger_name, definition: row.definition }));
     },
 
     async foreignKeys() {

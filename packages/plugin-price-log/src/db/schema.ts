@@ -12,6 +12,13 @@ import { integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
  *   migration sets, so a Plugin's may apply before Core's.
  * - no column added to a Core table. A Plugin cannot; a **Project** can, because it owns its
  *   own repository and its own migrations. That asymmetry is the teachable rule.
+ * - no `updated_at`, and none of Core's machinery for one. Core advances that column with a
+ *   trigger on every table of its own that carries it (ADR-0037); whether a Plugin does the
+ *   same is **the Plugin's business**, because a Plugin owns its tables and Core reaching in
+ *   to attach a trigger would be ADR-0004's line crossed from the wrong side. A Plugin that
+ *   wants the guarantee writes its own function and its own trigger in its own migration
+ *   set — not by calling Core's `core_set_updated_at()`, which is a detail of a schema Core
+ *   has promised nothing about (ADR-0003, ADR-0019) and may rename without a version bump.
  *
  * Every table here is prefixed `price_log_`, which is what this package's `tablesFilter` is
  * scoped to.
@@ -24,6 +31,11 @@ import { integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
  * Step that writes rows here was built. Nothing in Core moved to make room for them, and no
  * Core migration mentions them: a Plugin's schema evolves on its own timetable, in its own
  * migration set, which is the property the whole no-foreign-key rule buys (ADR-0004).
+ *
+ * `resolved_at` and no `updated_at`, which is this Plugin's answer to the question above
+ * rather than an omission: a row here records that something happened, and is never updated.
+ * A column that would never move is worse than no column — it is the defect ADR-0037 was
+ * written against, kept alive by convention.
  */
 export const priceLogEntry = pgTable("price_log_entry", {
   id: uuid("id").primaryKey().defaultRandom(),

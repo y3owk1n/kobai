@@ -17,6 +17,14 @@ import {
  *
  * Core's schema shape is explicitly **not** part of the stability promise (ADR-0003). A
  * Plugin may not add a column here; a Project may add columns to its own tables freely.
+ *
+ * **`updated_at` is advanced by a database trigger, and there is nothing about that in this
+ * file** (ADR-0037). Drizzle's `$onUpdate` would fire only for writes going through this
+ * package's query builder, and under ADR-0004 the writers Core does not mediate — a Project,
+ * a Plugin, a hand-run `UPDATE` — are the normal case. So a table added here that carries
+ * `updated_at` needs a `--custom` migration attaching `core_set_updated_at` to it, the way
+ * `migrations/0009_updated_at_triggers.sql` does. Forgetting turns
+ * `packages/core/src/db/updated-at.test.ts` red, naming the table.
  */
 
 /**
