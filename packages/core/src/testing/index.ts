@@ -29,4 +29,5 @@ export {
   type SchemaInspector,
   type SchemaQuery,
   type TableRef,
+  type TriggerFact,
 } from "./schema.ts";
