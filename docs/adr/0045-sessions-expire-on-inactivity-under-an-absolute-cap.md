@@ -1,5 +1,15 @@
 # Sessions expire on inactivity, under an absolute cap
 
+> **"The window is hardcoded" superseded by
+> [ADR-0050](./0050-the-idle-window-is-a-projects-the-cap-is-cores.md).** A Project sets the
+> idle window in `kobai.config.ts`; thirty minutes is now the default a Project gets by saying
+> nothing, and an unusable value stops the boot. **The absolute cap stays Core's** — the
+> reasoning below for why it exists is the reasoning for why a Project does not set it — and
+> everything else here stands: the window slides on every authenticated request, the deadline
+> slides both ways, the write pattern is one condition on the read path, and `session-expired`
+> keeps its meaning. The precision sentence below is stated against a fixed thirty minutes;
+> ADR-0050 restates it against a configured window, and at the default it is the same sentence.
+
 A Merchant session ends after **30 minutes with no requests**, and every authenticated request
 pushes that deadline out again. No session outlives **12 hours from sign-in**, however hard it
 is used. The extension is written to `core_session` at most **once a minute per session**, not

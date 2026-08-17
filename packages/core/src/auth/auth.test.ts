@@ -11,9 +11,10 @@ import {
 } from "../testing/index.ts";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./permissions.ts";
 import {
+  DEFAULT_SESSION_IDLE_WINDOW_MS,
+  MINIMUM_SESSION_IDLE_WINDOW_MS,
   SESSION_ABSOLUTE_LIFETIME_MS,
   SESSION_EXTENSION_INTERVAL_MS,
-  SESSION_IDLE_WINDOW_MS,
 } from "./session.ts";
 
 /**
@@ -523,10 +524,10 @@ describe("a session slides", () => {
     // another click. More than a whole window has passed since sign-in and the Merchant is
     // still working — so an expiry fixed at sign-in would have signed them out midway through
     // exactly the session story 49 is not about.
-    await idleFor(kobai, 0.8 * SESSION_IDLE_WINDOW_MS);
+    await idleFor(kobai, 0.8 * DEFAULT_SESSION_IDLE_WINDOW_MS);
     const midway = await kobai.request("/admin/store", { headers: merchant.headers });
 
-    await idleFor(kobai, 0.8 * SESSION_IDLE_WINDOW_MS);
+    await idleFor(kobai, 0.8 * DEFAULT_SESSION_IDLE_WINDOW_MS);
     const afterwards = await kobai.request("/admin/store", { headers: merchant.headers });
 
     expect(midway.status).toBe(200);
@@ -538,7 +539,7 @@ describe("a session slides", () => {
     const merchant = await signInTestMerchant(kobai);
 
     // Story 49's unattended browser: the whole window passes with nobody clicking anything.
-    await idleFor(kobai, SESSION_IDLE_WINDOW_MS);
+    await idleFor(kobai, DEFAULT_SESSION_IDLE_WINDOW_MS);
 
     const response = await kobai.request("/admin/store", { headers: merchant.headers });
 
@@ -595,7 +596,7 @@ describe("a session slides", () => {
     const first = await kobai.request("/admin/store", { headers: merchant.headers });
     // Having been used once under the new rule, it is now an ordinary session: an idle window
     // ends it, rather than the twelve hours it was born with.
-    await idleFor(kobai, SESSION_IDLE_WINDOW_MS);
+    await idleFor(kobai, DEFAULT_SESSION_IDLE_WINDOW_MS);
     const afterwards = await kobai.request("/admin/store", { headers: merchant.headers });
 
     expect(first.status).toBe(200);
@@ -622,6 +623,250 @@ describe("a session slides", () => {
     expect(third).toBeGreaterThan(second);
   });
 });
+
+describe("a Project's own idle window", () => {
+  // One deployment's answer, longer than stock kobai's, shared by the tests below that are
+  // about a window being *different* rather than about a particular length.
+  const CONFIGURED_WINDOW_MS = 45 * 60_000;
+
+  it("is how long a session survives with nobody using it", async () => {
+    const idleWindowMs = CONFIGURED_WINDOW_MS;
+    kobai = await createTestKobai({ session: { idleWindowMs } });
+    const merchant = await signInTestMerchant(kobai);
+
+    // A minute past stock kobai's window and a quarter of an hour inside this deployment's,
+    // so the assertion cannot pass on the default: under it this request is already refused.
+    await idleFor(kobai, DEFAULT_SESSION_IDLE_WINDOW_MS + 60_000);
+    const inside = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    // The configured window, all of it, with nobody clicking anything.
+    await idleFor(kobai, idleWindowMs);
+    const outside = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(inside.status).toBe(200);
+    expect(outside.status).toBe(401);
+    // Still *expired*, not anonymous: configuring the window changes when a Merchant is
+    // signed out and never what they are told about it (ADR-0045).
+    await expect(outside.json()).resolves.toMatchObject({ reason: "session-expired" });
+  });
+
+  it("still spends at most a minute of itself on the write pattern", async () => {
+    const idleWindowMs = CONFIGURED_WINDOW_MS;
+    kobai = await createTestKobai({ session: { idleWindowMs } });
+    const merchant = await signInTestMerchant(kobai);
+
+    // The guarantee ADR-0045 stated as "twenty-nine minutes always survive, thirty never do",
+    // now that thirty is a number this deployment chose: a whole window less the extension
+    // interval always survives, and a whole window never does. The second half is the test
+    // above; this is the first, at the exact millisecond it is promised for.
+    await idleFor(kobai, idleWindowMs - SESSION_EXTENSION_INTERVAL_MS);
+
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("pulls in the deadlines a longer window left behind", async () => {
+    const idleWindowMs = 5 * 60_000;
+    kobai = await createTestKobai({ session: { idleWindowMs } });
+    const merchant = await signInTestMerchant(kobai);
+
+    // What *lowering* a window finds in the table: rows written by the deployment before it,
+    // sitting further out than a whole window of the new one. An extension that only ever
+    // pushed deadlines forward would never touch them — the new setting would take effect
+    // for nobody who was already signed in, which is #26's bug arriving from the other side.
+    await mintedUnderAWindowOf(kobai, DEFAULT_SESSION_IDLE_WINDOW_MS);
+
+    const first = await kobai.request("/admin/store", { headers: merchant.headers });
+    // Used once under the new rule, so it is now an ordinary session of this deployment's:
+    // five minutes of quiet ends it. Under a push-only extension it would still have
+    // twenty-five minutes left here.
+    await idleFor(kobai, idleWindowMs);
+    const afterwards = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(first.status).toBe(200);
+    expect(afterwards.status).toBe(401);
+    await expect(afterwards.json()).resolves.toMatchObject({ reason: "session-expired" });
+  });
+
+  it("keeps the write interval absolute rather than a fraction of itself", async () => {
+    // A five-minute window is a sixth of the default one. If the extension interval were
+    // derived from the window — a thirtieth of it, which is what a minute is against thirty
+    // minutes — this deployment would write six times as often, and ten seconds of staleness
+    // would be worth an `UPDATE`. One a minute is the bound ADR-0050 keeps absolute.
+    kobai = await createTestKobai({ session: { idleWindowMs: 5 * 60_000 } });
+    const merchant = await signInTestMerchant(kobai);
+
+    await idleFor(kobai, SESSION_EXTENSION_INTERVAL_MS / 6);
+    const first = await currentDeadline(kobai, merchant);
+    const second = await currentDeadline(kobai, merchant);
+
+    // Past the minute it is worth one, on a short window exactly as on a long one.
+    await idleFor(kobai, SESSION_EXTENSION_INTERVAL_MS);
+    const third = await currentDeadline(kobai, merchant);
+
+    expect(second).toBe(first);
+    expect(third).toBeGreaterThan(second);
+  });
+
+  it("set at the cap is inert, and the cap is left doing all the work", async () => {
+    // The sharp edge of the ceiling, asserted rather than left to be discovered: at exactly
+    // the cap every deadline is pinned at sign-in plus twelve hours from the moment the
+    // session is minted, so **there is no idle expiry left**. Eleven hours of silence do not
+    // end this session, where any shorter window would have. A Project asking for a
+    // twelve-hour idle window is asking for that, and ADR-0050 says so out loud.
+    kobai = await createTestKobai({
+      session: { idleWindowMs: SESSION_ABSOLUTE_LIFETIME_MS },
+    });
+    const merchant = await signInTestMerchant(kobai);
+
+    await idleFor(kobai, 11 * 60 * 60_000);
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("cannot reach past the cap, even set as long as a Project may set it", async () => {
+    // The longest window Core will accept is the cap itself, so this is the configuration
+    // that comes closest to buying a session that never ends. It buys nothing: the cap is
+    // Core's and no key in `kobai.config.ts` moves it (ADR-0050).
+    kobai = await createTestKobai({
+      session: { idleWindowMs: SESSION_ABSOLUTE_LIFETIME_MS },
+    });
+    const merchant = await signInTestMerchant(kobai);
+
+    // Used continuously since it was minted — its idle deadline is still ahead — and minted
+    // longer ago than any session is allowed to live.
+    await signedInAgo(kobai, SESSION_ABSOLUTE_LIFETIME_MS + 60_000);
+
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-expired" });
+  });
+});
+
+/**
+ * A window Core cannot serve stops the boot, and says which key and which bound.
+ *
+ * The seam is `createTestKobai`, which is `createKobai` with a database in front of it — so
+ * these assert the very thing a Project's `server.ts` does on the way up, and a rejected
+ * configuration is a deployment that never serves rather than one serving sessions of a
+ * length nobody chose. **Nothing is clamped**: every case here is a boot that failed, not a
+ * number quietly moved to the nearest legal one.
+ */
+describe("an idle window Core will not enforce", () => {
+  const bootWith = (idleWindowMs: number) =>
+    createTestKobai({ session: { idleWindowMs } });
+
+  it("is refused at zero, which is a session over before it starts", async () => {
+    await expect(bootWith(0)).rejects.toThrow(/`session\.idleWindowMs`.*at least/s);
+  });
+
+  it("is refused when negative, rather than read as its absolute value", async () => {
+    await expect(bootWith(-30 * 60_000)).rejects.toThrow(
+      /`session\.idleWindowMs`.*at least.*-1800000/s,
+    );
+  });
+
+  it("is refused below the floor the write pattern needs", async () => {
+    // Ninety seconds is a perfectly ordinary-looking number and an unusable window: the
+    // deadline is written at most once a minute, so most of this one would be spent on that.
+    await expect(bootWith(90_000)).rejects.toThrow(/at least 120000.*90000/s);
+  });
+
+  it("is refused past the absolute cap, which no session could ever reach", async () => {
+    await expect(bootWith(SESSION_ABSOLUTE_LIFETIME_MS + 1)).rejects.toThrow(
+      /at most 43200000.*43200001/s,
+    );
+  });
+
+  it("is refused when it is not a whole number of milliseconds", async () => {
+    await expect(bootWith(1_800_000.5)).rejects.toThrow(
+      /whole number of milliseconds.*1800000\.5/s,
+    );
+  });
+
+  it("is refused when it is not a number at all, which is what a bad environment gives", async () => {
+    // `Number(process.env.KOBAI_SESSION_IDLE_WINDOW_MS)` with the variable unset is `NaN`,
+    // and it typechecks as a `number` all the way in. Left alone it makes every comparison
+    // false and every session immortal, which is the one failure this must never be.
+    await expect(bootWith(Number("nonsense"))).rejects.toThrow(
+      /whole number of milliseconds.*NaN/s,
+    );
+  });
+
+  it("is accepted at the floor itself, so the bound is a bound and not an off-by-one", async () => {
+    await using booted = await bootWith(MINIMUM_SESSION_IDLE_WINDOW_MS);
+    const merchant = await signInTestMerchant(booted);
+
+    // Half of a two-minute window is what the write pattern guarantees, and it survives.
+    await idleFor(booted, MINIMUM_SESSION_IDLE_WINDOW_MS / 2);
+    const response = await booted.request("/admin/store", { headers: merchant.headers });
+
+    expect(response.status).toBe(200);
+  });
+});
+
+/**
+ * What the published description says a session is worth.
+ *
+ * The numbers reach a Developer through `Session.expiresAt`'s description, and through
+ * `@kobai/client`'s generated types after that — so a description that still said thirty
+ * minutes to a deployment serving forty-five would be worse than the hardcoded window it
+ * replaced. It is read off the running instance's own document, which is what `kobai.openapi()`
+ * hands a Project to publish (ADR-0002).
+ */
+describe("the description of a session", () => {
+  it("reports the numbers a Project that configured nothing gets", async () => {
+    kobai = await createTestKobai();
+
+    // The literals, not the constants: a test that read the constants would agree with any
+    // default at all, and this is the assertion that the two ADR-0045 chose are still the
+    // two a Project gets for free.
+    expect(deadlineDescription(kobai)).toContain("another 30 minutes of idleness");
+    expect(deadlineDescription(kobai)).toContain(
+      "never later than 12 hours after sign-in",
+    );
+  });
+
+  it("reports a configured window rather than the default", async () => {
+    kobai = await createTestKobai({ session: { idleWindowMs: 45 * 60_000 } });
+
+    expect(deadlineDescription(kobai)).toContain("another 45 minutes of idleness");
+    expect(deadlineDescription(kobai)).not.toContain("30 minutes");
+    // And the cap it cannot configure is still described, unchanged.
+    expect(deadlineDescription(kobai)).toContain(
+      "never later than 12 hours after sign-in",
+    );
+  });
+
+  it("says a window that does not divide into minutes in units a person reads", async () => {
+    kobai = await createTestKobai({ session: { idleWindowMs: 125_000 } });
+
+    // Milliseconds is the unit a Project writes and it need not be a round number of
+    // anything. Divided by 60000 straight into the sentence, this window published "another
+    // 2.0833333333333335 minutes of idleness" — into the description, and into every client
+    // generated from it.
+    expect(deadlineDescription(kobai)).toContain(
+      "another 2 minutes 5 seconds of idleness",
+    );
+  });
+});
+
+/** What this instance's own OpenAPI description says `Session.expiresAt` means. */
+function deadlineDescription(harness: TestKobai): string {
+  const schemas = harness.openapi().components?.schemas;
+  const session = schemas?.Session;
+  const description =
+    session && "properties" in session
+      ? session.properties?.expiresAt?.description
+      : undefined;
+  if (typeof description !== "string") {
+    throw new Error("The description carries no Session.expiresAt to read.");
+  }
+  return description;
+}
 
 describe("signing out", () => {
   it("invalidates the session on the very next request", async () => {
@@ -905,6 +1150,23 @@ async function mintedUnderTheOldRule(harness: TestKobai): Promise<void> {
   await harness.db.execute(
     sql`update core_session
         set expires_at = created_at + make_interval(secs => ${SESSION_ABSOLUTE_LIFETIME_MS / 1000})`,
+  );
+}
+
+/**
+ * Rewrites the session as a deployment with a *different* idle window would have written it.
+ *
+ * The other arrangement about a change rather than about time, and the one that matters when a
+ * Project lowers its window: every row in the table was written under the old one, and no
+ * amount of idling produces a deadline further out than the current window allows.
+ */
+async function mintedUnderAWindowOf(
+  harness: TestKobai,
+  milliseconds: number,
+): Promise<void> {
+  await harness.db.execute(
+    sql`update core_session
+        set expires_at = now() + make_interval(secs => ${milliseconds / 1000})`,
   );
 }
 

@@ -3,6 +3,7 @@ import {
   type InitialMerchantSeed,
   seedInitialMerchant,
 } from "./auth/seed.ts";
+import { resolveSessionPolicy } from "./auth/session.ts";
 import { consoleLogger, type KobaiProjectConfig, type Logger } from "./config.ts";
 import { createDatabaseHandle, type Database } from "./db/client.ts";
 import {
@@ -98,6 +99,10 @@ export type Kobai = {
 };
 
 export function createKobai(options: KobaiOptions): Kobai {
+  // First, and before anything is opened: a window this deployment cannot serve stops the
+  // boot here rather than at the first Merchant who notices their sessions are the wrong
+  // length. Nothing is clamped, and the message names the key and the bound it missed.
+  const sessionPolicy = resolveSessionPolicy(options.session);
   const logger = options.logger ?? consoleLogger;
   const database = createDatabaseHandle(options.databaseUrl);
   const migrations = createMigrationStateHolder();
@@ -118,7 +123,13 @@ export function createKobai(options: KobaiOptions): Kobai {
     options.workflows?.["resolve-price"] ?? {},
   );
 
-  const app = createHttpApp({ db: database.db, migrations, logger, priceWorkflow });
+  const app = createHttpApp({
+    db: database.db,
+    migrations,
+    logger,
+    priceWorkflow,
+    sessionPolicy,
+  });
 
   return {
     fetch: app.fetch,

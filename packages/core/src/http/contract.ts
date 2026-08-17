@@ -1,10 +1,6 @@
 import { z } from "@hono/zod-openapi";
 import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
-import {
-  SESSION_ABSOLUTE_LIFETIME_MS,
-  SESSION_IDLE_WINDOW_MS,
-  type SessionRejection,
-} from "../auth/session.ts";
+import type { SessionPolicy, SessionRejection } from "../auth/session.ts";
 
 /**
  * Every shape kobai's HTTP surface accepts or answers with, as one set of schemas.
@@ -208,19 +204,62 @@ export const Merchant = MerchantIdentity.extend({ role: RoleSummary }).openapi(
  * `expiresAt` is described rather than left to be inferred, because it is the one field here
  * whose meaning changed under it: it is not a lifetime fixed at sign-in but the end of an idle
  * window, so a client that cached it once would be reading a deadline that has since moved.
- * The two numbers in that description are read off the constants that decide them rather than
+ * The two numbers in that description are read off the policy that decides them rather than
  * retyped, so moving a window moves what the API says about it — and the description a client
  * is generated from cannot go stale about the behaviour it is documenting (ADR-0045).
+ *
+ * **It is a function of the policy because the window is a Project's** (ADR-0050). This is the
+ * one schema on the surface whose *text* depends on how a deployment was configured, so it is
+ * built per instance from the numbers that instance actually enforces, and a description
+ * generated from a running kobai describes that kobai. A module-level constant would have gone
+ * on saying thirty minutes to every deployment that set something else, which is worse than
+ * the hardcoded window it replaced: a wrong number is worse than an unconfigurable one.
  */
-export const Session = z
-  .object({
-    expiresAt: z.iso.datetime().meta({
-      description: `When this session ends if no further request is made. Every authenticated request pushes it out by another ${SESSION_IDLE_WINDOW_MS / 60_000} minutes of idleness, so read it from the most recent response rather than caching the one sign-in returned. It is never later than ${SESSION_ABSOLUTE_LIFETIME_MS / 3_600_000} hours after sign-in, however active the session is; past that the Merchant signs in again.`,
-    }),
-    merchant: MerchantIdentity,
-    role: RoleSummary,
-  })
-  .openapi("Session");
+export function sessionSchema(policy: SessionPolicy) {
+  return z
+    .object({
+      expiresAt: z.iso.datetime().meta({
+        description: `When this session ends if no further request is made. Every authenticated request pushes it out by another ${humanDuration(policy.idleWindowMs)} of idleness, so read it from the most recent response rather than caching the one sign-in returned. It is never later than ${humanDuration(policy.absoluteLifetimeMs)} after sign-in, however active the session is; past that the Merchant signs in again.`,
+      }),
+      merchant: MerchantIdentity,
+      role: RoleSummary,
+    })
+    .openapi("Session");
+}
+
+/** What {@link sessionSchema} builds, for the routes that declare it. */
+export type SessionSchema = ReturnType<typeof sessionSchema>;
+
+/**
+ * A span of milliseconds as a Developer would say it: `30 minutes`, `12 hours`,
+ * `2 hours 30 minutes`.
+ *
+ * The unit lives here rather than in the sentence because the *number* is a Project's now. A
+ * template that said "`${ms / 60_000}` minutes" was right for every window Core happened to
+ * ship and wrong for the first one that did not divide — a two-minute-five-second window
+ * published "2.0833333333333335 minutes" into `openapi.json` and into every generated client
+ * from it. This is exact for any whole number of milliseconds and reads the same as the
+ * hand-written text did for the two that ship.
+ */
+function humanDuration(milliseconds: number): string {
+  const units = [
+    { name: "hour", size: 3_600_000 },
+    { name: "minute", size: 60_000 },
+    { name: "second", size: 1_000 },
+  ] as const;
+
+  const parts: string[] = [];
+  let left = milliseconds;
+  for (const { name, size } of units) {
+    // The last unit takes the remainder rather than a whole count, so nothing is dropped: a
+    // window that is not a whole number of seconds says so instead of being rounded silently.
+    const count = name === "second" ? left / size : Math.floor(left / size);
+    left -= count * size;
+    if (count > 0) parts.push(`${count} ${name}${count === 1 ? "" : "s"}`);
+  }
+
+  return parts.length > 0 ? parts.join(" ") : "0 seconds";
+}
 
 /**
  * The header a sign-in answers with, and the reason there is no `IssuedSession` schema.

@@ -19,6 +19,13 @@ export type {
   InitialMerchantCredentials,
   InitialMerchantSeed,
 } from "./auth/seed.ts";
+/**
+ * The one thing a Project may say about how long its sessions live (ADR-0050). Exported as a
+ * type alone: the window is a number in `kobai.config.ts`, and the bounds on it are in that
+ * key's documentation and in the message a boot fails with, so there is nothing here a
+ * Project has to import to write one. The absolute cap is Core's and is not on this surface.
+ */
+export type { SessionOptions } from "./auth/session.ts";
 export type { Price, Product, ProductDetail, Variant } from "./catalog/read.ts";
 export {
   type CoreWorkflowOverrides,

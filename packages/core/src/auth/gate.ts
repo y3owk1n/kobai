@@ -6,6 +6,7 @@ import {
   type Authenticated,
   holdsPermission,
   resolveSession,
+  type SessionPolicy,
   type SessionRejection,
 } from "./session.ts";
 import { presentedSessionToken } from "./session-cookie.ts";
@@ -20,7 +21,7 @@ import { presentedSessionToken } from "./session-cookie.ts";
  *
  * ```ts
  * const guarded = new Hono<AdminEnv>();
- * guarded.use("*", requireSession(db));
+ * guarded.use("*", requireSession(db, sessionPolicy));
  * guarded.get("/store", requirePermission(PERMISSIONS.storeRead), (c) => …);
  * ```
  *
@@ -76,13 +77,14 @@ type Authorisation = { readonly ok: true; readonly auth: Authenticated } | Refus
  */
 async function authorise(
   db: Database,
+  policy: SessionPolicy,
   cookieHeader: string | undefined,
   permission?: Permission,
 ): Promise<Authorisation> {
   const token = presentedSessionToken(cookieHeader);
   if (!token.ok) return refusal(token.reason);
 
-  const lookup = await resolveSession(db, token.token);
+  const lookup = await resolveSession(db, token.token, policy);
   if (!lookup.ok) return refusal(lookup.reason);
 
   if (permission !== undefined && !holdsPermission(lookup.auth, permission)) {
@@ -114,10 +116,13 @@ function refuse<E extends Env>(c: Context<E>, refusal: Refusal) {
  * fails the build. The mark is put on here rather than at the mounting site so that there is
  * no unmarked gate to mount by accident. See `http/gate-refusals.ts`.
  */
-export function requireSession(db: Database): MiddlewareHandler<AdminEnv> {
+export function requireSession(
+  db: Database,
+  policy: SessionPolicy,
+): MiddlewareHandler<AdminEnv> {
   return gateAnswering(GATE_REFUSALS.noSession, async (c, next) => {
     // No permission is asked for here, so only the 401 arm is ever reachable.
-    const result = await authorise(db, c.req.header("cookie"));
+    const result = await authorise(db, policy, c.req.header("cookie"));
     if (!result.ok) return refuse(c, result);
 
     c.set("auth", result.auth);

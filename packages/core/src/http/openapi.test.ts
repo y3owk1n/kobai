@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_SESSION_POLICY } from "../auth/session.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { silentLogger } from "../testing/kobai.ts";
@@ -31,6 +32,10 @@ function describeCore() {
     // Step runs and never which routes exist, so the description does not move with it —
     // and a test that boots a Project's config to assert that would be asserting nothing.
     priceWorkflow: priceResolutionWorkflow,
+    // The default, because `packages/core/openapi.json` is the description of stock kobai.
+    // What a *configured* window does to it is asserted through the running application, in
+    // `auth/auth.test.ts`.
+    sessionPolicy: DEFAULT_SESSION_POLICY,
   });
   return { app, document: describeHttpApp(app) };
 }

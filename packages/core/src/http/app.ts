@@ -1,5 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { HTTPException } from "hono/http-exception";
+import type { SessionPolicy } from "../auth/session.ts";
 import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
@@ -20,6 +21,14 @@ export type HttpDependencies = {
    * config rebuilt. Threaded through to the store surface rather than imported there.
    */
   readonly priceWorkflow: PriceResolutionWorkflow;
+  /**
+   * How long this deployment's sessions live — the default, or what its `kobai.config.ts`
+   * said (ADR-0050). Threaded through rather than imported by the modules that need it,
+   * because it is a property of the instance: the admin gate enforces it, and the OpenAPI
+   * description of `Session` reports it, so a description generated from this app is a
+   * description of *these* numbers.
+   */
+  readonly sessionPolicy: SessionPolicy;
 };
 
 /**
@@ -144,7 +153,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
 
   const admin = new OpenAPIHono();
   admin.use("*", requireMigrationsApplied(deps.migrations));
-  admin.route("/", createAdminRoutes({ db: deps.db }));
+  admin.route("/", createAdminRoutes({ db: deps.db, sessionPolicy: deps.sessionPolicy }));
   app.route("/admin", admin);
 
   // The second authenticated surface, and a second gate rather than a second credential for
