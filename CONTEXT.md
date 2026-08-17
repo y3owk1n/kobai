@@ -25,6 +25,26 @@ _Avoid_: user, customer, buyer, end user
 > sentences of this project's first description, and they want opposing things. Say which
 > one you mean.
 
+## Access
+
+**Role**:
+A named set of Permissions a Merchant holds. Roles carry **permission sets, never
+per-resource ACLs** — a route asks whether a Role holds one named Permission, and never asks
+per row. See ADR-0027.
+_Avoid_: group, team, profile, ACL, policy
+
+**Permission**:
+One named thing a Role may do, as a string — `store:read`. Additive: a new Permission is a
+new string, not a new structure.
+_Avoid_: scope, grant, right, capability, claim
+
+**Session**:
+A signed-in Merchant, held as a row with an expiry, presented on a request as a bearer
+token. Ending one is deleting the row, so signing out takes effect immediately. There is no
+Shopper session — Core holds no Shopper credential at all (ADR-0020). The *token* is how a
+Session is presented, and is not another word for the Session itself.
+_Avoid_: login, cookie, JWT
+
 ## Structure
 
 **Core**:

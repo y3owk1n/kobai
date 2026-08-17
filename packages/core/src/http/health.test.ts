@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { defineMigrationSet } from "../migrations/set.ts";
-import { type TestKobai, createTestKobai } from "../testing/index.ts";
+import { type TestKobai, createTestKobai, signInTestMerchant } from "../testing/index.ts";
 
 let kobai: TestKobai | undefined;
 
@@ -25,7 +25,7 @@ describe("GET /health", () => {
             name: "core",
             migrationsSchema: "drizzle",
             migrationsTable: "__drizzle_migrations_core",
-            applied: 2,
+            applied: 4,
           },
         ],
       },
@@ -62,6 +62,9 @@ describe("GET /health", () => {
 
   it("reports migration state rather than connectivity, and needs no database to do it", async () => {
     kobai = await createTestKobai();
+    // Signed in while the database still exists, so the request below fails on the database
+    // rather than at the gate.
+    const merchant = await signInTestMerchant(kobai);
     await kobai.database.drop();
 
     // Health answers from what the migration run recorded, so it keeps working when the
@@ -69,7 +72,7 @@ describe("GET /health", () => {
     // succeeded — and it means /health is not a database liveness check. A route that does
     // touch the database fails, as it should.
     const health = await kobai.request("/health");
-    const store = await kobai.request("/admin/store");
+    const store = await kobai.request("/admin/store", { headers: merchant.headers });
 
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({ status: "ok" });

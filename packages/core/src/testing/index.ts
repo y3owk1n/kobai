@@ -22,3 +22,9 @@ export {
   type TestKobai,
   type TestKobaiOptions,
 } from "./kobai.ts";
+export {
+  signInTestMerchant,
+  TEST_MERCHANT,
+  type TestCredentials,
+  type TestSession,
+} from "./merchant.ts";

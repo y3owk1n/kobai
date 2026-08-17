@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { defineMigrationSet } from "../migrations/set.ts";
-import { type TestKobai, createTestKobai } from "../testing/index.ts";
+import { type TestKobai, createTestKobai, signInTestMerchant } from "../testing/index.ts";
 
 let kobai: TestKobai | undefined;
 
@@ -13,8 +13,9 @@ afterEach(async () => {
 describe("GET /admin/store", () => {
   it("returns the Store a fresh database was migrated into being", async () => {
     kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
 
-    const response = await kobai.request("/admin/store");
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -26,11 +27,11 @@ describe("GET /admin/store", () => {
 
   it("carries no identifier, because there is only ever one Store", async () => {
     kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
 
-    const body = (await (await kobai.request("/admin/store")).json()) as Record<
-      string,
-      unknown
-    >;
+    const body = (await (
+      await kobai.request("/admin/store", { headers: merchant.headers })
+    ).json()) as Record<string, unknown>;
 
     // An id here is the first thing a storefront would key a cache on, and the second thing
     // someone would add a `where` on. ADR-0005: the Store is never a scoping key.
