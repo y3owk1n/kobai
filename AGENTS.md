@@ -138,6 +138,32 @@ default independently, so the port had to be passed twice and kept in step by wh
 remembered; forgetting one brought the container up on one port while the suite dialled
 another, and neither error named the other (#21).
 
+**The credentials travel the same way, and the two addresses are percent-encoded** (#63,
+[ADR-0046](docs/adr/0046-the-postgres-credentials-belong-to-dot-env-too.md)). The hook reads
+`POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` out of `.env` with the same helper
+that reads the port, and builds both database addresses from them — so a password changed in
+the one file compose reads is the password the suite signs in with. It did not used to be:
+the harness was handed `kobai:kobai` whatever `.env` said, and the only symptom was an
+authentication failure naming neither file. Three things about it are easy to get wrong:
+
+- **`kobai_dotenv` is the reader, and there is one of it.** It follows docker compose's own
+  env-file grammar — quoted values, escapes inside double quotes, an inline comment needing
+  whitespace in front — because the file it is reading is compose's. A second parser would
+  be two answers to what `.env` says.
+- **`kobai_urlencode` takes which half of the URL it is filling.** `pg` reads the user and
+  password with `decodeURIComponent` and the database name with `decodeURI`, and the second
+  never unescapes a reserved character — so an over-encoded `=` in a database name arrives
+  as a literal `%3D`. Encode against the driver, not against the RFC.
+- **The hook is sourced under `set -e`.** A line of it that returns non-zero takes down every
+  `devbox run …` with a bare exit status and no message. A checkout with no `.env` is the
+  ordinary case, so reading one that is not there must not be a failure — and
+  `tests/support/init-hook.ts` runs the hook with `set -e` for that reason.
+
+What this does **not** carry is the app container's own `DATABASE_URL`: compose assembles that
+one by substitution and has no way to encode anything, so a password containing `/`, `?` or
+`#` breaks `devbox run up` while the suite is unaffected. `.env.example` says so next to the
+variables.
+
 The project name is set for the same reason. Compose otherwise names a project after the
 checkout directory's basename, so two checkouts both called `kobai` would share a project,
 and therefore a volume, and therefore a database — a far quieter failure than a port

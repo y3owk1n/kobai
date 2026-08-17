@@ -8,10 +8,13 @@ import { quoteIdentifier } from "../db/identifier.ts";
  * `compose.yaml`.
  *
  * `KOBAI_TEST_DATABASE_URL` is not something kobai's own contributors set: devbox exports
- * it in front of every script, built from the same per-checkout port it hands
- * `compose.yaml`, so the container's published port and the address dialled here come
- * from one place and cannot drift apart (AGENTS.md § Development). The literal below is
- * the fallback for a suite run outside devbox, and matches `compose.yaml`'s own fallback.
+ * it in front of every script, built from the same per-checkout port and the same
+ * `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` it hands `compose.yaml`, so where
+ * the container comes up and who it lets in are both decided once and cannot drift apart
+ * (AGENTS.md § Development). The literal below is the fallback for a suite run outside
+ * devbox, and every part of it matches `compose.yaml`'s own fallbacks —
+ * `tests/the-fallback-postgres-port.test.ts` holds the port to that and
+ * `tests/the-postgres-credentials-belong-to-dot-env.test.ts` the credentials.
  *
  * "Maintenance" rather than "admin" throughout this module: in kobai, **Admin** means the
  * pre-built UI a Merchant works in, and nothing else (`CONTEXT.md`).
