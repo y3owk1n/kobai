@@ -1,0 +1,39 @@
+{
+  "name": "kobai-reference-admin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Admin, vendored into the reference Project. Source a Developer owns and edits (ADR-0010, ADR-0033).",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "vite",
+    "// db:push": "There is deliberately no db:push script here either. This package opens no database and owns no tables — it is a browser bundle — but the rule is the repository's rather than a per-package judgement, because `drizzle-kit push` diffs a schema against the LIVE database and so reports success while silently dropping the tables of every package whose schema it was not given, leaving their tracking rows behind so the migration runner cannot repair it. See docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
+  },
+  "// devDependencies": "Everything, including React and Base UI. This package ships a browser bundle: `vite build` inlines every one of these into `dist`, so nothing here is required by the process at runtime and every one of them is honestly a dev dependency. (The Dockerfile's runtime `pnpm install --prod` does not currently prune them — it re-installs over a node_modules the build stage already populated, so devDependencies survive in the image. That is not this package's doing and is true of drizzle-kit, biome and vitest too; it is reported as a finding rather than worked around here.) The shadcn CLI writes new component dependencies into `dependencies`; move them here when it does. `shadcn` itself is on this list because it is a build input and not only a CLI: `src/index.css` does `@import \"shadcn/tailwind.css\"`, so removing it as unused would break the build.",
+  "devDependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@kobai/client": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.31.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "shadcn": "^4.18.0",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3",
+    "tw-animate-css": "^1.4.0",
+    "vite": "^8.2.1"
+  }
+}

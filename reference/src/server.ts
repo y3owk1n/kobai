@@ -1,6 +1,8 @@
 import { serve } from "@hono/node-server";
 import { consoleLogger, createKobai } from "@kobai/core";
 import config from "../kobai.config.ts";
+import { ADMIN_PATH, createAdminAssets } from "./admin-assets.ts";
+import { createProjectFetch } from "./app.ts";
 
 /**
  * The reference Project's entrypoint — the whole of what a Project has to write to run
@@ -26,10 +28,16 @@ if (!databaseUrl) {
 const port = Number(process.env.PORT ?? 3000);
 const kobai = createKobai({ ...config, databaseUrl, logger: consoleLogger });
 
+/**
+ * One process serves both. The Admin is a directory of built files at `/admin-ui`, and every
+ * other path is kobai's — one container, one origin, and so no CORS anywhere (ADR-0010).
+ */
+const fetch = createProjectFetch(kobai, createAdminAssets());
+
 let boundPort = port;
-const server = serve({ fetch: kobai.fetch, port }, (address) => {
+const server = serve({ fetch, port }, (address) => {
   boundPort = address.port;
-  consoleLogger.info("listening", { port: boundPort });
+  consoleLogger.info("listening", { port: boundPort, admin: ADMIN_PATH });
 });
 
 const shutdown = async () => {

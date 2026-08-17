@@ -202,13 +202,121 @@ describe("revoking an API key", () => {
   });
 });
 
+describe("listing API keys", () => {
+  it("names every key that exists, and carries no value to present", async () => {
+    // The gap this closes: minting answers with the value once and the id once, so a
+    // Merchant who lost that response held a live credential they could not revoke.
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const browser = await created(kobai, merchant.headers, {
+      name: "browser",
+      kind: "publishable",
+    });
+    const server = await created(kobai, merchant.headers, {
+      name: "server",
+      kind: "secret",
+    });
+
+    const response = await kobai.request("/admin/api-keys", {
+      headers: merchant.headers,
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      apiKeys: { id: string; name: string; kind: string; revokedAt: string | null }[];
+    };
+    // Newest first, like the Product list.
+    expect(body.apiKeys.map((key) => key.name)).toEqual(["server", "browser"]);
+    expect(body.apiKeys.map((key) => key.kind)).toEqual(["secret", "publishable"]);
+    expect(body.apiKeys.map((key) => key.id)).toEqual([server.id, browser.id]);
+    // The whole security property of this route, and the reason it is worth asserting on
+    // the serialised body rather than field by field: #6 stores only a SHA-256 and shows
+    // the value once, so a listing that leaked any part of a key would undo that quietly.
+    const listed = JSON.stringify(body);
+    expect(listed).not.toContain(server.key);
+    expect(listed).not.toContain(browser.key);
+    expect(listed).not.toContain("kobai_sk_");
+    expect(listed).not.toContain("kobai_pk_");
+  });
+
+  it("keeps a revoked key in the list, and says when it stopped working", async () => {
+    // A revoked key that vanished would make the list unusable as an audit: "no such key"
+    // and "revoked last Tuesday" are different answers to the same question.
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const key = await created(kobai, merchant.headers, {
+      name: "server",
+      kind: "secret",
+    });
+
+    await kobai.request(`/admin/api-keys/${key.id}`, {
+      method: "DELETE",
+      headers: merchant.headers,
+    });
+    const response = await kobai.request("/admin/api-keys", {
+      headers: merchant.headers,
+    });
+
+    const body = (await response.json()) as {
+      apiKeys: { id: string; revokedAt: string | null }[];
+    };
+    expect(body.apiKeys).toHaveLength(1);
+    expect(body.apiKeys[0]?.id).toBe(key.id);
+    expect(body.apiKeys[0]?.revokedAt).toEqual(expect.any(String));
+  });
+
+  it("is closed to a caller with no session", async () => {
+    kobai = await createTestKobai();
+
+    const response = await kobai.request("/admin/api-keys");
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-missing" });
+  });
+
+  it("is closed to a Role that does not hold api-key:read", async () => {
+    // Reading the list is its own permission: a Merchant may be allowed to see which
+    // credentials exist without being allowed to mint or revoke one.
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const password = "a reader's very long password";
+    await kobai.database.query(
+      "insert into core_role (name, permissions) values ('reader', array['store:read'])",
+    );
+    await kobai.request("/admin/merchants", {
+      method: "POST",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ email: "reader@example.test", password, role: "reader" }),
+    });
+    const reader = sessionOf(
+      await kobai.request("/admin/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "reader@example.test", password }),
+      }),
+    );
+
+    const response = await kobai.request("/admin/api-keys", {
+      headers: reader.headers,
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "permission-denied",
+      required: "api-key:read",
+    });
+  });
+});
+
 describe("the owner Role", () => {
-  it("holds the API key permission on a freshly migrated deployment", async () => {
+  it("holds the API key permissions on a freshly migrated deployment", async () => {
     // The seeded Role gains each new permission through a migration of its own, so an
     // existing deployment's owner keeps holding everything Core defines (ADR-0027).
     kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai, TEST_MERCHANT);
 
     expect(merchant.role.permissions).toContain("api-key:write");
+    expect(merchant.role.permissions).toContain("api-key:read");
   });
 });

@@ -21,6 +21,15 @@ export const PERMISSIONS = {
   catalogWrite: "catalog:write",
   /** Mint and revoke API keys. The permission that hands out access to the store surface. */
   apiKeyWrite: "api-key:write",
+  /**
+   * List the API keys this deployment has issued — never their values, which are gone.
+   *
+   * It reads oddly after the write permission and belongs there anyway: the seeded `owner`
+   * Role is a text array built by appending one migration at a time, and a test asserts it
+   * equals `ALL_PERMISSIONS` exactly. So this list's order is the order the migrations ran,
+   * and a new permission goes at the end wherever it would read best.
+   */
+  apiKeyRead: "api-key:read",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

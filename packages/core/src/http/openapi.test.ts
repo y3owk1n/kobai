@@ -153,7 +153,7 @@ describe("the description covers both surfaces, including how each is opened", (
 
     // The loop is only worth anything if it found the operations. A scan that silently
     // found none would pass every assertion in it.
-    expect(schemes).toHaveLength(13);
+    expect(schemes).toHaveLength(14);
   });
 
   it("describes the refusal each gate makes, so a client can tell them apart", () => {

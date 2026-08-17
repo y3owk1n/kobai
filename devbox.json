@@ -89,6 +89,19 @@
       "down": "docker compose down",
       "build": "pnpm -r build",
       "dev": "pnpm -r build && pnpm --filter kobai-reference dev",
+
+      // The Admin, with a reload loop, in a second terminal beside `devbox run dev`.
+      //
+      // It is a Vite dev server rather than the Project's process — nothing else gives a
+      // Developer a reload — and it proxies `/admin`, `/store` and `/health` to the Project
+      // on PORT. So the **browser still sees exactly one origin**, this one, which is what
+      // production looks like too and why no CORS is configured anywhere (ADR-0010,
+      // ADR-0033). A second origin would need CORS and would be a dev-only lie about the
+      // deployment.
+      //
+      // `devbox run dev` already serves the *built* Admin at /admin-ui, because it builds
+      // first. This is what to run when the Admin is the thing being edited.
+      "admin:dev": "pnpm --filter kobai-reference-admin dev",
       "lint": "pnpm exec biome ci .",
       "format": "pnpm exec biome check --write .",
       "typecheck": "pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit",

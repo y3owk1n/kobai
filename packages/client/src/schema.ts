@@ -462,6 +462,44 @@ export interface paths {
   };
   "/admin/api-keys": {
     /**
+     * List API keys
+     * @description Newest first, unpaginated, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time.
+     */
+    get: {
+      responses: {
+        /** @description Every API key, and whether it still works. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["ApiKeyList"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
      * Mint an API key
      * @description The value is in this response and in no other, ever — only a digest is stored. `kobai_pk_…` is publishable and `kobai_sk_…` is secret, so the kind is readable off the value itself.
      */
@@ -799,6 +837,22 @@ export interface components {
       /** @description How a Merchant tells one key from another when revoking. */
       name: string;
       kind: components["schemas"]["ApiKeyKind"];
+    };
+    ApiKeyList: {
+      apiKeys: components["schemas"]["ApiKeySummary"][];
+    };
+    ApiKeySummary: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      kind: components["schemas"]["ApiKeyKind"];
+      /** Format: date-time */
+      createdAt: string;
+      /**
+       * Format: date-time
+       * @description When it stopped working, or `null` while it still does.
+       */
+      revokedAt: string | null;
     };
     ResolvedPrice: {
       variant: components["schemas"]["VariantIdentity"];

@@ -249,23 +249,50 @@ export const IdParam = z.object({
 export const ApiKeyKind = z.enum(API_KEY_KINDS).openapi("ApiKeyKind");
 
 /**
+ * What both views of a key agree on, and the reason they are declared together: the fields
+ * that identify a key never depend on whether its value is being shown.
+ *
+ * Not `.openapi()`-named itself — a `$ref` for it would be a name for something a Developer
+ * never receives on its own. The two schemas below are what the API answers with.
+ */
+const ApiKeyIdentity = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  kind: ApiKeyKind,
+  createdAt: z.iso.datetime(),
+});
+
+/**
  * A key, as it is reported once and never again.
  *
  * Which kind it is can be read off `key` itself — `kobai_pk_…` is publishable and
  * `kobai_sk_…` is secret — so shipping a secret to a browser is a mistake that is visible
  * in a code review, a log line and a bug report, with no lookup.
  */
-export const IssuedApiKey = z
-  .object({
-    id: z.uuid(),
-    name: z.string(),
-    kind: ApiKeyKind,
-    createdAt: z.iso.datetime(),
-    key: z.string().meta({
-      description: "The value itself. Shown at creation and unrecoverable afterwards.",
-    }),
-  })
-  .openapi("IssuedApiKey");
+export const IssuedApiKey = ApiKeyIdentity.extend({
+  key: z.string().meta({
+    description: "The value itself. Shown at creation and unrecoverable afterwards.",
+  }),
+}).openapi("IssuedApiKey");
+
+/**
+ * A key as the Admin lists it: enough to recognise and revoke, never enough to present.
+ *
+ * No fragment of the value appears here — not a prefix, not the last four characters. Only
+ * a SHA-256 of the whole key is stored, so there is nothing to show, and showing part of one
+ * would be a second place a credential partly lives. `name` is what tells two keys apart,
+ * which is why minting demands one.
+ */
+export const ApiKeySummary = ApiKeyIdentity.extend({
+  revokedAt: z.iso.datetime().nullable().meta({
+    description: "When it stopped working, or `null` while it still does.",
+  }),
+}).openapi("ApiKeySummary");
+
+/** The list, in an envelope — the same shape, and the same reason, as `ProductList`. */
+export const ApiKeyList = z
+  .object({ apiKeys: z.array(ApiKeySummary).readonly() })
+  .openapi("ApiKeyList");
 
 export const CreateApiKeyRequest = z
   .object({
