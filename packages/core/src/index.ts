@@ -21,6 +21,12 @@ export {
 } from "./config.ts";
 export type { Database } from "./db/client.ts";
 export type { HealthBody } from "./http/health.ts";
+/**
+ * The OpenAPI description is on the surface because ADR-0002 makes the API the product:
+ * `kobai.openapi()` is how a Project publishes the description of the API *it* serves, and
+ * `packages/core/openapi.json` — reachable as `@kobai/core/openapi.json` — is Core's own.
+ */
+export type { OpenApiDocument } from "./http/openapi.ts";
 export { createKobai, type Kobai, type KobaiOptions } from "./kobai.ts";
 export type {
   AppliedMigrationSet,

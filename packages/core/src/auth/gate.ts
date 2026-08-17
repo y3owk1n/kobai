@@ -1,4 +1,4 @@
-import type { Context, MiddlewareHandler } from "hono";
+import type { Context, Env, MiddlewareHandler } from "hono";
 import type { Database } from "../db/client.ts";
 import { bearerToken } from "./bearer.ts";
 import type { Permission } from "./permissions.ts";
@@ -36,13 +36,32 @@ export type AdminEnv = { Variables: { auth: Authenticated } };
  * Why the gate said no, ready to be sent. 401 when nobody is asking, 403 when somebody is and
  * their Role does not hold the permission — the distinction a client needs to decide between
  * "sign in" and "ask an owner".
+ *
+ * The two are separate types rather than one with a widened `body`, because they carry
+ * different fields and the OpenAPI description promises which arrives with which status. A
+ * `Record<string, unknown>` here would make that promise uncheckable at the point it is kept.
  */
-export type Refusal = {
+export type SessionRefused = {
   readonly ok: false;
-  readonly status: 401 | 403;
-  readonly body: Record<string, unknown>;
-  readonly headers?: Record<string, string>;
+  readonly status: 401;
+  readonly body: {
+    readonly error: string;
+    readonly reason: `session-${SessionRejection}`;
+  };
+  readonly headers: Record<string, string>;
 };
+
+export type PermissionRefused = {
+  readonly ok: false;
+  readonly status: 403;
+  readonly body: {
+    readonly error: string;
+    readonly reason: "permission-denied";
+    readonly required: Permission;
+  };
+};
+
+export type Refusal = SessionRefused | PermissionRefused;
 
 export type Authorisation = { readonly ok: true; readonly auth: Authenticated } | Refusal;
 
@@ -71,10 +90,28 @@ export async function authorise(
   return { ok: true, auth: lookup.auth };
 }
 
+/**
+ * Sends a refusal.
+ *
+ * Branched rather than passed through as `(body, status)` because the two carry different
+ * shapes, and the OpenAPI description promises which arrives with which status. Handing
+ * `c.json` a union of bodies and a union of statuses would lose the pairing at exactly the
+ * point the promise is kept, so a route's declaration could no longer be checked against it.
+ *
+ * Generic over the environment so both the middleware below and the one handler that gates
+ * itself — `POST /admin/merchants`, which mints the first Merchant — can use it.
+ */
+export function refuse<E extends Env>(c: Context<E>, refusal: Refusal) {
+  return refusal.status === 401
+    ? c.json(refusal.body, 401, refusal.headers)
+    : c.json(refusal.body, 403);
+}
+
 export function requireSession(db: Database): MiddlewareHandler<AdminEnv> {
   return async (c, next) => {
+    // No permission is asked for here, so only the 401 arm is ever reachable.
     const result = await authorise(db, c.req.header("authorization"));
-    if (!result.ok) return c.json(result.body, result.status, result.headers);
+    if (!result.ok) return refuse(c, result);
 
     c.set("auth", result.auth);
     await next();
@@ -86,8 +123,7 @@ export function requirePermission(permission: Permission): MiddlewareHandler<Adm
   return async (c, next) => {
     const auth = authenticated(c);
     if (!holdsPermission(auth, permission)) {
-      const result = denial(auth, permission);
-      return c.json(result.body, result.status);
+      return c.json(denial(auth, permission).body, 403);
     }
     await next();
   };
@@ -118,7 +154,7 @@ export function authenticated(c: Context<AdminEnv>): Authenticated {
  * empty page an anonymous request would get. The row is already gone by this point —
  * `resolveSession` deletes it — so the sign-out is real and not merely reported.
  */
-function refusal(reason: SessionRejection): Refusal {
+function refusal(reason: SessionRejection): SessionRefused {
   return {
     ok: false,
     status: 401,
@@ -129,7 +165,7 @@ function refusal(reason: SessionRejection): Refusal {
   };
 }
 
-function denial(auth: Authenticated, permission: Permission): Refusal {
+function denial(auth: Authenticated, permission: Permission): PermissionRefused {
   return {
     ok: false,
     status: 403,

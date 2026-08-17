@@ -1,6 +1,7 @@
 import { consoleLogger, type KobaiProjectConfig, type Logger } from "./config.ts";
 import { createDatabaseHandle, type Database } from "./db/client.ts";
-import { createHttpApp } from "./http/app.ts";
+import { createHttpApp, describeHttpApp } from "./http/app.ts";
+import type { OpenApiDocument } from "./http/openapi.ts";
 import { coreMigrationSet } from "./migrations/core-set.ts";
 import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
@@ -26,6 +27,15 @@ export type Kobai = {
   readonly fetch: (request: Request) => Response | Promise<Response>;
   /** In-process dispatch, for tests and for anything else that already holds the object. */
   request(input: string | URL | Request, init?: RequestInit): Promise<Response>;
+  /**
+   * This instance's OpenAPI description, produced from the routes it serves.
+   *
+   * Not served over HTTP — `/store` refuses an unauthenticated request before saying
+   * whether a path exists, and an endpoint handing out the whole surface anonymously would
+   * undo that. It is generated at build time into `packages/core/openapi.json`, which is
+   * what `@kobai/client` is generated from and what a Developer in another language reads.
+   */
+  openapi(): OpenApiDocument;
   readonly db: Database;
   /** Core's set first, then each set the Project wired, in the order it wired them. */
   readonly migrationSets: readonly MigrationSet[];
@@ -64,6 +74,7 @@ export function createKobai(options: KobaiOptions): Kobai {
   return {
     fetch: app.fetch,
     request: async (input, init) => app.request(input, init),
+    openapi: () => describeHttpApp(app),
     db: database.db,
     migrationSets,
     migrationState: () => migrations.get(),

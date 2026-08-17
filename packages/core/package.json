@@ -17,24 +17,30 @@
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
-    }
+    },
+    "./openapi.json": "./openapi.json"
   },
   "files": [
     "dist",
-    "migrations"
+    "migrations",
+    "openapi.json"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:generate": "drizzle-kit generate",
+    "// openapi:generate": "It needs no build and no database. Node runs the TypeScript directly (type stripping), `createKobai` builds its pool without connecting, and the description is a property of the routes rather than of anything behind them. `devbox run openapi:generate` runs this and then regenerates @kobai/client from what it wrote — in that order, because pnpm walks the workspace in dependency order.",
+    "openapi:generate": "node scripts/generate-openapi.ts",
     "// db:migrate": "There is no db:migrate script either, for a smaller reason. Core applies its own migrations at boot, so the CLI would be a second code path applying the same files — and ADR-0030 records that the CLI and the programmatic migrator default to different tracking schemas. `drizzle.config.ts` still sets the tracking location explicitly so the two agree if one is ever added.",
     "// db:push": "There is deliberately no db:push script — not here, not in any Plugin, and not in the reference Project. `drizzle-kit push` diffs a schema against the LIVE database, so pushing Core's schema at a database holding Plugin tables reports `[/] Changes applied` and silently DROPS every Plugin table, while leaving their migration tracking rows intact so the migration runner believes the work is done and cannot repair it. Observed, not theorised: see FINDINGS.md section E on branch prototype/drizzle-multi-migration, and docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md. `tablesFilter` mitigates it and is set below anyway, but the primary control is that the dangerous command is never available."
   },
   "dependencies": {
+    "@hono/zod-openapi": "^1.6.0",
     "@node-rs/argon2": "^2.1.0",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.6.14",
-    "pg": "^8.16.3"
+    "hono": "^4.13.2",
+    "pg": "^8.16.3",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
     "@types/pg": "^8.15.5",

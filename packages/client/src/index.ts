@@ -1,0 +1,137 @@
+import createClient, { type Client, type Middleware } from "openapi-fetch";
+import type { components, paths } from "./schema.ts";
+
+/**
+ * `@kobai/client` — kobai's HTTP surface, as TypeScript.
+ *
+ * Everything in `./schema.ts` is generated from `@kobai/core`'s `openapi.json`, which is
+ * itself generated from the routes Core serves. So the types here are not a description of
+ * kobai written by hand and kept up to date: they are the surface, two mechanical steps
+ * removed, and a build fails when either step is out of date.
+ *
+ * ADR-0006 calls this "a first-class deliverable, not a convenience", and the reason is
+ * ADR-0002: kobai ships no storefront, so for a Developer building one the API *is* the
+ * product. A client that typed its responses as `unknown` would hand that Developer the
+ * documentation and keep the guarantees.
+ *
+ * ```ts
+ * const kobai = createKobaiClient({
+ *   baseUrl: "https://shop.example.com",
+ *   credential: { apiKey: process.env.KOBAI_API_KEY },
+ * });
+ *
+ * const { data, error } = await kobai.GET("/store/variants/{id}/price", {
+ *   params: { path: { id: variantId } },
+ * });
+ * // `error` is the union of every refusal the route declares, so branching on `reason`
+ * // means narrowing first — a 500 carries no `reason`, and the types say so.
+ * if (error) return renderUnavailable("reason" in error ? error.reason : "unavailable");
+ * return renderPrice(data.price.amount, data.price.currency);
+ * ```
+ *
+ * Only `createKobaiClient` and the types are hand-written. The wrapper exists to do the one
+ * thing the description cannot express — attach a credential — and nothing else: every
+ * path, parameter, body and response comes from the generated `paths`.
+ */
+
+/** Everything `openapi-fetch` gives, over kobai's paths. `GET`, `POST`, `DELETE`, … */
+export type KobaiClient = Client<paths>;
+
+/**
+ * Which credential this client carries.
+ *
+ * The two are kept apart because the surfaces are (ADR-0020). A Merchant session opens
+ * `/admin`; an API key opens `/store`; neither is worth anything on the other. A single
+ * `token` option would have made presenting the wrong one at the wrong surface look like an
+ * ordinary call, and it is not — it is a 401 with `reason: "api-key-malformed"`, which is
+ * the API telling you that you brought the other key.
+ */
+export type KobaiCredential =
+  | {
+      /** A Merchant session token, from `POST /admin/session`. Opens `/admin`. */
+      readonly session: string;
+    }
+  | {
+      /** An API key — `kobai_pk_…` or `kobai_sk_…`. Opens `/store`. */
+      readonly apiKey: string;
+    };
+
+export type KobaiClientOptions = {
+  /** Where kobai is served, e.g. `https://shop.example.com`. */
+  readonly baseUrl: string;
+  /**
+   * Presented as `Authorization: Bearer …` on every request.
+   *
+   * Optional, because two routes are reachable without one: `POST /admin/merchants` on a
+   * deployment nobody has claimed, and `POST /admin/session`, which is how a session is
+   * obtained in the first place.
+   */
+  readonly credential?: KobaiCredential;
+  /**
+   * The `fetch` to dispatch with. Defaults to the platform's.
+   *
+   * Given a kobai instance's own `fetch`, a test drives this client against the real
+   * application with no port and no process — which is how `client.test.ts` proves the
+   * generated types describe what the server actually answers.
+   */
+  readonly fetch?: (request: Request) => Response | Promise<Response>;
+};
+
+export function createKobaiClient(options: KobaiClientOptions): KobaiClient {
+  const dispatch = options.fetch;
+  const client = createClient<paths>({
+    baseUrl: options.baseUrl,
+    // Awaited here rather than demanded of the caller, so a `Kobai`'s own `fetch` — which
+    // may answer synchronously — can be handed over as it is.
+    ...(dispatch ? { fetch: async (request: Request) => dispatch(request) } : {}),
+  });
+
+  const credential = options.credential;
+  if (credential) {
+    const bearer = "session" in credential ? credential.session : credential.apiKey;
+    const authorise: Middleware = {
+      onRequest: ({ request }) => {
+        request.headers.set("authorization", `Bearer ${bearer}`);
+        return request;
+      },
+    };
+    client.use(authorise);
+  }
+
+  return client;
+}
+
+/**
+ * The description's named schemas, under the names it gives them.
+ *
+ * Re-exported one by one rather than as a bag, so that a name disappearing from the API is
+ * a build failure here rather than a `never` somewhere downstream.
+ */
+export type Health = components["schemas"]["Health"];
+export type MigrationState = components["schemas"]["MigrationState"];
+export type Store = components["schemas"]["Store"];
+export type Product = components["schemas"]["Product"];
+export type ProductDetail = components["schemas"]["ProductDetail"];
+export type Variant = components["schemas"]["Variant"];
+export type Price = components["schemas"]["Price"];
+export type Merchant = components["schemas"]["Merchant"];
+export type Session = components["schemas"]["Session"];
+export type IssuedSession = components["schemas"]["IssuedSession"];
+export type IssuedApiKey = components["schemas"]["IssuedApiKey"];
+export type ApiKeyKind = components["schemas"]["ApiKeyKind"];
+export type ResolvedPrice = components["schemas"]["ResolvedPrice"];
+export type StepReport = components["schemas"]["StepReport"];
+export type Refusal = components["schemas"]["Refusal"];
+export type SessionRefusal = components["schemas"]["SessionRefusal"];
+export type ApiKeyRefusal = components["schemas"]["ApiKeyRefusal"];
+export type PermissionDenied = components["schemas"]["PermissionDenied"];
+export type PriceRefusal = components["schemas"]["PriceRefusal"];
+
+/**
+ * The generated surface itself, for anything the helpers above do not reach.
+ *
+ * `operations` is deliberately not among them: `openapi-typescript` keys it by
+ * `operationId`, kobai's routes declare none, and re-exporting the empty record it produces
+ * would be a name that resolves to nothing.
+ */
+export type { components, paths } from "./schema.ts";

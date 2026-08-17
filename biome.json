@@ -6,6 +6,8 @@
       "!**/dist",
       "!**/node_modules",
       "!**/migrations/meta",
+      "!packages/core/openapi.json",
+      "!packages/client/src/schema.ts",
       "!.devbox",
       "!pnpm-lock.yaml"
     ]

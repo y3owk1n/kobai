@@ -1,10 +1,12 @@
-import { type Context, Hono } from "hono";
+import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { type ApiKeyCreation, createApiKey, revokeApiKey } from "../auth/api-key.ts";
 import {
   type AdminEnv,
   authenticated,
   authorise,
+  refuse,
   requirePermission,
   requireSession,
 } from "../auth/gate.ts";
@@ -26,6 +28,14 @@ import {
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
 import { readStore } from "../store/read.ts";
+import * as contract from "./contract.ts";
+import {
+  invalidRequestHook,
+  json,
+  MERCHANT_SESSION,
+  OPTIONAL_MERCHANT_SESSION,
+  REFUSALS,
+} from "./openapi.ts";
 
 /**
  * The admin surface — everything a Merchant reaches, and the only thing the Admin consumes
@@ -41,29 +51,289 @@ import { readStore } from "../store/read.ts";
  * Registration order matters — the way in is registered first, so its handlers answer before
  * the guard below them is reached. Each of those two routes has a test that calls it with no
  * `Authorization` header, and every other route has one asserting the opposite.
+ *
+ * **Every route is a declaration.** A route is a `createRoute({…})` object naming its path,
+ * its security scheme, the body it takes and every status it answers with, and
+ * `app.openapi(route, handler)` is what both serves it and puts it in the description. So
+ * the description is not a document beside the code that somebody keeps up to date: it is
+ * the code. A response the description promises and the handler does not produce does not
+ * ship, because `c.json(body, status)` is typed against the schema the route declared.
  */
 
 export type AdminDependencies = {
   readonly db: Database;
 };
 
-export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
-  const admin = new Hono<AdminEnv>();
+// ---- The way in --------------------------------------------------------------------------
 
-  // ---- The way in ------------------------------------------------------------------------
+/**
+ * Creates a Merchant.
+ *
+ * Normally this needs `merchant:write`, like any other change to the deployment. The one
+ * exception is a deployment holding no Merchant at all: nobody could hold the permission,
+ * so requiring it unconditionally would leave the Admin permanently unreachable. The first
+ * Merchant therefore claims the deployment — and claiming it is possible exactly once, so
+ * from the second request onwards this route behaves like every other guarded one.
+ */
+const createMerchantRoute = createRoute({
+  method: "post",
+  path: "/merchants",
+  summary: "Create a Merchant",
+  description:
+    "Needs `merchant:write`, except on a deployment that holds no Merchant at all — the first Merchant claims it, anonymously and exactly once.",
+  security: OPTIONAL_MERCHANT_SESSION,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateMerchantRequest } },
+    },
+  },
+  responses: {
+    201: json("The Merchant, and the Role they hold.", contract.Merchant),
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    409: json(
+      "Somebody got there first: the address is taken, or the deployment is already claimed.",
+      contract.Refusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
 
-  /**
-   * Creates a Merchant.
-   *
-   * Normally this needs `merchant:write`, like any other change to the deployment. The one
-   * exception is a deployment holding no Merchant at all: nobody could hold the permission,
-   * so requiring it unconditionally would leave the Admin permanently unreachable. The first
-   * Merchant therefore claims the deployment — and claiming it is possible exactly once, so
-   * from the second request onwards this route behaves like every other guarded one.
-   */
-  admin.post("/merchants", async (c) => {
-    const body = await jsonBody(c);
-    if (!body.ok) return c.json(body.error, 400);
+/** Signs in: exchanges credentials for a session. */
+const signInRoute = createRoute({
+  method: "post",
+  path: "/session",
+  summary: "Sign in",
+  description:
+    "An unknown address and a wrong password are answered identically, and in the same time. Distinguishing them would turn this into a way to ask who works here.",
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.SignInRequest } },
+    },
+  },
+  responses: {
+    201: json(
+      "The session, with the token to present on every later request.",
+      contract.IssuedSession,
+    ),
+    400: REFUSALS.invalid,
+    401: json("Those credentials are not valid.", contract.InvalidCredentials),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+// ---- Everything else ---------------------------------------------------------------------
+
+const readSessionRoute = createRoute({
+  method: "get",
+  path: "/session",
+  summary: "Who the caller is",
+  description:
+    "What the Admin asks first after a page load: who am I, and what may I do.",
+  security: MERCHANT_SESSION,
+  responses: {
+    200: json("The caller's Merchant and Role.", contract.Session),
+    401: REFUSALS.noSession,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const signOutRoute = createRoute({
+  method: "delete",
+  path: "/session",
+  summary: "Sign out",
+  description: "The row goes, so the token stops working on the very next request.",
+  security: MERCHANT_SESSION,
+  responses: {
+    204: { description: "Signed out." },
+    401: REFUSALS.noSession,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readStoreRoute = createRoute({
+  method: "get",
+  path: "/store",
+  summary: "Read the Store",
+  description: "One deployment is one Store (ADR-0005), so this takes no identifier.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeRead)] as const,
+  responses: {
+    200: json("The Store.", contract.Store),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Creates a Product and the Variants that make it sellable, in one transaction.
+ *
+ * There is deliberately no route that creates a Product on its own. A Product is never
+ * sellable in itself (ADR-0008), so one with no Variant is a catalog entry nothing can buy
+ * — and the cheapest way to guarantee that state never exists is to give the API no way to
+ * reach it, rather than to detect and repair it afterwards.
+ */
+const createProductRoute = createRoute({
+  method: "post",
+  path: "/products",
+  summary: "Create a Product",
+  description:
+    "A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateProductRequest } },
+    },
+  },
+  responses: {
+    201: json("The Product, with its Variants.", contract.ProductDetail),
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    409: json("A Variant already carries one of those SKUs.", contract.Refusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const listProductsRoute = createRoute({
+  method: "get",
+  path: "/products",
+  summary: "List Products",
+  description:
+    "Newest first, unpaginated. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  responses: {
+    200: json("Every Product.", contract.ProductList),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readProductRoute = createRoute({
+  method: "get",
+  path: "/products/{id}",
+  summary: "Read a Product",
+  description: "One Product, with its Variants and each Variant's Prices.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Product.", contract.ProductDetail),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Product exists.", contract.Refusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Adds a Price to a Variant — an insert, never an update.
+ *
+ * The Variant is what the route addresses because the Variant is what is sellable. Calling
+ * this twice leaves a Variant with two Prices rather than one overwritten one, which is
+ * ADR-0008's shape working: sale prices, further currencies and quantity breaks are more
+ * rows here, not a migration.
+ */
+const setPriceRoute = createRoute({
+  method: "post",
+  path: "/variants/{id}/prices",
+  summary: "Price a Variant",
+  description:
+    "An insert, never an update. Calling this twice leaves a Variant with two Prices — which is how sale prices, further currencies and quantity breaks arrive without a migration.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.SetPriceRequest } },
+    },
+  },
+  responses: {
+    201: json("The Price.", contract.Price),
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Variant exists.", contract.Refusal),
+    422: json(
+      "Well formed, and still refused: this Store does not price in that currency.",
+      contract.Refusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Mints an API key — the credential the store surface is gated by (ADR-0020).
+ *
+ * The value is in this response and in no other, ever: only a digest is stored, so there
+ * is nothing to show a second time. That is the same bargain the password column makes,
+ * and it is why the route answers with the key rather than making a Merchant fetch it.
+ */
+const createApiKeyRoute = createRoute({
+  method: "post",
+  path: "/api-keys",
+  summary: "Mint an API key",
+  description:
+    "The value is in this response and in no other, ever — only a digest is stored. `kobai_pk_…` is publishable and `kobai_sk_…` is secret, so the kind is readable off the value itself.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.apiKeyWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateApiKeyRequest } },
+    },
+  },
+  responses: {
+    201: json("The key, shown once.", contract.IssuedApiKey),
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const revokeApiKeyRoute = createRoute({
+  method: "delete",
+  path: "/api-keys/{id}",
+  summary: "Revoke an API key",
+  description: "It stops working on the very next request, like a deleted Session.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.apiKeyWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Revoked." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such API key exists.", contract.Refusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv> {
+  const admin = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
+
+  admin.openapi(createMerchantRoute, async (c) => {
+    const body = c.req.valid("json");
 
     // An `Authorization` header means the caller is claiming to be somebody, so take them at
     // their word and hold them to it — the bootstrap path is for a caller with no session on
@@ -77,59 +347,49 @@ export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
         c.req.header("authorization"),
         PERMISSIONS.merchantWrite,
       );
-      if (!gate.ok) return c.json(gate.body, gate.status, gate.headers);
+      if (!gate.ok) return refuse(c, gate);
     }
 
-    return respondToCreation(c, await createMerchant(deps.db, body.value, { bootstrap }));
+    return respondToCreation(c, await createMerchant(deps.db, body, { bootstrap }));
   });
 
-  /** Signs in: exchanges credentials for a session. */
-  admin.post("/session", async (c) => {
-    const body = await jsonBody(c);
-    if (!body.ok) return c.json(body.error, 400);
+  admin.openapi(signInRoute, async (c) => {
+    const body = c.req.valid("json");
 
-    const merchant = await authenticateMerchant(
-      deps.db,
-      body.value.email,
-      body.value.password,
-    );
+    const merchant = await authenticateMerchant(deps.db, body.email, body.password);
     if (!merchant) {
       // One answer for an unknown address and for a wrong password. Distinguishing them would
       // turn this endpoint into a way to ask who works here.
       return c.json(
-        { error: "Those credentials are not valid.", reason: "invalid-credentials" },
+        {
+          error: "Those credentials are not valid.",
+          reason: "invalid-credentials" as const,
+        },
         401,
       );
     }
 
     const issued = await createSession(deps.db, merchant.id);
     return c.json(
-      {
-        token: issued.token,
-        ...sessionBody(merchant, merchant.role, issued.expiresAt),
-      },
+      { token: issued.token, ...sessionBody(merchant, merchant.role, issued.expiresAt) },
       201,
     );
   });
 
-  // ---- Everything else -------------------------------------------------------------------
-
-  const guarded = new Hono<AdminEnv>();
+  const guarded = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
   guarded.use("*", requireSession(deps.db));
 
-  /** Who the caller is and what they may do — the Admin's first call after a page load. */
-  guarded.get("/session", (c) => {
+  guarded.openapi(readSessionRoute, (c) => {
     const auth = authenticated(c);
     return c.json(sessionBody(auth.merchant, auth.role, auth.expiresAt), 200);
   });
 
-  /** Signs out. The row goes, so the token stops working on the very next request. */
-  guarded.delete("/session", async (c) => {
+  guarded.openapi(signOutRoute, async (c) => {
     await revokeSession(deps.db, authenticated(c).sessionId);
     return c.body(null, 204);
   });
 
-  guarded.get("/store", requirePermission(PERMISSIONS.storeRead), async (c) => {
+  guarded.openapi(readStoreRoute, async (c) => {
     const store = await readStore(deps.db);
     if (!store) {
       return c.json(
@@ -140,31 +400,18 @@ export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
     return c.json(store, 200);
   });
 
-  /**
-   * Creates a Product and the Variants that make it sellable, in one transaction.
-   *
-   * There is deliberately no route that creates a Product on its own. A Product is never
-   * sellable in itself (ADR-0008), so one with no Variant is a catalog entry nothing can buy
-   * — and the cheapest way to guarantee that state never exists is to give the API no way to
-   * reach it, rather than to detect and repair it afterwards.
-   */
-  guarded.post("/products", requirePermission(PERMISSIONS.catalogWrite), async (c) => {
-    const body = await jsonBody(c);
-    if (!body.ok) return c.json(body.error, 400);
-
-    const created = await createProduct(deps.db, body.value);
+  guarded.openapi(createProductRoute, async (c) => {
+    const created = await createProduct(deps.db, c.req.valid("json"));
     if (!created.ok) return refused(c, created, PRODUCT_STATUS);
     return c.json(created.product, 201);
   });
 
-  /** Every Product, so a Merchant can confirm the one they just made is there. */
-  guarded.get("/products", requirePermission(PERMISSIONS.catalogRead), async (c) => {
+  guarded.openapi(listProductsRoute, async (c) => {
     return c.json({ products: await listProducts(deps.db) }, 200);
   });
 
-  /** One Product, with its Variants and each Variant's Prices. */
-  guarded.get("/products/:id", requirePermission(PERMISSIONS.catalogRead), async (c) => {
-    const found = await readProduct(deps.db, c.req.param("id"));
+  guarded.openapi(readProductRoute, async (c) => {
+    const found = await readProduct(deps.db, c.req.valid("param").id);
     if (!found) {
       return c.json(
         { error: "No such Product exists.", reason: "product-not-found" },
@@ -174,58 +421,28 @@ export function createAdminRoutes(deps: AdminDependencies): Hono<AdminEnv> {
     return c.json(found, 200);
   });
 
-  /**
-   * Adds a Price to a Variant — an insert, never an update.
-   *
-   * The Variant is what the route addresses because the Variant is what is sellable. Calling
-   * this twice leaves a Variant with two Prices rather than one overwritten one, which is
-   * ADR-0008's shape working: sale prices, further currencies and quantity breaks are more
-   * rows here, not a migration.
-   */
-  guarded.post(
-    "/variants/:id/prices",
-    requirePermission(PERMISSIONS.catalogWrite),
-    async (c) => {
-      const body = await jsonBody(c);
-      if (!body.ok) return c.json(body.error, 400);
+  guarded.openapi(setPriceRoute, async (c) => {
+    const created = await setPrice(deps.db, c.req.valid("param").id, c.req.valid("json"));
+    if (!created.ok) return refused(c, created, PRICE_STATUS);
+    return c.json(created.price, 201);
+  });
 
-      const created = await setPrice(deps.db, c.req.param("id"), body.value);
-      if (!created.ok) return refused(c, created, PRICE_STATUS);
-      return c.json(created.price, 201);
-    },
-  );
-
-  /**
-   * Mints an API key — the credential the store surface is gated by (ADR-0020).
-   *
-   * The value is in this response and in no other, ever: only a digest is stored, so there
-   * is nothing to show a second time. That is the same bargain the password column makes,
-   * and it is why the route answers with the key rather than making a Merchant fetch it.
-   */
-  guarded.post("/api-keys", requirePermission(PERMISSIONS.apiKeyWrite), async (c) => {
-    const body = await jsonBody(c);
-    if (!body.ok) return c.json(body.error, 400);
-
-    const created = await createApiKey(deps.db, body.value);
+  guarded.openapi(createApiKeyRoute, async (c) => {
+    const created = await createApiKey(deps.db, c.req.valid("json"));
     if (!created.ok) return refused(c, created, API_KEY_STATUS);
     return c.json(created.apiKey, 201);
   });
 
-  /** Revokes a key. It stops working on the very next request, like a deleted Session. */
-  guarded.delete(
-    "/api-keys/:id",
-    requirePermission(PERMISSIONS.apiKeyWrite),
-    async (c) => {
-      const revoked = await revokeApiKey(deps.db, c.req.param("id"));
-      if (!revoked) {
-        return c.json(
-          { error: "No such API key exists.", reason: "api-key-not-found" },
-          404,
-        );
-      }
-      return c.body(null, 204);
-    },
-  );
+  guarded.openapi(revokeApiKeyRoute, async (c) => {
+    const revoked = await revokeApiKey(deps.db, c.req.valid("param").id);
+    if (!revoked) {
+      return c.json(
+        { error: "No such API key exists.", reason: "api-key-not-found" },
+        404,
+      );
+    }
+    return c.body(null, 204);
+  });
 
   admin.route("/", guarded);
 
@@ -286,7 +503,9 @@ function respondToCreation(c: Context<AdminEnv>, created: MerchantCreation) {
  * one — a client parses refusals one way whether it was turned back at the door or by the
  * handler. The status map is passed in rather than switched on here, so a module that grows a
  * reason has one place to say what it means and the compiler asks for it: `satisfies Record<…>`
- * on each map makes an unmapped reason a build failure rather than an `undefined` status.
+ * on each map makes an unmapped reason a build failure rather than an `undefined` status. The
+ * route declaring that status is the second half of the same guarantee — a status no route
+ * names does not typecheck.
  */
 function refused<Reason extends string, Status extends ContentfulStatusCode>(
   c: Context<AdminEnv>,
@@ -299,27 +518,11 @@ function refused<Reason extends string, Status extends ContentfulStatusCode>(
   );
 }
 
-type JsonBody =
-  | { readonly ok: true; readonly value: Record<string, unknown> }
-  | { readonly ok: false; readonly error: Record<string, string> };
-
 /**
- * Reads a JSON object body, turning a malformed one into a 400 rather than a 500: Hono's
- * `req.json()` throws, and an unparseable body is the client's mistake, not the server's.
+ * There is deliberately no catch-all here.
+ *
+ * An unrouted `/admin` path falls through to Hono's own plain-text 404, which is not the
+ * JSON shape `/store` answers with — an inconsistency between the two surfaces, filed as
+ * #33 and fixed there rather than here. The description says what is true today: it names
+ * the routes that exist, and promises nothing about the ones that do not.
  */
-async function jsonBody(c: Context<AdminEnv>): Promise<JsonBody> {
-  const malformed = {
-    ok: false,
-    error: { error: "The request body must be a JSON object.", reason: "malformed-body" },
-  } as const;
-
-  try {
-    const value: unknown = await c.req.json();
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return malformed;
-    }
-    return { ok: true, value: value as Record<string, unknown> };
-  } catch {
-    return malformed;
-  }
-}

@@ -1,5 +1,4 @@
-import { Hono } from "hono";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { requireApiKey, type StoreEnv } from "../auth/store-gate.ts";
 import type { Database } from "../db/client.ts";
 import type {
@@ -8,6 +7,8 @@ import type {
 } from "../pricing/resolve-price.ts";
 import { openMetadata } from "../workflow/context.ts";
 import type { WorkflowRun } from "../workflow/run.ts";
+import * as contract from "./contract.ts";
+import { API_KEY, invalidRequestHook, json, REFUSALS } from "./openapi.ts";
 
 /**
  * The store surface — what a storefront calls, and the second of kobai's two authenticated
@@ -32,22 +33,49 @@ export type StoreDependencies = {
   readonly priceWorkflow: PriceResolutionWorkflow;
 };
 
-export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
-  const store = new Hono<StoreEnv>();
+/**
+ * What a Variant costs.
+ *
+ * The answer is produced by the `resolve-price` Workflow rather than by a query here, and
+ * the response says which Steps ran. That field is a requirement rather than a debugging
+ * nicety: it is what lets a Developer who has replaced a Step *see* that theirs ran, so the
+ * extension mechanism is demonstrated rather than assumed (spec story 33).
+ */
+const resolvePriceRoute = createRoute({
+  method: "get",
+  path: "/variants/{id}/price",
+  summary: "What a Variant costs",
+  description:
+    "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did.",
+  security: API_KEY,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json(
+      "The resolved Price, and the Steps that produced it.",
+      contract.ResolvedPrice,
+    ),
+    401: REFUSALS.noApiKey,
+    404: json(
+      "A Step refused: there is no such Variant, or it carries no Price.",
+      contract.PriceRefusal,
+    ),
+    422: json(
+      "A Step this build of Core does not know refused. The request was well formed and the Workflow declined it.",
+      contract.PriceRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv> {
+  const store = new OpenAPIHono<StoreEnv>({ defaultHook: invalidRequestHook });
 
   store.use("*", requireApiKey(deps.db));
 
-  /**
-   * What a Variant costs.
-   *
-   * The answer is produced by the `resolve-price` Workflow rather than by a query here, and
-   * the response says which Steps ran. That field is a requirement rather than a debugging
-   * nicety: it is what lets a Developer who has replaced a Step *see* that theirs ran, so the
-   * extension mechanism is demonstrated rather than asserted (spec story 33).
-   */
-  store.get("/variants/:id/price", async (c) => {
+  store.openapi(resolvePriceRoute, async (c) => {
     const run = await deps.priceWorkflow.run(
-      { variantId: c.req.param("id") },
+      { variantId: c.req.valid("param").id },
       // Everything the caller sent that Core does not model, carried through untouched —
       // ADR-0013's open context, at the edge where it is filled.
       { db: deps.db, metadata: openMetadata(new URL(c.req.url)) },
@@ -76,12 +104,17 @@ export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
    * right path and the wrong method lands here too, and is reported as a path that is not
    * there; distinguishing the two would mean enumerating methods per path for a surface that
    * currently has one route.
+   *
+   * It is a wildcard rather than a route, so it is deliberately absent from the OpenAPI
+   * description: a description enumerates the paths that exist, and this one answers the
+   * paths that do not. A generated client therefore has no type for this body, which is
+   * consistent rather than a gap — it also has no way to make the call that produces one.
    */
   store.all("*", (c) =>
     c.json(
       {
         error: `There is no ${c.req.path} on the store surface.`,
-        reason: "not-found",
+        reason: "not-found" as const,
       },
       404,
     ),
@@ -99,16 +132,24 @@ export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
  * and the Workflow declined it, which is the most that can honestly be said about a refusal
  * whose meaning is not Core's to know.
  */
-const REFUSED = {
+const PRICE_REFUSAL_STATUS = {
   "variant-not-found": 404,
   "price-not-set": 404,
-} as const satisfies Record<PriceResolutionRefusal, ContentfulStatusCode>;
+} as const satisfies Record<PriceResolutionRefusal, PriceRefusalStatus>;
+
+/**
+ * The two statuses a refused resolution can carry.
+ *
+ * Narrow on purpose: the route declares exactly these, so a third one would have to be
+ * declared before it could be returned.
+ */
+type PriceRefusalStatus = 404 | 422;
 
 const REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW = 422;
 
-function statusFor(reason: string): ContentfulStatusCode {
+function statusFor(reason: string): PriceRefusalStatus {
   return (
-    (REFUSED as Record<string, ContentfulStatusCode>)[reason] ??
+    (PRICE_REFUSAL_STATUS as Record<string, PriceRefusalStatus>)[reason] ??
     REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW
   );
 }
