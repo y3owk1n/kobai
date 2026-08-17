@@ -22,6 +22,10 @@ export {
   type TestSession,
 } from "./merchant.ts";
 export {
+  migrationSetUpTo,
+  type PartialMigrationSet,
+} from "./migrations.ts";
+export {
   type ColumnFact,
   type ForeignKeyFact,
   inspectSchema,

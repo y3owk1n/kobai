@@ -37,10 +37,12 @@ describe("a Plugin owns its own tables", () => {
       "drizzle.__drizzle_migrations_plugin_price_log",
     ]);
     // Only this Plugin's count is asserted. How many migrations Core has is Core's business
-    // and no reason for a Plugin's suite to go red. Two of its own, because this package
+    // and no reason for a Plugin's suite to go red. Four of its own, because this package
     // widened its table when it needed to — on its own timetable, in its own set, with no
-    // Core migration involved.
-    expect(tracking.find((entry) => entry.table.endsWith("price_log"))?.applied).toBe(2);
+    // Core migration involved. Four rather than two because widening a table that may
+    // already hold rows takes three migrations, not one: add nullable, backfill, then
+    // constrain (ADR-0038, and `migrations.test.ts` beside this file).
+    expect(tracking.find((entry) => entry.table.endsWith("price_log"))?.applied).toBe(4);
   });
 
   it("scopes its migration config to its own table prefix", () => {

@@ -1,0 +1,33 @@
+-- The middle step of a safe widening: give every row that predates `amount` and `currency`
+-- a value, so that the migration after this one can make both columns NOT NULL.
+--
+-- This file is hand-written, and that is not an exception to "migrations are generated"
+-- (AGENTS.md § Layout). It is a `--custom` migration, generated with
+-- `drizzle-kit generate --custom`, whose body carries **no schema change at all** — it is an
+-- UPDATE. drizzle-kit diffs schemas, so a backfill is invisible to it in both directions:
+-- `generate` will never write one and will never notice one is missing. That is the same
+-- reason Core's seed migrations and `0009_updated_at_triggers.sql` are hand-written
+-- (ADR-0037), and it is why the safe widening is three migrations rather than one — the two
+-- ends are generated from `schema.ts` and only the middle is ours. See ADR-0038.
+--
+-- Why the values are these. A row here predates the Step that records amounts, so no price
+-- was ever observed for it; the honest question is not "what was it?" but "how do you say
+-- there wasn't one?". `XXX` is ISO 4217's own answer — the code reserved for transactions
+-- where no currency is involved — and 0 minor units is the only amount consistent with it.
+-- Any real currency code would be a price this Plugin never saw, sitting in the column
+-- indistinguishable from one it did: wrong in the shape of a correct answer, which is the
+-- expensive kind.
+--
+-- No column DEFAULT is set here or anywhere, deliberately. `ADD COLUMN … NOT NULL DEFAULT 0`
+-- would have made this one statement instead of three and, on Postgres 11 and later, without
+-- rewriting the table — but the default would then also apply to every row written
+-- *afterwards*, so a Step that forgot to pass an amount would log `0 XXX` and look like a
+-- free item rather than failing. The backfill is for the rows that were already there. The
+-- constraint is for the rows that come next.
+--
+-- `WHERE … IS NULL` so this stays idempotent and touches nothing it should not: a row
+-- written between this migration and the last one already carries its own values, and this
+-- must not overwrite them.
+UPDATE "price_log_entry"
+SET "amount" = 0, "currency" = 'XXX'
+WHERE "amount" IS NULL OR "currency" IS NULL;

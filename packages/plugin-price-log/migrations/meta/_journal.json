@@ -12,8 +12,22 @@
     {
       "idx": 1,
       "version": "7",
-      "when": 1786952577993,
-      "tag": "0001_spicy_darwin",
+      "when": 1786971644465,
+      "tag": "0001_widen_with_amount_and_currency",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786971655171,
+      "tag": "0002_backfill_amount_and_currency",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786971678628,
+      "tag": "0003_require_amount_and_currency",
       "breakpoints": true
     }
   ]
