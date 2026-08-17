@@ -138,8 +138,10 @@ describe("the store surface exposes no Merchant-only capability", () => {
   });
 
   it("serves the price and nothing else about the catalog", async () => {
-    // The whole surface, enumerated: one route. Anything a Merchant does — creating a
-    // Product, listing the catalog, minting a key — is not reachable with a key at all.
+    // What a key reaches is a Shopper's path through the Store — a price, a Cart, an Order —
+    // and nothing else about the catalog. Anything a Merchant does — creating a Product,
+    // listing the catalog, minting a key — is not reachable with a key at all. The paths
+    // below are the ones a caller would most plausibly guess, and each is a 404.
     kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
 
