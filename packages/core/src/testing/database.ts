@@ -7,6 +7,12 @@ import { quoteIdentifier } from "../db/identifier.ts";
  * ones are created, not a test database itself. Defaults to the `db` service in
  * `compose.yaml`.
  *
+ * `KOBAI_TEST_DATABASE_URL` is not something kobai's own contributors set: devbox exports
+ * it in front of every script, built from the same per-checkout port it hands
+ * `compose.yaml`, so the container's published port and the address dialled here come
+ * from one place and cannot drift apart (AGENTS.md § Development). The literal below is
+ * the fallback for a suite run outside devbox, and matches `compose.yaml`'s own fallback.
+ *
  * "Maintenance" rather than "admin" throughout this module: in kobai, **Admin** means the
  * pre-built UI a Merchant works in, and nothing else (`CONTEXT.md`).
  */

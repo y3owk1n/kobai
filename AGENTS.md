@@ -43,7 +43,7 @@ and no PR opens on a red one.
 | `devbox run ci` | **The gate.** Everything below, in order. |
 | `devbox run up` | Postgres and the reference Project. `http://localhost:3000/health`. |
 | `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
-| `devbox run db` | Just Postgres — what the test suite needs. |
+| `devbox run db` | Just Postgres — what the test suite needs, on this checkout's own port. |
 | `devbox run test` | Postgres up, build, then the whole suite. |
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
 | `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
@@ -71,6 +71,45 @@ explanation sits where the command would have been — a **real comment** in `de
 `"// …"` **key** in each package's `package.json` — and `tests/no-push-script.test.ts` fails
 the build if a push script appears in either, or in a `run:` step under
 `.github/workflows/`, where no script name would give it away.
+
+### The Postgres port belongs to the checkout, not to kobai
+
+**`devbox run db` publishes Postgres on a port derived from this checkout's path**, in the
+range **55000-55999** — so `docker ps` will show something like `55154`, not the `55432` the
+files fall back to. That is not a mystery, it is the point: two checkouts of kobai (a second
+clone, a git worktree) differ by their path and nothing else, so hashing the path gives each
+one a port of its own and lets both run `devbox run ci` at the same time with nothing passed
+by hand. A *random* port would do that too and would be worse — a path does not change
+between runs, so the container yesterday's run left behind is still findable at today's port.
+
+The derivation lives in `devbox.json`'s `init_hook`, in front of every script, and it sets
+four things from the one number:
+
+| Variable | What it decides |
+| --- | --- |
+| `POSTGRES_PORT` | The host port `compose.yaml` publishes the `db` service on. |
+| `KOBAI_TEST_DATABASE_URL` | The address the test harness dials (`packages/core/src/testing/database.ts`). |
+| `DATABASE_URL` | Where `devbox run dev` reaches that container from the host. |
+| `COMPOSE_PROJECT_NAME` | `kobai-<hash>` — which containers and which volume this checkout owns. |
+
+**One source decides all four, and that is the property worth keeping.** They used to
+default independently, so the port had to be passed twice and kept in step by whoever
+remembered; forgetting one brought the container up on one port while the suite dialled
+another, and neither error named the other (#21).
+
+The project name is set for the same reason. Compose otherwise names a project after the
+checkout directory's basename, so two checkouts both called `kobai` would share a project,
+and therefore a volume, and therefore a database — a far quieter failure than a port
+collision. Carrying the whole hash rather than the port keeps that true even for two
+checkouts that happen to derive the same port: they stay separate projects and collide
+loudly on the port, which is the failure you want.
+
+**An explicit value still wins**, and from `.env` as well as from the environment, because
+`.env` is where `.env.example` sends a Developer and docker compose reads it too — a pin
+compose honoured while the harness ignored it would be this same bug in a new place. Pin
+`POSTGRES_PORT` and every address above follows it; pin `DATABASE_URL` and only that one
+moves. So CI can fix a port, and so can anyone who wants one they can type. The 5432 a
+Developer's own Postgres sits on is untouched either way.
 
 ### Never use a `"// …"` key in `devbox.json`
 

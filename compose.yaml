@@ -16,7 +16,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobai}
       POSTGRES_DB: ${POSTGRES_DB:-kobai}
     ports:
-      # Deliberately not 5432 — a Developer's own Postgres should not have to move.
+      # Deliberately not 5432 — a Developer's own Postgres should not have to move. And
+      # deliberately not a fixed port either: devbox derives POSTGRES_PORT from the
+      # checkout's path, and the address the test harness dials from the same value, so
+      # two checkouts can run the gate at once and cannot disagree about where the
+      # database is. See AGENTS.md § Development. The literal below is what a bare
+      # `docker compose` outside devbox falls back to, and the test harness falls back to
+      # the same one.
       - "${POSTGRES_PORT:-55432}:5432"
     volumes:
       - kobai-db:/var/lib/postgresql/data
