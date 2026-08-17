@@ -239,6 +239,50 @@ describe("what the command tells a Developer at an empty boundary", () => {
     expect(printed).toContain("applied 0 codemods");
   });
 
+  it("says the lockfile moved, because the install it ran had to move it", async () => {
+    // The command rewrites a file nobody named — a Developer reviewing the diff afterwards
+    // meets a `pnpm-lock.yaml` change, and finding out here beats guessing there. The flag
+    // is in the line for the same reason: it is what makes the install legal after a
+    // deliberate range bump, and pnpm freezes by default wherever `CI` is set.
+    const at = await aProject("0.1.0");
+
+    const printed = formatUpgradeReport(
+      await upgradeProject({
+        directory: at,
+        to: "1.0.0",
+        install: nothingInstalls,
+        loadCodemodSet: shipping(),
+      }),
+    );
+
+    expect(printed).toContain("--no-frozen-lockfile");
+    expect(printed).toContain("pnpm-lock.yaml was rewritten too");
+  });
+
+  it("does not claim the lockfile moved when no range did", async () => {
+    const at = await aProject("1.0.0");
+    await writeFile(
+      join(at, "package.json"),
+      `${JSON.stringify({ name: "my-store", dependencies: { "@kobai/core": "^1.0.0" } }, null, 2)}\n`,
+    );
+    await writeFile(
+      join(at, "admin/package.json"),
+      `${JSON.stringify({ name: "my-store-admin", devDependencies: { "@kobai/client": "^1.0.0" } }, null, 2)}\n`,
+    );
+
+    const printed = formatUpgradeReport(
+      await upgradeProject({
+        directory: at,
+        to: "1.0.0",
+        install: nothingInstalls,
+        loadCodemodSet: shipping(),
+      }),
+    );
+
+    expect(printed).toContain("nothing to re-resolve");
+    expect(printed).not.toContain("pnpm-lock.yaml was rewritten too");
+  });
+
   it("distinguishes a set that is empty from one that had nothing matching", async () => {
     const at = await aProject("0.1.0");
 

@@ -21,13 +21,42 @@ export function formatUpgradeReport(report: UpgradeReport): string {
     ...rangeLines(report),
     "",
     "Install",
-    "  `pnpm install` ran, so the version above is the one on disk.",
+    ...installLines(report),
     "",
     "Codemods",
     ...codemodLines(report),
     "",
     summary(report),
   ].join("\n");
+}
+
+/**
+ * What the install did, including the file nobody asked it to touch.
+ *
+ * **An upgrade changes `pnpm-lock.yaml` as surely as it changes a manifest**, and a
+ * Developer reading the diff afterwards should have been told that here rather than
+ * discovering it in `git status`. It is also the line that explains the flag: the ranges
+ * changed a moment earlier, so a frozen install would have refused by construction — which
+ * is why this one install is allowed to move the lockfile and nothing else in a Project is.
+ */
+function installLines(report: UpgradeReport): string[] {
+  const ran =
+    "  `pnpm install --no-frozen-lockfile` ran, so the version above is the one on disk.";
+
+  if (report.ranges.changed.length === 0) {
+    return [
+      ran,
+      "  No range moved, so the lockfile had nothing to re-resolve and should be unchanged.",
+    ];
+  }
+
+  return [
+    ran,
+    "  pnpm-lock.yaml was rewritten too, and had to be: the ranges above changed, so the",
+    "  lockfile they had been resolved from was out of date the moment they did. Expect it",
+    "  in the diff beside the manifests and commit it with them. Nothing else in your",
+    "  Project installs any differently — that flag is scoped to this one install.",
+  ];
 }
 
 function rangeLines(report: UpgradeReport): string[] {

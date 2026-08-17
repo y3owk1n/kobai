@@ -28,3 +28,9 @@ One argument, and no way to skip the install: no codemod can run until the versi
 moving to is on disk, so an upgrade that installed nothing would be an upgrade that quietly
 ran none. If the command exits non-zero, read what it printed — the ranges may already have
 moved, and it will say what it could not finish.
+
+**`pnpm-lock.yaml` moves with the manifests, and belongs in the same commit.** The ranges
+changed, so the resolution recorded in the lockfile is out of date the moment they do — the
+upgrade's install runs `--no-frozen-lockfile` for that reason, and the command's report says
+so. It is the only install that does: run this in your CI and everything else there still
+installs strictly from the lockfile.

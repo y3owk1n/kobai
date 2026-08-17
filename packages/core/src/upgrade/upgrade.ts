@@ -273,9 +273,29 @@ async function codemodSetInstalledIn(directory: string): Promise<LoadedCodemodSe
   };
 }
 
+/**
+ * The install, and the one install in kobai that **must** be allowed to move the lockfile.
+ *
+ * `--no-frozen-lockfile` is not a convenience and not a workaround for a strict runner. The
+ * line above this one has just rewritten every `@kobai/*` range on purpose, so by the time
+ * the install runs `pnpm-lock.yaml` is out of date **by construction** — that is what an
+ * upgrade *is*. A frozen install is therefore wrong here in every environment; it merely
+ * happens to be quiet in the ones where pnpm does not freeze by default.
+ *
+ * **And pnpm freezes whenever `CI` is set.** So without this flag the command works on a
+ * Developer's machine and fails in exactly the place an upgrade is most often run
+ * unattended — with `ERR_PNPM_OUTDATED_LOCKFILE` naming a lockfile that is stale precisely
+ * because this command did its job. kobai's own gate found it that way round: green
+ * locally, red in GitHub Actions.
+ *
+ * The flag is scoped to this one call and to nothing else. A Project's own `pnpm install`,
+ * its Dockerfile's production install and this repository's `devbox run ci` all still
+ * resolve from the lockfile and still fail when it has drifted, which is what they are for:
+ * a lockfile is stale there by accident, and here on purpose.
+ */
 async function pnpmInstall(directory: string): Promise<void> {
   try {
-    await run("pnpm", ["install"], {
+    await run("pnpm", ["install", "--no-frozen-lockfile"], {
       cwd: directory,
       timeout: INSTALL_TIMEOUT,
       maxBuffer: 32 * 1024 * 1024,
@@ -283,7 +303,7 @@ async function pnpmInstall(directory: string): Promise<void> {
   } catch (cause) {
     const { stdout = "", stderr = "" } = cause as { stdout?: string; stderr?: string };
     throw new Error(
-      `\`pnpm install\` failed after the version bump, so this Project is on new ranges with old packages. Fix whatever the install complained about and run this command again.\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`,
+      `\`pnpm install --no-frozen-lockfile\` failed after the version bump, so this Project is on new ranges with old packages. Fix whatever the install complained about and run this command again.\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`,
       { cause },
     );
   }

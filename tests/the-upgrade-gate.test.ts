@@ -139,8 +139,18 @@ beforeAll(async () => {
   // **The upgrade, exactly as a Developer runs it.** `pnpm exec` finds the bin `@kobai/core`
   // declares, so the command is the one this Project has installed — not a script this test
   // wrote, and not a hand-edited manifest.
+  //
+  // **`CI` is set here on purpose, and it makes this gate stricter rather than kinder.**
+  // pnpm defaults `frozen-lockfile` to true whenever `CI` is set, and an upgrade has just
+  // made the lockfile out of date deliberately — so this is the one environment in which
+  // the command's own install can refuse to run, and it did: green on every Developer's
+  // machine and red in GitHub Actions with `ERR_PNPM_OUTDATED_LOCKFILE`. A Developer runs
+  // `kobai-upgrade` in their CI too, which is where an upgrade failing costs the most, so
+  // the fix belongs in the command and the environment that catches it belongs here.
   upgradeOutput = await phase("running the shipped upgrade command", () =>
-    runInProject(project, "pnpm", ["exec", "kobai-upgrade", "--to", SYNTHETIC_MAJOR]),
+    runInProject(project, "pnpm", ["exec", "kobai-upgrade", "--to", SYNTHETIC_MAJOR], {
+      CI: "true",
+    }),
   );
 
   // The Developer's next command. `kobai-upgrade` installs and migrates source; building is
@@ -236,6 +246,26 @@ describe("a customised Project taken across a Core major", () => {
       installed.version,
       "The Project's manifest says the new major but its node_modules holds the old one, so nothing below this tested the upgrade.",
     ).toBe(SYNTHETIC_MAJOR);
+
+    // **The lockfile is part of what an upgrade moves.** It has to be — the ranges above
+    // changed, so the resolution it recorded is stale by construction — and the install
+    // that follows a range bump is the one install in kobai allowed to rewrite it. A
+    // lockfile still pinned to the old major means the command bumped manifests and left
+    // the Project's resolution behind, which is the half-upgrade a frozen install produces
+    // when it is given its way.
+    const lockfile = await readFile(join(project, "pnpm-lock.yaml"), "utf8");
+    expect(
+      lockfile,
+      "The Project's manifests moved to the new major and pnpm-lock.yaml did not, so the upgrade left the lockfile disagreeing with the manifests it just rewrote.",
+    ).toContain(`^${SYNTHETIC_MAJOR}`);
+
+    // Criterion 9: the command changed a file the Developer did not name, so it says so.
+    // Finding a lockfile in the diff and having to work out who wrote it is exactly the
+    // surprise the report exists to prevent.
+    expect(
+      upgradeOutput,
+      `The command rewrote pnpm-lock.yaml and never mentioned it, so a Developer reviewing the diff meets a lockfile change nothing accounted for. It printed:\n${upgradeOutput}`,
+    ).toContain("pnpm-lock.yaml");
   });
 
   it("still boots, and applies every migration set into the database it already had", () => {

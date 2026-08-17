@@ -337,6 +337,15 @@ things about it are easy to get wrong and expensive to discover late:
   an unreadable `CODEMOD_SET_FORMAT`, an unorderable version — **fails the command**; only an
   absent set is survivable, and even that exits non-zero. The command has one argument and no
   way to skip the install, because either would be an upgrade that quietly ran no codemods.
+- **Its install is the one install in kobai that may move `pnpm-lock.yaml`**, and it runs
+  `pnpm install --no-frozen-lockfile` to say so. The ranges have just changed on purpose, so
+  the lockfile is stale *by construction* — and **pnpm freezes by default whenever `CI` is
+  set**, which made this green on a Developer's machine and red in GitHub Actions with
+  `ERR_PNPM_OUTDATED_LOCKFILE`. The gate therefore runs the upgrade with `CI=true` so that
+  environment exists locally too. Everywhere else a stale lockfile is an accident and
+  refusing is correct: do not spread the flag, and never fix this class of failure by
+  clearing `CI` for a child process — that hides it from every Developer's CI, which is where
+  an upgrade failing costs the most.
 
 **Do not reach for an AST tool to write a codemod without reopening ADR-0035.** A codemod
 gets the Project's directory and `node:fs`, which is all a manifest-level migration needs;

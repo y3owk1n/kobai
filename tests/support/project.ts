@@ -25,10 +25,18 @@ export async function runInProject(
   directory: string,
   command: string,
   args: readonly string[],
+  /**
+   * Added to the environment the command runs in, never replacing it — a Project's install
+   * needs the caller's PATH, HOME and pnpm store to work at all. What this is for is a test
+   * that needs a command to meet an environment the machine it runs on does not have; see
+   * the `CI` set on the upgrade in `the-upgrade-gate.test.ts`.
+   */
+  environment: Readonly<Record<string, string>> = {},
 ): Promise<string> {
   try {
     const { stdout } = await run(command, [...args], {
       cwd: directory,
+      env: { ...process.env, ...environment },
       timeout: PROJECT_TIMEOUT,
       maxBuffer: 32 * 1024 * 1024,
     });

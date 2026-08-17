@@ -94,6 +94,32 @@ where pnpm's real path carries the version and the cache key changes when the ve
 The gate asserts the report names the version arrived at, which is the assertion that catches
 this class of bug at all.
 
+## The install must be allowed to move the lockfile
+
+The command rewrites every `@kobai/*` range and *then* installs, so at the moment the install
+runs `pnpm-lock.yaml` is out of date **by construction**. That is not a state to recover
+from; it is what an upgrade is. So this one install runs `pnpm install --no-frozen-lockfile`,
+and the flag is part of the design rather than a workaround.
+
+**pnpm turns `frozen-lockfile` on by default whenever `CI` is set**, which made this the
+worst kind of bug: the command worked on every Developer's machine and refused to run in CI —
+where an upgrade is most often run unattended, and where a failure costs the most — with
+`ERR_PNPM_OUTDATED_LOCKFILE` blaming a lockfile that was stale precisely because the command
+had done its job. kobai's own gate found it that way round, green locally and red in GitHub
+Actions, and the fix belongs in the shipped command: setting `CI=` for the gate's child
+process would have made the gate pass and left every Developer's CI broken.
+
+The flag is scoped to this install and no other. Everywhere else a lockfile is stale by
+accident and refusing is correct — a Project's Dockerfile production install, this
+repository's `devbox run ci`, a Project's own `devbox run install`. The gate now sets
+`CI=true` for the upgrade command it runs, so the environment that catches this is present
+locally too, rather than only in GitHub Actions.
+
+**A Developer is told.** The report's *Install* section names the flag, says
+`pnpm-lock.yaml` was rewritten and why, and says to commit it beside the manifests — the
+same standard the three codemod outcomes are held to, applied to a file the Developer never
+named. When no range moved, it says the lockfile had nothing to re-resolve instead.
+
 ## No AST tool, deliberately, and this is where that gets revisited
 
 A codemod is handed the Project's directory and nothing else. That is the smallest honest
