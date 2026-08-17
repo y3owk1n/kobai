@@ -611,6 +611,55 @@ const price = await kobai.request("/store/variants/…/price", { headers: key.he
 A test whose subject is the *kind* of key should ask for the kind it means
 (`{ kind: "publishable" }`) and say why, rather than leaning on the default.
 
+**Almost every test needs something to sell before it can assert anything, and that
+arrangement is one line.** `seedTestCatalog` creates a Product, the Variant that makes it
+sellable and a Price on that Variant — through the public API, like everything else here, so
+a Plugin's test is doing exactly what a Plugin can do — and signs a Merchant in and mints a
+secret key on the way, because the catalog is reached through one gate or the other:
+
+```ts
+const catalog = await seedTestCatalog(kobai); // "A poster", one POSTER-A2, one Price of 1250
+
+const price = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+  headers: catalog.apiKey.headers,
+});
+const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+  headers: catalog.merchant.headers,
+});
+```
+
+**Amounts are integer minor units** — 1250 is USD 12.50 — and a Price's currency is the
+Store's default, which since #5 is the only currency a Price may carry. So the helper takes
+no currency at all: the correct thing is the only thing.
+
+It hides the arrangement a test does not care about and **never the thing the test is
+about**, which is the same line `signInTestMerchant` draws. A test asserting on the OpenAPI
+description takes the one-liner; a test asserting on price *selection* names the Prices it
+means, and they stay visible in the test rather than becoming a default it inherited:
+
+```ts
+await seedTestCatalog(kobai, { prices: [1250, 900] });   // two Prices on one Variant
+await seedTestCatalog(kobai, { prices: [] });            // a Variant with no Price at all
+await seedTestCatalog(kobai, {                           // several Variants; an unnamed one
+  variants: [{ prices: [1250] }, { sku: "MUG", prices: [] }],  // takes POSTER-A2, A3, …
+});
+await seedTestCatalog(kobai, { merchant });              // one already signed in (ADR-0041)
+```
+
+`prices` is the one-Variant shorthand for `variants` and naming both is a type error. Ask for
+a Variant by SKU — `catalog.variant("MUG").id` — never by position: a Product reports its
+Variants in **SKU order**, not in the order they were asked for. `catalog.variantId` is the
+first one asked for, for the common case that has only one.
+
+**The harness is promised surface** (ADR-0047): everything `@kobai/core/testing` exports is
+covered by ADR-0019's semver commitment, because it ships for the Plugin author who needs the
+same seam Core tests through — while the five Extension Points of ADR-0003 stay five, since
+nothing attaches to a test harness at runtime. So a helper added here is designed as public
+API and documented in this section, and what a helper does *internally* — which requests it
+makes, in what order — is promised to nobody. `seedTestCatalog`'s own contract, including
+every case above, is asserted in `packages/core/src/testing/catalog.test.ts` against the
+running application rather than against the object it returns.
+
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive
 the runner yourself:

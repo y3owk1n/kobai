@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createTestApiKey,
-  createTestKobai,
-  signInTestMerchant,
-  type TestKobai,
-} from "../testing/index.ts";
+import { createTestKobai, seedTestCatalog } from "../testing/index.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
 import type { LoadedPrices, ResolvedPrice } from "./resolve-price.ts";
 
@@ -29,46 +24,15 @@ const flatRate = defineStep(
   }),
 );
 
-type Priced = {
-  readonly variantId: string;
-  /** A key's headers, ready to ask the store surface with. */
-  readonly headers: Record<string, string>;
-};
-
-/** A Store holding one Variant at one Price, created entirely through the public API. */
-async function priced(instance: TestKobai, amount: number): Promise<Priced> {
-  const merchant = await signInTestMerchant(instance);
-  const json = { ...merchant.headers, "content-type": "application/json" };
-
-  const product = (await (
-    await instance.request("/admin/products", {
-      method: "POST",
-      headers: json,
-      body: JSON.stringify({ title: "A poster", variants: [{ sku: "POSTER-A2" }] }),
-    })
-  ).json()) as { variants: { id: string }[] };
-  const variantId = product.variants[0]?.id ?? "";
-
-  await instance.request(`/admin/variants/${variantId}/prices`, {
-    method: "POST",
-    headers: json,
-    body: JSON.stringify({ amount }),
-  });
-
-  const key = await createTestApiKey(instance, merchant, { name: "storefront" });
-
-  return { variantId, headers: key.headers };
-}
-
 describe("a Project that replaces a Step in the price-resolution Workflow", () => {
   it("serves the replacement's price instead of the Price the Merchant entered", async () => {
     await using kobai = await createTestKobai({
       workflows: { "resolve-price": { steps: { "select-price": flatRate } } },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
@@ -86,10 +50,10 @@ describe("a Project that replaces a Step in the price-resolution Workflow", () =
     await using kobai = await createTestKobai({
       workflows: { "resolve-price": { steps: { "select-price": flatRate } } },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -125,10 +89,10 @@ describe("a Project that replaces a Step in the price-resolution Workflow", () =
         },
       },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -140,10 +104,10 @@ describe("a Project that replaces a Step in the price-resolution Workflow", () =
     // The override belongs to the Project that declared it and to no other instance —
     // including one booted in the same process a moment later.
     await using kobai = await createTestKobai();
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -178,10 +142,10 @@ describe("a Project that replaces a Step in the price-resolution Workflow", () =
         },
       },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(422);
@@ -203,10 +167,10 @@ describe("a Project that inserts a Step without replacing one", () => {
     await using kobai = await createTestKobai({
       workflows: { "resolve-price": { after: { "select-price": [watching] } } },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
@@ -237,10 +201,10 @@ describe("a Project that inserts a Step without replacing one", () => {
         },
       },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -295,11 +259,11 @@ describe("a Step reading an input Core does not model", () => {
     await using kobai = await createTestKobai({
       workflows: { "resolve-price": { steps: { "select-price": leadTimeSurcharge } } },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
     const response = await kobai.request(
-      `/store/variants/${store.variantId}/price?leadTimeDays=3`,
-      { headers: store.headers },
+      `/store/variants/${catalog.variantId}/price?leadTimeDays=3`,
+      { headers: catalog.apiKey.headers },
     );
 
     expect(response.status).toBe(200);
@@ -312,10 +276,10 @@ describe("a Step reading an input Core does not model", () => {
     await using kobai = await createTestKobai({
       workflows: { "resolve-price": { steps: { "select-price": leadTimeSurcharge } } },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -328,11 +292,11 @@ describe("a Step reading an input Core does not model", () => {
     // same request and does nothing with it, because nothing in Core reads a key out of the
     // open half of a context.
     await using kobai = await createTestKobai();
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
     const response = await kobai.request(
-      `/store/variants/${store.variantId}/price?leadTimeDays=3`,
-      { headers: store.headers },
+      `/store/variants/${catalog.variantId}/price?leadTimeDays=3`,
+      { headers: catalog.apiKey.headers },
     );
 
     expect(response.status).toBe(200);
