@@ -57,6 +57,21 @@ key in `devbox.json` and in each package's `package.json` says so where the comm
 have been, and `tests/no-push-script.test.ts` fails the build if one appears in either — or
 in a `run:` step under `.github/workflows/`, where no script name would give it away.
 
+### Dependency updates
+
+Dependabot is configured by [`.github/dependabot.yml`](.github/dependabot.yml), which
+carries the reasoning in full. Three parts of it are durable enough to belong here:
+
+- **Weekly, on Monday** — not daily. A merged bump rewrites `pnpm-lock.yaml` and every
+  open branch has to rebase onto it, so updates arrive as one predictable batch.
+- **Majors are never grouped.** Minor and patch updates batch into one PR per ecosystem;
+  a major matches no group and so arrives as its own PR, named for the package and the
+  boundary it crosses. It is not allowed to hide inside a batch — that is the failure
+  the config was written against.
+- **`@types/node` is held at the major `devbox.json` provides.** Typing against a newer
+  Node than the one that runs means typechecking against functions that do not exist at
+  runtime. The Node pin is recorded in ADR-0031; when it moves, lift the `ignore`.
+
 ### Layout
 
 | Path | What |
