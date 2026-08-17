@@ -36,7 +36,7 @@ New to the project? These five carry the shape of everything else:
 | [0008](./0008-variants-are-sellable-and-prices-are-rows.md) | Variants are the only sellable thing, and Prices are rows | Accepted |
 | [0009](./0009-cart-and-order-are-separate-and-orders-snapshot.md) | Cart and Order are separate, and Orders snapshot everything | Accepted |
 | [0010](./0010-the-admin-ships-in-one-container-and-gets-no-private-api.md) | The Admin ships in the Project's container and gets no private API | Accepted |
-| [0011](./0011-postgres-and-drizzle.md) | Postgres, with Drizzle as the ORM | Accepted — **carries an unverified risk** |
+| [0011](./0011-postgres-and-drizzle.md) | Postgres, with Drizzle as the ORM | Accepted — **risk verified and closed** |
 | [0012](./0012-capacity-constrained-availability-without-yield-pricing.md) | Capacity-constrained availability, without yield pricing | Accepted |
 | [0013](./0013-core-owns-no-lead-time-pricing-and-workflow-context-is-open.md) | Core owns no lead-time pricing, and Workflow context is open | Accepted — test case re-anchored by 0029 |
 | [0014](./0014-fulfilment-strategies-are-an-open-set-and-fulfilment-is-its-own-entity.md) | Fulfilment strategies are an open set, and Fulfilment is its own entity | Accepted |
@@ -55,17 +55,24 @@ New to the project? These five carry the shape of everything else:
 | [0027](./0027-holds-roles-and-bundles-re-decided-on-platform-terms.md) | Holds, roles and bundles, re-decided on platform terms | Accepted |
 | [0028](./0028-the-core-membership-rule.md) | The Core membership rule | Accepted |
 | [0029](./0029-the-reference-project-is-the-release-gate-and-content-is-built-first.md) | The reference Project is the release gate, and the content Plugin is built first | Accepted |
+| [0030](./0030-generate-and-migrate-only-never-drizzle-kit-push.md) | `generate` and `migrate` only — never `drizzle-kit push` | Accepted |
+
+## Prototypes
+
+Throwaway code kept as a primary source, on branches out of main.
+
+- **`prototype/drizzle-multi-migration`** — settled ADR-0011's open risk and produced
+  ADR-0030. Three packages generating, applying and evolving migrations independently
+  against one Postgres. Run it with `devbox run prototype`; the verdict is in its
+  `FINDINGS.md`.
 
 ## Open risks
 
-- **[ADR-0011](./0011-postgres-and-drizzle.md)** — whether `drizzle-kit` cleanly handles
-  multiple independent migration sets against one database is believed but **not
-  verified**, and it is load-bearing for [ADR-0004](./0004-plugins-own-their-tables-core-tables-are-closed.md).
-  Settle it with a throwaway prototype before Core depends on it. If it does not hold,
-  Kysely is the fallback and ADR-0011 is superseded rather than patched.
 - **[ADR-0024](./0024-one-release-target-v1-and-1-0-are-the-same-thing.md)** — the
   architecture ships without production validation. ADR-0029 is the deliberate substitute
   and only works if the reference Project is built early and upgraded honestly.
+
+_ADR-0011's Drizzle risk was closed by prototype — see above._
 
 ## Conventions
 

@@ -23,3 +23,8 @@ promise is only credible if this door stays shut.
   deliberately.
 - `metadata` is unindexed and untyped by design. If a Plugin needs either, it needs its own
   table.
+- **The no-foreign-key rule buys more than it was written for.** Because no FK points from a
+  Plugin table into a Core table, Postgres imposes no cross-package ordering constraint, so
+  migration sets apply in **any** order — Plugins before Core included. Verified by the
+  prototype on branch `prototype/drizzle-multi-migration`. This matters because a Project
+  installs Plugins in whatever order it likes.
