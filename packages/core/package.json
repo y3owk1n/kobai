@@ -8,10 +8,19 @@
   "publishConfig": {
     "registry": "http://localhost:4873"
   },
+  "// bin": "`kobai-upgrade` is the command ADR-0001 has always described — a version bump plus the shipped codemods. It is a bin of *this* package rather than of `create-kobai` because the codemods that run must be the ones the version being upgraded **to** ships, and this is the only package that is at that version in a Project once the install has run. See docs/adr/0035-upgrading-is-a-command-kobai-ships.md.",
+  "bin": {
+    "kobai-upgrade": "./dist/upgrade/bin.js"
+  },
+  "// exports": "`./codemods` is what a Project's `node_modules` is asked for during an upgrade, so it is the set belonging to the version arrived at rather than the one the running command came from. `./package.json` is what tells the upgrade command which version that is; Node only lets a package be asked for its own manifest when `exports` names it.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./codemods": {
+      "types": "./dist/upgrade/codemods.d.ts",
+      "default": "./dist/upgrade/codemods.js"
     },
     "./migrations": {
       "types": "./dist/migrations/index.d.ts",
@@ -21,7 +30,8 @@
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
     },
-    "./openapi.json": "./openapi.json"
+    "./openapi.json": "./openapi.json",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",

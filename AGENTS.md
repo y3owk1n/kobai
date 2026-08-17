@@ -180,6 +180,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/core` | `@kobai/core` — the package a Project depends on (ADR-0025). |
 | `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files. |
 | `packages/core/openapi.json` | The OpenAPI description. Generated, never hand-edited. |
+| `packages/core/src/upgrade` | `kobai-upgrade` — the command that moves a Project across a kobai version, and the codemod set it consults (ADR-0035). |
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
 | `packages/create-kobai` | `create-kobai` — the scaffolder. Generates a Project a Developer owns (ADR-0001, ADR-0034). |
@@ -311,6 +312,43 @@ comment in that file stops Biome parsing its own config. The reason: the templat
 generated artifact like `openapi.json`, and `jsonc-parser` re-prints an edited `tsconfig`
 with slightly different wrapping than Biome would, so formatting it would fight the
 byte-comparison that keeps it honest.
+
+### Upgrading a Project, and the codemods that do not exist yet
+
+`@kobai/core` ships a bin, **`kobai-upgrade`** (ADR-0035). It moves every `@kobai/*` range in
+a Project, installs, and runs the codemods **the version being upgraded to** ships. Three
+things about it are easy to get wrong and expensive to discover late:
+
+- **The set is keyed to the version that broke something**, not to a `from → to` pair.
+  `Codemod.introducedIn` names it and the runner takes everything in `(from, to]`, in order,
+  so a Project jumping two majors runs both without anybody having enumerated the pair. A
+  `0.x` minor counts as a major, because `^0.1.0` means `>=0.1.0 <0.2.0`.
+- **The set is read from the version arrived at, and Node's resolver cache will hand you the
+  one before it.** `require.resolve` caches by specifier and search path, so the same lookup
+  either side of an install returns the same package. The first version of this command
+  reported the old version as the new one and would have run its codemods — invisibly, because
+  at an empty boundary both sets are empty. The installed package is therefore read off the
+  filesystem at `node_modules/@kobai/core`, and the set resolved from *inside* it, where
+  pnpm's real path carries the version.
+- **The set is empty and the command says so.** "Nothing to do" and "did nothing" are
+  different answers, and only the first tells a Developer the command would have spoken up.
+  `CODEMOD_SET_FORMAT` is the other half: a runner meeting a set it cannot read refuses rather
+  than reporting none.
+
+**Do not reach for an AST tool to write a codemod without reopening ADR-0035.** A codemod
+gets the Project's directory and `node:fs`, which is all a manifest-level migration needs;
+TypeScript 7 ships no compiler API and #28 rejected pinning a second one, so rewriting a
+Developer's TypeScript is a dependency decision nobody has taken.
+
+The **upgrade seam** is `tests/the-upgrade-gate.test.ts`, and it is the release gate ADR-0029
+asks for: a generated Project — which *is* the reference Project — is arranged through the
+public API, taken across a **synthetic major** manufactured by republishing this commit's
+packages under another version, then rebuilt, rebooted against the same database, and asked
+the same question. Each assertion is one clause of ADR-0001's promise and says which clause
+broke, because `exit 1` at three in the morning is not a diagnosis. What it deliberately does
+not prove is that a codemod transforms anything — there is no breaking change to migrate —
+and that is pinned against fixtures in `packages/core/src/upgrade/codemods.test.ts`.
+
 
 ### Writing tests
 
@@ -448,6 +486,15 @@ boots it; `tests/the-runtime-image.test.ts` does that to the repository's, and
 `docker compose up --build` on the compose file and Dockerfile a Developer receives.
 Inspecting is not enough on its own — a prune that removed something the runtime needs looks
 identical to one that worked until the container is made to serve a request.
+
+**A credential is a build secret, never a file.** A Project's `.npmrc` holds an auth token
+when kobai comes from a private mirror, and a token that arrives through `COPY` is in an
+image layer forever, whatever a later `rm` says. So `.dockerignore` refuses the file and the
+Dockerfile mounts it — `RUN --mount=type=secret,id=npmrc,target=/app/.npmrc` — for the length
+of the install and no longer. Both halves, because either alone is a trap: the ignore line
+without the mount breaks every private-registry build, and the mount without it leaves the
+accident possible. The Project's image test greps the built image for the token rather than
+reading the Dockerfile, which is the only check that can see this.
 
 Real Postgres rather than a fake, because under
 [ADR-0004](docs/adr/0004-plugins-own-their-tables-core-tables-are-closed.md),

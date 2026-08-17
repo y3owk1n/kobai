@@ -60,6 +60,7 @@ New to the project? These five carry the shape of everything else:
 | [0032](./0032-merchant-sessions-travel-in-an-httponly-cookie.md) | Merchant sessions travel in an httpOnly cookie, and SameSite is the CSRF answer | Accepted |
 | [0033](./0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md) | The Admin's shape: a vendored Vite SPA, built into the Project and served at a path | Accepted |
 | [0034](./0034-kobai-is-published-and-the-reference-project-is-what-create-kobai-generates.md) | kobai's packages are published, and the reference Project is what `create-kobai` generates | Accepted |
+| [0035](./0035-upgrading-is-a-command-kobai-ships.md) | Upgrading is a command kobai ships, carried by the version being upgraded to | Accepted |
 
 ## Prototypes
 
@@ -74,7 +75,10 @@ Throwaway code kept as a primary source, on branches out of main.
 
 - **[ADR-0024](./0024-one-release-target-v1-and-1-0-are-the-same-thing.md)** — the
   architecture ships without production validation. ADR-0029 is the deliberate substitute
-  and only works if the reference Project is built early and upgraded honestly.
+  and only works if the reference Project is built early and upgraded honestly. The gate
+  now exists (`tests/the-upgrade-gate.test.ts`, ADR-0035) and runs on every commit; what it
+  cannot yet prove is that a codemod transforms anything, because kobai has broken nothing
+  and so ships none.
 
 _ADR-0011's Drizzle risk was closed by prototype — see above._
 

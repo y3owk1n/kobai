@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { freePort } from "./free-port.ts";
@@ -198,6 +198,7 @@ export async function startLocalRegistry(
 export async function publishPackages(
   registry: LocalRegistry,
   packageDirectories: readonly string[],
+  options: PublishOptions = {},
 ): Promise<void> {
   if (packageDirectories.length === 0) {
     // Failing open would leave the registry empty and every install failing later with a
@@ -222,16 +223,82 @@ export async function publishPackages(
     }
 
     for (const tarball of tarballs) {
-      await run(
-        "npm",
-        ["publish", join(destination, tarball), "--registry", registry.url],
-        {
-          cwd: repoRoot,
-          env: { ...process.env, npm_config_userconfig: registry.npmrc },
-        },
-      );
+      const published =
+        options.version === undefined
+          ? join(destination, tarball)
+          : await republishedAs(join(destination, tarball), options.version, destination);
+
+      await run("npm", ["publish", published, "--registry", registry.url], {
+        cwd: repoRoot,
+        env: { ...process.env, npm_config_userconfig: registry.npmrc },
+      });
     }
   } finally {
     await rm(destination, { recursive: true, force: true });
   }
+}
+
+export type PublishOptions = {
+  /**
+   * Publish these packages as this version instead of the one their manifests carry.
+   *
+   * **This is how #12's synthetic major exists.** ADR-0029 makes "the reference Project
+   * upgrades cleanly across a Core major" a release gate, and a gate that ran only when
+   * kobai actually released a major would run approximately never — so the gate manufactures
+   * one, on every commit, out of the packages this commit built.
+   *
+   * It is a rewrite of one manifest field and nothing else, which is exactly what a real
+   * version bump is. The tarball is the one `pnpm pack` produced, unpacked and repacked, so
+   * the files inside it are the files `tests/packaged-migrations.test.ts` reads. Nothing in
+   * the working tree is touched: a test that edited a manifest to publish it would leave a
+   * dirty repository behind the moment it crashed, and `tests/publish-guard.test.ts` asserts
+   * those versions stay in step.
+   *
+   * What it deliberately does *not* manufacture is a breaking change. There is none to make:
+   * `1.0.0` here is `0.1.0`'s code under another number. So the gate proves the path a
+   * Developer walks — bump, install, run the shipped command, boot, serve — and proves that
+   * a deeply customised Project survives it. It does not prove that a codemod transforms
+   * anything, because kobai ships none; `packages/core/src/upgrade/codemods.test.ts` is where
+   * that is pinned down. See docs/adr/0035.
+   */
+  readonly version?: string;
+};
+
+/**
+ * The same tarball, at another version.
+ *
+ * Every `@kobai/*` dependency moves too, and that is not a nicety: `pnpm pack` resolves a
+ * `workspace:*` to an exact pin, so a `@kobai/plugin-price-log@1.0.0` still asking for
+ * `@kobai/core@0.1.0` would install a *second* Core beside the new one. The Project would
+ * then hold two Cores, two migration runners and two sets of Workflow declarations, and the
+ * upgrade would appear to work while the Plugin talked to the old one.
+ */
+async function republishedAs(
+  tarball: string,
+  version: string,
+  workingDirectory: string,
+): Promise<string> {
+  const staged = await mkdtemp(join(workingDirectory, "staged-"));
+  await run("tar", ["-xzf", tarball, "-C", staged]);
+
+  const manifestPath = join(staged, "package", "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  manifest.version = version;
+
+  for (const block of ["dependencies", "peerDependencies"] as const) {
+    const dependencies = manifest[block];
+    if (dependencies === null || typeof dependencies !== "object") continue;
+    for (const name of Object.keys(dependencies as Record<string, string>)) {
+      if (!name.startsWith("@kobai/")) continue;
+      (dependencies as Record<string, string>)[name] = version;
+    }
+  }
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const republished = join(workingDirectory, `${version}-${basename(tarball)}`);
+  await run("tar", ["-czf", republished, "-C", staged, "package"]);
+  return republished;
 }
