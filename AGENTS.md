@@ -41,8 +41,9 @@ and no PR opens on a red one.
 | Command | What it does |
 | --- | --- |
 | `devbox run ci` | **The gate.** Everything below, in order. |
-| `devbox run up` | Postgres and the reference Project. `http://localhost:3000/health`. |
+| `devbox run up` | Postgres and the reference Project. `http://localhost:3000/health`, Admin at `/admin-ui`. |
 | `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
+| `devbox run admin:dev` | The Admin with a reload loop, beside `devbox run dev`. See [The Admin](#the-admin). |
 | `devbox run db` | Just Postgres — what the test suite needs, on this checkout's own port. |
 | `devbox run test` | Postgres up, build, then the whole suite. |
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
@@ -182,6 +183,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
 | `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
+| `reference/admin/` | The **Admin**, vendored into the Project as source a Developer edits (ADR-0033). |
 | `compose.yaml`, `Dockerfile` | Postgres and the application, and nothing else. |
 
 ### The API contract
@@ -216,6 +218,40 @@ one installs `@kobai/client`.
 `openapi-typescript` is pinned to **6.7.6, exactly**, and `.github/dependabot.yml` holds the
 major back. Version 7 builds its output with the TypeScript compiler API and TypeScript 7
 ships none — see below.
+
+### The Admin
+
+**The Admin is vendored source, not a dependency** (ADR-0010, ADR-0033). It lives at
+`reference/admin/` — React on Vite, Tailwind v4, shadcn/ui on **Base UI** — and every
+component under `src/components/ui/` is an ordinary file in this repository because that is
+how shadcn works: `shadcn add` copies source in. Edit them. Add another with
+
+```sh
+devbox run -- pnpm --filter kobai-reference-admin exec pnpm dlx shadcn@latest add <name>
+```
+
+and move whatever it writes into `dependencies` over to `devDependencies` — the whole
+frontend toolchain is bundled at build time, so none of it belongs in the shipped image.
+
+**One process serves both.** `reference/src/app.ts` asks one question — is this path the
+Admin's? — and hands everything else to `kobai.fetch` untouched. The Admin is at
+`/admin-ui`, deliberately **outside** `/admin`: the session cookie's default-path is the
+admin surface's directory (ADR-0032), and a cookie path matches only at a `/` boundary, so no
+asset request carries the credential. Beware that `/admin` *is* a bare string prefix of
+`/admin-ui` — match on the path boundary, never on `startsWith` alone.
+
+**There is no CORS configuration in this repository, and adding one is a wrong turn.** One
+origin is what ADR-0010 spends the single container on. The dev loop keeps it: `devbox run
+admin:dev` is a Vite server that **proxies** `/admin`, `/store` and `/health` to the Project,
+so the browser still sees one origin while editing.
+
+**The Admin may use only the public API, through `@kobai/client`.** No raw `fetch`, no
+`@kobai/core` import, and no route that exists for its benefit — if the Admin needs something
+the API cannot do, that is a finding about the API (ADR-0010).
+`tests/admin-uses-only-the-public-api.test.ts` fails the build on any network primitive in
+the Admin's source and on any kobai path `openapi.json` does not carry. Interaction and
+visual testing of the Admin is deferred, not forgotten; that guardrail is what stands in for
+it.
 
 ### Writing tests
 

@@ -8,6 +8,7 @@
       "!**/migrations/meta",
       "!packages/core/openapi.json",
       "!packages/client/src/schema.ts",
+      "!reference/admin/src/index.css",
       "!.devbox",
       "!pnpm-lock.yaml"
     ]

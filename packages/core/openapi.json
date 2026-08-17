@@ -617,6 +617,54 @@
           "kind"
         ]
       },
+      "ApiKeyList": {
+        "type": "object",
+        "properties": {
+          "apiKeys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeySummary"
+            }
+          }
+        },
+        "required": [
+          "apiKeys"
+        ]
+      },
+      "ApiKeySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ApiKeyKind"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it stopped working, or `null` while it still does."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "createdAt",
+          "revokedAt"
+        ]
+      },
       "ResolvedPrice": {
         "type": "object",
         "properties": {
@@ -1523,6 +1571,67 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List API keys",
+        "description": "Newest first, unpaginated, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every API key, and whether it still works.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyList"
                 }
               }
             }

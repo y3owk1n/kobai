@@ -11,9 +11,11 @@
     "start": "node dist/src/server.js",
     "// db:push": "There is deliberately no db:push script here either. A Project's database holds Core's tables and every wired Plugin's, so `drizzle-kit push` — which diffs against the LIVE database — reports success while silently dropping the tables of whichever packages the pushed schema does not know about, and leaves their tracking rows behind so the migration runner cannot repair it. Generate a migration instead. See docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
   },
+  "// dependencies": "`kobai-reference-admin` is a dependency rather than a devDependency because this process serves its `dist` at runtime — `src/admin-assets.ts` finds it through Node's own module resolution, which is right whether this file runs from `src` or from `dist`. Everything that *builds* the Admin is a devDependency of that package, so the built assets are all the runtime needs.",
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@kobai/core": "workspace:*",
-    "@kobai/plugin-price-log": "workspace:*"
+    "@kobai/plugin-price-log": "workspace:*",
+    "kobai-reference-admin": "workspace:*"
   }
 }

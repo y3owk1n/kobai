@@ -1,7 +1,12 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { type ApiKeyCreation, createApiKey, revokeApiKey } from "../auth/api-key.ts";
+import {
+  type ApiKeyCreation,
+  createApiKey,
+  listApiKeys,
+  revokeApiKey,
+} from "../auth/api-key.ts";
 import {
   type AdminEnv,
   authenticated,
@@ -322,6 +327,34 @@ const createApiKeyRoute = createRoute({
   },
 });
 
+/**
+ * Every key this deployment has issued — the route that makes revocation reachable.
+ *
+ * Minting answers with the value once and the id once, so before this existed a Merchant who
+ * lost that response held a live credential they could not name. Nothing here is presentable:
+ * only a digest of a key is stored, so there is no value to leak and no fragment of one is
+ * offered in its place.
+ *
+ * `api-key:read` rather than `api-key:write`: seeing which credentials exist and handing out
+ * a new one are different powers, and each route names the one permission it needs.
+ */
+const listApiKeysRoute = createRoute({
+  method: "get",
+  path: "/api-keys",
+  summary: "List API keys",
+  description:
+    "Newest first, unpaginated, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.apiKeyRead)] as const,
+  responses: {
+    200: json("Every API key, and whether it still works.", contract.ApiKeyList),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 const revokeApiKeyRoute = createRoute({
   method: "delete",
   path: "/api-keys/{id}",
@@ -446,6 +479,10 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     const created = await createApiKey(deps.db, c.req.valid("json"));
     if (!created.ok) return refused(c, created, API_KEY_STATUS);
     return c.json(created.apiKey, 201);
+  });
+
+  guarded.openapi(listApiKeysRoute, async (c) => {
+    return c.json({ apiKeys: await listApiKeys(deps.db) }, 200);
   });
 
   guarded.openapi(revokeApiKeyRoute, async (c) => {

@@ -58,6 +58,7 @@ New to the project? These five carry the shape of everything else:
 | [0030](./0030-generate-and-migrate-only-never-drizzle-kit-push.md) | `generate` and `migrate` only — never `drizzle-kit push` | Accepted |
 | [0031](./0031-the-runtime-shape-devbox-a-pnpm-workspace-hono-and-one-gate.md) | The runtime shape: devbox, a pnpm workspace, Hono, and one gate command | Accepted |
 | [0032](./0032-merchant-sessions-travel-in-an-httponly-cookie.md) | Merchant sessions travel in an httpOnly cookie, and SameSite is the CSRF answer | Accepted |
+| [0033](./0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md) | The Admin's shape: a vendored Vite SPA, built into the Project and served at a path | Accepted |
 
 ## Prototypes
 

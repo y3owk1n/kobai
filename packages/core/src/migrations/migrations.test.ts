@@ -20,7 +20,7 @@ describe("migration tracking", () => {
     kobai = await createTestKobai();
 
     await expect(inspectSchema(kobai.database).migrationTracking()).resolves.toEqual([
-      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 8 },
+      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 9 },
     ]);
   });
 
@@ -95,7 +95,7 @@ describe("the runner is reachable on its own", () => {
         name: "core",
         migrationsTable: "__drizzle_migrations_core",
         migrationsSchema: "drizzle",
-        applied: 8,
+        applied: 9,
       },
     ]);
   });

@@ -57,6 +57,13 @@
       "when": 1786948398195,
       "tag": "0007_seed_api_key_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786956170034,
+      "tag": "0008_seed_api_key_read_permission",
+      "breakpoints": true
     }
   ]
 }

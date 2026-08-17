@@ -3,8 +3,8 @@
 Open source headless commerce engine with a pre-built admin UI, built to be extended
 without forking.
 
-> **Status: walking skeleton in progress.** It boots, migrates, and a Merchant signs in to
-> read their Store; the catalog, the Workflows and the Admin are being built on top of it. See
+> **Status: walking skeleton in progress.** It boots, migrates, and a Merchant signs in to the
+> Admin, creates a Product and sees the price a storefront would receive. See
 > [`CONTEXT.md`](./CONTEXT.md) for the vocabulary and [`docs/adr/`](./docs/adr/) for the
 > decisions made so far.
 
@@ -16,6 +16,7 @@ its own Node.
 ```sh
 devbox run up     # Postgres and the application, and nothing else
 curl localhost:3000/health
+open http://localhost:3000/admin-ui/   # the Admin, from the same process and the same origin
 ```
 
 Migrations apply at boot, so a fresh database becomes a working Store with no separate step.
@@ -27,6 +28,11 @@ the test suite.
 
 - **Headless.** kobai ships an API and an Admin. The storefront is yours — see
   [ADR-0002](./docs/adr/0002-headless-the-storefront-is-out-of-scope.md).
+- **One thing to deploy.** The Admin is served by the Project's own process, at a path, from
+  the same origin as the API, and uses only the public API — so there is no second service
+  and no CORS to configure. Its source is vendored into the Project and yours to edit — see
+  [ADR-0010](./docs/adr/0010-the-admin-ships-in-one-container-and-gets-no-private-api.md) and
+  [ADR-0033](./docs/adr/0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md).
 - **Extended without forking.** Scaffolding generates a Project you own outright; kobai
   Core is a versioned dependency of it — see
   [ADR-0001](./docs/adr/0001-customisation-lives-in-a-project-not-a-fork.md).

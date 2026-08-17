@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { apiKey } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -56,6 +56,26 @@ export type IssuedApiKey = {
   readonly createdAt: string;
   /** The value itself. Shown at creation and unrecoverable afterwards. */
   readonly key: string;
+};
+
+/**
+ * A key as the Admin lists it: enough to recognise and revoke, never enough to present.
+ *
+ * There is deliberately no fragment of the value here — not a prefix beyond the kind, not
+ * the last four characters. Only a SHA-256 of the whole key is stored, so there is nothing
+ * to show; and a listing that showed *some* of a key would be a second place a credential
+ * partly lives, bought for a convenience `name` already provides.
+ *
+ * `revokedAt` rather than a boolean, and a revoked key stays in the list: "there is no such
+ * key" and "that key stopped working on Tuesday" are different answers to the same question.
+ */
+export type ApiKeySummary = {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: ApiKeyKind;
+  readonly createdAt: string;
+  /** When it stopped working, or `null` while it still does. */
+  readonly revokedAt: string | null;
 };
 
 /** Unvalidated: it arrives as a JSON body and is narrowed in one place, below. */
@@ -137,6 +157,35 @@ export async function createApiKey(
       key,
     },
   };
+}
+
+/**
+ * Every key this deployment has issued, newest first — including the revoked ones.
+ *
+ * One Store per deployment (ADR-0005), so there is nothing to scope by and no filter to
+ * take. Unpaginated, like the Product list, and in an envelope for the same reason.
+ */
+export async function listApiKeys(db: Database): Promise<ApiKeySummary[]> {
+  const rows = await db
+    .select({
+      id: apiKey.id,
+      name: apiKey.name,
+      kind: apiKey.kind,
+      createdAt: apiKey.createdAt,
+      revokedAt: apiKey.revokedAt,
+    })
+    .from(apiKey)
+    // `id` breaks the tie, so two keys minted in the same millisecond still list in a
+    // stable order rather than whichever one Postgres reached first.
+    .orderBy(desc(apiKey.createdAt), desc(apiKey.id));
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    kind: asKind(row.kind),
+    createdAt: row.createdAt.toISOString(),
+    revokedAt: row.revokedAt?.toISOString() ?? null,
+  }));
 }
 
 /**

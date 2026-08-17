@@ -118,6 +118,7 @@ export type Price = components["schemas"]["Price"];
 export type Merchant = components["schemas"]["Merchant"];
 export type Session = components["schemas"]["Session"];
 export type IssuedApiKey = components["schemas"]["IssuedApiKey"];
+export type ApiKeySummary = components["schemas"]["ApiKeySummary"];
 export type ApiKeyKind = components["schemas"]["ApiKeyKind"];
 export type ResolvedPrice = components["schemas"]["ResolvedPrice"];
 export type StepReport = components["schemas"]["StepReport"];

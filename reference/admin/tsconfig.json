@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The Admin runs in a browser, so the base config's Node-shaped module settings are
+    // replaced rather than extended: Vite is the resolver, and `preserve` leaves the import
+    // syntax for it to read. `dom` joins the lib list for the same reason.
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    // `vite.config.ts` is Node's, and is included here so it is checked at all; `vite/client`
+    // arrives through `src/vite-env.d.ts`, which is where Vite's own template puts it.
+    "types": ["node"],
+    // `paths` replaces the base config's map, so the workspace entries the Admin actually
+    // uses are repeated here. `@kobai/client` resolves to source for the same reason the
+    // rest of the repository does: the editor and `typecheck` should not need a build first.
+    // `vite build` resolves it through `node_modules` to `dist`, exactly as a Project would.
+    "paths": {
+      "@/*": ["./src/*"],
+      "@kobai/client": ["../../packages/client/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}
