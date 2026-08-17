@@ -77,6 +77,7 @@ New to the project? These five carry the shape of everything else:
 | [0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md) | The commerce spine comes before the content Plugin | Accepted — amends 0029 |
 | [0052](./0052-a-fulfilment-strategy-is-dependency-substitution.md) | A Fulfilment Strategy is dependency substitution, not a sixth Extension Point | Accepted — reconciles 0014 with 0003 |
 | [0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) | Core owns the Payment record and ships no provider | Accepted |
+| [0054](./0054-a-step-may-invoke-another-workflow.md) | A Step may invoke another Workflow, and the deployment's declaration is the one that runs | Accepted — extends 0017 |
 
 ## Prototypes
 

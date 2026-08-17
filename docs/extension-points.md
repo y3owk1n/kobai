@@ -140,9 +140,9 @@ about the running process rather than about what you have customised. See sectio
 
 **Status: proven end to end.** In the reference Project, `select-price` is replaced with a
 Step that answers one cent; a Variant whose Price row says `1250` is served `1` by the API,
-and `reference/src/kobai.config.test.ts` asserts exactly that through HTTP. Insertion and
-compensation are built and tested. This is the only one of the five you can lean your whole
-weight on today.
+and `reference/src/kobai.config.test.ts` asserts exactly that through HTTP. Insertion,
+compensation and composition — one Step invoking another Workflow — are built and tested. This
+is the only one of the five you can lean your whole weight on today.
 
 Commerce customisation is overwhelmingly *process* customisation — tax calculation, price
 resolution, shipping rate selection, discount stacking, fulfilment routing, payment capture
@@ -244,6 +244,54 @@ defineStep("record", write, (input, context) => unwrite(input, context));
 
 Compensation ships now rather than later because it cannot be retrofitted cheaply: adding it
 afterwards means rewriting every Workflow that exists by then (ADR-0017).
+
+### Invoking another Workflow from a Step
+
+A Step may run another declared Workflow, and there is one way to do it
+([ADR-0054](./adr/0054-a-step-may-invoke-another-workflow.md)):
+
+```ts
+import {
+  defineStep,
+  priceResolutionWorkflow,
+  runWorkflow,
+  StepFailure,
+  type PriceResolutionRequest,
+} from "@kobai/core";
+
+export const resolvesAPrice = defineStep(
+  "resolves-a-price",
+  async (input: PriceResolutionRequest, context) => {
+    const run = await runWorkflow(priceResolutionWorkflow, input, context);
+    if (!run.ok) throw new StepFailure(run.reason, run.detail); // pass the refusal on
+    return run.output;
+  },
+);
+```
+
+**It runs your deployment's declaration, not the one you named.** You import Core's
+`priceResolutionWorkflow` because that is the only handle the package offers; what actually
+runs is the version rebuilt from your `kobai.config.ts`. So a Step you replaced in
+`resolve-price` applies wherever `resolve-price` is reached from, including from inside another
+Workflow, and you wire it once. Reaching for `priceResolutionWorkflow.run(…)` instead is the
+mistake this exists to prevent — it works, and it runs Core's Steps on a deployment that
+replaced them.
+
+Three more things hold across the boundary, and each is the same rule you already know:
+
+- **An inner Workflow refusing is a value, not a throw.** You get the whole run back, naming
+  the inner slot that stopped and the inner Steps that completed, and you decide: pass it on
+  with a `StepFailure`, or carry on. The union is what makes ignoring it impossible — there is
+  no `output` to read until `ok` is narrowed.
+- **A bug in an inner Step travels as itself**, out through your Step unchanged, and surfaces
+  as the 500 it is (ADR-0036).
+- **An inner Workflow that completed is unwound when a later Step fails.** You do not have to
+  arrange it and there is nothing to remember: your Step's own compensation runs first, then
+  the Steps of the Workflow it invoked, in reverse. A Step that fails *after* invoking one
+  still has that Workflow unwound, because the work is done either way.
+
+A Workflow that invokes itself resolves to itself and recurses forever. There is no depth limit
+and no cycle detection; that is a declaration you wrote rather than something Core can rescue.
 
 ### Reading data Core has never heard of
 

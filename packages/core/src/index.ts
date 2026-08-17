@@ -70,15 +70,20 @@ export {
   selectPrice,
 } from "./pricing/resolve-price.ts";
 export type { Store } from "./store/read.ts";
-export type { WorkflowContext } from "./workflow/context.ts";
+export type { WorkflowContext, WorkflowRegistry } from "./workflow/context.ts";
 export { openMetadata } from "./workflow/context.ts";
 export type { CompensationFailure, StepReport, WorkflowRun } from "./workflow/run.ts";
 /**
- * Exported because it is what a Project catches. Unwinding never replaces what stopped a run
- * (ADR-0036), so this is how the *other* fact — the Store may be inconsistent — reaches
- * anything that wrapped a Workflow's `run` in a `try`.
+ * `runWorkflow` is the one way a Step invokes another Workflow (ADR-0054), on the surface
+ * because a Plugin's Step and a Project's Step compose for the same reasons Core's do — and
+ * because reaching for `workflow.run` instead is the mistake it exists to prevent: that one
+ * runs the declaration it was handed, which is Core's own whatever the deployment wired.
+ *
+ * `UnwindFailure` is here because it is what a Project catches. Unwinding never replaces what
+ * stopped a run (ADR-0036), so this is how the *other* fact — the Store may be inconsistent —
+ * reaches anything that wrapped a Workflow's `run` in a `try`.
  */
-export { UnwindFailure } from "./workflow/run.ts";
+export { runWorkflow, UnwindFailure } from "./workflow/run.ts";
 export type { Step } from "./workflow/step.ts";
 export { defineStep, StepFailure } from "./workflow/step.ts";
 /**

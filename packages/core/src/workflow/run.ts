@@ -1,6 +1,6 @@
 import type { WorkflowContext } from "./context.ts";
 import { StepFailure } from "./step.ts";
-import type { WorkflowStep } from "./workflow.ts";
+import type { StepShapes, Workflow, WorkflowStep } from "./workflow.ts";
 
 /**
  * Core's runner: it executes a Workflow's Steps in declared order and answers with the last
@@ -122,7 +122,85 @@ type Undo = {
   readonly slot: string;
   readonly compensate: (input: unknown, context: WorkflowContext) => void | Promise<void>;
   readonly input: unknown;
+  /**
+   * The context its Step ran against, carried rather than taken from whoever unwinds.
+   *
+   * A Workflow invoked from inside a Step hands its completed work *up*, so an entry is
+   * routinely unwound by a run that is not the one it was made in. Handing a compensation
+   * its own run's context is what keeps `metadata` — ADR-0013's open half — the same thing
+   * on the way back out as it was on the way in.
+   */
+  readonly context: WorkflowContext;
 };
+
+/**
+ * Where a Step's inner Workflow runs leave what they completed, so the run around them can
+ * unwind it (ADR-0054).
+ *
+ * Symbol-keyed rather than a field on {@link WorkflowContext}, because it is the runner's own
+ * bookkeeping: a Step neither reads it nor sets it, and a field would be a promise about it
+ * under ADR-0019. A symbol survives the one thing a Step legitimately does to a context —
+ * spreading it — where a `WeakMap` keyed on the object would silently not.
+ */
+const UNWIND_SINK = Symbol("kobai.workflow.unwind-sink");
+
+/** A context with the runner's bookkeeping on it, which is the only place that shape is named. */
+type Composing = WorkflowContext & { readonly [UNWIND_SINK]?: Undo[] };
+
+/** The context one Step is given: its own, plus somewhere to leave what it delegates. */
+function composing(context: WorkflowContext, sink: Undo[]): Composing {
+  return { ...context, [UNWIND_SINK]: sink };
+}
+
+/**
+ * Where this run hands its completed work when it finishes — set when it is nested inside a
+ * Step of another run, and absent when it is the outermost one.
+ */
+function sinkOf(context: WorkflowContext): Undo[] | undefined {
+  return (context as Composing)[UNWIND_SINK];
+}
+
+/**
+ * Runs another declared Workflow from inside a Step — kobai's one way to compose them
+ * (ADR-0054).
+ *
+ * What it does that `workflow.run(input, context)` does not is resolve the declaration through
+ * the deployment's registry, so a Project's replacement of an inner Step applies when that
+ * Workflow is reached from inside another one, without being wired a second time. Calling
+ * `run` directly is therefore a quiet mistake rather than a loud one: it works, and it runs
+ * Core's Steps on a deployment that replaced them.
+ *
+ * The *other* half of composition needs no cooperation at all, deliberately. An inner run
+ * hands what it completed to whatever context it was given, so an inner Workflow that
+ * succeeded is undone when a later outer Step fails however it was reached — the failure this
+ * mechanism must never have is work nothing unwinds, and that one is closed by the runner
+ * rather than by remembering to call the right function.
+ *
+ * The result is a value, refusal included. An inner Workflow declining is an answer the
+ * invoking Step is the only thing in a position to interpret: passing it on is
+ * `throw new StepFailure(run.reason, run.detail)`, and carrying on regardless is a legitimate
+ * choice a runner could not make for it. The union is what makes ignoring it impossible —
+ * there is no `output` to read until `ok` has been narrowed.
+ */
+export async function runWorkflow<In, Out, Shapes extends StepShapes>(
+  workflow: Workflow<In, Out, Shapes>,
+  input: In,
+  context: WorkflowContext,
+): Promise<WorkflowRun<Out>> {
+  // Asked with `hasOwn` rather than by indexing: a registry is an ordinary object, so a
+  // Workflow called `constructor` or `toString` would otherwise resolve to a prototype member
+  // and fail on `.run` — a name deciding whether composition works at all.
+  //
+  // The registry is keyed by a declaration's own name and holds that declaration, rebuilt —
+  // so this cast says what the registry's type cannot: same Workflow, same input, same output.
+  const registry = context.workflows;
+  const declared =
+    registry && Object.hasOwn(registry, workflow.name)
+      ? (registry[workflow.name] as Workflow<In, Out, Shapes>)
+      : undefined;
+
+  return (declared ?? workflow).run(input, context);
+}
 
 /**
  * Runs the given Steps in order, threading each one's output into the next.
@@ -138,19 +216,29 @@ export async function runSteps<Out>(
   input: unknown,
   context: WorkflowContext,
 ): Promise<WorkflowRun<Out>> {
+  // Set when this run is nested inside a Step of another one. What it completes then belongs
+  // to that Step's position rather than to this run, which ends without ever unwinding it.
+  const outer = sinkOf(context);
   const ran: StepReport[] = [];
   const undo: Undo[] = [];
   let value = input;
 
   for (const entry of steps) {
     const given = value;
+    // Each Step is given a context of its own, so a Workflow it invokes leaves what it
+    // completed against *this* position and is unwound with it rather than nowhere.
+    const delegated: Undo[] = [];
     try {
-      value = await (entry.step.run as Erased)(given, context);
+      value = await (entry.step.run as Erased)(given, composing(context, delegated));
     } catch (cause) {
       // Unwound before the answer is composed, and before a bug is allowed to travel: what
       // the caller is told is a different question from whether the Store is left consistent,
       // and a refusal and a bug leave exactly the same mess behind.
-      const uncompensated = await unwind(undo, context);
+      //
+      // The Workflows this Step invoked before it stopped completed, so they unwind too — a
+      // Step that failed has no compensation of its own to run, and the work it delegated
+      // would otherwise be the one kind nothing ever reaches.
+      const uncompensated = await unwind([...undo, ...delegated]);
 
       // Only a refusal is an answer. Anything else is a bug in a Step, and a bug must not be
       // dressed up as a decision the Workflow made — it keeps travelling, and surfaces as
@@ -176,9 +264,19 @@ export async function runSteps<Out>(
     ran.push({ step: entry.slot, implementation: entry.step.name });
     // The failing Step is not among these: it did not complete, so there is nothing of its
     // to undo, and calling its compensation would be asking it to unwind work it never did.
+    //
+    // What this Step delegated goes on first, so unwinding — which reads this backwards —
+    // reaches the Step's own compensation before it reaches the Workflows the Step invoked.
+    // The nesting is what decides the order: a Step sits outside what it called.
+    undo.push(...delegated);
     const compensate = entry.step.compensate as Undo["compensate"] | undefined;
-    if (compensate) undo.push({ slot: entry.slot, compensate, input: given });
+    if (compensate) undo.push({ slot: entry.slot, compensate, input: given, context });
   }
+
+  // Nothing is unwound on the way out of a run that succeeded — but a nested one hands what
+  // it did upwards, because "this Workflow finished" and "the process it is part of finished"
+  // are different facts, and only the outer run knows the second.
+  outer?.push(...undo);
 
   return { ok: true, output: value as Out, steps: ran };
 }
@@ -188,7 +286,9 @@ export async function runSteps<Out>(
  *
  * Reverse because a later Step's work may rest on an earlier one's — undoing in declaration
  * order would pull the ground out from under a compensation that had not run yet. Each Step
- * is handed the value it ran on, so a Step that wrote something can find what it wrote.
+ * is handed the value it ran on, and the context it ran against, so a Step that wrote
+ * something can find what it wrote — including a Step of a Workflow another Step invoked,
+ * whose entries arrived here from a run that has already finished (ADR-0054).
  *
  * **Every completed Step's compensation is attempted, and one that throws does not stop the
  * rest** (ADR-0036). A compensation is by nature the code most likely to be running against a
@@ -202,15 +302,12 @@ export async function runSteps<Out>(
  * runner's decision, not this loop's, and this loop is not in a position to make it: it does
  * not know whether a refusal or a bug brought it here.
  */
-async function unwind(
-  undo: readonly Undo[],
-  context: WorkflowContext,
-): Promise<readonly CompensationFailure[]> {
+async function unwind(undo: readonly Undo[]): Promise<readonly CompensationFailure[]> {
   const uncompensated: CompensationFailure[] = [];
 
   for (const entry of [...undo].reverse()) {
     try {
-      await entry.compensate(entry.input, context);
+      await entry.compensate(entry.input, entry.context);
     } catch (cause) {
       uncompensated.push({ slot: entry.slot, cause });
     }
