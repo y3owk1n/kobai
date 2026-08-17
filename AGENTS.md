@@ -127,7 +127,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files. |
 | `packages/core/openapi.json` | The OpenAPI description. Generated, never hand-edited. |
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
-| `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, nothing else. |
+| `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
 | `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
 | `compose.yaml`, `Dockerfile` | Postgres and the application, and nothing else. |
@@ -245,6 +245,27 @@ await using kobai = await createTestKobai({
 
 That is the same `kobai.config.ts` shape a Developer writes, so a test of the override
 mechanism is a test of the thing they actually do.
+
+**Inserting a Step** sits beside `steps` rather than inside it, so replacement and
+observation are distinguishable at a glance, and a list because observing composes:
+
+```ts
+workflows: {
+  "resolve-price": {
+    steps:  { "select-price": myStep },        // owns the slot
+    after:  { "select-price": [watchIt] },     // watches it; `before` likewise
+  },
+}
+```
+
+An inserted Step takes and gives the **same** type — what the slot is given, before it; what
+the slot produced, after it — so it cannot alter the output contract. That is enforced by the
+same compiler check that rejects a bad replacement, and the `@ts-expect-error` assertions
+pinning it live beside the ones for replacement. **Compensation** is a third argument to
+`defineStep`; the runner unwinds the Steps that completed in reverse when a later one fails,
+handing each one the very value its `run` was given. Test it the way
+`packages/plugin-price-log/src/record-price-resolution.test.ts` does — by asking the database
+whether the row is still there, never by counting calls.
 
 The **packaging seam** covers what none of those can, because it is not about a running
 database at all: that the `migrations/` directory each package resolves relative to its

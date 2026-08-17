@@ -191,3 +191,151 @@ describe("a Project that replaces a Step in the price-resolution Workflow", () =
     });
   });
 });
+
+describe("a Project that inserts a Step without replacing one", () => {
+  /** Watches what `select-price` produced and hands it straight back. */
+  const watching = defineStep(
+    "watching-the-price",
+    (resolved: ResolvedPrice): ResolvedPrice => resolved,
+  );
+
+  it("runs the inserted Step and leaves the answer as it was", async () => {
+    await using kobai = await createTestKobai({
+      workflows: { "resolve-price": { after: { "select-price": [watching] } } },
+    });
+    const store = await priced(kobai, 1250);
+
+    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+      headers: store.headers,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      // The Merchant's Price, untouched. Observation is not ownership: an inserted Step
+      // cannot alter the output contract, so nothing it does can change the price served.
+      price: { amount: 1250, currency: "USD" },
+      workflow: {
+        steps: [
+          { step: "load-prices", implementation: "load-prices" },
+          { step: "select-price", implementation: "select-price" },
+          { step: "watching-the-price", implementation: "watching-the-price" },
+        ],
+      },
+    });
+  });
+
+  it("runs one before and one after the same Step, and Core's Step still runs", async () => {
+    await using kobai = await createTestKobai({
+      workflows: {
+        "resolve-price": {
+          before: {
+            "select-price": [
+              defineStep("watching-the-candidates", (loaded: LoadedPrices) => loaded),
+            ],
+          },
+          after: { "select-price": [watching] },
+        },
+      },
+    });
+    const store = await priced(kobai, 1250);
+
+    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+      headers: store.headers,
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      price: { amount: 1250 },
+      workflow: {
+        steps: [
+          { step: "load-prices", implementation: "load-prices" },
+          { step: "watching-the-candidates", implementation: "watching-the-candidates" },
+          { step: "select-price", implementation: "select-price" },
+          { step: "watching-the-price", implementation: "watching-the-price" },
+        ],
+      },
+    });
+  });
+});
+
+/**
+ * ADR-0013, at the seam it was written for.
+ *
+ * Lead-time pricing is the case that ADR names, and Core does not know what a lead time is.
+ * A storefront sends one anyway — as a query parameter on a Core route that models nothing in
+ * the query string — and a Project's Step reads it out of the Workflow's open context. No
+ * route changed, no Core type learned a field, and nothing in Core reads the key: `metadata`
+ * is written at the edge and read only by whoever put a Step there.
+ */
+describe("a Step reading an input Core does not model", () => {
+  /** A surcharge for wanting it sooner. Core has never heard of any of this. */
+  const leadTimeSurcharge = defineStep(
+    "surcharge-by-lead-time",
+    (input: LoadedPrices, context): ResolvedPrice => {
+      const [chosen] = input.prices;
+      if (!chosen)
+        throw new StepFailure("price-not-set", "This Variant carries no Price.");
+
+      // Whatever arrived under this key, in whatever shape. Core never parsed it, because
+      // parsing implies a shape and this is not Core's field to have an opinion about.
+      const days = Number(context.metadata.leadTimeDays ?? 0);
+      const surcharge = Number.isFinite(days) ? Math.max(0, days) * 100 : 0;
+
+      return {
+        variant: input.variant,
+        price: {
+          id: chosen.id,
+          amount: chosen.amount + surcharge,
+          currency: chosen.currency,
+        },
+      };
+    },
+  );
+
+  it("prices a rush order from a parameter no Core route declares", async () => {
+    await using kobai = await createTestKobai({
+      workflows: { "resolve-price": { steps: { "select-price": leadTimeSurcharge } } },
+    });
+    const store = await priced(kobai, 1250);
+
+    const response = await kobai.request(
+      `/store/variants/${store.variantId}/price?leadTimeDays=3`,
+      { headers: store.headers },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      price: { amount: 1550, currency: "USD" },
+    });
+  });
+
+  it("prices the same Variant without one at the Merchant's Price", async () => {
+    await using kobai = await createTestKobai({
+      workflows: { "resolve-price": { steps: { "select-price": leadTimeSurcharge } } },
+    });
+    const store = await priced(kobai, 1250);
+
+    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+      headers: store.headers,
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      price: { amount: 1250, currency: "USD" },
+    });
+  });
+
+  it("ignores the parameter entirely for a deployment with no Step that reads it", async () => {
+    // The other half of "Core requires no knowledge of its shape": stock kobai is handed the
+    // same request and does nothing with it, because nothing in Core reads a key out of the
+    // open half of a context.
+    await using kobai = await createTestKobai();
+    const store = await priced(kobai, 1250);
+
+    const response = await kobai.request(
+      `/store/variants/${store.variantId}/price?leadTimeDays=3`,
+      { headers: store.headers },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ price: { amount: 1250 } });
+  });
+});

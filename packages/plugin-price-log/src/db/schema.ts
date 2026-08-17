@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 /**
  * This Plugin's tables. There is one, and there is meant to be one.
@@ -18,12 +18,12 @@ import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
  */
 
 /**
- * One record of a price having been resolved.
+ * One record of a price having been resolved — written by the Step this Plugin offers.
  *
- * It carries no amount yet, because Price does not exist yet — this Plugin is here to prove
- * that a Plugin can own a table, not to be useful. The Step that writes rows into it arrives
- * with the price-resolution Workflow; a Plugin *offers* that Step and the Project wires it
- * (ADR-0017).
+ * `amount` and `currency` arrived in this package's **second** migration, added when the
+ * Step that writes rows here was built. Nothing in Core moved to make room for them, and no
+ * Core migration mentions them: a Plugin's schema evolves on its own timetable, in its own
+ * migration set, which is the property the whole no-foreign-key rule buys (ADR-0004).
  */
 export const priceLogEntry = pgTable("price_log_entry", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -33,6 +33,9 @@ export const priceLogEntry = pgTable("price_log_entry", {
    * on a shape Core has not promised (ADR-0003).
    */
   variantId: text("variant_id").notNull(),
+  /** Minor units of `currency`, copied as served — 1250 is `USD` 12.50. */
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull(),
   resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

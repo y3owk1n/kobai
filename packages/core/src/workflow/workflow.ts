@@ -140,20 +140,81 @@ export type StepOverrides<W extends AnyWorkflow> =
   W extends Workflow<never, unknown, infer Shapes> ? StepOverrideMap<Shapes> : never;
 
 /**
- * What a Project may change about one Workflow.
+ * A Step inserted at a position, rather than filling a slot: it is handed a value and hands
+ * back **the same type**.
  *
- * A record with one key today, and that is deliberate: `before`/`after` insertion is a
- * separate, weaker mechanism under ADR-0017 and belongs beside `steps` rather than mixed into
- * it, so a Developer reading a config can tell replacement from observation at a glance.
+ * That single pinned type is the whole of ADR-0017's "insertion cannot alter the output
+ * contract", and it is deliberately weaker than replacement. A Step here may read what flows
+ * past — log it, record it, measure it — and cannot change its shape, so observation cannot
+ * quietly become mutation (spec story 29). No new mechanism enforces it: this is the same
+ * check that rejects a bad replacement, with the input and the output pinned together.
+ *
+ * If insertion could change the output there would be no reason to ever replace a Step, and
+ * the two mechanisms would collapse into one that is impossible to reason about.
  */
-export type WorkflowOverrides<W extends AnyWorkflow> = {
-  /** Which Step fills which slot. A named slot is replaced; an unnamed one is inherited. */
-  readonly steps?: StepOverrides<W>;
+export type InsertedStep<Value> = Step<string, Value, Value>;
+
+/**
+ * The Steps a Project runs **before** each slot, keyed by slot.
+ *
+ * A list rather than one Step, because observing composes — a Project may want its own
+ * measurement beside a Plugin's recording — and because the order they are written in is the
+ * order they run in, and the reverse of the order their compensations unwind in. Replacement
+ * is one Step per slot for the opposite reason: a slot holds exactly one implementation.
+ *
+ * Each Step is pinned to what the slot is *given*, since that is the value flowing at this
+ * position.
+ */
+export type StepsBeforeMap<Shapes extends StepShapes> = {
+  readonly [Slot in keyof Shapes & string]?: readonly InsertedStep<
+    Shapes[Slot]["input"]
+  >[];
 };
 
 /**
- * The same Workflow with the named slots filled by other Steps — ADR-0017's replacement, and
- * the whole of what Core does with a Project's override map.
+ * The Steps a Project runs **after** each slot, keyed by slot — pinned to what the slot
+ * *produces*, since that is the value flowing here. See {@link StepsBeforeMap}.
+ */
+export type StepsAfterMap<Shapes extends StepShapes> = {
+  readonly [Slot in keyof Shapes & string]?: readonly InsertedStep<
+    Shapes[Slot]["output"]
+  >[];
+};
+
+/** {@link StepsBeforeMap}, named against the Workflow rather than its shapes. */
+export type StepsBefore<W extends AnyWorkflow> =
+  W extends Workflow<never, unknown, infer Shapes> ? StepsBeforeMap<Shapes> : never;
+
+/** {@link StepsAfterMap}, named against the Workflow rather than its shapes. */
+export type StepsAfter<W extends AnyWorkflow> =
+  W extends Workflow<never, unknown, infer Shapes> ? StepsAfterMap<Shapes> : never;
+
+/**
+ * What a Project may change about one Workflow, expressed over `Shapes` for the same reason
+ * {@link StepOverrideMap} is. A Project reads it as {@link WorkflowOverrides}.
+ *
+ * Three keys, and the separation is the decision ADR-0017 records: `steps` replaces, and
+ * `before`/`after` observe. They sit beside each other rather than mixed together so that a
+ * Developer reading a config can tell owning a Step from watching one at a glance — and so
+ * that the compiler can hold them to different promises, since only replacement is allowed to
+ * decide what a slot produces.
+ */
+export type WorkflowOverrideMap<Shapes extends StepShapes> = {
+  /** Which Step fills which slot. A named slot is replaced; an unnamed one is inherited. */
+  readonly steps?: StepOverrideMap<Shapes>;
+  /** Steps to run before a slot, watching what it is about to be given. */
+  readonly before?: StepsBeforeMap<Shapes>;
+  /** Steps to run after a slot, watching what it produced. */
+  readonly after?: StepsAfterMap<Shapes>;
+};
+
+/** {@link WorkflowOverrideMap}, named against the Workflow being rewired. */
+export type WorkflowOverrides<W extends AnyWorkflow> =
+  W extends Workflow<never, unknown, infer Shapes> ? WorkflowOverrideMap<Shapes> : never;
+
+/**
+ * The same Workflow with a Project's config applied — slots refilled, Steps inserted around
+ * them — and the whole of what Core does with what a Project declared (ADR-0017).
  *
  * It **rebuilds the declaration** rather than copying the object. `describe` and `run` close
  * over the array they were built with, so `{ ...workflow, steps: mine }` would report the new
@@ -163,35 +224,75 @@ export type WorkflowOverrides<W extends AnyWorkflow> = {
  * discouraged.
  *
  * The original is untouched and still runs what it always did: a declaration is a value, and
- * overriding produces another one.
+ * rewiring produces another one.
  *
  * Naming a slot the Workflow does not declare throws, at the moment the declaration is
  * rewired rather than at the request that would have been priced differently. The compiler
  * already rejects it for a config written as a literal; this catches the map built at
- * runtime, where the alternative is an override that silently does nothing.
+ * runtime, where the alternative is an override that silently does nothing. So does an
+ * inserted Step that answers to a name the Workflow already uses for a slot — see
+ * {@link position}.
  */
-export function overrideSteps<In, Out, Shapes extends StepShapes>(
+export function rewireWorkflow<In, Out, Shapes extends StepShapes>(
   workflow: Workflow<In, Out, Shapes>,
-  overrides: StepOverrideMap<Shapes>,
+  overrides: WorkflowOverrideMap<Shapes>,
 ): Workflow<In, Out, Shapes> {
+  // The declaration's types are discharged here, as they are in the runner: the compiler has
+  // already held every Step in these maps to the position it was written at.
   const slots = new Set(workflow.steps.map((entry) => entry.slot));
-  const supplied = overrides as Readonly<Record<string, AnyStep | undefined>>;
+  const replacements = (overrides.steps ?? {}) as Replacements;
+  const before = (overrides.before ?? {}) as Insertions;
+  const after = (overrides.after ?? {}) as Insertions;
 
-  for (const slot of Object.keys(supplied)) {
-    if (slots.has(slot)) continue;
-    throw new Error(
-      `The Workflow ${JSON.stringify(workflow.name)} has no Step ${JSON.stringify(slot)} to replace. It declares ${[...slots].map((declared) => JSON.stringify(declared)).join(", ")}.`,
-    );
+  for (const [map, verb] of [
+    [replacements, "replace"],
+    [before, "insert before"],
+    [after, "insert after"],
+  ] as const) {
+    for (const slot of Object.keys(map)) {
+      if (slots.has(slot)) continue;
+      throw new Error(
+        `The Workflow ${JSON.stringify(workflow.name)} has no Step ${JSON.stringify(slot)} to ${verb}. It declares ${[...slots].map((declared) => JSON.stringify(declared)).join(", ")}.`,
+      );
+    }
   }
 
-  return createWorkflow<In, Out, Shapes>(
-    workflow.name,
-    workflow.steps.map((entry) => {
-      const replacement = supplied[entry.slot];
-      return replacement ? { slot: entry.slot, step: replacement } : entry;
-    }),
-  );
+  const rewired: WorkflowStep[] = [];
+  for (const entry of workflow.steps) {
+    // An inserted Step occupies a position of its own, under its own name: it fills no slot
+    // Core declared, so it answers to itself and a slot stays what a Project's `steps` map is
+    // keyed by. Insertion is anchored to the *slot*, not to what fills it, so a Project may
+    // replace a Step and watch the same position in one config.
+    for (const step of before[entry.slot] ?? [])
+      rewired.push(position(workflow.name, step, slots));
+    const replacement = replacements[entry.slot];
+    rewired.push(replacement ? { slot: entry.slot, step: replacement } : entry);
+    for (const step of after[entry.slot] ?? [])
+      rewired.push(position(workflow.name, step, slots));
+  }
+
+  return createWorkflow<In, Out, Shapes>(workflow.name, rewired);
 }
+
+/** One inserted Step as a position, refusing to squat on a slot the Workflow declares. */
+function position(
+  workflow: string,
+  step: AnyStep,
+  slots: ReadonlySet<string>,
+): WorkflowStep {
+  if (slots.has(step.name)) {
+    throw new Error(
+      `An inserted Step may not be called ${JSON.stringify(step.name)}: the Workflow ${JSON.stringify(workflow)} already declares a Step ${JSON.stringify(step.name)}, and a slot is what an override map is keyed by.`,
+    );
+  }
+  return { slot: step.name, step };
+}
+
+/** A replacement map with its declared types discharged: slot to the Step filling it. */
+type Replacements = Readonly<Record<string, AnyStep | undefined>>;
+
+/** An insertion map, likewise: slot to the Steps watching that position, in order. */
+type Insertions = Readonly<Record<string, readonly AnyStep[] | undefined>>;
 
 /**
  * Declares a Workflow, one Step at a time.
