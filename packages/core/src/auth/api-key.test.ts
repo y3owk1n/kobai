@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestKobai,
+  sessionOf,
   signInTestMerchant,
   TEST_MERCHANT,
   type TestKobai,
@@ -131,18 +132,18 @@ describe("creating an API key", () => {
       headers: { ...merchant.headers, "content-type": "application/json" },
       body: JSON.stringify({ email: "reader@example.test", password, role: "reader" }),
     });
-    const signedIn = (await (
+    const reader = sessionOf(
       await kobai.request("/admin/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email: "reader@example.test", password }),
-      })
-    ).json()) as { token: string };
+      }),
+    );
 
     const response = await kobai.request("/admin/api-keys", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${signedIn.token}`,
+        ...reader.headers,
         "content-type": "application/json",
       },
       body: JSON.stringify({ name: "storefront", kind: "secret" }),

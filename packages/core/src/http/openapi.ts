@@ -44,10 +44,12 @@ export function openApiJson(document: OpenApiDocument): string {
 /**
  * The two ways in, as OpenAPI names them.
  *
- * Both are `Authorization: Bearer`, and they are nonetheless two schemes rather than one,
- * because they open two different surfaces and neither credential is worth anything on
- * the other (ADR-0020). A generated client that treated them as one scheme would let a
- * storefront's key be sent at `/admin` and call it a type-correct request.
+ * They were two schemes when both were `Authorization: Bearer`, because they open two
+ * different surfaces and neither credential is worth anything on the other (ADR-0020) — a
+ * generated client that treated them as one would let a storefront's key be sent at
+ * `/admin` and call it a type-correct request. Since ADR-0032 they do not even arrive the
+ * same way: the admin surface is opened by the `kobai_session` cookie and the store
+ * surface by a bearer API key.
  */
 export const SECURITY_SCHEMES = {
   merchantSession: "merchantSession",
@@ -87,11 +89,18 @@ export function json<Schema extends z.ZodType>(description: string, schema: Sche
 }
 
 /**
- * A refusal from one of the two gates, which is a JSON body *and* a header.
+ * A refusal from the **store** gate, which is a JSON body *and* a header.
  *
- * RFC 6750 says a 401 names the scheme the request failed to satisfy, and both gates send
- * it. Describing it as a header rather than only mentioning it in prose is the difference
- * between a client that can act on it and a Developer who has to read the sentence.
+ * RFC 6750 says a 401 names the scheme the request failed to satisfy, and the store gate
+ * sends it. Describing it as a header rather than only mentioning it in prose is the
+ * difference between a client that can act on it and a Developer who has to read the
+ * sentence.
+ *
+ * The admin gate no longer has one to send. `/admin` is opened by the `kobai_session`
+ * cookie (ADR-0032), and there is no registered HTTP authentication scheme for a cookie —
+ * so a challenge there would either name `Bearer`, which is now false, or invent a scheme
+ * no client knows. Its 401 is a plain body, and `SessionRefusal`'s `reason` is what a
+ * client acts on.
  */
 function unauthorised<Schema extends z.ZodType>(description: string, schema: Schema) {
   return {
@@ -114,8 +123,8 @@ export const REFUSALS = {
     "Migrations have not applied, so nothing but `/health` is served yet.",
     contract.Unavailable,
   ),
-  noSession: unauthorised(
-    "No live Merchant session was presented.",
+  noSession: json(
+    "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
     contract.SessionRefusal,
   ),
   noApiKey: unauthorised("No live API key was presented.", contract.ApiKeyRefusal),

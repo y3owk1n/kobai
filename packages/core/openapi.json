@@ -3,7 +3,7 @@
   "info": {
     "title": "kobai",
     "version": "0.0.0",
-    "description": "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session, and `/store`, behind an API key (ADR-0020). `/health` is open, and is the only route that answers before migrations have applied.",
+    "description": "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session in an httpOnly cookie, and `/store`, behind a bearer API key (ADR-0020, ADR-0032). `/health` is open, and is the only route that answers before migrations have applied.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -12,9 +12,10 @@
   "components": {
     "securitySchemes": {
       "merchantSession": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "A Merchant session token, from `POST /admin/session`. Opens `/admin` and nothing else."
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "kobai_session",
+        "description": "A Merchant session, set by `POST /admin/session` as an httpOnly cookie and sent back by the browser by itself. Opens `/admin` and nothing else. httpOnly, `SameSite=Strict`, `Path=/admin`, and `Secure` whenever the request arrived over HTTPS — so the token is in no response body and reachable by no script (ADR-0032)."
       },
       "apiKey": {
         "type": "http",
@@ -311,24 +312,6 @@
         "required": [
           "email",
           "password"
-        ]
-      },
-      "IssuedSession": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Session"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "token": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "token"
-            ]
-          }
         ]
       },
       "Session": {
@@ -852,20 +835,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -920,7 +890,7 @@
     "/admin/session": {
       "post": {
         "summary": "Sign in",
-        "description": "An unknown address and a wrong password are answered identically, and in the same time. Distinguishing them would turn this into a way to ask who works here.",
+        "description": "The session travels back as an httpOnly `kobai_session` cookie, which a browser then sends on every admin request by itself; it is in no response body. An unknown address and a wrong password are answered identically, and in the same time — distinguishing them would turn this into a way to ask who works here.",
         "requestBody": {
           "required": true,
           "content": {
@@ -933,11 +903,21 @@
         },
         "responses": {
           "201": {
-            "description": "The session, with the token to present on every later request.",
+            "description": "Who you now are. The credential itself is in the cookie.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "`kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to."
+                },
+                "required": true,
+                "description": "`kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IssuedSession"
+                  "$ref": "#/components/schemas/Session"
                 }
               }
             }
@@ -1004,20 +984,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1050,7 +1017,7 @@
       },
       "delete": {
         "summary": "Sign out",
-        "description": "The row goes, so the token stops working on the very next request.",
+        "description": "The row goes, so the session stops working on the very next request, and the cookie is cleared so the browser stops sending it. Both halves matter: clearing only the cookie would leave a live session behind, and deleting only the row would leave the browser presenting a credential to be refused.",
         "security": [
           {
             "merchantSession": []
@@ -1058,23 +1025,20 @@
         ],
         "responses": {
           "204": {
-            "description": "Signed out."
-          },
-          "401": {
-            "description": "No live Merchant session was presented.",
+            "description": "Signed out.",
             "headers": {
-              "www-authenticate": {
+              "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
+                  "description": "`kobai_session`, emptied and expired, so the browser drops it."
                 },
                 "required": true,
-                "description": "The scheme the request failed to satisfy."
+                "description": "`kobai_session`, emptied and expired, so the browser drops it."
               }
-            },
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1127,20 +1091,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1223,20 +1174,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1307,20 +1245,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1395,20 +1320,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1513,20 +1425,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1629,20 +1528,7 @@
             }
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1710,20 +1596,7 @@
             "description": "Revoked."
           },
           "401": {
-            "description": "No live Merchant session was presented.",
-            "headers": {
-              "www-authenticate": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "Bearer"
-                  ],
-                  "description": "The scheme the request failed to satisfy."
-                },
-                "required": true,
-                "description": "The scheme the request failed to satisfy."
-              }
-            },
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
             "content": {
               "application/json": {
                 "schema": {

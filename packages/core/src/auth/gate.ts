@@ -1,6 +1,5 @@
 import type { Context, Env, MiddlewareHandler } from "hono";
 import type { Database } from "../db/client.ts";
-import { bearerToken } from "./bearer.ts";
 import type { Permission } from "./permissions.ts";
 import {
   type Authenticated,
@@ -8,6 +7,7 @@ import {
   resolveSession,
   type SessionRejection,
 } from "./session.ts";
+import { presentedSessionToken } from "./session-cookie.ts";
 
 /**
  * The gate on the admin surface.
@@ -48,7 +48,6 @@ export type SessionRefused = {
     readonly error: string;
     readonly reason: `session-${SessionRejection}`;
   };
-  readonly headers: Record<string, string>;
 };
 
 export type PermissionRefused = {
@@ -74,10 +73,10 @@ export type Authorisation = { readonly ok: true; readonly auth: Authenticated } 
  */
 export async function authorise(
   db: Database,
-  authorization: string | undefined,
+  cookieHeader: string | undefined,
   permission?: Permission,
 ): Promise<Authorisation> {
-  const token = bearerToken(authorization);
+  const token = presentedSessionToken(cookieHeader);
   if (!token.ok) return refusal(token.reason);
 
   const lookup = await resolveSession(db, token.token);
@@ -102,15 +101,13 @@ export async function authorise(
  * itself — `POST /admin/merchants`, which mints the first Merchant — can use it.
  */
 export function refuse<E extends Env>(c: Context<E>, refusal: Refusal) {
-  return refusal.status === 401
-    ? c.json(refusal.body, 401, refusal.headers)
-    : c.json(refusal.body, 403);
+  return refusal.status === 401 ? c.json(refusal.body, 401) : c.json(refusal.body, 403);
 }
 
 export function requireSession(db: Database): MiddlewareHandler<AdminEnv> {
   return async (c, next) => {
     // No permission is asked for here, so only the 401 arm is ever reachable.
-    const result = await authorise(db, c.req.header("authorization"));
+    const result = await authorise(db, c.req.header("cookie"));
     if (!result.ok) return refuse(c, result);
 
     c.set("auth", result.auth);
@@ -151,17 +148,19 @@ export function authenticated(c: Context<AdminEnv>): Authenticated {
  *
  * `session-expired` is deliberately distinguishable from `session-missing`: a Merchant whose
  * session ran out has been signed *out*, and the Admin should say so rather than render the
- * empty page an anonymous request would get. The row is already gone by this point —
- * `resolveSession` deletes it — so the sign-out is real and not merely reported.
+ * empty page an anonymous request would get. That distinction is why the cookie carries no
+ * `Expires` of its own — a cookie the browser dropped would arrive as `session-missing`, and
+ * the browser would have overruled the answer this surface exists to give.
+ *
+ * There is deliberately no `WWW-Authenticate` here, and the store gate still sends one. RFC
+ * 6750's challenge names the scheme a request failed to satisfy; this surface is opened by a
+ * cookie, so naming `Bearer` would be an instruction a client cannot act on.
  */
 function refusal(reason: SessionRejection): SessionRefused {
   return {
     ok: false,
     status: 401,
     body: { error: REFUSAL[reason], reason: `session-${reason}` },
-    // RFC 6750: name the scheme the request failed to satisfy rather than making a client
-    // guess at it.
-    headers: { "www-authenticate": "Bearer" },
   };
 }
 
@@ -179,9 +178,9 @@ function denial(auth: Authenticated, permission: Permission): PermissionRefused 
 
 const REFUSAL = {
   missing:
-    "This endpoint requires a Merchant session. Sign in at POST /admin/session and send `Authorization: Bearer <token>`.",
+    "This endpoint requires a Merchant session. Sign in at POST /admin/session; the session comes back as a `kobai_session` cookie, which a browser then sends by itself.",
   malformed:
-    "The Authorization header is not a bearer token. Send `Authorization: Bearer <token>`.",
+    "The `kobai_session` cookie carries no session token. Sign in again at POST /admin/session.",
   unknown: "This session does not exist. Sign in again at POST /admin/session.",
   expired: "This session has expired and you have been signed out. Sign in again.",
 } as const satisfies Record<SessionRejection, string>;

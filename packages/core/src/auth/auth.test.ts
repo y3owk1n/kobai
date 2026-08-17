@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestKobai,
   inspectSchema,
+  sessionOf,
   signInTestMerchant,
   TEST_MERCHANT,
   type TestKobai,
-  type TestSession,
 } from "../testing/index.ts";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./permissions.ts";
 
@@ -161,14 +161,31 @@ describe("signing in", () => {
     );
 
     expect(response.status).toBe(201);
-    const body = (await response.json()) as { token: string; expiresAt: string };
+    const body = (await response.json()) as { expiresAt: string };
     expect(body).toEqual({
-      token: expect.any(String),
       expiresAt: expect.any(String),
       merchant: { id: expect.any(String), email: EMAIL },
       role: { name: "owner", permissions: [...ALL_PERMISSIONS] },
     });
     expect(Date.parse(body.expiresAt)).toBeGreaterThan(Date.now());
+  });
+
+  it("puts the credential in an httpOnly cookie and nowhere in the body", async () => {
+    kobai = await createTestKobai();
+    await kobai.request("/admin/merchants", json({ email: EMAIL, password: PASSWORD }));
+
+    const response = await kobai.request(
+      "/admin/session",
+      json({ email: EMAIL, password: PASSWORD }),
+    );
+
+    // `sessionOf` throws when there is no cookie to read, so reaching the next line is
+    // already the assertion that one was set.
+    const { token } = sessionOf(response);
+
+    // The whole reason for the cookie: a live session token is not in a response body, so
+    // no logging integration can ever write one to disk by doing its job.
+    await expect(response.text()).resolves.not.toContain(token);
   });
 
   it("answers a wrong password exactly as it answers an address nobody holds", async () => {
@@ -192,6 +209,86 @@ describe("signing in", () => {
   });
 });
 
+describe("the session cookie's attributes", () => {
+  /** Signs in over `scheme`, optionally behind a proxy that says so, and reads what came back. */
+  async function cookieFrom(
+    harness: TestKobai,
+    url = "http://kobai.test/admin/session",
+    headers: Record<string, string> = {},
+  ): Promise<string> {
+    await harness.request("/admin/merchants", json({ email: EMAIL, password: PASSWORD }));
+    const response = await harness.request(
+      url,
+      json({ email: EMAIL, password: PASSWORD }, headers),
+    );
+    const cookie = response.headers.get("set-cookie") ?? "";
+    // Asserted here so the negative expectations below cannot pass by there being no cookie
+    // at all, which is the way a test like this quietly stops testing anything.
+    expect(cookie).toContain("kobai_session=");
+    return cookie;
+  }
+
+  it("is httpOnly and SameSite=Strict, scoped to the surface it opens", async () => {
+    kobai = await createTestKobai();
+
+    const cookie = await cookieFrom(kobai);
+
+    // httpOnly is the point of the exercise: no script reads it, so no logging integration
+    // and no third-party bundle can carry a live session off the page.
+    expect(cookie).toContain("HttpOnly");
+    // Strict rather than Lax: ADR-0010 puts the Admin in the same container as the API, so
+    // every request it makes is same-site anyway and nothing enters this surface from another
+    // site. Lax would keep a hole open for a flow that does not exist.
+    expect(cookie).toContain("SameSite=Strict");
+    // Not sent to `/store`, `/health`, or anything else a Project serves from this origin.
+    expect(cookie).toContain("Path=/admin");
+  });
+
+  it("does not expire in the browser, so the server stays the authority on when it does", async () => {
+    kobai = await createTestKobai();
+
+    const cookie = await cookieFrom(kobai);
+
+    // A cookie the browser dropped would simply stop being sent, and the request after it
+    // would be indistinguishable from an anonymous one — the Admin would render an empty page
+    // where it owes a sign-in prompt. The `core_session` row decides expiry, and the gate goes
+    // on answering `session-expired`.
+    expect(cookie).not.toContain("Expires=");
+    expect(cookie).not.toContain("Max-Age=");
+  });
+
+  it("is not Secure over plain HTTP, so local development works at all", async () => {
+    kobai = await createTestKobai();
+
+    const cookie = await cookieFrom(kobai);
+
+    // `devbox run up` serves http://localhost:3000. A cookie that only ever set over HTTPS
+    // would make signing in impossible there.
+    expect(cookie).not.toContain("Secure");
+  });
+
+  it.each([
+    ["served over HTTPS itself", "https://kobai.test/admin/session", {}],
+    [
+      "behind a proxy that terminated TLS",
+      "http://kobai.test/admin/session",
+      { "x-forwarded-proto": "https" },
+    ],
+  ])(
+    "is Secure when the request arrived over HTTPS — %s",
+    async (_case, url, headers) => {
+      kobai = await createTestKobai();
+
+      const cookie = await cookieFrom(kobai, url, headers);
+
+      // The proxy case is the one that matters in production: kobai is one container
+      // (ADR-0010) and TLS is almost always terminated in front of it, so judging by the
+      // process's own socket alone would drop `Secure` from every cookie a real deployment set.
+      expect(cookie).toContain("Secure");
+    },
+  );
+});
+
 describe("a session authenticates the admin surface", () => {
   it("opens an endpoint the Merchant's Role has permission for", async () => {
     kobai = await createTestKobai();
@@ -204,25 +301,46 @@ describe("a session authenticates the admin surface", () => {
   });
 
   it.each([
-    ["no Authorization header at all", undefined, "session-missing"],
-    [
-      "an Authorization header that is not a bearer token",
-      "Basic aGk6dGhlcmU=",
-      "session-malformed",
-    ],
-    ["a bearer scheme with nothing after it", "Bearer", "session-malformed"],
-    ["a token nobody was issued", "Bearer notatokenanybodyhas", "session-unknown"],
-  ])("rejects %s", async (_case, authorization, reason) => {
+    ["no Cookie header at all", undefined, "session-missing"],
+    ["cookies that do not include ours", "somebody_elses=value", "session-missing"],
+    ["our cookie carrying nothing", "kobai_session=", "session-malformed"],
+    ["a token nobody was issued", "kobai_session=notatokenanybodyhas", "session-unknown"],
+  ])("rejects %s", async (_case, cookie, reason) => {
     kobai = await createTestKobai();
     await signInTestMerchant(kobai);
 
     const response = await kobai.request("/admin/store", {
-      headers: authorization === undefined ? {} : { authorization },
+      headers: cookie === undefined ? {} : { cookie },
     });
 
     // The admin surface is not open by default: no session, no Store.
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toMatchObject({ reason });
+  });
+
+  it("does not accept the session as a bearer token, which is where it used to travel", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await kobai.request("/admin/store", {
+      headers: { authorization: `Bearer ${merchant.token}` },
+    });
+
+    // The old transport is gone rather than merely deprecated. Accepting both would keep the
+    // exposure ADR-0032 was written to close, for the sake of a caller nobody has.
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-missing" });
+  });
+
+  it("sends no bearer challenge, because it no longer accepts one", async () => {
+    kobai = await createTestKobai();
+
+    const response = await kobai.request("/admin/store");
+
+    // RFC 6750's challenge names the scheme a request failed to satisfy. `/admin` is opened
+    // by a cookie now, so naming `Bearer` would be an instruction that cannot work. The store
+    // gate still sends it, because there it is still true.
+    expect(response.headers.get("www-authenticate")).toBeNull();
   });
 });
 
@@ -294,18 +412,35 @@ describe("signing out", () => {
     await expect(afterwards.json()).resolves.toMatchObject({ reason: "session-unknown" });
   });
 
+  it("clears the cookie as well as the row, with the attributes it was set with", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const signOut = await kobai.request("/admin/session", {
+      method: "DELETE",
+      headers: merchant.headers,
+    });
+
+    // A browser matches a deletion to a stored cookie by name, domain and path, so a clear
+    // that disagreed about `Path` would leave the old cookie sitting there and sign-out would
+    // only look like it had worked.
+    const cleared = signOut.headers.get("set-cookie") ?? "";
+    expect(cleared).toContain("kobai_session=");
+    expect(cleared).not.toContain(merchant.token);
+    expect(cleared).toContain("Max-Age=0");
+    expect(cleared).toContain("Path=/admin");
+  });
+
   it("ends that session and no other", async () => {
     kobai = await createTestKobai();
     const first = await signInTestMerchant(kobai);
-    const second = (await (
-      await kobai.request("/admin/session", json({ email: EMAIL, password: PASSWORD }))
-    ).json()) as TestSession;
+    const second = sessionOf(
+      await kobai.request("/admin/session", json({ email: EMAIL, password: PASSWORD })),
+    );
 
     await kobai.request("/admin/session", { method: "DELETE", headers: first.headers });
 
-    const other = await kobai.request("/admin/store", {
-      headers: { authorization: `Bearer ${second.token}` },
-    });
+    const other = await kobai.request("/admin/store", { headers: second.headers });
     expect(other.status).toBe(200);
   });
 });
@@ -326,13 +461,12 @@ describe("permissions gate the endpoint", () => {
         owner.headers,
       ),
     );
-    const bookkeeper = (await (
+    const { headers } = sessionOf(
       await kobai.request(
         "/admin/session",
         json({ email: "books@example.test", password: PASSWORD }),
-      )
-    ).json()) as TestSession;
-    const headers = { authorization: `Bearer ${bookkeeper.token}` };
+      ),
+    );
 
     const store = await kobai.request("/admin/store", { headers });
     const session = await kobai.request("/admin/session", { headers });

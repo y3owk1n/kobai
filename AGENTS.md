@@ -236,12 +236,22 @@ each route names the one permission its Role must hold. `signInTestMerchant` cre
 deployment's first Merchant and signs them in through the public API, which is what anything
 behind the gate needs before it can assert on the thing it actually cares about. A test about
 *not* holding a permission should create a narrower Role itself — that is the subject, and a
-helper would hide it.
+helper would hide it; when it signs that narrower Merchant in, `sessionOf(response)` reads
+the session cookie off the sign-in response the way a browser would, and hands back the same
+`headers` shape.
+
+A session **is a cookie, not a bearer token** (ADR-0032). `merchant.headers` is
+`{ cookie: "kobai_session=…" }` and the token is in no response body, so a test that reaches
+for an `Authorization` header to open `/admin` is reaching for the transport that was removed.
+The one exception is a test whose *subject* is that removal — `auth.test.ts` presents the
+token as a bearer and asserts it is refused, because a gate that quietly kept accepting both
+would pass every other test in the file.
 
 The **store surface is closed by default too, behind a different gate**: `/store/*` sits
-behind an API key rather than a Merchant session (ADR-0020), so neither credential is worth
-anything on the other surface. `createTestApiKey` mints one through the public API, which
-means a Merchant has to be signed in first:
+behind a bearer API key rather than a Merchant session (ADR-0020), so neither credential is
+worth anything on the other surface — nor does either even arrive the same way.
+`createTestApiKey` mints one through the public API, which means a Merchant has to be signed
+in first:
 
 ```ts
 const merchant = await signInTestMerchant(kobai);

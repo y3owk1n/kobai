@@ -4,6 +4,7 @@ import {
   createTestKobai,
   signInTestMerchant,
   type TestKobai,
+  type TestSession,
 } from "../testing/index.ts";
 
 /**
@@ -27,7 +28,9 @@ type Priced = {
   /** A secret key's headers, ready to ask the store surface with. */
   readonly headers: Record<string, string>;
   readonly keyId: string;
-  readonly merchantHeaders: Record<string, string>;
+  readonly merchantHeaders: TestSession["headers"];
+  /** The value inside the session cookie, for the test that offers it as a key. */
+  readonly merchantToken: string;
 };
 
 /**
@@ -62,6 +65,7 @@ async function priced(instance: TestKobai, amount = 1250): Promise<Priced> {
     headers: key.headers,
     keyId: key.id,
     merchantHeaders: merchant.headers,
+    merchantToken: merchant.token,
   };
 }
 
@@ -124,13 +128,25 @@ describe("the store surface is not open by default", () => {
   it("refuses a Merchant session, which is the other surface's credential", async () => {
     kobai = await createTestKobai();
     const store = await priced(kobai);
+    const path = `/store/variants/${store.variantId}/price`;
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.merchantHeaders,
+    const asCookie = await kobai.request(path, { headers: store.merchantHeaders });
+    // And the value inside the cookie, handed over the way a key is. A browser would never
+    // do this — the cookie is scoped `Path=/admin` — but the gate must refuse it anyway,
+    // because "neither credential is worth anything on the other surface" (ADR-0020) is a
+    // property of the gate rather than of the browser that usually calls it.
+    const asBearer = await kobai.request(path, {
+      headers: { authorization: `Bearer ${store.merchantToken}` },
     });
 
-    expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toMatchObject({ reason: "api-key-malformed" });
+    expect(asCookie.status).toBe(401);
+    expect(asBearer.status).toBe(401);
+    // `missing` for the cookie: a Merchant session is a cookie now (ADR-0032) and this gate
+    // reads `Authorization`, so a session presented that way is not a badly-shaped key — it
+    // is no key at all. The bare token still reads `malformed`, because a key carries a
+    // prefix and a session token carries none.
+    await expect(asCookie.json()).resolves.toMatchObject({ reason: "api-key-missing" });
+    await expect(asBearer.json()).resolves.toMatchObject({ reason: "api-key-malformed" });
   });
 
   it("answers an unrouted store path in the same shape as every other refusal", async () => {

@@ -111,11 +111,14 @@ describe("the description covers both surfaces, including how each is opened", (
     const { document } = describeCore();
 
     // One scheme covering both would let a generated client send a storefront's key at
-    // `/admin` and call it a type-correct request (ADR-0020).
+    // `/admin` and call it a type-correct request (ADR-0020). Since ADR-0032 they do not
+    // even arrive the same way: the admin surface is opened by a cookie a browser carries
+    // by itself, and the store surface by a bearer key a server sends deliberately.
     expect(document.components?.securitySchemes).toEqual({
       [SECURITY_SCHEMES.merchantSession]: {
-        type: "http",
-        scheme: "bearer",
+        type: "apiKey",
+        in: "cookie",
+        name: "kobai_session",
         description: expect.any(String),
       },
       [SECURITY_SCHEMES.apiKey]: {

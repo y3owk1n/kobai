@@ -19,6 +19,13 @@ import {
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import { createSession, revokeSession } from "../auth/session.ts";
+import {
+  clearedSessionCookie,
+  presentedSessionToken,
+  type Scheme,
+  schemeOf,
+  sessionCookie,
+} from "../auth/session-cookie.ts";
 import { listProducts, readProduct } from "../catalog/read.ts";
 import {
   createProduct,
@@ -108,7 +115,7 @@ const signInRoute = createRoute({
   path: "/session",
   summary: "Sign in",
   description:
-    "An unknown address and a wrong password are answered identically, and in the same time. Distinguishing them would turn this into a way to ask who works here.",
+    "The session travels back as an httpOnly `kobai_session` cookie, which a browser then sends on every admin request by itself; it is in no response body. An unknown address and a wrong password are answered identically, and in the same time — distinguishing them would turn this into a way to ask who works here.",
   request: {
     body: {
       required: true,
@@ -116,10 +123,13 @@ const signInRoute = createRoute({
     },
   },
   responses: {
-    201: json(
-      "The session, with the token to present on every later request.",
-      contract.IssuedSession,
-    ),
+    201: {
+      ...json(
+        "Who you now are. The credential itself is in the cookie.",
+        contract.Session,
+      ),
+      headers: contract.SessionCookieSet,
+    },
     400: REFUSALS.invalid,
     401: json("Those credentials are not valid.", contract.InvalidCredentials),
     500: REFUSALS.serverError,
@@ -148,10 +158,11 @@ const signOutRoute = createRoute({
   method: "delete",
   path: "/session",
   summary: "Sign out",
-  description: "The row goes, so the token stops working on the very next request.",
+  description:
+    "The row goes, so the session stops working on the very next request, and the cookie is cleared so the browser stops sending it. Both halves matter: clearing only the cookie would leave a live session behind, and deleting only the row would leave the browser presenting a credential to be refused.",
   security: MERCHANT_SESSION,
   responses: {
-    204: { description: "Signed out." },
+    204: { description: "Signed out.", headers: contract.SessionCookieCleared },
     401: REFUSALS.noSession,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -335,18 +346,19 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   admin.openapi(createMerchantRoute, async (c) => {
     const body = c.req.valid("json");
 
-    // An `Authorization` header means the caller is claiming to be somebody, so take them at
-    // their word and hold them to it — the bootstrap path is for a caller with no session on
-    // a deployment with no Merchant, and nothing else.
+    // A presented session means the caller is claiming to be somebody, so take them at their
+    // word and hold them to it — the bootstrap path is for a caller with no session on a
+    // deployment with no Merchant, and nothing else.
+    // "Missing" and not merely "not usable": a caller who sent the cookie and got it wrong
+    // is claiming to be somebody, and is told so rather than quietly handed the anonymous
+    // path — the same line `Authorization` drew before the cookie replaced it.
+    const cookie = c.req.header("cookie");
+    const presented = presentedSessionToken(cookie);
     const bootstrap =
-      c.req.header("authorization") === undefined && !(await hasAnyMerchant(deps.db));
+      !presented.ok && presented.reason === "missing" && !(await hasAnyMerchant(deps.db));
 
     if (!bootstrap) {
-      const gate = await authorise(
-        deps.db,
-        c.req.header("authorization"),
-        PERMISSIONS.merchantWrite,
-      );
+      const gate = await authorise(deps.db, cookie, PERMISSIONS.merchantWrite);
       if (!gate.ok) return refuse(c, gate);
     }
 
@@ -370,10 +382,12 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     }
 
     const issued = await createSession(deps.db, merchant.id);
-    return c.json(
-      { token: issued.token, ...sessionBody(merchant, merchant.role, issued.expiresAt) },
-      201,
-    );
+
+    // The credential leaves in a header and not in the body. That is the whole switch: a
+    // token in a response body is a token every logging integration is one `JSON.stringify`
+    // away from writing down (ADR-0032).
+    c.header("set-cookie", sessionCookie(issued.token, scheme(c)));
+    return c.json(sessionBody(merchant, merchant.role, issued.expiresAt), 201);
   });
 
   const guarded = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
@@ -386,6 +400,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
 
   guarded.openapi(signOutRoute, async (c) => {
     await revokeSession(deps.db, authenticated(c).sessionId);
+    c.header("set-cookie", clearedSessionCookie(scheme(c)));
     return c.body(null, 204);
   });
 
@@ -469,6 +484,16 @@ const PRICE_STATUS = {
   Exclude<PriceCreation, { ok: true }>["reason"],
   400 | 404 | 422
 >;
+
+/**
+ * Which scheme this request arrived over, which is all the cookie needs to know.
+ *
+ * Read from the request rather than from configuration, so the same build sets a `Secure`
+ * cookie behind TLS and a working one over the plain HTTP `devbox run up` serves.
+ */
+function scheme(c: Context<AdminEnv>): Scheme {
+  return schemeOf(c.req.url, c.req.header("x-forwarded-proto"));
+}
 
 /** One shape for "you are signed in", whether it is being issued or merely reported. */
 function sessionBody(merchant: MerchantIdentity, role: RoleSummary, expiresAt: Date) {

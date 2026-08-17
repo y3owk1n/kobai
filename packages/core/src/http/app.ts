@@ -1,5 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { HTTPException } from "hono/http-exception";
+import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
@@ -33,7 +34,7 @@ const DOCUMENT = {
     title: "kobai",
     version: "0.0.0",
     description:
-      "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session, and `/store`, behind an API key (ADR-0020). `/health` is open, and is the only route that answers before migrations have applied.",
+      "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session in an httpOnly cookie, and `/store`, behind a bearer API key (ADR-0020, ADR-0032). `/health` is open, and is the only route that answers before migrations have applied.",
     license: { name: "MIT", identifier: "MIT" },
   },
 } as const;
@@ -120,10 +121,11 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
     "securitySchemes",
     SECURITY_SCHEMES.merchantSession,
     {
-      type: "http",
-      scheme: "bearer",
+      type: "apiKey",
+      in: "cookie",
+      name: SESSION_COOKIE,
       description:
-        "A Merchant session token, from `POST /admin/session`. Opens `/admin` and nothing else.",
+        "A Merchant session, set by `POST /admin/session` as an httpOnly cookie and sent back by the browser by itself. Opens `/admin` and nothing else. httpOnly, `SameSite=Strict`, `Path=/admin`, and `Secure` whenever the request arrived over HTTPS — so the token is in no response body and reachable by no script (ADR-0032).",
     },
   );
   app.openAPIRegistry.registerComponent("securitySchemes", SECURITY_SCHEMES.apiKey, {

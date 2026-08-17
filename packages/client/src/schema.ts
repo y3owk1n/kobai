@@ -56,12 +56,8 @@ export interface paths {
             "application/json": components["schemas"]["Refusal"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -106,12 +102,8 @@ export interface paths {
             "application/json": components["schemas"]["Session"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -132,7 +124,7 @@ export interface paths {
     };
     /**
      * Sign in
-     * @description An unknown address and a wrong password are answered identically, and in the same time. Distinguishing them would turn this into a way to ask who works here.
+     * @description The session travels back as an httpOnly `kobai_session` cookie, which a browser then sends on every admin request by itself; it is in no response body. An unknown address and a wrong password are answered identically, and in the same time — distinguishing them would turn this into a way to ask who works here.
      */
     post: {
       requestBody: {
@@ -141,10 +133,14 @@ export interface paths {
         };
       };
       responses: {
-        /** @description The session, with the token to present on every later request. */
+        /** @description Who you now are. The credential itself is in the cookie. */
         201: {
+          headers: {
+            /** @description `kobai_session`, httpOnly, SameSite=Strict, Path=/admin, and Secure whenever the request arrived over HTTPS. A browser sends it back by itself; nothing else has to. */
+            "set-cookie": string;
+          };
           content: {
-            "application/json": components["schemas"]["IssuedSession"];
+            "application/json": components["schemas"]["Session"];
           };
         };
         /** @description The request does not fit this endpoint's schema. */
@@ -175,20 +171,20 @@ export interface paths {
     };
     /**
      * Sign out
-     * @description The row goes, so the token stops working on the very next request.
+     * @description The row goes, so the session stops working on the very next request, and the cookie is cleared so the browser stops sending it. Both halves matter: clearing only the cookie would leave a live session behind, and deleting only the row would leave the browser presenting a credential to be refused.
      */
     delete: {
       responses: {
         /** @description Signed out. */
         204: {
+          headers: {
+            /** @description `kobai_session`, emptied and expired, so the browser drops it. */
+            "set-cookie": string;
+          };
           content: never;
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -221,12 +217,8 @@ export interface paths {
             "application/json": components["schemas"]["Store"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -265,12 +257,8 @@ export interface paths {
             "application/json": components["schemas"]["ProductList"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -318,12 +306,8 @@ export interface paths {
             "application/json": components["schemas"]["Refusal"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -374,12 +358,8 @@ export interface paths {
             "application/json": components["schemas"]["ProductDetail"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -441,12 +421,8 @@ export interface paths {
             "application/json": components["schemas"]["Refusal"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -508,12 +484,8 @@ export interface paths {
             "application/json": components["schemas"]["Refusal"];
           };
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -556,12 +528,8 @@ export interface paths {
         204: {
           content: never;
         };
-        /** @description No live Merchant session was presented. */
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
         401: {
-          headers: {
-            /** @description The scheme the request failed to satisfy. */
-            "www-authenticate": "Bearer";
-          };
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
           };
@@ -728,9 +696,6 @@ export interface components {
       password: string;
       /** @description A Role by name. Defaults to `owner`. */
       role?: string;
-    };
-    IssuedSession: components["schemas"]["Session"] & {
-      token: string;
     };
     Session: {
       /** Format: date-time */

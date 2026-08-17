@@ -19,7 +19,8 @@ import { bearerToken } from "./bearer.ts";
  * a wider notion of "credential", every route added under `/admin` would be one mistake away
  * from being reachable by a storefront. As it is, a key presented to `/admin` is not a
  * session and is refused there, and a session presented to `/store` is not a key and is
- * refused here.
+ * refused here — and since ADR-0032 they do not even arrive the same way, because a session
+ * is a cookie and this gate reads `Authorization`.
  *
  * ```ts
  * const store = new Hono<StoreEnv>();
@@ -76,7 +77,7 @@ const REFUSAL = {
   missing:
     "This endpoint requires an API key. Send `Authorization: Bearer <key>`, and create a key from the Admin.",
   malformed:
-    "That is not a kobai API key. A key looks like `kobai_pk_…` if it is publishable or `kobai_sk_…` if it is secret; a Merchant session token opens the admin surface, not this one.",
+    "That is not a kobai API key. A key looks like `kobai_pk_…` if it is publishable or `kobai_sk_…` if it is secret. A Merchant session opens the admin surface and not this one, and it is a cookie rather than anything that could arrive here.",
   unknown: "This API key does not exist. Create one from the Admin.",
   revoked: "This API key has been revoked. Create a new one from the Admin.",
 } as const satisfies Record<ApiKeyRejection, string>;

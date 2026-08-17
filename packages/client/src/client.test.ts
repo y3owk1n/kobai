@@ -39,10 +39,29 @@ function clientFor(
   });
 }
 
+/**
+ * A client that carries a Merchant's session cookie, which is what a browser does for free.
+ *
+ * The client does not model the session and should not (ADR-0032): on the same origin a
+ * browser attaches the cookie itself. A test has no browser, so it plays one — three lines,
+ * and honest about being three lines, rather than a cookie option nobody would use in
+ * production.
+ */
+function adminClientFor(instance: TestKobai, cookie: string): KobaiClient {
+  const client = clientFor(instance);
+  client.use({
+    onRequest: ({ request }) => {
+      request.headers.set("cookie", cookie);
+      return request;
+    },
+  });
+  return client;
+}
+
 /** A Store holding one Variant at one Price, arranged through the client itself. */
 async function priced(instance: TestKobai, amount = 1250) {
   const merchant = await signInTestMerchant(instance);
-  const admin = clientFor(instance, { session: merchant.token });
+  const admin = adminClientFor(instance, merchant.headers.cookie);
 
   const product = await admin.POST("/admin/products", {
     body: { title: "A poster", variants: [{ sku: "POSTER-A2" }] },
@@ -103,7 +122,7 @@ describe("consuming kobai through the generated client", () => {
     // The client attaches whichever credential it was given; the server decides. A key at
     // `/admin` is not a session, and a session at `/store` is not a key (ADR-0020).
     const withKey = clientFor(kobai, { apiKey: store.apiKey });
-    const withSession = clientFor(kobai, { session: store.merchant.token });
+    const withSession = adminClientFor(kobai, store.merchant.headers.cookie);
 
     const adminWithKey = await withKey.GET("/admin/store");
     const storeWithSession = await withSession.GET("/store/variants/{id}/price", {
@@ -112,12 +131,13 @@ describe("consuming kobai through the generated client", () => {
 
     expect(adminWithKey.response.status).toBe(401);
     expect(storeWithSession.response.status).toBe(401);
-    // The two refusals are not symmetrical, and the description says so: a key carries a
-    // prefix, so the store gate can tell "that is not a kobai key" from "nobody issued
-    // that one" without a lookup. A session token carries none, so a key presented at
-    // `/admin` is a well-formed bearer token that names no session.
-    expect(reasonOf(adminWithKey.error)).toBe("session-unknown");
-    expect(reasonOf(storeWithSession.error)).toBe("api-key-malformed");
+    // The two refusals are not symmetrical, and the description says so. A key sent at
+    // `/admin` arrives in a header that surface stopped reading when the session moved into
+    // a cookie (ADR-0032), so it is no session at all rather than an unrecognised one. A
+    // session sent at `/store` is a cookie that gate never looks at — and a browser would
+    // not even send it there, because the cookie is scoped `Path=/admin`.
+    expect(reasonOf(adminWithKey.error)).toBe("session-missing");
+    expect(reasonOf(storeWithSession.error)).toBe("api-key-missing");
   });
 
   it("hands back a refusal in the shape the description promised", async () => {
@@ -153,8 +173,9 @@ describe("consuming kobai through the generated client", () => {
     });
 
     expect(created.data?.email).toBe("first@example.test");
-    expect(signedIn.data?.token).toEqual(expect.any(String));
     expect(signedIn.data?.role.permissions).toContain("catalog:write");
+    // The credential came back in a header a browser acts on and this client never reads.
+    expect(signedIn.response.headers.get("set-cookie")).toContain("kobai_session=");
   });
 
   it("is closed by default, and says which gate turned the caller back", async () => {
@@ -168,10 +189,12 @@ describe("consuming kobai through the generated client", () => {
 
     expect(reasonOf(admin.error)).toBe("session-missing");
     expect(reasonOf(store.error)).toBe("api-key-missing");
-    // RFC 6750, and part of the description rather than only of the prose: both 401s
-    // declare this header, so both have to send it.
-    expect(admin.response.headers.get("www-authenticate")).toBe("Bearer");
+    // RFC 6750, and part of the description rather than only of the prose: the store 401
+    // declares this header, so it has to send it. The admin 401 declares none and sends
+    // none — it is opened by a cookie now, and a challenge naming `Bearer` would be an
+    // instruction no client could act on (ADR-0032).
     expect(store.response.headers.get("www-authenticate")).toBe("Bearer");
+    expect(admin.response.headers.get("www-authenticate")).toBeNull();
   });
 });
 
@@ -280,6 +303,39 @@ describe("what the generated types refuse", () => {
     const read = async () => client.GET("/admin/products/{id}", {});
 
     expect(read).toBeDefined();
+  });
+
+  it("does not model a session credential, because a cookie is not the caller's to carry", () => {
+    const build = () =>
+      createKobaiClient({
+        baseUrl: "http://kobai.test",
+        // The session is an httpOnly cookie the browser sends by itself (ADR-0032). An
+        // option for it here would be one no caller could fill: nothing outside the browser
+        // ever holds the value.
+        // @ts-expect-error `KobaiCredential` is the API key, and only the API key.
+        credential: { session: "a session token" },
+      });
+
+    expect(build).toBeDefined();
+  });
+
+  it("does not carry a session token on the sign-in response, because no response does", () => {
+    const signIn = async () => {
+      const { data } = await client.POST("/admin/session", {
+        body: {
+          email: "first@example.test",
+          password: "a merchant's very long password",
+        },
+      });
+
+      // The finding that decided ADR-0032: while `token` was a published field, anything
+      // logging a response body logged a live credential. It is not a field any more, and
+      // this line is what fails the build if it ever comes back.
+      // @ts-expect-error a `Session` carries no token; it travels in the cookie.
+      return data?.token;
+    };
+
+    expect(signIn).toBeDefined();
   });
 
   it("types a refusal too, so `reason` is a union and not a string", () => {
