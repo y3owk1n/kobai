@@ -8,6 +8,39 @@
 #
 # Lines marked DECISION are choices made here. Everything else is either a key Dependabot
 # requires, or a default left alone deliberately and said to be one.
+#
+# ------------------------------------------------------------------------------------
+# Version updates and security updates are two mechanisms, and this file reaches only
+# one of them directly.
+# ------------------------------------------------------------------------------------
+# Everything above answers "what should we be on?" — a schedule, a batch, a cooldown.
+# Security updates answer a different question, "what are we on that is known
+# vulnerable?", and they are **switched on in repository settings**, not here. There is
+# no key in this file that enables them; `updates[].applies-to` does not exist, and the
+# published schema (json.schemastore.org/dependabot-2.0.json) sets
+# `additionalProperties: false` on an update entry, so writing one is a typo that
+# Dependabot drops in silence. They were already on while #69's thirteen alerts sat
+# open, which is why "enable it" was never the fix.
+#
+# What this file *does* reach: every option in an entry below marked with the
+# shield-check icon in GitHub's options reference also shapes security pull requests.
+# Concretely, for the npm entry —
+#
+#   * `commit-message` applies, so a security PR is a Conventional Commit like any other.
+#   * `cooldown` does NOT apply, and `open-pull-requests-limit` does NOT apply. A
+#     security fix is therefore never held back by the three-day soak and never crowded
+#     out by a backlog of version PRs. That asymmetry is the point of putting the delay
+#     in `cooldown` rather than in `schedule`.
+#   * `ignore` DOES apply — see the hazard noted on the `ignore` block below.
+#   * `groups` applies only where a group says `applies-to: "security-updates"`. A group
+#     that omits the key is version-updates-only, which is what the two routine batches
+#     below are.
+#
+# And what neither reaches: an advisory against a **transitive** dependency that no
+# release of its parent moves off. Dependabot opens no pull request at all for those —
+# it has nothing to bump — so they accumulate silently, which is exactly what #69 found.
+# The lever for those is a scoped `pnpm.overrides` entry in the root `package.json`,
+# documented there and in AGENTS.md § Dependency updates.
 
 version: 2
 
@@ -49,6 +82,43 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+      # DECISION: security fixes batch too, into one PR of their own. `applies-to` is the
+      # only key in this file that names security updates, and it belongs to a group; a
+      # group without it is version-updates-only, so this batch and the one above never
+      # mix. The reason is the same one that made the routine batch weekly: kobai has one
+      # `pnpm-lock.yaml` and several branches open against it at once, so N security
+      # branches each rewriting that file cost N-1 rebases to land one fix.
+      #
+      # The obvious objection — that grouping lets one un-bumpable dependency block every
+      # other fix — does not hold here, and #69 is the evidence. Dependabot only groups
+      # updates it can actually make; an advisory it cannot resolve never joins the group
+      # and never blocks it, it simply produces no PR (which is how thirteen alerts went
+      # unnoticed). The residual risk is a bump that lands and fails CI, and that is
+      # identical grouped or not.
+      #
+      # It is not hiding anything either, and this is the difference from a major. A major
+      # is invisible inside a batch, so #29 kept majors out. A security fix is never only
+      # a PR: it has an alert with a severity and an advisory behind it, the alert list is
+      # what gets reviewed, and a grouped PR body enumerates every advisory it closes.
+      #
+      # `dependency-type: "development"` was considered here — batching dev-scope fixes
+      # while a runtime one still arrives alone — and rejected on evidence. Every one of
+      # #69's thirteen alerts reported `"scope": "runtime"` from the alerts API although
+      # all thirteen were reached only through a devDependency, so the predicate would
+      # have misfired on the exact case it was written for. Do not add it back without
+      # first checking that `gh api repos/y3owk1n/kobai/dependabot/alerts` reports the
+      # scope correctly for a transitive pnpm dependency.
+      # `update-types` keeps #29's rule intact rather than quietly reversing it: a security
+      # fix whose only remedy crosses a **major** boundary matches no group and arrives on
+      # its own, exactly as a routine major does. It costs a decision either way — the
+      # dependency's API is changing, and the advisory is the reason rather than the
+      # excuse. Note the spelling: a group takes `minor`/`patch`, not the
+      # `version-update:semver-*` form that `ignore` and `allow` take.
+      npm-security:
+        applies-to: "security-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
     # DECISION: majors are deliberately left out of every group. A dependency matching no
     # group falls back to its own pull request, so `typescript` 5 → 7 arrives alone, on
     # its own branch, titled with the package and the boundary it crosses, with its own
@@ -63,6 +133,15 @@ updates:
     # hand-closed every week, which is how a reviewer learns to skim past exactly the
     # kind of PR this file exists to make them read. **Lift this the day the devbox Node
     # pin moves** — that pin is the constraint, not the types.
+    #
+    # HAZARD, and it is the reason to keep this list at two entries and never grow it
+    # casually: `ignore` is one of the options that shapes **security** pull requests as
+    # well as version ones, and there is no way to scope an entry to version updates
+    # only. So a security advisory whose only fix is the major being held back here would
+    # be suppressed — no PR, and no way to tell from the alert list that a rule did it.
+    # Both entries below are held at a major boundary for a reason recorded elsewhere in
+    # the repository, and both name the day to lift them; neither is a preference. Before
+    # adding a third, ask what happens when that package is the one with the advisory.
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
@@ -144,6 +223,12 @@ updates:
       github-actions-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+
+      # No `applies-to: "security-updates"` group here, unlike npm, and the asymmetry is
+      # deliberate. Grouping security fixes there buys one rebase of `pnpm-lock.yaml`
+      # instead of several; an action bump edits a `uses:` line and there is no shared
+      # file to rebase, so grouping would buy nothing and would cost the per-advisory
+      # pull request. Three actions are pinned in total.
 
     commit-message:
       # DECISION: `ci`, not `chore` — what changes here is the build, not a dependency
