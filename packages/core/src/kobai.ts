@@ -5,6 +5,11 @@ import {
 } from "./auth/seed.ts";
 import { consoleLogger, type KobaiProjectConfig, type Logger } from "./config.ts";
 import { createDatabaseHandle, type Database } from "./db/client.ts";
+import {
+  type DatabaseReadiness,
+  type WaitForDatabaseOptions,
+  waitForDatabase,
+} from "./db/readiness.ts";
 import { createHttpApp, describeHttpApp } from "./http/app.ts";
 import type { OpenApiDocument } from "./http/openapi.ts";
 import { coreMigrationSet } from "./migrations/core-set.ts";
@@ -56,6 +61,22 @@ export type Kobai = {
   /** Core's set first, then each set the Project wired, in the order it wired them. */
   readonly migrationSets: readonly MigrationSet[];
   /**
+   * Waits for the database to accept a connection, up to a deadline. Call it once per boot,
+   * before {@link Kobai.migrate}.
+   *
+   * It exists so that *"the database is not up yet"* and *"a migration failed"* are two
+   * answers rather than one (ADR-0048). `migrate()` reaches for the database on its first
+   * statement, so without this a Postgres still starting comes back as Core's migration set
+   * having failed — a true refusal with a false reason. Waiting is bounded and retried;
+   * migrating is neither, and a migration that ran and failed is never retried here or
+   * anywhere.
+   *
+   * Skipping it is not fatal, only less legible: a Project whose platform already orders its
+   * containers may call `migrate()` straight away, and the generated Project's compose file
+   * orders them too. This is what covers every deployment that offers no such ordering.
+   */
+  waitForDatabase(options?: WaitForDatabaseOptions): Promise<DatabaseReadiness>;
+  /**
    * Applies every migration set. Returns failure rather than throwing: what a failed
    * migration means is the caller's decision, and the reference Project's answer — report
    * it on `/health`, then exit non-zero — is one of several defensible ones.
@@ -106,6 +127,17 @@ export function createKobai(options: KobaiOptions): Kobai {
     db: database.db,
     migrationSets,
     migrationState: () => migrations.get(),
+
+    async waitForDatabase(options) {
+      return waitForDatabase(database.pool, {
+        ...options,
+        // Said once, and only when there is something to say. A boot against a database that
+        // is already up prints nothing at all; a boot that is going to sit here for thirty
+        // seconds says why on its first attempt rather than at the end of them.
+        onWaiting: ({ message }) =>
+          logger.info("waiting for the database", { reason: message }),
+      });
+    },
 
     async migrate() {
       migrations.set({ status: "running" });

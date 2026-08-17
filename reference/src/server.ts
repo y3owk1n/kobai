@@ -6,17 +6,19 @@ import { createProjectFetch } from "./app.ts";
 
 /**
  * The reference Project's entrypoint — the whole of what a Project has to write to run
- * kobai. Read env, hand it to Core, bind a port, migrate, seed the first Merchant, and decide
- * what each failure means.
+ * kobai. Read env, hand it to Core, bind a port, wait for the database, migrate, seed the
+ * first Merchant, and decide what each failure means.
  *
- * The order matters. The listener is bound *before* migrations run, so `GET /health` can
- * answer throughout: a Developer, or a container orchestrator, can tell a booting instance
- * from a broken one instead of seeing the same connection refused for both. Core's own gate
- * keeps every other route at 503 until migrations have applied, so nothing is ever served
- * against a half-migrated schema.
+ * The order matters. The listener is bound *before* anything touches the database, so
+ * `GET /health` can answer throughout: a Developer, or a container orchestrator, can tell a
+ * booting instance from a broken one instead of seeing the same connection refused for both.
+ * Core's own gate keeps every other route at 503 until migrations have applied, so nothing is
+ * ever served against a half-migrated schema.
  *
  * If a migration fails the process exits non-zero rather than lingering. A half-migrated
- * database that keeps its container alive is the failure mode worth avoiding.
+ * database that keeps its container alive is the failure mode worth avoiding. A database that
+ * is merely not up yet is a different fact and is waited on, briefly, before it becomes the
+ * same one — see below.
  */
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -68,6 +70,35 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     void shutdown().then(() => process.exit(0));
   });
+}
+
+/**
+ * The database, before anything is asked of it.
+ *
+ * This is a separate call from the migration below because they are separate facts, and
+ * telling them apart is worth a line: a Postgres that has not finished starting used to
+ * arrive here as *Core's migration set failed*, which is a true refusal with a false reason
+ * and an afternoon's debugging (#80, ADR-0048). Waiting is bounded and retried; migrating is
+ * neither. Both refuse to start, and each says which of the two happened.
+ *
+ * `compose.yaml` already holds `app` back until `db` reports healthy, so on a Developer's
+ * machine this returns on its first attempt. It is here for every deployment that offers no
+ * such ordering — a platform that starts containers in whatever order it likes, a database
+ * that restarts under a running application.
+ */
+const ready = await kobai.waitForDatabase();
+if (!ready.ok) {
+  consoleLogger.error("refusing to start", {
+    reason: "the database never accepted a connection, so no migration was attempted",
+    detail: ready.message,
+    waitedMs: ready.waitedMs,
+  });
+  // The listener, and not `shutdown()`. A deadline reached because the connection itself hung
+  // — a dropped SYN rather than a refusal — leaves an attempt outstanding, and `pool.end()`
+  // waits for it: a boot that blocked here would be the hang this whole call exists to
+  // replace. The process is ending; its sockets go with it.
+  server.close();
+  process.exit(1);
 }
 
 const outcome = await kobai.migrate();
