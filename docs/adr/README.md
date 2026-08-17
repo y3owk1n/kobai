@@ -68,6 +68,12 @@ New to the project? These five carry the shape of everything else:
 | [0040](./0040-an-unrouted-path-is-a-refusal-and-the-gate-answers-before-it.md) | An unrouted path is a refusal like any other, and the gate answers before it | Accepted |
 | [0041](./0041-the-first-merchant-is-seeded-at-boot.md) | The first Merchant is seeded at boot, and Core has no unauthenticated write path | Accepted — supersedes part of 0020 |
 | [0044](./0044-the-cli-and-migrator-agreement-is-asserted-in-the-gate.md) | The CLI/migrator agreement is asserted in the gate, not behind an opt-in step | Accepted — enforces 0030 |
+| [0045](./0045-sessions-expire-on-inactivity-under-an-absolute-cap.md) | Sessions expire on inactivity, under an absolute cap | **"The window is hardcoded" superseded by 0050.** Rest stands |
+| [0046](./0046-the-postgres-credentials-belong-to-dot-env-too.md) | The Postgres credentials come from `.env`, and devbox is where they are encoded | Accepted — completes 0031 |
+| [0047](./0047-the-test-harness-is-promised-surface.md) | The test harness is promised surface, and it is not a sixth Extension Point | Accepted |
+| [0048](./0048-readiness-is-asked-over-the-transport-the-application-uses.md) | Readiness is asked over the transport the application uses, and waiting is not migrating | Accepted |
+| [0049](./0049-migration-counts-are-derived-and-the-strength-moved-to-the-effect.md) | Migration counts are derived, and the strength moved to the effect | Accepted |
+| [0050](./0050-the-idle-window-is-a-projects-the-cap-is-cores.md) | The idle window is a Project's, the absolute cap is Core's | Accepted — supersedes part of 0045 |
 
 ## Prototypes
 
