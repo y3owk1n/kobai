@@ -8,7 +8,7 @@
   },
   "// scripts": "There are none here on purpose. Every command lives in devbox.json, so there is one list rather than two that drift — see AGENTS.md § Development. `devbox run ci` is the gate.",
   "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.5.8",
     "@types/node": "^22.18.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.6",
