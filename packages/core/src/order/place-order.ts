@@ -5,6 +5,7 @@ import {
   cart,
   cartLineItem,
   order,
+  orderAdjustment,
   orderLineItem,
   product,
   variant,
@@ -33,14 +34,25 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  * the same transaction the Order is written in rather than becoming a fourth thing that can
  * fail afterwards (ADR-0018).
  *
- * Three slots today:
+ * Five slots today:
  *
  * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired
  *   or empty. It applies no pricing rule; it hands over what was selected.
  * - **`price-lines`** invokes `resolve-price` for each line, through the deployment's own
  *   declaration (ADR-0054) — so a Project that replaced `select-price` charges its own prices
  *   at Capture without wiring the same customisation twice.
- * - **`capture-order`** writes the Order and its snapshot Line Items in one transaction.
+ * - **`apply-adjustments`** attaches discounts and surcharges as their own lines (ADR-0022).
+ *   Core's own implementation attaches none; the slot is where a Plugin's or a Project's rule
+ *   goes.
+ * - **`calculate-tax`** works out the tax on each line, and Core's own implementation returns
+ *   **zero** — see {@link calculateTax}.
+ * - **`capture-order`** writes the Order, its snapshot Line Items and its Adjustments in one
+ *   transaction.
+ *
+ * **`apply-adjustments` runs before `calculate-tax`, and that is arithmetic rather than
+ * ordering taste.** ADR-0022 says an Adjustment changes what a line total means in every Order
+ * snapshot, tax base and refund; a discount applied after the tax had been worked out would
+ * leave the Order taxed on a figure nobody was charged.
  */
 
 /** What a storefront sends: the Cart to place, and nothing else to orchestrate. */
@@ -109,10 +121,78 @@ export type PricedLine = CartLineToPlace & {
   readonly currency: string;
 };
 
-/** What `price-lines` produces and `capture-order` writes. */
+/** What `price-lines` produces and `apply-adjustments` adjusts. */
 export type PricedLines = {
   readonly cart: CartToPlace;
   readonly lines: readonly PricedLine[];
+};
+
+/**
+ * A discount or a surcharge — **its own line, never a number folded into an amount**
+ * (ADR-0022).
+ *
+ * That is the whole shape and the whole point. An Adjustment that had been subtracted from a
+ * `unitAmount` would leave an Order saying a Variant cost something it does not cost, with no
+ * record of why, and every downstream figure — the tax base, a refund, the Merchant's revenue —
+ * derived from a price that was never charged. So a Step declares what it is adding and Core
+ * writes it as a row beside the line it belongs to.
+ *
+ * There is no `id` here because a Step is describing an Adjustment rather than reading one
+ * back; Capture gives it one, and {@link OrderAdjustment} is what a caller then sees.
+ */
+export type Adjustment = {
+  /**
+   * Machine-readable, and the Step's to choose — `lead-time-surcharge`, `loyalty-discount`.
+   *
+   * Core defines none of its own and validates none: an Adjustment kobai understood would be a
+   * discount engine, and that is not what ADR-0022 asked for.
+   */
+  readonly code: string;
+  /** For a person — what a Shopper reads on a confirmation and a Merchant reads in the Admin. */
+  readonly description: string;
+  /**
+   * **Signed** minor units of the Order's currency: negative discounts, positive surcharges.
+   *
+   * One signed column rather than a `kind` and a magnitude, because the arithmetic is then the
+   * same in both directions and a total is a sum — the alternative is a branch at every place
+   * money is added up, and one of them eventually gets the sign wrong.
+   */
+  readonly amount: number;
+  /** The Adjustment's own open data (ADR-0004) — why it was applied, in the Step's own terms. */
+  readonly metadata?: Record<string, unknown>;
+};
+
+/** One priced line, with whatever `apply-adjustments` attached to it. */
+export type AdjustedLine = PricedLine & {
+  readonly adjustments: readonly Adjustment[];
+};
+
+/** What `apply-adjustments` produces and `calculate-tax` taxes. */
+export type AdjustedLines = {
+  readonly cart: CartToPlace;
+  readonly lines: readonly AdjustedLine[];
+  /**
+   * Adjustments on the **Order as a whole** — the ones that belong to no single line, such as a
+   * basket-wide discount or a delivery surcharge (ADR-0022, `CONTEXT.md`).
+   *
+   * Two places rather than one because the distinction is real and unrecoverable afterwards: an
+   * Adjustment on a line is part of what that line came to, and so part of what a Return for
+   * that line refunds, while one on the Order is not attributable to any of them.
+   */
+  readonly adjustments: readonly Adjustment[];
+};
+
+/** One adjusted line, with the tax `calculate-tax` worked out for it. */
+export type TaxedLine = AdjustedLine & {
+  /** Minor units, on the **adjusted** figure — which is why this slot runs after that one. */
+  readonly tax: number;
+};
+
+/** What `calculate-tax` produces and `capture-order` writes. */
+export type TaxedLines = {
+  readonly cart: CartToPlace;
+  readonly lines: readonly TaxedLine[];
+  readonly adjustments: readonly Adjustment[];
 };
 
 /**
@@ -239,6 +319,57 @@ export const priceLines = defineStep(
 );
 
 /**
+ * Attaches Adjustments — and **Core attaches none**.
+ *
+ * That is not an oversight and it is not a placeholder. ADR-0022 puts the *shape* in Core
+ * because omitting it makes "line total" wrong in every Order, tax base and refund; it does not
+ * put a discount engine in Core, and there is no rule Core could apply that would be right for
+ * anybody's Store. What ships here is the slot, positioned where the arithmetic needs it.
+ *
+ * A Plugin or a Project fills it either way round, and both are ordinary:
+ *
+ * - **Replacing** the slot owns it — the Step takes {@link PricedLines} and returns
+ *   {@link AdjustedLines} with whatever it decided.
+ * - **Inserting after** it composes — an inserted Step takes and gives {@link AdjustedLines}, so
+ *   two rules that each add a surcharge stack rather than overwrite one another. That is the
+ *   shape to reach for when more than one thing adjusts an Order.
+ */
+export const applyAdjustments = defineStep(
+  "apply-adjustments",
+  (input: PricedLines): AdjustedLines => ({
+    cart: input.cart,
+    lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+    adjustments: [],
+  }),
+);
+
+/**
+ * Works out the tax on each line, and **returns zero**.
+ *
+ * Zero is the deliverable rather than a stub apologised for. ADR-0009 has an Order's Line Items
+ * snapshot the tax as at Capture, so the figure has to exist from the very first Order — a
+ * snapshot that gained one later would change what every Order written before it means, and
+ * there would be no honest value to backfill. Core has no jurisdiction and will never have one,
+ * so the only tax it can state truthfully is the tax it charged, which is none.
+ *
+ * A replaceable Step returning zero is therefore the extension surface being used as intended:
+ * a Project whose rules Core will never model replaces this slot, and so does the tax spec when
+ * it arrives — neither of them changing what an Order means, because the field was always there.
+ *
+ * It taxes the **adjusted** figure: `unitAmount × quantity` plus this line's Adjustments, which
+ * is what `apply-adjustments` running first is for. A replacement that wants the tax base has
+ * everything it needs on the input and nothing to ask Core for.
+ */
+export const calculateTax = defineStep(
+  "calculate-tax",
+  (input: AdjustedLines): TaxedLines => ({
+    cart: input.cart,
+    lines: input.lines.map((line) => ({ ...line, tax: 0 })),
+    adjustments: input.adjustments,
+  }),
+);
+
+/**
  * **Capture** — the Order comes into existence and becomes immutable.
  *
  * One transaction, and it is the last thing in this Workflow that can fail. Nothing here is
@@ -250,10 +381,15 @@ export const priceLines = defineStep(
  * The Order is read back inside the transaction rather than assembled from what went in, so
  * what a Capture reports is the same bytes a later `GET` reports — same columns, same line
  * order, produced by the same code.
+ *
+ * **Core composes the money here rather than trusting a Step to have done it.** A replaced
+ * `apply-adjustments` says what it is adding and a replaced `calculate-tax` says what it is
+ * charging; neither is asked for a total, because a Step that had to keep one in step with what
+ * it changed is a Step that can forget to.
  */
 export const captureOrder = defineStep(
   "capture-order",
-  async (input: PricedLines, context): Promise<Order> => {
+  async (input: TaxedLines, context): Promise<Order> => {
     const currency = oneCurrency(input.lines);
     const lines = input.lines.map((line) => ({
       variantId: line.variantId,
@@ -262,12 +398,15 @@ export const captureOrder = defineStep(
       unitAmount: line.unitAmount,
       currency: line.currency,
       quantity: line.quantity,
-      // `tax` is left to its zero default until the tax spec puts a real Step in
-      // `calculate-tax`; the column exists now so that adding tax later is not a change to
-      // what an Order means (ADR-0022).
-      total: line.unitAmount * line.quantity,
+      tax: line.tax,
+      // What the line came to: the goods, the Adjustments on it, and the tax on the adjusted
+      // figure. Stored rather than derived, because a snapshot recomputed is not one.
+      total: totalOf(line),
       metadata: line.metadata,
+      adjustments: line.adjustments,
     }));
+    const total =
+      lines.reduce((sum, line) => sum + line.total, 0) + sumOf(input.adjustments);
 
     return context.db.transaction(async (tx: Transaction): Promise<Order> => {
       const [written] = await tx
@@ -277,15 +416,36 @@ export const captureOrder = defineStep(
           shopperEmail: input.cart.shopper?.email ?? null,
           shopperExternalId: input.cart.shopper?.externalId ?? null,
           currency,
-          total: lines.reduce((sum, line) => sum + line.total, 0),
+          total,
           metadata: input.cart.metadata,
         })
         .returning({ id: order.id });
       if (!written) throw new Error("Writing an Order returned no row.");
 
-      await tx
+      const insertedLines = await tx
         .insert(orderLineItem)
-        .values(lines.map((line) => ({ ...line, orderId: written.id })));
+        .values(
+          lines.map(({ adjustments: _adjustments, ...line }) => ({
+            ...line,
+            orderId: written.id,
+          })),
+        )
+        // By SKU rather than by the order the rows came back in: a Cart holds one line per
+        // Variant and a SKU is unique across the deployment, so this is a real correlation
+        // rather than a bet on what `returning` happens to preserve.
+        .returning({ id: orderLineItem.id, sku: orderLineItem.sku });
+      const lineIdBySku = new Map(insertedLines.map((line) => [line.sku, line.id]));
+
+      const adjustments = [
+        ...lines.flatMap((line) =>
+          rowsFor(line.adjustments, written.id, lineIdBySku.get(line.sku) ?? null),
+        ),
+        // The Order's own go in with a null line, which is what makes them the Order's.
+        ...rowsFor(input.adjustments, written.id, null),
+      ];
+      // Skipped rather than run empty: an `insert … values ()` with no rows is a syntax error
+      // in Postgres, and no Adjustment at all is the ordinary case.
+      if (adjustments.length > 0) await tx.insert(orderAdjustment).values(adjustments);
 
       const captured = await readOrder(tx, written.id);
       if (!captured) throw new Error("An Order was written and could not be read back.");
@@ -293,6 +453,43 @@ export const captureOrder = defineStep(
     });
   },
 );
+
+/** What one line came to: the goods, its own Adjustments, and the tax on the adjusted figure. */
+function totalOf(line: TaxedLine): number {
+  return line.unitAmount * line.quantity + sumOf(line.adjustments) + line.tax;
+}
+
+/**
+ * Adjustments summed, which is all that is needed in either direction.
+ *
+ * A discount is a negative amount, so there is no branch here and there is deliberately none
+ * anywhere else either — see {@link Adjustment.amount}.
+ */
+function sumOf(adjustments: readonly Adjustment[]): number {
+  return adjustments.reduce((sum, adjustment) => sum + adjustment.amount, 0);
+}
+
+/**
+ * Adjustments as rows, keeping the order the Step produced them in.
+ *
+ * `position` is that order, and it is stored because Capture writes every row in one
+ * transaction — nothing else about them distinguishes one from another afterwards.
+ */
+function rowsFor(
+  adjustments: readonly Adjustment[],
+  orderId: string,
+  orderLineItemId: string | null,
+) {
+  return adjustments.map((adjustment, position) => ({
+    orderId,
+    orderLineItemId,
+    position,
+    code: adjustment.code,
+    description: adjustment.description,
+    amount: adjustment.amount,
+    metadata: adjustment.metadata ?? {},
+  }));
+}
 
 /**
  * The one currency this Order is in.
@@ -307,7 +504,7 @@ export const captureOrder = defineStep(
  * Multi-currency is out of scope by decision, and is additive when it arrives — a Price is a
  * row, so the shape that would represent it is more rows rather than a different Order.
  */
-function oneCurrency(lines: readonly PricedLine[]): string {
+function oneCurrency(lines: readonly TaxedLine[]): string {
   const currencies = [...new Set(lines.map((line) => line.currency))];
   const [only] = currencies;
   if (only === undefined) throw new Error("An Order was captured with no Line Items.");
@@ -328,6 +525,8 @@ function oneCurrency(lines: readonly PricedLine[]): string {
 export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order")
   .step(loadCart)
   .step(priceLines)
+  .step(applyAdjustments)
+  .step(calculateTax)
   .step(captureOrder)
   .build();
 

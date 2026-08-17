@@ -1507,7 +1507,24 @@ export interface components {
       quantity: number;
       /** @description Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means. */
       tax: number;
+      /** @description The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them. */
+      adjustments: components["schemas"]["OrderAdjustment"][];
+      /** @description What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`. */
       total: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    OrderAdjustment: {
+      /** Format: uuid */
+      id: string;
+      /** @description Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set. */
+      code: string;
+      /** @description For a person to read. */
+      description: string;
+      /** @description **Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way. */
+      amount: number;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -1521,10 +1538,12 @@ export interface components {
       shopper: components["schemas"]["CartShopper"];
       /** @description ISO 4217. Every amount here is in it. */
       currency: string;
-      /** @description What was charged, in minor units. */
+      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments. */
       total: number;
       /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
       lineItems: components["schemas"]["OrderLineItem"][];
+      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
+      adjustments: components["schemas"]["OrderAdjustment"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;

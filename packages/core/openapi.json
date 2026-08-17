@@ -1098,8 +1098,16 @@
             "type": "integer",
             "description": "Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means."
           },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderAdjustment"
+            },
+            "description": "The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them."
+          },
           "total": {
-            "type": "integer"
+            "type": "integer",
+            "description": "What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`."
           },
           "metadata": {
             "type": "object",
@@ -1115,7 +1123,41 @@
           "unitAmount",
           "quantity",
           "tax",
+          "adjustments",
           "total",
+          "metadata"
+        ]
+      },
+      "OrderAdjustment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set."
+          },
+          "description": {
+            "type": "string",
+            "description": "For a person to read."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "**Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "description",
+          "amount",
           "metadata"
         ]
       },
@@ -1146,7 +1188,7 @@
           },
           "total": {
             "type": "integer",
-            "description": "What was charged, in minor units."
+            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments."
           },
           "lineItems": {
             "type": "array",
@@ -1154,6 +1196,13 @@
               "$ref": "#/components/schemas/OrderLineItem"
             },
             "description": "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position."
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderAdjustment"
+            },
+            "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
           },
           "metadata": {
             "type": "object",
@@ -1173,6 +1222,7 @@
           "currency",
           "total",
           "lineItems",
+          "adjustments",
           "metadata",
           "createdAt"
         ]

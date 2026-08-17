@@ -99,6 +99,20 @@
       "when": 1786992622778,
       "tag": "0013_order_updated_at_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787010542101,
+      "tag": "0014_fresh_fenris",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787010550732,
+      "tag": "0015_order_adjustment_updated_at_trigger",
+      "breakpoints": true
     }
   ]
 }
