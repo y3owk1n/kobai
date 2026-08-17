@@ -13,10 +13,10 @@ import type { WorkflowStep } from "./workflow.ts";
 /**
  * One Step, as the run reports it: the slot it filled, and what filled it.
  *
- * See {@link WorkflowStep} for why those are two things. Reporting both here — while they
- * still always agree, because nothing has been replaced yet — is what will let a Developer
- * see in the response that *their* Step ran (spec story 33) without the response contract
- * having to change to say so.
+ * See {@link WorkflowStep} for why those are two things. Reporting both is what lets a
+ * Developer see in the response that *their* Step ran (spec story 33): the slot stays Core's
+ * and the implementation beside it is theirs, so the response says so without the contract
+ * having to change to accommodate an override.
  */
 export type StepReport = {
   readonly step: string;

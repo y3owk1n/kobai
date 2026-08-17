@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
+import type { PriceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { createAdminRoutes } from "./admin.ts";
 import { health, requireMigrationsApplied } from "./health.ts";
 import { createStoreRoutes } from "./store.ts";
@@ -10,6 +11,11 @@ export type HttpDependencies = {
   readonly db: Database;
   readonly migrations: MigrationStateHolder;
   readonly logger: Logger;
+  /**
+   * The `resolve-price` declaration this deployment runs — Core's, or the one the Project's
+   * config rebuilt. Threaded through to the store surface rather than imported there.
+   */
+  readonly priceWorkflow: PriceResolutionWorkflow;
 };
 
 /**
@@ -51,7 +57,7 @@ export function createHttpApp(deps: HttpDependencies): Hono {
   // neither credential is worth anything on the other surface (ADR-0020).
   const store = new Hono();
   store.use("*", requireMigrationsApplied(deps.migrations));
-  store.route("/", createStoreRoutes({ db: deps.db }));
+  store.route("/", createStoreRoutes({ db: deps.db, priceWorkflow: deps.priceWorkflow }));
   app.route("/store", store);
 
   return app;

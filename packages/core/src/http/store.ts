@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { requireApiKey, type StoreEnv } from "../auth/store-gate.ts";
 import type { Database } from "../db/client.ts";
-import {
-  type PriceResolutionRefusal,
-  priceResolutionWorkflow,
+import type {
+  PriceResolutionRefusal,
+  PriceResolutionWorkflow,
 } from "../pricing/resolve-price.ts";
 import { openMetadata } from "../workflow/context.ts";
 import type { WorkflowRun } from "../workflow/run.ts";
@@ -24,6 +24,12 @@ import type { WorkflowRun } from "../workflow/run.ts";
 
 export type StoreDependencies = {
   readonly db: Database;
+  /**
+   * The `resolve-price` declaration this deployment runs — Core's, or the one the Project's
+   * config rebuilt by replacing a Step (ADR-0017). Handed in rather than imported, because a
+   * route that imported it would run Core's Steps whatever the Project had wired.
+   */
+  readonly priceWorkflow: PriceResolutionWorkflow;
 };
 
 export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
@@ -40,19 +46,22 @@ export function createStoreRoutes(deps: StoreDependencies): Hono<StoreEnv> {
    * extension mechanism is demonstrated rather than asserted (spec story 33).
    */
   store.get("/variants/:id/price", async (c) => {
-    const run = await priceResolutionWorkflow.run(
+    const run = await deps.priceWorkflow.run(
       { variantId: c.req.param("id") },
       // Everything the caller sent that Core does not model, carried through untouched —
       // ADR-0013's open context, at the edge where it is filled.
       { db: deps.db, metadata: openMetadata(new URL(c.req.url)) },
     );
 
-    if (!run.ok) return c.json(refusal(run), statusFor(run.reason));
+    if (!run.ok)
+      return c.json(refusal(run, deps.priceWorkflow.name), statusFor(run.reason));
 
     return c.json(
       {
         ...run.output,
-        workflow: { name: priceResolutionWorkflow.name, steps: run.steps },
+        // `steps` names each slot *and* what filled it, so a Project that replaced one sees
+        // its own Step here in place of Core's.
+        workflow: { name: deps.priceWorkflow.name, steps: run.steps },
       },
       200,
     );
@@ -110,12 +119,12 @@ function statusFor(reason: string): ContentfulStatusCode {
  * The Steps that ran are reported on the way out as well as on the way in, so a Developer
  * debugging a refused resolution can see how far the Workflow got before it stopped.
  */
-function refusal(run: Extract<WorkflowRun<unknown>, { ok: false }>) {
+function refusal(run: Extract<WorkflowRun<unknown>, { ok: false }>, workflow: string) {
   return {
     error: run.detail,
     reason: run.reason,
     workflow: {
-      name: priceResolutionWorkflow.name,
+      name: workflow,
       failed: run.failed,
       steps: run.steps,
     },
