@@ -219,6 +219,12 @@ One named, typed unit inside a Workflow, individually replaceable by a Plugin or
 Replacing a Step is kobai's flagship customisation mechanism — see ADR-0003.
 _Avoid_: stage, task, handler, middleware
 
+**Compensation**:
+What a Step declares to undo what it did, run by Core when a later Step fails. Every
+completed Step's compensation is attempted, newest first, and one that throws stops neither
+the rest nor the answer the run was going to give — see ADR-0017 and ADR-0036.
+_Avoid_: rollback, revert, cleanup, undo handler
+
 ## Retired terms
 
 These appeared in early descriptions of kobai and should not be used again:

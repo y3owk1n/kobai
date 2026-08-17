@@ -44,13 +44,82 @@ export type WorkflowRun<Out> =
       readonly detail: string;
       /** The Steps that completed. The one named by `failed` is not among them. */
       readonly steps: readonly StepReport[];
+      /**
+       * The Steps whose compensation threw while unwinding, in the order they were attempted
+       * — so, newest first (ADR-0036).
+       *
+       * Empty on an ordinary refusal, and that is the case worth naming: it says the Store
+       * was left as the Workflow found it. A non-empty list is the *other* fact about this
+       * run — not why it was refused, but whether the Store is now consistent — and it is
+       * reported beside the refusal rather than in place of it, because the caller who asked
+       * "why was this rejected" is still owed the answer.
+       */
+      readonly uncompensated: readonly CompensationFailure[];
     };
+
+/** One compensation that threw: the slot whose Step declared it, and what it threw. */
+export type CompensationFailure = {
+  readonly slot: string;
+  readonly cause: unknown;
+};
+
+/**
+ * Unwinding finished, and one or more compensations threw while it did — raised only when
+ * what stopped the run was a **bug** rather than a refusal.
+ *
+ * A refusal is a value, so the compensations that failed are reported on it (see
+ * {@link WorkflowRun}). A bug is a throw, and there is no value to report anything on — so
+ * the second fact travels attached to the first: the bug is this error's `cause`, and the
+ * Steps left uncompensated are named in the message and listed on `uncompensated`. Neither
+ * fact replaces the other, which is the whole of ADR-0036.
+ *
+ * It is an `AggregateError` because that is what it is — every compensation that threw is in
+ * `errors`, in the order they were attempted — and because a runner that picked one of them
+ * to re-raise would be choosing which half of the mess an operator gets to read.
+ */
+export class UnwindFailure extends AggregateError {
+  readonly uncompensated: readonly CompensationFailure[];
+
+  constructor(cause: unknown, uncompensated: readonly CompensationFailure[]) {
+    super(
+      uncompensated.map((failure) => failure.cause),
+      describeUnwindFailure(cause, uncompensated),
+      { cause },
+    );
+    this.name = "UnwindFailure";
+    this.uncompensated = uncompensated;
+  }
+}
+
+/**
+ * Both facts, in one line.
+ *
+ * The message carries what stopped the run as well as what the unwinding could not undo,
+ * because the thing that logs an error kobai raised logs its `message` and nothing else — so
+ * a wrapper that kept the original only in `cause` would make a broken Step *quieter* than it
+ * was before it also broke its own cleanup, which is the opposite of the point.
+ */
+function describeUnwindFailure(
+  cause: unknown,
+  uncompensated: readonly CompensationFailure[],
+): string {
+  const slots = uncompensated.map((failure) => JSON.stringify(failure.slot)).join(", ");
+  const steps = `${uncompensated.length} Step${uncompensated.length === 1 ? "" : "s"}`;
+  return `A Workflow failed, and unwinding it left ${steps} uncompensated: ${slots}. The Store may be inconsistent. What stopped the run: ${messageOf(cause)}`;
+}
+
+/** What a thrown thing says for itself. A Step may throw anything, so nothing is assumed. */
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+}
 
 /** What a Step's `run` looks like once the declaration's types have been discharged. */
 type Erased = (input: unknown, context: WorkflowContext) => unknown;
 
 /** Likewise a Step's compensation, together with what it is owed: the value its Step ran on. */
 type Undo = {
+  /** The slot it belongs to, so a compensation that throws can be reported by position. */
+  readonly slot: string;
   readonly compensate: (input: unknown, context: WorkflowContext) => void | Promise<void>;
   readonly input: unknown;
 };
@@ -81,12 +150,18 @@ export async function runSteps<Out>(
       // Unwound before the answer is composed, and before a bug is allowed to travel: what
       // the caller is told is a different question from whether the Store is left consistent,
       // and a refusal and a bug leave exactly the same mess behind.
-      await unwind(undo, context);
+      const uncompensated = await unwind(undo, context);
 
       // Only a refusal is an answer. Anything else is a bug in a Step, and a bug must not be
       // dressed up as a decision the Workflow made — it keeps travelling, and surfaces as
-      // the 500 it is.
-      if (!(cause instanceof StepFailure)) throw cause;
+      // the 500 it is. It travels alone unless the unwinding failed too, in which case it
+      // travels as the cause of that (ADR-0036): a thrown outcome has no result object for
+      // the second fact to be reported on, and dropping it would leave the more urgent of
+      // the two — the Store may be inconsistent — nowhere at all.
+      if (!(cause instanceof StepFailure))
+        throw uncompensated.length === 0
+          ? cause
+          : new UnwindFailure(cause, uncompensated);
 
       return {
         ok: false,
@@ -94,6 +169,7 @@ export async function runSteps<Out>(
         reason: cause.reason,
         detail: cause.detail,
         steps: ran,
+        uncompensated,
       };
     }
 
@@ -101,28 +177,44 @@ export async function runSteps<Out>(
     // The failing Step is not among these: it did not complete, so there is nothing of its
     // to undo, and calling its compensation would be asking it to unwind work it never did.
     const compensate = entry.step.compensate as Undo["compensate"] | undefined;
-    if (compensate) undo.push({ compensate, input: given });
+    if (compensate) undo.push({ slot: entry.slot, compensate, input: given });
   }
 
   return { ok: true, output: value as Out, steps: ran };
 }
 
 /**
- * Undoes the completed Steps, newest first.
+ * Undoes the completed Steps, newest first, and reports the compensations that threw.
  *
  * Reverse because a later Step's work may rest on an earlier one's — undoing in declaration
  * order would pull the ground out from under a compensation that had not run yet. Each Step
  * is handed the value it ran on, so a Step that wrote something can find what it wrote.
  *
- * A compensation that throws is a bug like any other, and it travels: unwinding stops there
- * rather than continuing over a machine that has just proved it does not understand its own
- * state. It travels *in place of* whatever stopped the run — the caller learns that the
- * cleanup failed rather than which Step refused, which is the more urgent of the two and the
- * only one that cannot be inferred from a Workflow that claims to have tidied up after
- * itself.
+ * **Every completed Step's compensation is attempted, and one that throws does not stop the
+ * rest** (ADR-0036). A compensation is by nature the code most likely to be running against a
+ * system already in a bad state, so its failing is the ordinary case rather than the remote
+ * one — and stopping there would leave the Steps *before* it uncompensated, in exactly the
+ * situation compensation exists to prevent. Which Steps got undone would then depend on where
+ * in the chain the failure landed, which is the opposite of the predictability the reverse
+ * order is for.
+ *
+ * Nothing is thrown from here. What one compensation failing means for the run is the
+ * runner's decision, not this loop's, and this loop is not in a position to make it: it does
+ * not know whether a refusal or a bug brought it here.
  */
-async function unwind(undo: readonly Undo[], context: WorkflowContext): Promise<void> {
+async function unwind(
+  undo: readonly Undo[],
+  context: WorkflowContext,
+): Promise<readonly CompensationFailure[]> {
+  const uncompensated: CompensationFailure[] = [];
+
   for (const entry of [...undo].reverse()) {
-    await entry.compensate(entry.input, context);
+    try {
+      await entry.compensate(entry.input, context);
+    } catch (cause) {
+      uncompensated.push({ slot: entry.slot, cause });
+    }
   }
+
+  return uncompensated;
 }

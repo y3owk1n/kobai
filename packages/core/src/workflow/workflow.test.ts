@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Database } from "../db/client.ts";
 import { openMetadata, type WorkflowContext } from "./context.ts";
+import { UnwindFailure } from "./run.ts";
 import { defineStep, type Step, StepFailure } from "./step.ts";
 import {
   defineWorkflow,
@@ -99,6 +100,9 @@ describe("running a Workflow", () => {
       reason: "nothing-doing",
       detail: "This Step declines to proceed.",
       steps: [{ step: "first", implementation: "first" }],
+      // Nothing was left half-undone: no Step here declared a compensation, so there was
+      // nothing to unwind and nothing that could have failed at it (ADR-0036).
+      uncompensated: [],
     });
   });
 
@@ -363,6 +367,11 @@ describe("compensating a Workflow that failed", () => {
     throw new StepFailure("nothing-doing", "This Step declines to proceed.");
   });
 
+  /** A Step with a bug in it: not a refusal, so it is not an answer the Workflow can give. */
+  const broken = defineStep("broken", (_input: Trail): Trail => {
+    throw new TypeError("undefined is not a function");
+  });
+
   /** A Step that records having run and, given the chance, records having been undone. */
   const undoable = <Name extends string>(name: Name, unwound: string[]) =>
     defineStep(
@@ -439,11 +448,7 @@ describe("compensating a Workflow that failed", () => {
     const unwound: string[] = [];
     const workflow = defineWorkflow<Trail>("visits")
       .step(undoable("first", unwound))
-      .step(
-        defineStep("broken", (_input: Trail): Trail => {
-          throw new TypeError("undefined is not a function");
-        }),
-      )
+      .step(broken)
       .build();
 
     await expect(workflow.run({ trail: [] }, CONTEXT)).rejects.toThrow(
@@ -452,32 +457,97 @@ describe("compensating a Workflow that failed", () => {
     expect(unwound).toEqual(["first"]);
   });
 
-  it("lets a failing compensation travel, in place of the refusal it was unwinding", async () => {
-    // The deliberate limit of this mechanism, pinned so it is a decision rather than a
-    // surprise: a compensation that throws stops the unwinding where it stands, and what the
-    // caller gets is the cleanup's failure rather than the refusal. That is the more urgent
-    // of the two — a Workflow that could not tidy up after itself is worse news than the
-    // Step that asked it to.
+  /** A Step whose compensation is itself broken — the case ADR-0036 is about. */
+  const uncompensatable = <Name extends string>(name: Name) =>
+    defineStep(
+      name,
+      (input: Trail): Trail => ({ trail: [...input.trail, name] }),
+      () => {
+        throw new TypeError(`the compensation of ${name} is itself broken`);
+      },
+    );
+
+  it("keeps unwinding past a compensation that throws, so the Steps before it still get their turn", async () => {
+    // ADR-0036. A compensation is by nature the code most likely to be running against a
+    // system already in a bad state, so one of them failing must not decide the fate of the
+    // others: `second` throws in the middle of the unwinding and `first`, which is earlier in
+    // the chain and later in the unwinding, is still undone.
     const unwound: string[] = [];
     const workflow = defineWorkflow<Trail>("visits")
       .step(undoable("first", unwound))
-      .step(
-        defineStep(
-          "second",
-          (input: Trail): Trail => ({ trail: [...input.trail, "second"] }),
-          () => {
-            throw new TypeError("the compensation is itself broken");
-          },
-        ),
-      )
+      .step(uncompensatable("second"))
+      .step(undoable("third", unwound))
       .step(refuses)
       .build();
 
-    await expect(workflow.run({ trail: [] }, CONTEXT)).rejects.toThrow(
-      "the compensation is itself broken",
-    );
-    // `first` is earlier, so its turn never came.
-    expect(unwound).toEqual([]);
+    await workflow.run({ trail: [] }, CONTEXT);
+
+    expect(unwound).toEqual(["third", "first"]);
+  });
+
+  it("answers with the refusal that stopped the run, and names what was left uncompensated", async () => {
+    // The two facts are different questions — "why was this rejected" and "is the Store now
+    // consistent" — and the second must not erase the first (ADR-0036). #8 shipped the
+    // opposite and pinned it; #59 revisited it.
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", []))
+      .step(uncompensatable("second"))
+      .step(refuses)
+      .build();
+
+    const run = await workflow.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(false);
+    if (run.ok) return;
+    expect(run.reason).toBe("nothing-doing");
+    expect(run.failed).toBe("refuses");
+    expect(run.uncompensated).toEqual([{ slot: "second", cause: expect.any(TypeError) }]);
+  });
+
+  it("reports nothing uncompensated when every compensation did its job", async () => {
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", []))
+      .step(refuses)
+      .build();
+
+    const run = await workflow.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(false);
+    if (run.ok) return;
+    expect(run.uncompensated).toEqual([]);
+  });
+
+  it("carries the bug that stopped the run as the cause of a failed unwinding", async () => {
+    // A bug travels rather than becoming an answer, and it still does when the unwinding it
+    // triggered also failed — but now it arrives *with* that news rather than being replaced
+    // by it. A thrown outcome has no result object to hang the second fact on, so it hangs on
+    // the error: the Steps left uncompensated are named in the message, and the bug is the
+    // cause.
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(uncompensatable("second"))
+      .step(undoable("third", unwound))
+      .step(broken)
+      .build();
+
+    const thrown: unknown = await workflow
+      .run({ trail: [] }, CONTEXT)
+      .catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(UnwindFailure);
+    if (!(thrown instanceof UnwindFailure)) return;
+    // Both facts in the one line, because the thing that logs an error kobai raised logs its
+    // message: a broken Step must not go quieter for having also broken its own cleanup.
+    expect(thrown.message).toMatch(/left 1 Step uncompensated: "second"/);
+    expect(thrown.message).toMatch(/undefined is not a function/);
+    expect(thrown.cause).toBeInstanceOf(TypeError);
+    expect((thrown.cause as Error).message).toBe("undefined is not a function");
+    expect(thrown.uncompensated).toEqual([
+      { slot: "second", cause: expect.any(TypeError) },
+    ]);
+    // The unwinding still finished around the compensation that threw, on this path too.
+    expect(unwound).toEqual(["third", "first"]);
   });
 
   it("compensates nothing when every Step succeeds", async () => {

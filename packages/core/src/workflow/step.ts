@@ -32,6 +32,12 @@ export type Step<Name extends string, In, Out> = {
    * That identity is the promise a Step's own bookkeeping rests on: a Step that wrote a row
    * can key what it wrote by the value it wrote it for, and find it again here.
    *
+   * Throwing from here is contained rather than fatal (ADR-0036): the compensations of the
+   * Steps before this one still run, in the same reverse order, and what the caller is told
+   * is still whatever stopped the run — a refusal with its own reason, or the Step's bug.
+   * What a failure here records is that *this* Step could not be undone, and it is attempted
+   * exactly once. So this is no place to signal a decision; it is a place to undo work.
+   *
    * It answers nothing. A Workflow that has failed produces no output, and a compensation
    * returning a value would suggest it could still contribute to one.
    */

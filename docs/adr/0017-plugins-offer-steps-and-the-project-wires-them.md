@@ -12,6 +12,12 @@ Step's input and output types. `before`/`after` insertion exists as a separate, 
 weaker mechanism that cannot alter the output contract. And a Step may declare a
 **compensating action**, which Core runs in reverse when a later Step fails.
 
+> **Extended by [ADR-0036](./0036-unwinding-is-exhaustive-and-never-replaces-what-stopped-the-run.md).**
+> "Core runs it in reverse when a later Step fails" left one edge unstated: what happens when
+> a compensation itself throws. ADR-0036 settles it — unwinding is exhaustive, and a
+> compensation failing never replaces what stopped the run. The decision recorded here is
+> unchanged.
+
 > **On the shape.** This ADR first sketched the map as `steps: { 'resolve-price': myStep }`,
 > written before a Workflow had named Steps. That shape cannot say *which* Step is being
 > replaced, so it only ever worked for a Workflow with one overridable Step — and

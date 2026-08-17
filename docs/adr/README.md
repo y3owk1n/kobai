@@ -42,7 +42,7 @@ New to the project? These five carry the shape of everything else:
 | [0014](./0014-fulfilment-strategies-are-an-open-set-and-fulfilment-is-its-own-entity.md) | Fulfilment strategies are an open set, and Fulfilment is its own entity | Accepted |
 | [0015](./0015-shopper-supplied-input-is-project-owned.md) | Shopper-supplied input is Project-owned, and is not Media | Accepted |
 | [0016](./0016-kobai-is-not-a-cms-in-v1.md) | kobai is not a CMS ~~in v1~~ | **Amended by 0023.** Naming correction stands |
-| [0017](./0017-plugins-offer-steps-and-the-project-wires-them.md) | Plugins offer Steps; the Project wires them | Accepted |
+| [0017](./0017-plugins-offer-steps-and-the-project-wires-them.md) | Plugins offer Steps; the Project wires them | Accepted — unwinding edge settled by 0036 |
 | [0018](./0018-one-reservation-model-implemented-without-holds.md) | One Reservation model, ~~implemented without holds~~ | **"No holds" superseded by 0027.** Interface and atomicity stand |
 | [0019](./0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md) | Plugins are npm packages, and semver covers only the promised surface | Accepted |
 | [0020](./0020-core-owns-merchant-auth-and-api-keys-but-not-shopper-credentials.md) | Core owns Merchant auth and API keys, but not Shopper credentials | **"One role" superseded by 0027.** Rest stands |
@@ -61,6 +61,7 @@ New to the project? These five carry the shape of everything else:
 | [0033](./0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md) | The Admin's shape: a vendored Vite SPA, built into the Project and served at a path | Accepted |
 | [0034](./0034-kobai-is-published-and-the-reference-project-is-what-create-kobai-generates.md) | kobai's packages are published, and the reference Project is what `create-kobai` generates | Accepted |
 | [0035](./0035-upgrading-is-a-command-kobai-ships.md) | Upgrading is a command kobai ships, carried by the version being upgraded to | Accepted |
+| [0036](./0036-unwinding-is-exhaustive-and-never-replaces-what-stopped-the-run.md) | Unwinding is exhaustive, and a compensation that fails never replaces what stopped the run | Accepted — extends 0017 |
 
 ## Prototypes
 
