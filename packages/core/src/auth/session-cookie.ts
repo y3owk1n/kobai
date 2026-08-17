@@ -84,7 +84,12 @@ export function presentedSessionToken(
  * anonymous one — the Admin would render an empty page where it should render a sign-in
  * prompt. #4 made "your session ran out" a distinct answer on purpose; leaving the lifetime
  * to the `core_session` row keeps the database the single authority on it, and the gate goes
- * on answering `session-expired` rather than `session-missing` twelve hours later.
+ * on answering `session-expired` rather than `session-missing` when the window runs out.
+ *
+ * Since ADR-0045 that window *moves* — a request extends it — which is a second reason the
+ * attributes are absent rather than merely unnecessary. A browser-side expiry would have to
+ * be rewritten on every response to keep step with the row, and any response that failed to
+ * would drop a live session's cookie.
  *
  * **`Secure` follows the scheme the request arrived over**, so a deployment behind TLS gets
  * it and `devbox run up` over plain HTTP still works, with nothing to configure in either.

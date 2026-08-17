@@ -135,6 +135,12 @@ export type MerchantRow = typeof merchant.$inferSelect;
  * What is stored is a SHA-256 of the token, never the token. Read access to this table
  * therefore hands an attacker nothing to present — the same property the password column
  * has, for the same reason.
+ *
+ * **No `updated_at`, deliberately** — the one Core table without one (ADR-0037 attaches the
+ * trigger by sweeping for the column, so this table is simply not swept). A session is written
+ * for one reason only, which is that it was used, and `expires_at` already says when: it is
+ * the last request plus the idle window. A second column would record the same fact in a
+ * second place and pay a trigger on every extension to keep it there (ADR-0045).
  */
 export const session = pgTable(
   "core_session",
@@ -145,8 +151,18 @@ export const session = pgTable(
       // A deleted Merchant's sessions go with them, rather than outliving the account.
       .references(() => merchant.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull().unique(),
-    /** Absolute. Past this instant the session is over, attended or not. */
+    /**
+     * When this session runs out if nobody uses it — and it **moves**.
+     *
+     * A request that finds the session live pushes this forward, so the column records the
+     * end of an idle window rather than a lifetime fixed at sign-in (ADR-0045). It is the one
+     * column in Core a read path writes, and `auth/session.ts` owns both halves of that.
+     */
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /**
+     * When the Merchant signed in — and therefore the anchor of the absolute cap, which no
+     * amount of activity can slide. Read on the authentication path, not only for the record.
+     */
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

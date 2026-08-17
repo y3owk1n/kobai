@@ -10,6 +10,11 @@ import {
   type TestKobai,
 } from "../testing/index.ts";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./permissions.ts";
+import {
+  SESSION_ABSOLUTE_LIFETIME_MS,
+  SESSION_EXTENSION_INTERVAL_MS,
+  SESSION_IDLE_WINDOW_MS,
+} from "./session.ts";
 
 /**
  * Merchant auth, through the seam a Merchant and the Admin actually use: the public HTTP API,
@@ -507,10 +512,120 @@ describe("a session expires", () => {
   });
 });
 
+describe("a session slides", () => {
+  it("is kept alive by a Merchant who keeps working", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // Most of the window spent reading a page, then a click; then most of it again, and
+    // another click. More than a whole window has passed since sign-in and the Merchant is
+    // still working — so an expiry fixed at sign-in would have signed them out midway through
+    // exactly the session story 49 is not about.
+    await idleFor(kobai, 0.8 * SESSION_IDLE_WINDOW_MS);
+    const midway = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    await idleFor(kobai, 0.8 * SESSION_IDLE_WINDOW_MS);
+    const afterwards = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(midway.status).toBe(200);
+    expect(afterwards.status).toBe(200);
+  });
+
+  it("runs out when nobody is using it, and says so", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // Story 49's unattended browser: the whole window passes with nobody clicking anything.
+    await idleFor(kobai, SESSION_IDLE_WINDOW_MS);
+
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(response.status).toBe(401);
+    // Still *expired*, not anonymous. Sliding changes when the Merchant is signed out, never
+    // what they are told about it — the Admin renders a sign-in prompt for this reason and an
+    // empty page for `session-missing`.
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-expired" });
+  });
+
+  it("cannot be extended past the cap, however hard it is used", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // A session used continuously since it was minted — its idle deadline is still in the
+    // future — but minted longer ago than a session is allowed to live. A window that only
+    // ever slid forward would renew this one indefinitely, and a stolen token with it.
+    await signedInAgo(kobai, SESSION_ABSOLUTE_LIFETIME_MS + 60_000);
+
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-expired" });
+  });
+
+  it("shortens its last window rather than overshooting the cap", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // Ten minutes short of the cap, and stale enough that this request extends it. A full
+    // idle window from here would land twenty minutes past the cap, so the deadline the
+    // Merchant is given has to be the ten minutes that are left rather than the thirty they
+    // would get at any other moment of the session.
+    const remainder = 10 * 60_000;
+    await signedInAgo(kobai, SESSION_ABSOLUTE_LIFETIME_MS - remainder);
+    await idleFor(kobai, 2 * SESSION_EXTENSION_INTERVAL_MS);
+
+    const remaining = (await currentDeadline(kobai, merchant)) - Date.now();
+
+    expect(remaining).toBeLessThanOrEqual(remainder);
+    expect(remaining).toBeGreaterThan(remainder - SESSION_EXTENSION_INTERVAL_MS);
+  });
+
+  it("does not buy a database write with every request", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // Half the extension interval of staleness is not worth an `UPDATE`: two requests in a
+    // row find the same deadline, because neither moved it. A session extended on every
+    // request would hand back a deadline a few milliseconds newer each time.
+    await idleFor(kobai, SESSION_EXTENSION_INTERVAL_MS / 2);
+    const first = await currentDeadline(kobai, merchant);
+    const second = await currentDeadline(kobai, merchant);
+
+    // Past the interval it is worth one, and the Merchant gets their window back in full.
+    await idleFor(kobai, SESSION_EXTENSION_INTERVAL_MS);
+    const third = await currentDeadline(kobai, merchant);
+
+    expect(second).toBe(first);
+    expect(third).toBeGreaterThan(second);
+  });
+});
+
 describe("signing out", () => {
   it("invalidates the session on the very next request", async () => {
     kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+
+    const signOut = await kobai.request("/admin/session", {
+      method: "DELETE",
+      headers: merchant.headers,
+    });
+    const afterwards = await kobai.request("/admin/store", { headers: merchant.headers });
+
+    expect(signOut.status).toBe(204);
+    expect(afterwards.status).toBe(401);
+    await expect(afterwards.json()).resolves.toMatchObject({ reason: "session-unknown" });
+  });
+
+  it("is not undone by the request that carries it extending the session", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // Sign-out is an authenticated request like any other, so the gate in front of it slides
+    // the deadline forward before the handler runs — and this session is stale enough that it
+    // really does write one. Ending a session has to win against that every time, or "sign
+    // out" degrades into "please stop using this", which is the whole reason a Session is a
+    // row rather than a signed token.
+    await idleFor(kobai, 2 * SESSION_EXTENSION_INTERVAL_MS);
 
     const signOut = await kobai.request("/admin/session", {
       method: "DELETE",
@@ -722,4 +837,54 @@ async function expire(harness: TestKobai): Promise<void> {
   await harness.db.execute(
     sql`update core_session set expires_at = now() - interval '1 second'`,
   );
+}
+
+/**
+ * Passes time with nobody clicking anything — the other thing a test cannot do by waiting.
+ *
+ * The deadline in the row was written by the last request, so a session that has been idle for
+ * half an hour is a row whose `expires_at` sits half an hour earlier than the one the last
+ * request set. Winding the column back is therefore the same arrangement as letting the clock
+ * run forward, and it is the only one available: the idle window is measured in minutes and a
+ * test suite is not allowed to take them.
+ *
+ * `created_at` is left alone deliberately: it anchors a different clock.
+ */
+async function idleFor(harness: TestKobai, milliseconds: number): Promise<void> {
+  await harness.db.execute(
+    sql`update core_session
+        set expires_at = expires_at - make_interval(secs => ${milliseconds / 1000})`,
+  );
+}
+
+/**
+ * Moves sign-in itself into the past, leaving the idle deadline where it is.
+ *
+ * The absolute cap is measured from `created_at`, so this is how a test reaches a session that
+ * has been *used continuously* for hours — the only kind the cap is about, and one no amount
+ * of idling can produce.
+ */
+async function signedInAgo(harness: TestKobai, milliseconds: number): Promise<void> {
+  await harness.db.execute(
+    sql`update core_session
+        set created_at = now() - make_interval(secs => ${milliseconds / 1000})`,
+  );
+}
+
+/**
+ * When the session behind these headers is currently due to end, as the Merchant is told it.
+ *
+ * Read through `GET /admin/session`, which is what the Admin asks after a page load — so what
+ * this observes is the deadline a client can actually see, not a column. It is an ordinary
+ * authenticated request and therefore extends the session like any other, which is exactly
+ * what makes it the right instrument for asking whether a request extends anything.
+ */
+async function currentDeadline(
+  harness: TestKobai,
+  merchant: { readonly headers: { readonly cookie: string } },
+): Promise<number> {
+  const response = await harness.request("/admin/session", { headers: merchant.headers });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { expiresAt: string };
+  return Date.parse(body.expiresAt);
 }

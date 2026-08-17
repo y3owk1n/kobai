@@ -1,6 +1,10 @@
 import { z } from "@hono/zod-openapi";
 import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
-import type { SessionRejection } from "../auth/session.ts";
+import {
+  SESSION_ABSOLUTE_LIFETIME_MS,
+  SESSION_IDLE_WINDOW_MS,
+  type SessionRejection,
+} from "../auth/session.ts";
 
 /**
  * Every shape kobai's HTTP surface accepts or answers with, as one set of schemas.
@@ -198,10 +202,21 @@ export const Merchant = MerchantIdentity.extend({ role: RoleSummary }).openapi(
   "Merchant",
 );
 
-/** Who the caller is and what they may do — the Admin's first call after a page load. */
+/**
+ * Who the caller is and what they may do — the Admin's first call after a page load.
+ *
+ * `expiresAt` is described rather than left to be inferred, because it is the one field here
+ * whose meaning changed under it: it is not a lifetime fixed at sign-in but the end of an idle
+ * window, so a client that cached it once would be reading a deadline that has since moved.
+ * The two numbers in that description are read off the constants that decide them rather than
+ * retyped, so moving a window moves what the API says about it — and the description a client
+ * is generated from cannot go stale about the behaviour it is documenting (ADR-0045).
+ */
 export const Session = z
   .object({
-    expiresAt: z.iso.datetime(),
+    expiresAt: z.iso.datetime().meta({
+      description: `When this session ends if no further request is made. Every authenticated request pushes it out by another ${SESSION_IDLE_WINDOW_MS / 60_000} minutes of idleness, so read it from the most recent response rather than caching the one sign-in returned. It is never later than ${SESSION_ABSOLUTE_LIFETIME_MS / 3_600_000} hours after sign-in, however active the session is; past that the Merchant signs in again.`,
+    }),
     merchant: MerchantIdentity,
     role: RoleSummary,
   })
