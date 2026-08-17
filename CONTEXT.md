@@ -69,8 +69,16 @@ _Avoid_: app, instance, fork, install, override control base
 **Reference Project**:
 The Project kept in kobai's own repository, wired with real Step overrides and at least one
 Plugin, and upgraded across every Core major in CI. Its clean upgrade is a release gate —
-see ADR-0029.
-_Avoid_: example, demo, template, starter
+see ADR-0029. It is also the source `create-kobai`'s Template is generated from.
+_Avoid_: example, demo, starter, and **template** — the Reference Project is a Project that
+is really run, not a sample to copy. The Template below is a different thing.
+
+**Template**:
+The tree `create-kobai` writes into a new directory, generated from the Reference Project by
+`devbox run template:generate` and checked in beside the scaffolder. It is an artifact, not a
+source: it is never hand-edited, and a test regenerates it and fails the build if the two
+have drifted — see ADR-0034.
+_Avoid_: boilerplate, skeleton, scaffold (the noun; scaffolding is the act)
 
 **Admin**:
 The pre-built UI a Merchant works in. Its source is **vendored into the Project** rather than

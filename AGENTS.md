@@ -184,6 +184,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
 | `packages/create-kobai` | `create-kobai` — the scaffolder. Generates a Project a Developer owns (ADR-0001, ADR-0034). |
 | `packages/create-kobai/template/` | What it generates. **Generated** from `reference/`, checked in, never hand-edited. |
+| `packages/create-kobai/standalone/` | The few files a generated Project has and `reference/` does not. **Authored here**, not generated. |
 | `packages/create-kobai/src/adaptations.ts` | The complete list of ways a generated Project differs from the reference one. |
 | `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
@@ -296,6 +297,20 @@ gate reuses it** to bump Core across a synthetic major.
 **A generated Project is the root of its own two-package workspace**, so `pnpm -r` skips it:
 every recursive command in a Project needs `--include-workspace-root`, or it silently builds
 only the Admin and leaves no `dist/src/server.js` behind.
+
+**What is correct here is not automatically correct in the tarball.** npm strips a
+`.gitignore` out of every package it builds — silently, and regardless of `files` — so the
+Project's was present in this repository, asserted by every drift check, and missing from
+what a Developer would have installed. Dotfiles are therefore stored in `template/` *without*
+the leading dot and `scaffold` puts it back; `DOTFILES_STORED_DOTLESS` names them. The drift
+suite packs `create-kobai` for real and reads the tarball back, which is the only assertion
+that can see this class of bug at all.
+
+**`biome.json` excludes `packages/create-kobai/template`**, and cannot say why in itself — a
+comment in that file stops Biome parsing its own config. The reason: the template is a
+generated artifact like `openapi.json`, and `jsonc-parser` re-prints an edited `tsconfig`
+with slightly different wrapping than Biome would, so formatting it would fight the
+byte-comparison that keeps it honest.
 
 ### Writing tests
 

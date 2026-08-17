@@ -2,29 +2,20 @@
  * `create-kobai` — the command that generates a Project a Developer owns outright (ADR-0001,
  * ADR-0025).
  *
- * The scaffolding itself is `scaffold`. Everything else exported here exists because two
- * other things need it: the drift check that keeps what is generated equal to the reference
- * Project, and #12's upgrade gate, which scaffolds a Project and bumps Core across a
- * synthetic major.
+ * **Everything exported here is reachable from the published CLI, and imports nothing but
+ * Node builtins.** That is a constraint rather than a coincidence: a dependency on this path
+ * is a dependency of `npm create kobai@latest`, and one that is missing from the tarball
+ * fails for every Developer while passing every test run inside this workspace. The template
+ * generator, which needs a JSONC parser, lives behind `create-kobai/authoring` for exactly
+ * that reason.
  */
-export {
-  type Adaptation,
-  type AdaptationContext,
-  adaptationsFor,
-  adaptToTemplate,
-  contextFrom,
-  KOBAI_VERSION_RANGE,
-  PUBLISHED_KOBAI_PACKAGES,
-  REFERENCE_PROJECT_NAME,
-  STANDALONE_FILES,
-  TEMPLATE_PROJECT_NAME,
-} from "./adaptations.ts";
 export { main, parseArguments } from "./cli.ts";
-export { type ScaffoldOptions, type ScaffoldResult, scaffold } from "./scaffold.ts";
 export {
-  buildTemplate,
-  syncTemplate,
-  type TemplateFile,
-  type TemplateSources,
-} from "./template.ts";
-export { projectFiles, toPlatformPath } from "./tree.ts";
+  DOTFILES_STORED_DOTLESS,
+  REFERENCE_PROJECT_NAME,
+  TEMPLATE_PROJECT_NAME,
+  toProjectName,
+  toTemplateName,
+} from "./naming.ts";
+export { type ScaffoldOptions, type ScaffoldResult, scaffold } from "./scaffold.ts";
+export { isBinary, projectFiles, toPlatformPath } from "./tree.ts";

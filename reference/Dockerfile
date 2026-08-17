@@ -10,7 +10,11 @@ WORKDIR /app
 
 FROM base AS build
 COPY . .
-RUN pnpm install --frozen-lockfile
+# Not `--frozen-lockfile`: a Project that has never been installed has no `pnpm-lock.yaml`,
+# and `--frozen-lockfile` fails rather than creating one — so `docker compose up` would fail
+# on a freshly generated Project, which is the first thing anyone does. Once the lockfile is
+# committed this honours it exactly as the stricter flag would.
+RUN pnpm install
 # Builds the Admin's bundle and this Project's TypeScript. One command, because the Admin is
 # a workspace package of this Project with its own `build` script (ADR-0033).
 #

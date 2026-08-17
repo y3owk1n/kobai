@@ -225,8 +225,3 @@ export async function publishPackages(
     await rm(destination, { recursive: true, force: true });
   }
 }
-
-export const LOCAL_REGISTRY_TIMEOUTS = {
-  start: START_TIMEOUT,
-  publish: PUBLISH_TIMEOUT,
-} as const;

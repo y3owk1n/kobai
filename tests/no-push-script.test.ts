@@ -397,11 +397,24 @@ describe("no push command exists anywhere", () => {
     expect(scanned).toContain("packages/create-kobai/template/devbox.json");
   });
 
-  it("has no devbox.json key that generates over another one", async () => {
+  it("has no devbox.json key that generates over another one, in any devbox.json", async () => {
     // The other half of #30, and the reason `"//db:push"` was ever dangerous: two keys
     // that generate into one file are one command, and which of them it runs depends on
     // the order devbox happened to write them in.
-    expect(collidingKeys(devboxFile(await readText("devbox.json")).commands)).toEqual([]);
+    //
+    // Every discovered file, not just the root's. There are three now, and the one inside
+    // the generated Project is the one that would carry the mistake to every Developer.
+    const { devboxes } = await commandFilePaths();
+    const collisions: string[] = [];
+
+    for (const path of devboxes) {
+      const file = devboxFile(await readText(path), path);
+      collisions.push(...collidingKeys(file.commands).map((c) => `${path}: ${c}`));
+    }
+
+    expect(collisions).toEqual([]);
+    // Discovery finding nothing would make this pass by checking nothing.
+    expect(devboxes.length).toBeGreaterThanOrEqual(3);
   });
 });
 

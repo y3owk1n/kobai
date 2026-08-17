@@ -72,7 +72,7 @@ importers:
         version: 0.31.10
 
   packages/create-kobai:
-    devDependencies:
+    dependencies:
       jsonc-parser:
         specifier: ^3.3.1
         version: 3.3.1

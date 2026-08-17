@@ -17,8 +17,11 @@
     // `paths` replaces the base config's map rather than extending it, so every mapping the
     // Admin uses is repeated here. `@/*` is the Admin's own alias and matches
     // `vite.config.ts`'s `resolve.alias`; the two are read by different tools and have to
-    // agree. Anything not mapped here — `@kobai/client` among them — resolves through
-    // `node_modules`, which is what `vite build` does anyway.
+    // agree. `@kobai/client` points at workspace source for the reason the rest of this
+    // repository does — the editor and `typecheck` should not need a build first — while
+    // `vite build` resolves it through `node_modules` to `dist`, exactly as a Project would.
+    // A generated Project has no workspace source to point at and drops this second entry;
+    // that is a named adaptation in packages/create-kobai/src/adaptations.ts.
     "paths": {
       "@/*": [
         "./src/*"

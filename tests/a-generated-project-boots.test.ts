@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -105,7 +105,7 @@ describe("a Project generated into a clean directory", () => {
       // Criterion 3, read straight out of what was written: a semver range, not a path, not
       // a tarball, not `workspace:*`.
       const manifest = JSON.parse(
-        await run("cat", [join(project, "package.json")]).then((out) => out.stdout),
+        await readFile(join(project, "package.json"), "utf8"),
       ) as { name: string; dependencies: Record<string, string> };
       expect(manifest.name).toBe("my-store");
       expect(manifest.dependencies["@kobai/core"]).toMatch(/^\^\d+\.\d+\.\d+$/);

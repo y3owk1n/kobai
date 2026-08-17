@@ -1,4 +1,5 @@
 import { applyEdits, modify } from "jsonc-parser";
+import { REFERENCE_PROJECT_NAME, TEMPLATE_PROJECT_NAME } from "./naming.ts";
 
 /**
  * The complete list of ways a generated Project differs from the reference Project.
@@ -17,31 +18,6 @@ import { applyEdits, modify } from "jsonc-parser";
  * removes the guarantee without removing the test. Anything genuinely shared belongs in the
  * reference Project, where it is exercised, rather than in a template nobody boots.
  */
-
-/** The reference Project's npm name — the token every adaptation renames away from. */
-export const REFERENCE_PROJECT_NAME = "kobai-reference";
-
-/**
- * The name the template carries, and the token `scaffold` replaces with whatever the
- * Developer called their Project.
- *
- * One token covers the Admin's package too, because `kobai-project-admin` has
- * `kobai-project` as a prefix — so a single replacement renames the Project, its Admin, the
- * `pnpm --filter` arguments in `devbox.json`, and the two module specifiers that resolve
- * them at runtime. That is why no `.ts` file in the template needs a placeholder that would
- * stop it being valid TypeScript.
- */
-export const TEMPLATE_PROJECT_NAME = "kobai-project";
-
-/**
- * What a generated Project pins kobai at.
- *
- * A caret range rather than an exact pin: this is an ordinary npm dependency and should
- * behave like one, so a Developer gets patch and minor fixes and decides for themselves when
- * to cross a major. Crossing one is the event ADR-0029 makes a release gate, and #12 is the
- * CI job that proves it.
- */
-export const KOBAI_VERSION_RANGE = "^0.1.0";
 
 /** Every kobai package a generated Project resolves from a registry rather than a workspace. */
 export const PUBLISHED_KOBAI_PACKAGES = [
@@ -68,8 +44,8 @@ export const STANDALONE_FILES: readonly { file: string; why: string }[] = [
     why: "A generated Project is a two-package workspace: itself and its vendored Admin. The reference Project needs no such file because the repository root's already lists it and `reference/admin` alike.",
   },
   {
-    file: ".gitignore",
-    why: "`create-kobai` commits the Project it generates, so the Project needs to know what not to commit before that first commit happens. The reference Project is covered by the repository root's.",
+    file: "gitignore",
+    why: "`create-kobai` commits the Project it generates, so the Project needs to know what not to commit before that first commit happens. The reference Project is covered by the repository root's. Stored without the leading dot, and restored by `scaffold` — see DOTFILES_STORED_DOTLESS for why a real one here reaches no Developer.",
   },
 ];
 
@@ -149,17 +125,46 @@ export type AdaptationContext = {
    * versions this repository actually builds and tests with.
    */
   readonly toolchain: Readonly<Record<string, string>>;
+  /**
+   * What a generated Project pins kobai at — a caret range over the version Core is at.
+   *
+   * Derived rather than written down, for the reason the two fields above are: a literal
+   * here would be a second copy of a version this repository already pins, and the copy
+   * would go stale silently. The failure it prevents is nasty — bump the packages to `0.2.0`
+   * and a hardcoded `^0.1.0` leaves every generated Project asking a registry for something
+   * that is no longer there, surfacing as a resolution error deep inside the acceptance test
+   * rather than as anything naming this file.
+   *
+   * A range rather than an exact pin because this is an ordinary npm dependency and should
+   * behave like one: a Developer gets patch and minor fixes and decides for themselves when
+   * to cross a major. Crossing one is the event ADR-0029 makes a release gate, and #12 is
+   * the CI job that proves it.
+   */
+  readonly kobaiVersionRange: string;
 };
 
 /** What a standalone Project needs from the workspace root's devDependencies. */
 const TOOLCHAIN = ["typescript", "@types/node"] as const;
 
-/** Reads the context out of the repository root's manifest, which is where it is pinned. */
-export function contextFrom(rootManifest: string): AdaptationContext {
+/**
+ * Reads the context out of the two manifests that pin these things — the repository root's
+ * for the toolchain, and Core's for the version a Project asks a registry for.
+ */
+export function contextFrom(
+  rootManifest: string,
+  coreManifest: string,
+): AdaptationContext {
   const { packageManager, devDependencies = {} } = JSON.parse(rootManifest) as {
     packageManager?: string;
     devDependencies?: Record<string, string>;
   };
+
+  const { version } = JSON.parse(coreManifest) as { version?: string };
+  if (version === undefined || version === "0.0.0") {
+    throw new Error(
+      `@kobai/core's version is ${JSON.stringify(version ?? null)}, so a generated Project has no published version to depend on. See ADR-0034.`,
+    );
+  }
 
   if (packageManager === undefined) {
     throw new Error(
@@ -180,7 +185,7 @@ export function contextFrom(rootManifest: string): AdaptationContext {
     toolchain[name] = range;
   }
 
-  return { packageManager, toolchain };
+  return { packageManager, toolchain, kobaiVersionRange: `^${version}` };
 }
 
 export function adaptationsFor(context: AdaptationContext): readonly Adaptation[] {
@@ -204,7 +209,7 @@ export function adaptationsFor(context: AdaptationContext): readonly Adaptation[
       what: "the kobai dependencies, which are `workspace:*` inside this repository and an ordinary semver range outside it — the whole of ADR-0001's promise, and the reason this package exists",
       apply: (contents) =>
         editJson(contents, (json) => {
-          json.dependencies = versioned(json.dependencies);
+          json.dependencies = versioned(json.dependencies, context.kobaiVersionRange);
         }),
     },
     {
@@ -221,7 +226,10 @@ export function adaptationsFor(context: AdaptationContext): readonly Adaptation[
       what: "the kobai dependencies, for the same reason as the Project's",
       apply: (contents) =>
         editJson(contents, (json) => {
-          json.devDependencies = versioned(json.devDependencies);
+          json.devDependencies = versioned(
+            json.devDependencies,
+            context.kobaiVersionRange,
+          );
         }),
     },
     {
@@ -261,12 +269,12 @@ function sorted(block: Record<string, string>): Record<string, string> {
 }
 
 /** Every kobai `workspace:*` in a dependency block, swapped for the published range. */
-function versioned(block: unknown): unknown {
+function versioned(block: unknown, range: string): unknown {
   if (block === null || typeof block !== "object") return block;
 
   const dependencies = { ...(block as Record<string, string>) };
   for (const name of PUBLISHED_KOBAI_PACKAGES) {
-    if (name in dependencies) dependencies[name] = KOBAI_VERSION_RANGE;
+    if (name in dependencies) dependencies[name] = range;
   }
   return dependencies;
 }

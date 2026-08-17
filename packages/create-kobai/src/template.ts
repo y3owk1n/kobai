@@ -1,7 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { adaptToTemplate, contextFrom, STANDALONE_FILES } from "./adaptations.ts";
-import { projectFiles, toPlatformPath } from "./tree.ts";
+import { toTemplateName } from "./naming.ts";
+import { isBinary, projectFiles, toPlatformPath } from "./tree.ts";
 
 /**
  * The template, built from the reference Project.
@@ -28,6 +29,8 @@ export type TemplateSources = {
   readonly standaloneRoot: string;
   /** The repository root's `package.json`, which pins the pnpm a generated Project pins. */
   readonly rootManifest: string;
+  /** `@kobai/core`'s `package.json`, whose version a generated Project depends on. */
+  readonly coreManifest: string;
 };
 
 /** One file of the template, and where its bytes came from. */
@@ -35,15 +38,6 @@ export type TemplateFile = {
   readonly path: string;
   readonly contents: Buffer;
 };
-
-/**
- * A file with a NUL byte in it is not text, and running a string replacement over it would
- * corrupt it silently. Nothing in the Project is binary today — this makes that a checked
- * fact rather than an assumption that would fail the first time a Developer adds a favicon.
- */
-function isBinary(contents: Buffer): boolean {
-  return contents.includes(0);
-}
 
 /**
  * What the template should contain, computed but not written.
@@ -54,7 +48,10 @@ function isBinary(contents: Buffer): boolean {
  */
 export async function buildTemplate(sources: TemplateSources): Promise<TemplateFile[]> {
   const files: TemplateFile[] = [];
-  const context = contextFrom(await readFile(sources.rootManifest, "utf8"));
+  const context = contextFrom(
+    await readFile(sources.rootManifest, "utf8"),
+    await readFile(sources.coreManifest, "utf8"),
+  );
 
   for (const relative of await projectFiles(sources.referenceRoot)) {
     const contents = await readFile(
@@ -62,7 +59,10 @@ export async function buildTemplate(sources: TemplateSources): Promise<TemplateF
     );
 
     files.push({
-      path: relative,
+      // Adapted under the path the *Project* uses, stored under the one the template uses.
+      // A dotfile the packers disagree about is renamed here and renamed back by `scaffold`,
+      // so the adaptation list never has to know about it.
+      path: toTemplateName(relative),
       contents: isBinary(contents)
         ? contents
         : Buffer.from(
@@ -73,13 +73,12 @@ export async function buildTemplate(sources: TemplateSources): Promise<TemplateF
   }
 
   for (const { file } of STANDALONE_FILES) {
-    // Authored under `standalone/` with a leading dot stripped where one would make the file
-    // invisible in this repository — `.gitignore` is stored as `gitignore`, because a real
-    // one here would be read by git as this package's own.
-    const source = file.startsWith(".") ? file.slice(1) : file;
+    // Authored under `standalone/` under the same name it takes in the template. The
+    // Project's `.gitignore` is `gitignore` in both places and becomes a real one only when
+    // `scaffold` writes it out — see DOTFILES_STORED_DOTLESS for the two separate reasons.
     files.push({
       path: file,
-      contents: await readFile(join(sources.standaloneRoot, source)),
+      contents: await readFile(join(sources.standaloneRoot, file)),
     });
   }
 

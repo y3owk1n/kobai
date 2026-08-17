@@ -1,17 +1,19 @@
-import { readdir, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { projectFiles, REFERENCE_PROJECT_NAME, toPlatformPath } from "create-kobai";
 import {
   adaptationsFor,
   buildTemplate,
   contextFrom,
-  projectFiles,
-  REFERENCE_PROJECT_NAME,
   STANDALONE_FILES,
   type TemplateFile,
-  toPlatformPath,
-} from "create-kobai";
+} from "create-kobai/authoring";
 import { describe, expect, it } from "vitest";
+import { TARBALL_ROOT, tarballEntries } from "./support/tarball.ts";
 
 /**
  * Criterion 11 of #11: what `create-kobai` generates **is** the reference Project, and the
@@ -29,8 +31,8 @@ import { describe, expect, it } from "vitest";
  * test that regenerates and compares.
  *
  * **The comparison fails closed.** Every difference between the two trees has to be a named
- * entry in `ADAPTATIONS` or `STANDALONE_FILES`; anything else fails, whichever direction it
- * points. A byte comparison with no allowances would fail the moment the reference Project
+ * entry in `adaptationsFor` or `STANDALONE_FILES`; anything else fails, whichever direction
+ * it points. A byte comparison with no allowances would fail the moment the reference Project
  * legitimately said `workspace:*`; an allowance broad enough to cover that quietly would
  * pass forever. The list being short enough to read in a review is the whole guarantee.
  */
@@ -41,12 +43,21 @@ const packageRoot = fileURLToPath(new URL("packages/create-kobai/", repoRoot));
 const templateRoot = join(packageRoot, "template");
 const standaloneRoot = join(packageRoot, "standalone");
 const rootManifest = fileURLToPath(new URL("package.json", repoRoot));
+const coreManifest = fileURLToPath(new URL("packages/core/package.json", repoRoot));
 
 /** Rebuilding the template shells out to nothing, but it does read ~50 files twice. */
 const TIMEOUT = 30_000;
+/** Packing shells out to pnpm, which is seconds rather than milliseconds on a cold runner. */
+const PACK_TIMEOUT = 180_000;
 
 async function expected(): Promise<TemplateFile[]> {
-  return buildTemplate({ referenceRoot, templateRoot, standaloneRoot, rootManifest });
+  return buildTemplate({
+    referenceRoot,
+    templateRoot,
+    standaloneRoot,
+    rootManifest,
+    coreManifest,
+  });
 }
 
 /** What is checked in, read the same way `scaffold` reads it. */
@@ -99,14 +110,18 @@ describe("the generated Project matches the reference Project", () => {
   );
 
   it("carries no workspace-only dependency into a generated Project", async () => {
-    // The independent check, and the one that would survive `ADAPTATIONS` being wrong: a
-    // `workspace:` specifier resolves only inside this repository, so one that reached the
+    // The independent check, and the one that would survive the adaptation list being wrong:
+    // a `workspace:` specifier resolves only inside this repository, so one that reached the
     // template would produce a Project that cannot install anywhere. The version-range
     // adaptation is what prevents it, and this asserts the outcome rather than the rule.
-    const offenders = (await expected()).flatMap((file) => {
-      if (!file.path.endsWith("package.json")) return [];
+    //
+    // Against the **checked-in** bytes, not the freshly computed ones. Asserting on
+    // `expected()` would be asking the generator whether it did what it just did; these are
+    // the bytes that get published, which is the only version of the question that matters.
+    const offenders = [...(await checkedIn())].flatMap(([path, bytes]) => {
+      if (!path.endsWith("package.json")) return [];
 
-      const manifest = JSON.parse(file.contents.toString("utf8")) as {
+      const manifest = JSON.parse(bytes.toString("utf8")) as {
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
       };
@@ -115,7 +130,7 @@ describe("the generated Project matches the reference Project", () => {
         .filter(
           ([name, range]) => range.startsWith("workspace:") && name.startsWith("@kobai/"),
         )
-        .map(([name]) => `${file.path} → ${name}`);
+        .map(([name]) => `${path} → ${name}`);
     });
 
     expect(offenders).toEqual([]);
@@ -126,8 +141,10 @@ describe("the generated Project matches the reference Project", () => {
     // rather than by mangling one. A surviving `kobai-reference` would be a `pnpm --filter`
     // that matches nothing, or a module specifier that resolves nowhere, in a Project whose
     // Developer has never heard the word "reference".
-    const offenders = (await expected()).flatMap((file) =>
-      file.contents.toString("utf8").includes(REFERENCE_PROJECT_NAME) ? [file.path] : [],
+    //
+    // Against the checked-in bytes for the same reason as above.
+    const offenders = [...(await checkedIn())].flatMap(([path, bytes]) =>
+      bytes.toString("utf8").includes(REFERENCE_PROJECT_NAME) ? [path] : [],
     );
 
     expect(offenders).toEqual([]);
@@ -160,16 +177,66 @@ describe("the generated Project matches the reference Project", () => {
   });
 
   it("ships no test file, because the reference Project's tests are kobai's", async () => {
-    // Asserted rather than assumed: these tests import `@kobai/core/testing` and vitest,
-    // neither of which a generated Project has, so one arriving would break the Project on
-    // the first command a Developer ran.
-    expect((await expected()).filter((file) => file.path.endsWith(".test.ts"))).toEqual(
-      [],
-    );
+    // Against the checked-in bytes, which is what makes this an assertion rather than a
+    // tautology: `projectFiles` filters `*.test.ts` out of what generation *produces*, so
+    // asking `expected()` could never fail. What can fail is a test file sitting in the
+    // published directory — and these import `@kobai/core/testing` and vitest, neither of
+    // which a generated Project has, so one arriving breaks it on the first command run.
+    expect(
+      [...(await checkedIn()).keys()].filter((path) => path.endsWith(".test.ts")),
+    ).toEqual([]);
   });
 
+  it(
+    "puts every template file into the tarball it publishes",
+    async () => {
+      // This closes the gap between "correct in this repository" and "correct for a
+      // Developer", and it exists because that gap was real rather than theoretical: **npm
+      // drops a `.gitignore` from every tarball it builds**, unconditionally and silently.
+      // The Project's `.gitignore` was present here, asserted by every check above, and
+      // absent from the packed package — every assertion in this file compares two
+      // directories, and both of them were right.
+      //
+      // What a Developer installs is the tarball, so the tarball is what this reads. The two
+      // packers also disagree about which dotfiles they drop, which is why the fix was to
+      // store those under names neither has an opinion about rather than to appease one.
+      const destination = await mkdtemp(join(tmpdir(), "kobai-create-pack-"));
+      try {
+        await promisify(execFile)(
+          "pnpm",
+          ["--dir", packageRoot, "pack", "--pack-destination", destination],
+          { cwd: fileURLToPath(repoRoot) },
+        );
+
+        const [tarball] = await readdir(destination);
+        if (tarball === undefined)
+          throw new Error("Packing create-kobai wrote no tarball.");
+
+        const inside = `${TARBALL_ROOT}template/`;
+        const packed = new Set(
+          tarballEntries(await readFile(join(destination, tarball)))
+            .filter((entry) => entry.startsWith(inside))
+            .map((entry) => entry.slice(inside.length)),
+        );
+
+        expect(
+          [...(await checkedIn()).keys()].filter((path) => !packed.has(path)),
+          "These template files are in this repository and not in the tarball, so they reach nobody who installs create-kobai.",
+        ).toEqual([]);
+      } finally {
+        await rm(destination, { recursive: true, force: true });
+      }
+    },
+    PACK_TIMEOUT,
+  );
+
   it("keeps the list of differences short enough to read", async () => {
-    const adaptations = adaptationsFor(contextFrom(await readFile(rootManifest, "utf8")));
+    const adaptations = adaptationsFor(
+      contextFrom(
+        await readFile(rootManifest, "utf8"),
+        await readFile(coreManifest, "utf8"),
+      ),
+    );
 
     // Not a style rule. This test is worth exactly as much as the adaptation list is honest,
     // and the way it stops being honest is one convenient entry at a time until the

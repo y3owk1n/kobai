@@ -9,7 +9,13 @@
       "corepack enable --install-directory \"$DEVBOX_PROJECT_ROOT/.devbox/virtenv/nodejs/corepack-bin\""
     ],
     "scripts": {
-      "install": "pnpm install --frozen-lockfile",
+      // Deliberately not `--frozen-lockfile`. A freshly generated Project has no
+      // `pnpm-lock.yaml` — it cannot, because nothing has resolved a version yet — and
+      // `--frozen-lockfile` refuses outright when one is absent, which would make the very
+      // first command a Developer runs fail. Plain `install` writes the lockfile on the
+      // first run and honours it on every run after, which is the behaviour wanted at both
+      // ends. Commit the lockfile it writes.
+      "install": "pnpm install",
 
       // Postgres and this Project, built and running. This is the one command a first run
       // needs — Core applies its migrations at boot, so there is no separate migration step

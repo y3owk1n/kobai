@@ -3,8 +3,8 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { TEMPLATE_PROJECT_NAME } from "./adaptations.ts";
-import { projectFiles, toPlatformPath } from "./tree.ts";
+import { TEMPLATE_PROJECT_NAME, toProjectName } from "./naming.ts";
+import { isBinary, projectFiles, toPlatformPath } from "./tree.ts";
 
 const run = promisify(execFile);
 
@@ -97,19 +97,22 @@ export async function scaffold(options: ScaffoldOptions): Promise<ScaffoldResult
     );
   }
 
+  const written: string[] = [];
+
   for (const relative of files) {
     const contents = await readFile(join(templateRoot, toPlatformPath(relative)));
-    const destination = join(directory, toPlatformPath(relative));
+    // The leading dot goes back on here, at the last possible moment: a `.gitignore` inside
+    // the published tarball would not have survived being published at all.
+    const inProject = toProjectName(relative);
+    const destination = join(directory, toPlatformPath(inProject));
+    written.push(inProject);
 
     await mkdir(dirname(destination), { recursive: true });
-    // One token, every text file. `kobai-project-admin` carries `kobai-project` as a prefix,
-    // so renaming the Project renames its Admin package, the `pnpm --filter` arguments in
-    // `devbox.json`, and the two module specifiers that resolve them at runtime — all from
-    // this single replacement, which is why no template file needs a placeholder that would
-    // stop it being valid TypeScript.
+    // One token, every text file — see TEMPLATE_PROJECT_NAME for why one replacement is
+    // enough to rename the Project, its Admin package and everything that resolves them.
     await writeFile(
       destination,
-      contents.includes(0)
+      isBinary(contents)
         ? contents
         : contents.toString("utf8").replaceAll(TEMPLATE_PROJECT_NAME, name),
     );
@@ -117,7 +120,9 @@ export async function scaffold(options: ScaffoldOptions): Promise<ScaffoldResult
 
   const committed = options.git === false ? false : await initialCommit(directory, name);
 
-  return { directory, name, files, committed };
+  // The paths as the Project holds them, not as the template stored them — a caller asking
+  // what was written means the files that now exist.
+  return { directory, name, files: written.sort(), committed };
 }
 
 /**

@@ -9,8 +9,9 @@ Dockerfile, no compose file and no `.env.example` of its own.
 Two decisions, recorded together because neither works without the other.
 
 - **`@kobai/core`, `@kobai/plugin-price-log`, `@kobai/client` and `create-kobai` are
-  published packages** at a real version, starting at `0.1.0`. `private: true` is gone from
-  all four.
+  *publishable* packages** at a real version, starting at `0.1.0`. `private: true` is gone
+  from all four. **Nothing is published to npmjs.com, and nothing should be yet** — see
+  "Publishable is not published" below.
 - **The reference Project is a standalone Project tree**, and `create-kobai`'s template is
   **generated from it** and checked in. The repository root keeps its own `Dockerfile`,
   `compose.yaml`, `devbox.json` and `.env.example` for the workspace; the reference Project
@@ -40,6 +41,31 @@ Two options were rejected. A `file:` or packed-tarball dependency boots a Projec
 is **not** an ordinary versioned dependency, so it satisfies the acceptance test while
 hollowing out the only claim the test exists to check. Generating inside this workspace
 resolves `workspace:*` and proves nothing about a Developer's machine.
+
+## Publishable is not published, and npmjs.com is deliberately out of scope
+
+**kobai is early and the maintainer wants nothing to do with npmjs.com yet.** That is a
+decision, not an oversight, and it is recorded here because the diff that removes
+`private: true` from four packages looks exactly like the diff that precedes a first release.
+
+The distinction this ADR draws is between *being publishable* and *being published*.
+Publishable was forced: `pnpm` filters a `private: true` package out of the publish set
+entirely — not with an error, but by silently having nothing to do — so a package that stays
+private cannot reach any registry at all, including a local one, and a generated Project then
+cannot install Core by version. Criterion 3 of #11 is unsatisfiable without this.
+
+Published is a separate act that nothing here performs and nothing here prepares:
+
+- No release workflow exists. No CI job publishes anything.
+- No npm account, organisation, token or secret is referenced anywhere in this repository.
+- The only registry any of this reaches is a verdaccio process that a test starts on an
+  ephemeral port and kills on the way out.
+- The scope `@kobai` on npmjs.com is unclaimed, and claiming it is a decision for whoever
+  decides to release.
+
+When a first release does happen it needs a version policy, a changelog, provenance, and an
+answer to what `0.1.0` promises — none of which this ADR settles. Until then the guard in the
+next section is what keeps "publishable" from drifting into "published" by accident.
 
 ## What stands where `private: true` stood
 
@@ -83,11 +109,12 @@ been run. This is the arrangement `packages/core/openapi.json` and
 that regenerates and compares.
 
 **The differences between the two trees are enumerated, and everything else must be
-identical.** `packages/create-kobai/src/adaptations.ts` holds the list — the Project's name,
-the kobai dependencies being `workspace:*` inside this repository and a semver range outside
-it, two `extends` paths, one `paths` entry, and the pnpm and TypeScript versions a Project
-inherits from the workspace root here and must carry itself elsewhere — plus three files a
-standalone Project has and the reference Project does not. The test fails on any other
+identical.** `packages/create-kobai/src/adaptations.ts` holds the list — among them the
+Project's name and `description`, the kobai dependencies being `workspace:*` inside this
+repository and a semver range outside it, two `extends` paths, one `paths` entry, and the
+pnpm and TypeScript versions a Project inherits from the workspace root here and must carry
+itself elsewhere — plus three files a standalone Project has and the reference Project does
+not. The test fails on any other
 difference in either direction, including a file present in one tree and absent from the
 other.
 

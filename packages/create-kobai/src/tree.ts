@@ -81,3 +81,18 @@ export async function projectFiles(root: string): Promise<string[]> {
 export function toPlatformPath(relative: string): string {
   return sep === "/" ? relative : relative.split("/").join(sep);
 }
+
+/**
+ * Whether these bytes are a file no string replacement may touch.
+ *
+ * One implementation, for the same reason the walk above is one: generating the template and
+ * scaffolding a Project both rewrite text and must copy everything else verbatim. Two
+ * definitions of "text" would eventually disagree, and the way that shows up is a corrupted
+ * font in somebody's Admin rather than a failing test.
+ *
+ * Nothing in the Project is binary today. This makes that a checked fact rather than an
+ * assumption that breaks the first time a Developer adds a favicon.
+ */
+export function isBinary(contents: Buffer): boolean {
+  return contents.includes(0);
+}

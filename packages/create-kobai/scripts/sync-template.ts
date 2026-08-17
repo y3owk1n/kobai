@@ -17,6 +17,7 @@ const files = await syncTemplate({
   templateRoot: fileURLToPath(new URL("template/", packageRoot)),
   standaloneRoot: fileURLToPath(new URL("standalone/", packageRoot)),
   rootManifest: fileURLToPath(new URL("../../package.json", packageRoot)),
+  coreManifest: fileURLToPath(new URL("../core/package.json", packageRoot)),
 });
 
 process.stdout.write(

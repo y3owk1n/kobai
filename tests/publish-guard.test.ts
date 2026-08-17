@@ -83,6 +83,38 @@ describe("publishing kobai has to be deliberate", () => {
     expect(names).toContain("create-kobai");
   });
 
+  it("has no release workflow, and names no npm registry, account or token anywhere", async () => {
+    // kobai is early and npmjs.com is deliberately out of scope (ADR-0034). "Publishable"
+    // was forced by criterion 3 of #11 — pnpm will not publish a `private: true` package to
+    // any registry, local ones included — but *published* is a separate act, and this is
+    // what keeps the two apart as the repository grows.
+    //
+    // It scans CI rather than manifests because that is where a publish would actually be
+    // wired up, and because the manifest pin above is one careless edit from gone. Two
+    // independent locks, so neither has to be the only one.
+    const workflows = new URL(".github/workflows/", repoRoot);
+    const offenders: string[] = [];
+
+    for (const name of await readdir(workflows)) {
+      if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
+      const contents = await readFile(new URL(name, workflows), "utf8");
+
+      for (const [pattern, what] of [
+        [/\bnpm\s+publish\b/, "runs `npm publish`"],
+        [/\bpnpm\s+publish\b/, "runs `pnpm publish`"],
+        [/registry\.npmjs\.org/, "names the public registry"],
+        [/NPM_TOKEN|NODE_AUTH_TOKEN/, "reads an npm token"],
+      ] as const) {
+        if (pattern.test(contents)) offenders.push(`.github/workflows/${name} ${what}`);
+      }
+    }
+
+    expect(
+      offenders,
+      "Publishing kobai to npmjs.com is a decision nobody has taken yet. If it is being taken now, ADR-0034 is where it gets recorded and this assertion is what gets deleted — deliberately, not as collateral.",
+    ).toEqual([]);
+  });
+
   it("gives every published package a real version rather than 0.0.0", async () => {
     // `0.0.0` is not a starting point, it is an absence — and a generated Project pins a
     // caret range against whatever is here, so a version nobody chose is a range nobody

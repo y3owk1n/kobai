@@ -11,7 +11,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "node --env-file-if-exists=../.env --watch src/server.ts",
+    "// dev": "`--env-file-if-exists=.env` reads this Project's own `.env`, which is where `.env.example` tells a Developer to put one. It was `../.env` while the reference Project was only ever a folder inside kobai's workspace; in a generated Project `../` is whatever directory the Developer happened to scaffold into, so the file they were told to create would never be read.",
+    "dev": "node --env-file-if-exists=.env --watch src/server.ts",
     "start": "node dist/src/server.js",
     "// db:generate": "This Project owns tables of its own, so it generates migrations of its own — the same `drizzle-kit generate` Core and every Plugin run, against this Project's own schema and into this Project's own `migrations/`. `tablesFilter` in drizzle.config.ts keeps a generate here from ever writing a migration that touches Core's tables or a Plugin's.",
     "db:generate": "drizzle-kit generate",
