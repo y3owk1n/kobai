@@ -12,9 +12,27 @@
       "install": "pnpm install --frozen-lockfile",
       "db": "docker compose up -d --wait db",
       "db:down": "docker compose down -v",
-      "//db:generate": "It builds first because a Plugin's drizzle.config.ts imports defineKobaiDrizzleConfig from @kobai/core/migrations, and that specifier resolves through the package's `exports` to dist — the same path a Plugin author outside this repository takes. Recursive because every package that owns tables generates its own migrations from its own schema, Core included.",
+      // Explanations here are real comments, never `"// …"` keys: devbox turns every key
+      // into a script and eats the leading slashes, so such a key becomes the command it
+      // meant to document. See AGENTS.md § Development and issue #30.
+
+      // db:generate builds first because a Plugin's drizzle.config.ts imports
+      // defineKobaiDrizzleConfig from @kobai/core/migrations, and that specifier resolves
+      // through the package's `exports` to dist — the same path a Plugin author outside
+      // this repository takes. Recursive because every package that owns tables generates
+      // its own migrations from its own schema, Core included.
       "db:generate": "pnpm -r build && pnpm -r db:generate",
-      "//db:push": "There is deliberately no db:push script. This is the file kobai's commands live in, so it is the file where someone would reach for the convenient one. `drizzle-kit push` diffs against the LIVE database: run against a database holding Plugin tables it reports success and silently drops them, leaving their tracking rows so the migration runner believes the work is done and cannot repair it. Generate a migration instead. Observed on branch prototype/drizzle-multi-migration, FINDINGS.md section E; see docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md. tests/no-push-script.test.ts fails the build if a push script appears here.",
+
+      // There is deliberately no db:push script. This is the file kobai's commands live
+      // in, so it is the file where someone would reach for the convenient one.
+      // `drizzle-kit push` diffs against the LIVE database: run against a database
+      // holding Plugin tables it reports success and silently drops them, leaving their
+      // tracking rows so the migration runner believes the work is done and cannot repair
+      // it. Generate a migration instead. Observed on branch
+      // prototype/drizzle-multi-migration, FINDINGS.md section E; see
+      // docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md.
+      // tests/no-push-script.test.ts fails the build if a push script appears here.
+
       "up": "docker compose up --build",
       "down": "docker compose down",
       "build": "pnpm -r build",

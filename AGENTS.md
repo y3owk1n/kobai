@@ -52,10 +52,28 @@ There is deliberately **no `push` script** anywhere — not in Core, not in a Pl
 the reference Project. `drizzle-kit push` diffs against the live database and silently drops
 the tables of every package whose schema it was not given, leaving their tracking rows
 behind so the migration runner cannot repair it. See
-[ADR-0030](docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md). A `"// …"`
-key in `devbox.json` and in each package's `package.json` says so where the command would
-have been, and `tests/no-push-script.test.ts` fails the build if one appears in either — or
-in a `run:` step under `.github/workflows/`, where no script name would give it away.
+[ADR-0030](docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md). An
+explanation sits where the command would have been — a **real comment** in `devbox.json`, a
+`"// …"` **key** in each package's `package.json` — and `tests/no-push-script.test.ts` fails
+the build if a push script appears in either, or in a `run:` step under
+`.github/workflows/`, where no script name would give it away.
+
+### Never use a `"// …"` key in `devbox.json`
+
+**devbox turns every key into a runnable script and eats the leading `//` doing it.** It
+writes `.devbox/gen/scripts/<key>.sh` through a path join, and a join collapses `//`, so
+`"//db:generate"` lands on the *real* `db:generate` script's file and whichever is written
+last wins — and `"//db:push"` creates the very `devbox run db:push` ADR-0030 says must never
+exist. It self-heals whenever another script regenerates the file, which is why one passing
+run proves nothing. Observed on devbox 0.17.5; #30 has the reproduction.
+
+`devbox.json` is **HuJSON**, so write a real `//` comment instead — it can never become a
+command, and `biome.json` already sets `json.parser.allowComments`. The `"// …"` *key* stays
+correct in a `package.json`: npm requires strict JSON, so a comment cannot go there, and npm
+attaches no meaning to the key, which leaves it inert. `tests/no-push-script.test.ts` knows
+the difference — it reads `devbox.json`'s comments rather than its keys, judges a `"// …"`
+key there as the command devbox would generate from it, and fails if any key in the file
+would generate over another one.
 
 ### Dependency updates
 
