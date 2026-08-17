@@ -167,8 +167,20 @@ allowed because a declared Workflow *is* a public interface: it is one of ADR-00
 Extension Points, imported and read by a Project. `describe()` naming its Steps in order, and
 a replacement being rejected by the compiler, are promises no response body can carry — so
 `packages/core/src/workflow/workflow.test.ts` asserts them directly, including the type-level
-ones, which the `typecheck` step of the gate is what actually runs. Everything a Workflow
-*does* is still tested through HTTP.
+ones, which the `typecheck` step of the gate is what actually runs. **Replacing a Step**
+splits across both: that overriding rebuilds the declaration rather than aliasing it, that it
+leaves the Workflow it was given alone, and that it refuses a slot the Workflow never declared
+are promises about the object, so they stay there. What an override *does* is tested through
+HTTP like everything else, by booting with one:
+
+```ts
+await using kobai = await createTestKobai({
+  workflows: { "resolve-price": { steps: { "select-price": myStep } } },
+});
+```
+
+That is the same `kobai.config.ts` shape a Developer writes, so a test of the override
+mechanism is a test of the thing they actually do.
 
 The **packaging seam** covers what none of those can, because it is not about a running
 database at all: that the `migrations/` directory each package resolves relative to its

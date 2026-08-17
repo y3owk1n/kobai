@@ -49,6 +49,9 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
   const kobai = createKobai({
     databaseUrl: database.url,
     migrationSets: options?.migrationSets,
+    // A Project's Step overrides, so a test can boot with one swapped and ask the API what
+    // changed — the seam ADR-0017's promise is actually experienced at.
+    workflows: options?.workflows,
     logger: options?.logger ?? silentLogger,
   });
 

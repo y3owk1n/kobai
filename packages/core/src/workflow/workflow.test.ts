@@ -4,8 +4,10 @@ import { openMetadata, type WorkflowContext } from "./context.ts";
 import { defineStep, type Step, StepFailure } from "./step.ts";
 import {
   defineWorkflow,
+  overrideSteps,
   type StepInput,
   type StepOutput,
+  type StepOverrides,
   type WorkflowSlots,
 } from "./workflow.ts";
 
@@ -167,6 +169,78 @@ describe("running a Workflow", () => {
   });
 });
 
+describe("overriding a Workflow's Steps", () => {
+  const visits = () =>
+    defineWorkflow<Trail>("visits").step(visit("first")).step(visit("second")).build();
+
+  const instead = defineStep(
+    "instead",
+    (input: Trail): Trail => ({ trail: [...input.trail, "instead"] }),
+  );
+
+  it("runs the supplied Step in the slot it names, and inherits the rest", async () => {
+    const overridden = overrideSteps(visits(), { second: instead });
+
+    const run = await overridden.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ trail: ["first", "instead"] });
+    // The slot is unchanged and what filled it is not — the difference a response carries to
+    // show a Developer that their Step ran.
+    expect(run.steps).toEqual([
+      { step: "first", implementation: "first" },
+      { step: "second", implementation: "instead" },
+    ]);
+  });
+
+  it("answers with the declaration it actually runs", async () => {
+    // The trap, pinned. `describe` and `run` close over the array a Workflow was built with,
+    // so an override written as `{ ...workflow, steps: mine }` would report the new list and
+    // execute the old one — a Workflow claiming a Project's Step ran while Core's did. These
+    // three are the three ways of asking what a Workflow is made of, and this fails the
+    // moment they stop agreeing.
+    const overridden = overrideSteps(visits(), { second: instead });
+    const run = await overridden.run({ trail: [] }, CONTEXT);
+
+    expect(overridden.describe().steps.map((step) => step.slot)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(overridden.steps.map((entry) => [entry.slot, entry.step.name])).toEqual([
+      ["first", "first"],
+      ["second", "instead"],
+    ]);
+    expect(run.steps.map((step) => [step.step, step.implementation])).toEqual([
+      ["first", "first"],
+      ["second", "instead"],
+    ]);
+  });
+
+  it("leaves the Workflow it was given alone", async () => {
+    // A declaration is a value: overriding produces another one rather than rewiring Core's
+    // for everybody in the process.
+    const original = visits();
+
+    overrideSteps(original, { second: instead });
+    const run = await original.run({ trail: [] }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ trail: ["first", "second"] });
+  });
+
+  it("refuses a slot the Workflow does not declare", () => {
+    // A typo the compiler cannot see — a map assembled at runtime — would otherwise be an
+    // override that silently does nothing, discovered as a price that never changed.
+    expect(() =>
+      overrideSteps(visits(), { third: instead } as StepOverrides<
+        ReturnType<typeof visits>
+      >),
+    ).toThrow(/has no Step "third"/);
+  });
+});
+
 /**
  * What a Step declares, as the compiler sees it.
  *
@@ -239,5 +313,64 @@ describe("the types a Step declares", () => {
     );
 
     expect(fussy).toBeDefined();
+  });
+
+  /**
+   * The same two rejections, at the surface a Project actually writes.
+   *
+   * The pair above prove the `Step` type can express the constraint; these prove the override
+   * map applies it, which is the promise — ADR-0017's "a replacement must satisfy the original
+   * Step's input and output types" is about the map in `kobai.config.ts`, not about a type
+   * alias a Developer would never write. Both are checked by the `typecheck` step of the gate,
+   * so neither can regress into a runtime surprise silently.
+   */
+  it("accepts an override whose Step takes and gives what the slot does", async () => {
+    const overridden = overrideSteps(workflow, {
+      select: defineStep(
+        "cheapest-price",
+        (input: { readonly amounts: readonly number[] }) => ({
+          amount: Math.min(...input.amounts),
+        }),
+      ),
+    });
+
+    const run = await overridden.run({ sku: "POSTER-A2" }, CONTEXT);
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.output).toEqual({ amount: 900 });
+  });
+
+  it("rejects an override whose Step produces something else", () => {
+    const overrides: StepOverrides<Priced> = {
+      // @ts-expect-error `select` gives `{ amount }`, and this gives `{ total }`.
+      select: defineStep(
+        "wrong-output",
+        (_input: { readonly amounts: readonly number[] }) => ({ total: 0 }),
+      ),
+    };
+
+    expect(overrides).toBeDefined();
+  });
+
+  it("rejects an override whose Step demands more than the slot provides", () => {
+    const overrides: StepOverrides<Priced> = {
+      // @ts-expect-error `select` is given `{ amounts }` alone.
+      select: defineStep(
+        "fussy-input",
+        (input: { readonly amounts: readonly number[]; readonly quantity: number }) => ({
+          amount: (input.amounts[0] ?? 0) * input.quantity,
+        }),
+      ),
+    };
+
+    expect(overrides).toBeDefined();
+  });
+
+  it("rejects an override naming a slot the Workflow does not declare", () => {
+    // @ts-expect-error `priced` declares `load` and `select`, and nothing called `discount`.
+    const overrides: StepOverrides<Priced> = { discount: defineStep("free", () => ({})) };
+
+    expect(overrides).toBeDefined();
   });
 });

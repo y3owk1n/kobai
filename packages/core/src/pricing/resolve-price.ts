@@ -174,6 +174,16 @@ export const priceResolutionWorkflow = defineWorkflow<PriceResolutionRequest>(
   .step(selectPrice)
   .build();
 
+/**
+ * The declaration above, as a type.
+ *
+ * What a Project overrides is measured against this, and what the store surface runs is a
+ * value of it — Core's own, or the one a Project's config rebuilt. The surface holds the type
+ * rather than the value for exactly that reason: a route that imported the declaration
+ * directly would serve Core's Steps no matter what the Project had wired.
+ */
+export type PriceResolutionWorkflow = typeof priceResolutionWorkflow;
+
 function isNewer(candidate: PriceCandidate, best: PriceCandidate): boolean {
   const by = candidate.createdAt.getTime() - best.createdAt.getTime();
   return by === 0 ? candidate.id > best.id : by > 0;

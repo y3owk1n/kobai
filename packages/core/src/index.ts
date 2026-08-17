@@ -13,6 +13,7 @@ export type { Permission } from "./auth/permissions.ts";
 export { ALL_PERMISSIONS, OWNER_ROLE, PERMISSIONS } from "./auth/permissions.ts";
 export type { Price, Product, ProductDetail, Variant } from "./catalog/read.ts";
 export {
+  type CoreWorkflowOverrides,
   consoleLogger,
   defineKobaiConfig,
   type KobaiProjectConfig,
@@ -32,6 +33,7 @@ export type {
   PriceCandidate,
   PriceResolutionRefusal,
   PriceResolutionRequest,
+  PriceResolutionWorkflow,
   ResolvedPrice,
   VariantIdentity,
 } from "./pricing/resolve-price.ts";
@@ -48,17 +50,22 @@ export type { Step } from "./workflow/step.ts";
 export { defineStep, StepFailure } from "./workflow/step.ts";
 /**
  * The Workflow surface, in full. Under ADR-0019 every name here is a promise, so it is only
- * what a Project needs: the two ways to declare, the two ways to read a declaration, and
+ * what a Project needs: the two ways to declare, the two ways to read a declaration,
  * `StepInput`/`StepOutput`, which are what let a replacement be measured against the Step it
- * replaces (spec story 27). The builder's own types and the shape map behind those helpers
- * stay internal — they are how the promise is kept, not part of it.
+ * replaces (spec story 27), and the shape of an override map for a Project that assembles one
+ * outside `kobai.config.ts`. The builder's own types, the shape map behind those helpers, and
+ * `overrideSteps` itself stay internal — a Project rewires a Workflow by declaring it in its
+ * config, and a second way in would be customisation this repository's one config file could
+ * not show.
  */
 export type {
   StepDescriptor,
   StepInput,
   StepOutput,
+  StepOverrides,
   Workflow,
   WorkflowDescription,
+  WorkflowOverrides,
   WorkflowSlots,
   WorkflowStep,
 } from "./workflow/workflow.ts";

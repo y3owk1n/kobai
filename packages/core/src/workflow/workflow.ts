@@ -37,8 +37,8 @@ export type NoStepShapes = Readonly<Record<never, never>>;
  *
  * The two are separate because they stop being the same thing the moment a Project replaces
  * a Step (ADR-0017): the slot is what the override map is keyed by and what stays stable
- * across the swap, while `step.name` is whatever the implementation calls itself. Today
- * every entry has them equal, because nothing has been replaced yet.
+ * across the swap, while `step.name` is whatever the implementation calls itself. They agree
+ * in Core's own declaration and part company in a Project that has overridden one.
  */
 export type WorkflowStep = {
   readonly slot: string;
@@ -71,9 +71,9 @@ export type Workflow<In, Out, Shapes extends StepShapes = StepShapes> = {
    * Every position, in declared order.
    *
    * Read it; do not rebuild a Workflow by spreading one. `describe` and `run` close over
-   * this array as it was when `build()` ran, so `{ ...workflow, steps: mine }` would answer
-   * with the new list and still *execute* the old one. Rewiring a Workflow means declaring
-   * it again, which is what the next ticket's override machinery has to do.
+   * this array as it was when the Workflow was made, so `{ ...workflow, steps: mine }` would
+   * answer with the new list and still *execute* the old one. Rewiring a Workflow means
+   * declaring it again — {@link overrideSteps} is how, and the only way that exists.
    */
   readonly steps: readonly WorkflowStep[];
   /** What this Workflow is made of, without reading Core's implementation. */
@@ -113,6 +113,87 @@ export type StepOutput<W extends AnyWorkflow, Slot extends WorkflowSlots<W>> =
     : never;
 
 /**
+ * The Steps a Project supplies for a Workflow's slots, keyed by slot.
+ *
+ * Every entry is optional — a Project names the one or two slots it disagrees with and
+ * inherits the rest — and every entry's *types* are fixed by the slot it fills. The name is
+ * free, because a replacement is a different Step and should be able to say so; the input and
+ * output are not, because that is the whole of ADR-0017's "a replacement must satisfy the
+ * original Step's input and output types". `Step`'s `run` is a function-valued property
+ * rather than a method precisely so a replacement demanding a *narrower* input is rejected
+ * here rather than handed `undefined` at runtime.
+ *
+ * Expressed over `Shapes` rather than over a Workflow type, so that this stays assignable in
+ * both directions when a Workflow is matched against {@link AnyWorkflow}. A Project reads it
+ * through {@link StepOverrides}.
+ */
+export type StepOverrideMap<Shapes extends StepShapes> = {
+  readonly [Slot in keyof Shapes & string]?: Step<
+    string,
+    Shapes[Slot]["input"],
+    Shapes[Slot]["output"]
+  >;
+};
+
+/** {@link StepOverrideMap}, named against the Workflow being overridden rather than its shapes. */
+export type StepOverrides<W extends AnyWorkflow> =
+  W extends Workflow<never, unknown, infer Shapes> ? StepOverrideMap<Shapes> : never;
+
+/**
+ * What a Project may change about one Workflow.
+ *
+ * A record with one key today, and that is deliberate: `before`/`after` insertion is a
+ * separate, weaker mechanism under ADR-0017 and belongs beside `steps` rather than mixed into
+ * it, so a Developer reading a config can tell replacement from observation at a glance.
+ */
+export type WorkflowOverrides<W extends AnyWorkflow> = {
+  /** Which Step fills which slot. A named slot is replaced; an unnamed one is inherited. */
+  readonly steps?: StepOverrides<W>;
+};
+
+/**
+ * The same Workflow with the named slots filled by other Steps — ADR-0017's replacement, and
+ * the whole of what Core does with a Project's override map.
+ *
+ * It **rebuilds the declaration** rather than copying the object. `describe` and `run` close
+ * over the array they were built with, so `{ ...workflow, steps: mine }` would report the new
+ * list and execute the old one — a Workflow claiming a Project's Step ran while Core's
+ * actually did, which is the exact lie the mechanism exists to disprove. Going through the
+ * same constructor `build()` uses is what makes that unrepresentable rather than merely
+ * discouraged.
+ *
+ * The original is untouched and still runs what it always did: a declaration is a value, and
+ * overriding produces another one.
+ *
+ * Naming a slot the Workflow does not declare throws, at the moment the declaration is
+ * rewired rather than at the request that would have been priced differently. The compiler
+ * already rejects it for a config written as a literal; this catches the map built at
+ * runtime, where the alternative is an override that silently does nothing.
+ */
+export function overrideSteps<In, Out, Shapes extends StepShapes>(
+  workflow: Workflow<In, Out, Shapes>,
+  overrides: StepOverrideMap<Shapes>,
+): Workflow<In, Out, Shapes> {
+  const slots = new Set(workflow.steps.map((entry) => entry.slot));
+  const supplied = overrides as Readonly<Record<string, AnyStep | undefined>>;
+
+  for (const slot of Object.keys(supplied)) {
+    if (slots.has(slot)) continue;
+    throw new Error(
+      `The Workflow ${JSON.stringify(workflow.name)} has no Step ${JSON.stringify(slot)} to replace. It declares ${[...slots].map((declared) => JSON.stringify(declared)).join(", ")}.`,
+    );
+  }
+
+  return createWorkflow<In, Out, Shapes>(
+    workflow.name,
+    workflow.steps.map((entry) => {
+      const replacement = supplied[entry.slot];
+      return replacement ? { slot: entry.slot, step: replacement } : entry;
+    }),
+  );
+}
+
+/**
  * Declares a Workflow, one Step at a time.
  *
  * `Current` is the type the Steps declared so far have arrived at, so the next Step is
@@ -148,16 +229,26 @@ function builder<In, Current, Shapes extends StepShapes>(
       return builder(name, [...steps, { slot: step.name, step: step as AnyStep }]);
     },
 
-    build() {
-      return {
-        name,
-        steps,
-        describe: () => ({
-          name,
-          steps: steps.map((entry) => ({ slot: entry.slot })),
-        }),
-        run: (input, context) => runSteps<Current>(steps, input, context),
-      };
-    },
+    build: () => createWorkflow<In, Current, Shapes>(name, steps),
+  };
+}
+
+/**
+ * The one place a Workflow object is made, from `build()` and from {@link overrideSteps}
+ * alike.
+ *
+ * One constructor rather than two is what keeps the trap on `steps` closed: everything that
+ * answers questions about a Workflow closes over the array passed in here, so there is no way
+ * to produce one whose account of itself and whose behaviour disagree.
+ */
+function createWorkflow<In, Out, Shapes extends StepShapes>(
+  name: string,
+  steps: readonly WorkflowStep[],
+): Workflow<In, Out, Shapes> {
+  return {
+    name,
+    steps,
+    describe: () => ({ name, steps: steps.map((entry) => ({ slot: entry.slot })) }),
+    run: (input, context) => runSteps<Out>(steps, input, context),
   };
 }
