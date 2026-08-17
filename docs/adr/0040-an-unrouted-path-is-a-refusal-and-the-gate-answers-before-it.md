@@ -54,6 +54,10 @@ there (ADR-0027, pinned in `catalog.test.ts`).
 - The 404 body is now part of what kobai promises, and is asserted beside a gate refusal in
   `packages/core/src/http/app.test.ts` — field names and content type compared against each
   other rather than against a remembered literal, so the two cannot drift apart.
+- **Both halves of the disclosure position are pinned by test**, in the same file: an
+  anonymous request to a nonexistent admin path answers 401, and a signed-in Merchant whose
+  Role is too narrow gets 403 on a route that exists and 404 on one that does not. A change
+  that started hiding the second behind the first would fail rather than pass quietly.
 - A route added under a gate inherits the ordering for free; a surface mounted *without* one
   would answer 404 anonymously, which is the thing to notice when a third surface appears.
 - Changing the shape or the `reason` later is a breaking change to the contract, the same as
