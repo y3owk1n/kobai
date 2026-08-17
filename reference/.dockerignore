@@ -1,0 +1,21 @@
+# What `docker build` must not copy into this Project's image.
+#
+# `Dockerfile` starts with `COPY . .`, so without this file the build context is whatever
+# happens to be in the directory — including a `node_modules` installed on the host. That is
+# not merely wasteful: native dependencies are built for the machine that installed them, so
+# a macOS `node_modules` copied into a Linux image produces a container that installs
+# nothing, builds, and then fails at runtime on a binary for the wrong platform.
+**/node_modules
+**/dist
+
+# Build state and history, none of which the image needs.
+.devbox
+.git
+*.tsbuildinfo
+
+# Prose. `.env.example` is documentation too, but it is the one a Developer copies, and
+# leaving it in costs nothing.
+*.md
+.env
+.env.*
+!.env.example
