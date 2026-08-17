@@ -54,7 +54,8 @@ the tables of every package whose schema it was not given, leaving their trackin
 behind so the migration runner cannot repair it. See
 [ADR-0030](docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md). A `"// …"`
 key in `devbox.json` and in each package's `package.json` says so where the command would
-have been, and `tests/no-push-script.test.ts` fails the build if one appears in either.
+have been, and `tests/no-push-script.test.ts` fails the build if one appears in either — or
+in a `run:` step under `.github/workflows/`, where no script name would give it away.
 
 ### Layout
 
