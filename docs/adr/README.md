@@ -63,6 +63,7 @@ New to the project? These five carry the shape of everything else:
 | [0035](./0035-upgrading-is-a-command-kobai-ships.md) | Upgrading is a command kobai ships, carried by the version being upgraded to | Accepted |
 | [0036](./0036-unwinding-is-exhaustive-and-never-replaces-what-stopped-the-run.md) | Unwinding is exhaustive, and a compensation that fails never replaces what stopped the run | Accepted — extends 0017 |
 | [0037](./0037-updated-at-is-a-trigger-because-core-does-not-mediate-every-write.md) | `updated_at` advances by trigger, because Core does not mediate every write | Accepted |
+| [0040](./0040-an-unrouted-path-is-a-refusal-and-the-gate-answers-before-it.md) | An unrouted path is a refusal like any other, and the gate answers before it | Accepted |
 
 ## Prototypes
 

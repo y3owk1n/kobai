@@ -96,29 +96,16 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   });
 
   /**
-   * Anything else under `/store`.
+   * There is deliberately no catch-all here any more.
    *
-   * Registered last, so it answers only what no route above did. It exists because Hono's
-   * own 404 is plain text, and a storefront should be able to parse every answer this
-   * surface gives the same way — including the ones it did not expect. A request with the
-   * right path and the wrong method lands here too, and is reported as a path that is not
-   * there; distinguishing the two would mean enumerating methods per path for a surface that
-   * currently has one route.
-   *
-   * It is a wildcard rather than a route, so it is deliberately absent from the OpenAPI
-   * description: a description enumerates the paths that exist, and this one answers the
-   * paths that do not. A generated client therefore has no type for this body, which is
-   * consistent rather than a gap — it also has no way to make the call that produces one.
+   * This surface used to carry its own wildcard answering an unrouted `/store` path as
+   * `{ error, reason: "not-found" }`, because Hono's own 404 is plain text and a storefront
+   * should be able to parse every answer the same way. The admin surface had no equivalent
+   * (#33), so the fix was one `app.notFound` covering the whole application rather than a
+   * second copy of this one — see `app.ts`. The behaviour a storefront sees is unchanged,
+   * including the order: `requireApiKey` is mounted on this sub-app with `use("*")`, so it
+   * still answers an anonymous caller before anything says whether the path is there.
    */
-  store.all("*", (c) =>
-    c.json(
-      {
-        error: `There is no ${c.req.path} on the store surface.`,
-        reason: "not-found" as const,
-      },
-      404,
-    ),
-  );
 
   return store;
 }

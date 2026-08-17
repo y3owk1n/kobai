@@ -458,11 +458,11 @@ export const PriceRefusal = z
   .openapi("PriceRefusal");
 
 /**
- * There is deliberately no schema for the store surface's own 404.
+ * There is deliberately no schema for an unrouted path's 404.
  *
- * `/store` answers an unrouted path with `{ error, reason: "not-found" }` so a storefront
- * can parse every answer the same way, and that is a wildcard rather than a route. A
- * description enumerates the paths that exist; a schema named here and referenced by no
- * route would be registered nowhere and describe nothing, which is worse than its absence.
- * See `http/store.ts`.
+ * kobai answers one with `{ error, reason: "not-found" }` so a caller can parse every answer
+ * the same way, and that is a not-found handler rather than a route. A description
+ * enumerates the paths that exist; a schema named here and referenced by no route would be
+ * registered nowhere and describe nothing, which is worse than its absence. See
+ * `http/app.ts` and ADR-0040.
  */
