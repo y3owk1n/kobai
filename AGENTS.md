@@ -49,6 +49,19 @@ and no PR opens on a red one.
 | `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
 | `devbox run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
 
+**`devbox run -- <cmd>` runs from the project root and ignores a preceding `cd`.** So this:
+
+```sh
+cd packages/core && devbox run -- tsc -p tsconfig.json   # typechecks the ROOT project
+```
+
+silently checks the wrong thing and passes. It is a bad failure because it looks like
+success. Target a package through pnpm instead, which knows where its packages are:
+
+```sh
+devbox run -- pnpm --filter @kobai/core typecheck
+```
+
 There is deliberately **no `push` script** anywhere — not in Core, not in a Plugin, not in
 the reference Project. `drizzle-kit push` diffs against the live database and silently drops
 the tables of every package whose schema it was not given, leaving their tracking rows
