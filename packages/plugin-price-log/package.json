@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@kobai/core": "workspace:*",
-    "drizzle-orm": "^0.44.6"
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.5"
