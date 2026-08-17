@@ -46,7 +46,7 @@ and no PR opens on a red one.
 | `devbox run db` | Just Postgres — what the test suite needs. |
 | `devbox run test` | Postgres up, build, then the whole suite. |
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
-| `devbox run db:generate` | Generate a migration from a change to Core's schema. |
+| `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
 
 There is deliberately **no `push` script** anywhere — not in Core, not in a Plugin, not in
 the reference Project. `drizzle-kit push` diffs against the live database and silently drops
@@ -62,6 +62,7 @@ have been, and `tests/no-push-script.test.ts` fails the build if one appears in 
 | --- | --- |
 | `packages/core` | `@kobai/core` — the package a Project depends on (ADR-0025). |
 | `packages/core/migrations` | Core's migration set. Generated, never hand-edited except for `--custom` files. |
+| `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, nothing else. |
 | `reference/` | The **reference Project** — kobai's own Project and its release gate (ADR-0029). |
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
 | `compose.yaml`, `Dockerfile` | Postgres and the application, and nothing else. |
@@ -81,12 +82,29 @@ const response = await kobai.request("/admin/store");
 
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive
-the runner yourself, then inspect the result through `kobai.database.query`:
+the runner yourself:
 
 ```ts
 await using kobai = await createTestKobai({ migrate: false });
 await runMigrations(kobai.db, [pluginSet, coreMigrationSet]); // order is yours to choose
 ```
+
+The **schema seam** covers the rest of what HTTP cannot: ADR-0004's rules are properties of
+the schema, not behaviours. Ask Postgres what it is holding, through `inspectSchema` from
+`@kobai/core/testing` — never by hand-rolling another `information_schema` query, because
+there should be one of those:
+
+```ts
+const schema = inspectSchema(kobai.database);
+
+await expect(schema.tablesOwnedBy("price_log")).resolves.toEqual(["price_log_entry"]);
+await expect(schema.foreignKeysCrossingInto("core")).resolves.toEqual([]);
+await expect(schema.columnsOwnedBy("core")).resolves.toEqual(stockCoreColumns);
+```
+
+It also reads `migrationTracking()`, `columnsOf()` and `indexedColumnsOf()`, and it scans
+every non-system schema rather than only `public` — the prototype's inspector reported "no
+tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
 
 Real Postgres rather than a fake, because under
 [ADR-0004](docs/adr/0004-plugins-own-their-tables-core-tables-are-closed.md),

@@ -40,6 +40,19 @@ importers:
         specifier: ^0.31.5
         version: 0.31.10
 
+  packages/plugin-price-log:
+    dependencies:
+      '@kobai/core':
+        specifier: workspace:*
+        version: link:../core
+      drizzle-orm:
+        specifier: ^0.44.6
+        version: 0.44.7(@types/pg@8.21.0)(pg@8.23.0)
+    devDependencies:
+      drizzle-kit:
+        specifier: ^0.31.5
+        version: 0.31.10
+
   reference:
     dependencies:
       '@hono/node-server':
@@ -48,6 +61,9 @@ importers:
       '@kobai/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@kobai/plugin-price-log':
+        specifier: workspace:*
+        version: link:../packages/plugin-price-log
 
 packages:
 

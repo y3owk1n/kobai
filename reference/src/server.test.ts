@@ -45,7 +45,13 @@ describe("the reference Project's entrypoint", () => {
     const response = await fetch(`http://127.0.0.1:${listening.port}/health`);
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ status: "ok" });
+    // Both sets, from the *built* artifact: a Plugin resolves its migrations folder
+    // relative to its own module, so this is where a package that ships `dist` but forgets
+    // to ship `migrations` would be caught. Source-resolved tests never see that.
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      migrations: { sets: [{ name: "core" }, { name: "plugin-price-log" }] },
+    });
   });
 
   it("exits non-zero, and serves nothing, when a migration fails", async () => {

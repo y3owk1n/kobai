@@ -20,9 +20,12 @@
     "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true,
     "baseUrl": ".",
+    // The one list of workspace package mappings. `vitest.config.ts` derives its resolver
+    // aliases from this file rather than repeating it, so adding a package is one edit.
     "paths": {
       "@kobai/core": ["./packages/core/src/index.ts"],
-      "@kobai/core/*": ["./packages/core/src/*/index.ts"]
+      "@kobai/core/*": ["./packages/core/src/*/index.ts"],
+      "@kobai/plugin-price-log": ["./packages/plugin-price-log/src/index.ts"]
     }
   }
 }

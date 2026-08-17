@@ -1,6 +1,5 @@
-import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
-import { type TestKobai, createTestKobai } from "../testing/index.ts";
+import { type TestKobai, createTestKobai, inspectSchema } from "../testing/index.ts";
 import { coreMigrationSet } from "./core-set.ts";
 import { runMigrations } from "./run.ts";
 import {
@@ -20,32 +19,24 @@ describe("migration tracking", () => {
   it("tracks Core's migrations in Core's own table, in an explicitly named schema", async () => {
     kobai = await createTestKobai();
 
-    const tracking = await kobai.db.execute<{
-      table_schema: string;
-      table_name: string;
-    }>(sql`
-      select table_schema, table_name from information_schema.tables
-      where table_name like '\\_\\_drizzle_migrations%'
-      order by table_schema, table_name
-    `);
-
-    expect(tracking.rows).toEqual([
-      { table_schema: "drizzle", table_name: "__drizzle_migrations_core" },
+    await expect(inspectSchema(kobai.database).migrationTracking()).resolves.toEqual([
+      { schema: "drizzle", table: "__drizzle_migrations_core", applied: 2 },
     ]);
   });
 
-  it("does not track in the schema the drizzle-kit CLI would default to", async () => {
+  it("leaves nothing tracking where either tool would default to", async () => {
     // ADR-0030: the CLI reads `migrations.schema` from drizzle.config.ts while the
-    // programmatic migrator ignores it. If this ever lands in `public`, the two paths have
-    // diverged and each will re-apply what the other already ran.
+    // programmatic migrator ignores it and falls back to `drizzle`. Two paths, two
+    // defaults, no warning — so this names every tracking table in the database, in full.
+    // A bare `__drizzle_migrations`, or anything in `public`, means the paths have diverged
+    // and each is about to re-apply what the other already ran.
     kobai = await createTestKobai();
 
-    const inPublic = await kobai.db.execute(sql`
-      select table_name from information_schema.tables
-      where table_schema = 'public' and table_name like '\\_\\_drizzle%'
-    `);
+    const tracking = await inspectSchema(kobai.database).migrationTracking();
 
-    expect(inPublic.rows).toEqual([]);
+    expect(tracking.map((entry) => `${entry.schema}.${entry.table}`)).toEqual([
+      "drizzle.__drizzle_migrations_core",
+    ]);
     expect(KOBAI_MIGRATIONS_SCHEMA).toBe("drizzle");
   });
 
@@ -79,16 +70,12 @@ describe("migration tracking", () => {
 
   it("creates only tables carrying Core's own prefix", async () => {
     kobai = await createTestKobai();
+    const schema = inspectSchema(kobai.database);
 
-    const tables = await kobai.db.execute<{ table_name: string }>(sql`
-      select table_name from information_schema.tables
-      where table_schema = 'public' and table_type = 'BASE TABLE'
-    `);
+    const everything = (await schema.tables()).map((table) => table.name);
 
-    expect(tables.rows.length).toBeGreaterThan(0);
-    for (const { table_name } of tables.rows) {
-      expect(table_name).toMatch(/^core_/);
-    }
+    expect(everything.length).toBeGreaterThan(0);
+    await expect(schema.tablesOwnedBy("core")).resolves.toEqual(everything);
   });
 });
 
