@@ -1,10 +1,13 @@
 {
   "name": "@kobai/core",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "The kobai packages a Project depends on.",
   "license": "MIT",
+  "// publishConfig": "This package is published, because a generated Project depends on it as an ordinary versioned dependency and `workspace:*` does not resolve outside this workspace (ADR-0034). `private: true` used to be the only thing standing between a stray `pnpm publish` and npmjs.com, so removing it puts something else there: `registry` pins publishing at a loopback address, which is where `devbox run ci` stands one up. A publish to the public registry therefore has to be a deliberate act — someone passing `--registry` on purpose — rather than a typo. tests/publish-guard.test.ts fails the build if this pin goes missing.",
+  "publishConfig": {
+    "registry": "http://localhost:4873"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

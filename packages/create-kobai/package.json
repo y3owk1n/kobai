@@ -1,0 +1,36 @@
+{
+  "name": "create-kobai",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Generates a kobai Project you own outright, with kobai as an ordinary versioned dependency (ADR-0001).",
+  "license": "MIT",
+  "// publishConfig": "Published for the same reason as @kobai/core, and guarded the same way (ADR-0034). This one is the package a Developer reaches for first — `npm create kobai@latest my-store` — so it is the one that most needs to exist in a registry. `registry` pins publishing at a loopback address so reaching npmjs.com has to be deliberate rather than accidental. tests/publish-guard.test.ts fails the build if this pin goes missing.",
+  "publishConfig": {
+    "registry": "http://localhost:4873"
+  },
+  "bin": {
+    "create-kobai": "./dist/bin/create-kobai.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "// files": "`template` is the Project this package generates, and it ships because there is nowhere else to get it: a Developer's machine has no `reference/` to read. It is generated from the reference Project by `devbox run template:generate` and checked in — the same arrangement `packages/core/openapi.json` has, for the same reason, and `tests/create-kobai-matches-the-reference-project.test.ts` is what keeps it honest.",
+  "files": [
+    "dist",
+    "template"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "// template:generate": "Rewrites `template/` from the reference Project, applying the adaptations in src/adaptations.ts. Run it after changing anything under `reference/`; the drift test fails the build until you do.",
+    "template:generate": "node scripts/sync-template.ts",
+    "// db:push": "There is deliberately no db:push script here either, and this package is the one that would spread it furthest: whatever it generates, every Developer runs. `drizzle-kit push` diffs a schema against the LIVE database, so it reports success while silently dropping the tables of every package whose schema it was not given, leaving their tracking rows behind so the migration runner believes the work is done and cannot repair it. The Project this package generates has no push script either, and says why where the command would have been. See ADR-0030, https://github.com/y3owk1n/kobai/blob/main/docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md"
+  },
+  "devDependencies": {
+    "jsonc-parser": "^3.3.1"
+  }
+}

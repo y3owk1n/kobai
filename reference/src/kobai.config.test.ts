@@ -38,8 +38,45 @@ describe("installing the Plugin", () => {
 });
 
 describe("the reference Project's configuration", () => {
-  it("wires the Plugin's migration set, and that is the whole of the wiring", () => {
-    expect(config.migrationSets?.map((set) => set.name)).toEqual(["plugin-price-log"]);
+  it("wires the Plugin's migration set beside its own, and that is the whole of the wiring", () => {
+    // Two sets, and the pair is the point. `plugin-price-log` arrived as a dependency and
+    // does nothing until this file names it (ADR-0017); `project` is this Project's own,
+    // covering tables neither Core nor any Plugin has heard of. They are the same kind of
+    // object applied by the same runner, which is what makes "a Project owns tables on the
+    // same terms a Plugin does" a fact about the code rather than a claim in a document.
+    expect(config.migrationSets?.map((set) => set.name)).toEqual([
+      "plugin-price-log",
+      "project",
+    ]);
+  });
+
+  it("brings its own table into being, in its own tracking table", async () => {
+    await using kobai = await createTestKobai(config);
+    const schema = inspectSchema(kobai.database);
+
+    // The Project's table exists...
+    await expect(schema.tablesOwnedBy("project")).resolves.toEqual([
+      "project_variant_note",
+    ]);
+
+    // ...and it is tracked separately from Core's and the Plugin's, so none of the three
+    // can race or re-apply another's work.
+    const tracking = (await schema.migrationTracking()).map((fact) => fact.table);
+    expect(tracking).toContain("__drizzle_migrations_project");
+    expect(tracking).toContain("__drizzle_migrations_core");
+    expect(tracking).toContain("__drizzle_migrations_plugin_price_log");
+  });
+
+  it("puts no foreign key from its own tables into Core's", async () => {
+    // A Project *may* add one, unlike a Plugin — it owns its repository and its schema. This
+    // one deliberately does not, because the constraint would tie its migrations to Core's
+    // table still being called what it is called today, which is the coupling that turns an
+    // upgrade back into a merge (ADR-0001).
+    await using kobai = await createTestKobai(config);
+
+    await expect(
+      inspectSchema(kobai.database).foreignKeysCrossingInto("core"),
+    ).resolves.toEqual([]);
   });
 
   it("brings the Plugin's table into being when Core boots with it", async () => {

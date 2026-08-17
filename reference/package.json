@@ -4,18 +4,29 @@
   "private": true,
   "type": "module",
   "description": "The reference Project — kobai's own Project, and its release gate (ADR-0029).",
+  "// exports": "This Project is not a library and nothing imports from it, but `src/migration-set.ts` resolves its own `migrations/` directory by asking Node where this manifest is — which Node only allows a package to do for itself when the manifest names something in `exports`. The alternative was counting `..` segments, which is wrong at one of the two depths this code runs at. See the comment in that file.",
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "node --env-file-if-exists=../.env --watch src/server.ts",
     "start": "node dist/src/server.js",
-    "// db:push": "There is deliberately no db:push script here either. A Project's database holds Core's tables and every wired Plugin's, so `drizzle-kit push` — which diffs against the LIVE database — reports success while silently dropping the tables of whichever packages the pushed schema does not know about, and leaves their tracking rows behind so the migration runner cannot repair it. Generate a migration instead. See docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
+    "// db:generate": "This Project owns tables of its own, so it generates migrations of its own — the same `drizzle-kit generate` Core and every Plugin run, against this Project's own schema and into this Project's own `migrations/`. `tablesFilter` in drizzle.config.ts keeps a generate here from ever writing a migration that touches Core's tables or a Plugin's.",
+    "db:generate": "drizzle-kit generate",
+    "// db:push": "There is deliberately no db:push script here either. A Project's database holds Core's tables, every wired Plugin's, and its own, so `drizzle-kit push` — which diffs against the LIVE database — reports success while silently dropping the tables of whichever packages the pushed schema does not know about, and leaves their tracking rows behind so the migration runner cannot repair it. Generate a migration instead. See ADR-0030, https://github.com/y3owk1n/kobai/blob/main/docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md"
   },
   "// dependencies": "`kobai-reference-admin` is a dependency rather than a devDependency because this process serves its `dist` at runtime — `src/admin-assets.ts` finds it through Node's own module resolution, which is right whether this file runs from `src` or from `dist`. Everything that *builds* the Admin is a devDependency of that package, so the built assets are all the runtime needs.",
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@kobai/core": "workspace:*",
     "@kobai/plugin-price-log": "workspace:*",
+    "drizzle-orm": "^0.45.2",
     "kobai-reference-admin": "workspace:*"
+  },
+  "// devDependencies": "`drizzle-kit` is what `db:generate` runs, and it is a dev dependency for the same reason it is one in Core and in the Plugin: generating a migration is something a Developer does at their desk, and applying one is something Core does at boot through `drizzle-orm`. The container needs the second and not the first.",
+  "devDependencies": {
+    "drizzle-kit": "^0.31.5"
   }
 }

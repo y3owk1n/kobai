@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
+  "packages": ["nodejs@22"],
+  "env": {
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
+  },
+  "shell": {
+    "init_hook": [
+      "corepack enable --install-directory \"$DEVBOX_PROJECT_ROOT/.devbox/virtenv/nodejs/corepack-bin\""
+    ],
+    "scripts": {
+      "install": "pnpm install --frozen-lockfile",
+
+      // Postgres and this Project, built and running. This is the one command a first run
+      // needs — Core applies its migrations at boot, so there is no separate migration step
+      // and no half-set-up state to reason about.
+      "up": "docker compose up --build",
+      "down": "docker compose down",
+
+      // Just Postgres, for running the app on this machine with `devbox run dev`.
+      "db": "docker compose up -d --wait db",
+      "db:down": "docker compose down -v",
+
+      // Explanations here are real comments, never `"// …"` keys. devbox turns every key in
+      // this file into a runnable script and eats the leading slashes doing it, so a
+      // `"//db:push"` key would create the very `devbox run db:push` the next comment says
+      // must never exist. A `package.json` is the opposite on both counts — npm requires
+      // strict JSON and attaches no meaning to such a key — which is why the explanation
+      // there is a key and the one here is a comment.
+
+      // Generates a migration from this Project's own schema, in `src/db/schema.ts`, into
+      // this Project's own `migrations/`. Adding a column to a table you own is this
+      // command and nothing else: no coordination with Core, no Plugin consulted.
+      "db:generate": "pnpm --filter kobai-project db:generate",
+
+      // There is deliberately no db:push script, and this is the file where someone would
+      // reach for the convenient one. `drizzle-kit push` diffs against the LIVE database:
+      // run against a database holding Core's tables and every wired Plugin's, it reports
+      // success and silently DROPS the tables of whichever packages the pushed schema does
+      // not know about, leaving their migration tracking rows behind so the migration
+      // runner believes the work is done and cannot repair it. Generate a migration
+      // instead. Observed, not theorised — see ADR-0030,
+      // https://github.com/y3owk1n/kobai/blob/main/docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md
+
+      // `--include-workspace-root` is load-bearing, and its absence is a quiet failure.
+      // This Project *is* the root of its own two-package workspace, and `pnpm -r` skips
+      // the root by default — so without the flag this builds the Admin, reports success,
+      // and leaves the Project's own TypeScript uncompiled. The first thing anyone would
+      // notice is `node dist/src/server.js` saying the file does not exist.
+      "build": "pnpm -r --include-workspace-root build",
+      "dev": "pnpm -r --include-workspace-root build && pnpm --filter kobai-project dev",
+
+      // The Admin with a reload loop, in a second terminal beside `devbox run dev`. It is a
+      // Vite dev server that proxies `/admin`, `/store` and `/health` to the app, so the
+      // browser still sees exactly one origin — which is what production looks like and why
+      // there is no CORS configured anywhere (ADR-0010, ADR-0033).
+      "admin:dev": "pnpm --filter kobai-project-admin dev",
+
+      "typecheck": "pnpm -r --include-workspace-root typecheck",
+      "start": "pnpm --filter kobai-project start"
+    }
+  }
+}

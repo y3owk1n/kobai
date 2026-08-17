@@ -1,0 +1,9 @@
+# This Project and its Admin. Two packages, because the Admin is vendored source you own
+# and edit rather than a dependency you install (ADR-0033) — and it has its own build, its
+# own toolchain and its own `package.json` because it is a browser bundle and this is not.
+#
+# `pnpm -r build` therefore builds both, in dependency order, which is what the Dockerfile
+# and `devbox run dev` both rely on.
+packages:
+  - .
+  - admin

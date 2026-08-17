@@ -85,6 +85,15 @@
       // tests fail the gate when either has drifted.
       "openapi:generate": "pnpm -r openapi:generate",
 
+      // Rewrites what `create-kobai` generates from the reference Project, which is the
+      // source of truth for both. Run it after changing anything under `reference/` — the
+      // gate fails until you do, because
+      // tests/create-kobai-matches-the-reference-project.test.ts regenerates the template
+      // and compares it byte for byte with what is checked in. Same arrangement as
+      // openapi:generate above, and for the same reason: a generated artifact nobody
+      // regenerates is a generated artifact that has quietly stopped being true.
+      "template:generate": "pnpm --filter create-kobai template:generate",
+
       "up": "docker compose up --build",
       "down": "docker compose down",
       "build": "pnpm -r build",

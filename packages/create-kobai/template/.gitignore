@@ -1,0 +1,21 @@
+# Secrets. `.env.example` is the documented list of every variable kobai reads; `.env` is
+# your copy of it and never belongs in a repository.
+.env
+.env.*
+!.env.example
+
+# Build output and dependencies
+node_modules/
+dist/
+*.tsbuildinfo
+
+# devbox's nix profile
+.devbox/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+.idea/

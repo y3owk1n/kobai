@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "noEmit": false,
+    // Resolve @kobai/core the way a real Project does — through node_modules and the
+    // package's own `exports` — rather than through the source paths the editor uses.
+    "paths": {}
+  },
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -54,13 +54,58 @@ type CommandFile = {
   commentKeysAreInert: boolean;
 };
 
-async function commandFiles(): Promise<CommandFile[]> {
-  const manifests = ["reference/package.json"];
-  for (const entry of await readdir(new URL("packages/", repoRoot), {
-    withFileTypes: true,
-  })) {
-    if (entry.isDirectory()) manifests.push(`packages/${entry.name}/package.json`);
+/**
+ * Directories that hold installed or generated code rather than this repository's own.
+ *
+ * `dist` is excluded because a built copy of a manifest is not a place anyone adds a script;
+ * `node_modules` because a dependency's push script is not kobai's to forbid.
+ */
+const NOT_OURS = new Set(["node_modules", "dist", ".devbox", ".git"]);
+
+/**
+ * Every `package.json` and `devbox.json` in the repository, discovered rather than listed.
+ *
+ * It was a list, and the list went stale exactly the way a list does: `reference/admin` had
+ * a manifest with its own `// db:push` note that nothing scanned, and then `reference/` grew
+ * a `devbox.json` and `packages/create-kobai/` grew a whole generated Project underneath it.
+ * Discovery covers the next one without an edit, which is the same reason
+ * `tests/packaged-migrations.test.ts` discovers its packages.
+ *
+ * The generated Project under `packages/create-kobai/template/` matters most of all: it is
+ * the one whose scripts every Developer receives, so a push script reaching it would be the
+ * furthest-travelling version of this mistake.
+ */
+async function commandFilePaths(): Promise<{ manifests: string[]; devboxes: string[] }> {
+  const manifests: string[] = [];
+  const devboxes: string[] = [];
+
+  const walk = async (directory: URL, prefix: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (NOT_OURS.has(entry.name)) continue;
+        await walk(new URL(`${entry.name}/`, directory), `${prefix}${entry.name}/`);
+        continue;
+      }
+      if (entry.name === "package.json") manifests.push(`${prefix}package.json`);
+      if (entry.name === "devbox.json") devboxes.push(`${prefix}devbox.json`);
+    }
+  };
+
+  await walk(repoRoot, "");
+
+  if (manifests.length === 0 || devboxes.length === 0) {
+    // Failing open would be worse than failing: an empty list makes this whole file pass by
+    // scanning nothing, which is indistinguishable from scanning everything.
+    throw new Error(
+      `Discovery found ${manifests.length} manifest(s) and ${devboxes.length} devbox.json, so little or nothing was scanned for a push script.`,
+    );
   }
+
+  return { manifests, devboxes };
+}
+
+async function commandFiles(): Promise<CommandFile[]> {
+  const { manifests, devboxes } = await commandFilePaths();
 
   const files: CommandFile[] = await Promise.all(
     manifests.map(async (path) => {
@@ -70,25 +115,21 @@ async function commandFiles(): Promise<CommandFile[]> {
       return {
         path,
         commands: scripts,
-        comments: commentsIn(scripts),
+        // A manifest with no scripts at all has nowhere a push script would have gone, so
+        // there is nothing for a comment to explain the absence *of* — the workspace root
+        // is the case, and it says why it has no scripts in a `"// scripts"` key of its
+        // own. A manifest that does declare scripts is a place someone would add one, and
+        // has to say why it has not.
+        comments: Object.keys(scripts).length > 0 ? commentsIn(scripts) : null,
         namesCommands: true,
         commentKeysAreInert: true,
       };
     }),
   );
 
-  files.push(devboxFile(await readText("devbox.json")));
-
-  // The workspace root owns no tables and runs no commands, but it must still not sprout
-  // one.
-  const root = await read<{ scripts?: Record<string, string> }>("package.json");
-  files.push({
-    path: "package.json",
-    commands: root.scripts ?? {},
-    comments: null,
-    namesCommands: true,
-    commentKeysAreInert: true,
-  });
+  for (const path of devboxes) {
+    files.push(devboxFile(await readText(path), path));
+  }
 
   for (const path of await ciPaths()) {
     files.push(ciFile(path, await readText(path)));
@@ -108,7 +149,7 @@ async function commandFiles(): Promise<CommandFile[]> {
  * devbox 0.17.5; see #30. `devbox.json` is HuJSON, so a real comment says the same thing
  * and can never be generated into a command.
  */
-function devboxFile(contents: string): CommandFile {
+function devboxFile(contents: string, path = "devbox.json"): CommandFile {
   const errors: ParseError[] = [];
   // `allowTrailingComma` because HuJSON permits one and `devbox add` writes them: it
   // reformats this file when it rewrites it, and a comment in it makes it choose the
@@ -122,7 +163,7 @@ function devboxFile(contents: string): CommandFile {
       .map((e) => `${printParseErrorCode(e.error)} at offset ${e.offset}`)
       .join(", ");
     throw new Error(
-      `devbox.json could not be read, so no script in it was checked: ${detail}.`,
+      `${path} could not be read, so no script in it was checked: ${detail}.`,
     );
   }
 
@@ -132,12 +173,12 @@ function devboxFile(contents: string): CommandFile {
     // happen than a parse error: devbox moves `shell.scripts`, this reads nothing, and
     // the file where kobai's commands live goes unscanned while both tests still pass.
     throw new Error(
-      "devbox.json declares no shell.scripts, so the file kobai's commands live in was not scanned for a push script.",
+      `${path} declares no shell.scripts, so a file kobai's commands live in was not scanned for a push script.`,
     );
   }
 
   return {
-    path: "devbox.json",
+    path,
     commands: scripts,
     comments: jsoncComments(contents),
     namesCommands: true,
@@ -339,6 +380,21 @@ describe("no push command exists anywhere", () => {
         `${path} has no one comment saying both why it has no push script and where the evidence is`,
       ).not.toHaveLength(0);
     }
+  });
+
+  it("scans the Project every Developer receives, and both places a command can live", async () => {
+    // Discovery is what makes this guardrail cover the next package without an edit, and
+    // the way discovery fails is by quietly reaching less than it did. These four are the
+    // ones whose absence would matter most: the two inside the generated Project, because
+    // its scripts are the ones that travel to every Developer, and the two in the reference
+    // Project, because that is the Project the generated one is made from.
+    const scanned = (await commandFiles()).map((file) => file.path);
+
+    expect(scanned).toContain("reference/package.json");
+    expect(scanned).toContain("reference/admin/package.json");
+    expect(scanned).toContain("reference/devbox.json");
+    expect(scanned).toContain("packages/create-kobai/template/package.json");
+    expect(scanned).toContain("packages/create-kobai/template/devbox.json");
   });
 
   it("has no devbox.json key that generates over another one", async () => {
