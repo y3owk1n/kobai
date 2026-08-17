@@ -1,11 +1,25 @@
 # Plugins offer Steps; the Project wires them
 
-A Workflow Step is replaced through an **explicit config map in the Project** —
-`steps: { 'resolve-price': myStep }`. A Plugin *offers* Steps; it never installs them. A
-replacement must satisfy the original Step's input and output types. `before`/`after`
-insertion exists as a separate, deliberately weaker mechanism that cannot alter the output
-contract. And a Step may declare a **compensating action**, which Core runs in reverse when
-a later Step fails.
+A Workflow Step is replaced through an **explicit config map in the Project**, keyed by
+Workflow and then by the slot within it:
+
+```ts
+workflows: { "resolve-price": { steps: { "select-price": myStep } } }
+```
+
+A Plugin *offers* Steps; it never installs them. A replacement must satisfy the original
+Step's input and output types. `before`/`after` insertion exists as a separate, deliberately
+weaker mechanism that cannot alter the output contract. And a Step may declare a
+**compensating action**, which Core runs in reverse when a later Step fails.
+
+> **On the shape.** This ADR first sketched the map as `steps: { 'resolve-price': myStep }`,
+> written before a Workflow had named Steps. That shape cannot say *which* Step is being
+> replaced, so it only ever worked for a Workflow with one overridable Step — and
+> `resolve-price` shipped with two (`load-prices`, `select-price`). The nesting above is what
+> #7 built. `before`/`after` will sit beside `steps` rather than inside it, so that
+> replacement and observation are distinguishable at a glance. The decision this ADR records
+> — explicit wiring, declared by the Project, type-checked against the original — is
+> unchanged; only the illustration was stale.
 
 ## Why explicit over implicit registration
 
