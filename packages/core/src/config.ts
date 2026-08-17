@@ -1,5 +1,6 @@
 import type { SessionOptions } from "./auth/session.ts";
 import type { MigrationSet } from "./migrations/set.ts";
+import type { placeOrderWorkflow } from "./order/place-order.ts";
 import type { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
 import type { WorkflowOverrides } from "./workflow/workflow.ts";
 
@@ -70,6 +71,7 @@ export type KobaiProjectConfig = {
  */
 export type CoreWorkflowOverrides = {
   readonly "resolve-price"?: WorkflowOverrides<typeof priceResolutionWorkflow>;
+  readonly "place-order"?: WorkflowOverrides<typeof placeOrderWorkflow>;
 };
 
 /** Identity, for the types. A Project's `kobai.config.ts` calls this. */

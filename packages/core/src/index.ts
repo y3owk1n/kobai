@@ -55,6 +55,27 @@ export type {
   MigrationSet,
   MigrationState,
 } from "./migrations/index.ts";
+/**
+ * `place-order`, in full, for the same reason `resolve-price` is: a Project replacing a Step
+ * needs the declaration to measure the replacement against and the types the slot moves.
+ */
+export type {
+  CartLineToPlace,
+  CartToPlace,
+  LoadedCart,
+  PlaceOrderRefusal,
+  PlaceOrderRequest,
+  PlaceOrderWorkflow,
+  PricedLine,
+  PricedLines,
+} from "./order/place-order.ts";
+export {
+  captureOrder,
+  loadCart,
+  placeOrderWorkflow,
+  priceLines,
+} from "./order/place-order.ts";
+export type { Order, OrderLineItem, OrderShopper } from "./order/read.ts";
 export type {
   LoadedPrices,
   PriceCandidate,

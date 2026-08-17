@@ -4,7 +4,7 @@ import type { Database, Queryable, Transaction } from "../db/client.ts";
 import { cart, cartLineItem, price, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
-import { type Cart, readCart } from "./read.ts";
+import { type Cart, cartHasExpired, readCart } from "./read.ts";
 
 /**
  * Changing a Cart: creating one, attaching a Shopper to it, and its Line Items.
@@ -326,10 +326,7 @@ async function mutate<Reason extends CartRefusal>(
     if (!isUuid(cartId)) return noSuchCart(cartId);
 
     const [found] = await tx
-      // Qualified for the reason `read.ts` spells out: Drizzle renders a column inside a
-      // select-list `sql` template unqualified, which resolves against the wrong table the
-      // moment anything joins.
-      .select({ id: cart.id, expired: sql<boolean>`now() > ${cart}.${cart.expiresAt}` })
+      .select({ id: cart.id, expired: cartHasExpired })
       .from(cart)
       .where(eq(cart.id, cartId))
       .for("update")

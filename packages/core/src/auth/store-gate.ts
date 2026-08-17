@@ -34,9 +34,8 @@ import { bearerToken } from "./bearer.ts";
  *
  * Both kinds of key open it. A publishable key is the one a browser holds, and a price is
  * what a browser is allowed to know — which is what a publishable key is *for*. A route that
- * one day needs more than that reads `c.get("apiKey").kind` and says so itself; there is no
- * per-kind machinery here, because inventing one before a route needs it would fix its shape
- * by guesswork.
+ * needs more than that says so with {@link requireSecretApiKey}, above its own handler and
+ * below this one.
  */
 
 /** Hono's typing for the store sub-app: `c.get("apiKey")` is available below the gate. */
@@ -56,6 +55,41 @@ export function requireApiKey(db: Database): MiddlewareHandler<StoreEnv> {
     if (!lookup.ok) return refuse(c, lookup.reason);
 
     c.set("apiKey", lookup.apiKey);
+    await next();
+  });
+}
+
+/**
+ * The **second** gate on this surface: a route that a browser's key may not open (ADR-0055).
+ *
+ * Mounted per route rather than on the sub-app, because it is the exception — the store
+ * surface is a storefront's, and most of it is what a publishable key is for. It is a *gate*
+ * rather than a check inside a handler because the requirement is unconditional: this route is
+ * closed to a publishable key whatever the request says. Contrast the `403` a Cart handler
+ * answers, which depends on whether the *body* asserts a Shopper and so cannot be middleware.
+ *
+ * It answers **403 rather than 401**: the credential is live, and it is insufficient. A 401
+ * would invite a storefront to present it again, and RFC 6750 would have it carry a challenge
+ * naming a scheme that was already satisfied.
+ *
+ * It runs below {@link requireApiKey}, which is what puts a key on the context at all — Hono
+ * runs a sub-app's `use("*")` middleware before a route's own. Registered through
+ * `gateAnswering` like every other gate, so `openapi.test.ts` holds a route declaring this
+ * `403` to actually sitting behind it, and a route sitting behind it to declaring one.
+ */
+export function requireSecretApiKey(): MiddlewareHandler<StoreEnv> {
+  return gateAnswering(GATE_REFUSALS.secretKeyRequired, async (c, next) => {
+    if (c.get("apiKey").kind !== "secret") {
+      return c.json(
+        {
+          error:
+            "This endpoint requires a secret API key (`kobai_sk_…`). A publishable key is shipped to a browser, so it may build and read a Cart and may not take money or consume stock (ADR-0020).",
+          reason: "secret-key-required" as const,
+        },
+        403,
+      );
+    }
+
     await next();
   });
 }

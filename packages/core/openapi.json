@@ -1030,6 +1030,239 @@
             "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
           }
         }
+      },
+      "PlacedOrder": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Order"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "workflow": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/StepReport"
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "steps"
+                ]
+              }
+            },
+            "required": [
+              "workflow"
+            ]
+          }
+        ]
+      },
+      "OrderLineItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "variantId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it."
+          },
+          "title": {
+            "type": "string",
+            "description": "The Product's title as at Capture."
+          },
+          "sku": {
+            "type": "string",
+            "description": "The Variant's SKU as at Capture."
+          },
+          "unitAmount": {
+            "type": "integer",
+            "description": "What one of it cost, in minor units — 1250 is USD 12.50."
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "tax": {
+            "type": "integer",
+            "description": "Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means."
+          },
+          "total": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "variantId",
+          "title",
+          "sku",
+          "unitAmount",
+          "quantity",
+          "tax",
+          "total",
+          "metadata"
+        ]
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "description": "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's."
+          },
+          "shopper": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CartShopper"
+              },
+              {
+                "description": "As at Capture. `null` for a guest, which is the ordinary path."
+              }
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217. Every amount here is in it."
+          },
+          "total": {
+            "type": "integer",
+            "description": "What was charged, in minor units."
+          },
+          "lineItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLineItem"
+            },
+            "description": "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The moment of Capture, when this Order became immutable."
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "shopper",
+          "currency",
+          "total",
+          "lineItems",
+          "metadata",
+          "createdAt"
+        ]
+      },
+      "SecretKeyRequired": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "secret-key-required"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "PlaceOrderRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "failed": {
+                "type": "string",
+                "description": "The slot that refused."
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StepReport"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "failed",
+              "steps"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason",
+          "workflow"
+        ]
+      },
+      "PlaceOrderRequest": {
+        "type": "object",
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "description": "The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020)."
+          }
+        },
+        "required": [
+          "cartId"
+        ]
+      },
+      "OrderRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "order-not-found"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
       }
     },
     "parameters": {}
@@ -2721,6 +2954,230 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CartRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/orders": {
+      "post": {
+        "summary": "Turn a Cart into an Order",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaceOrderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Order, and the Steps that produced it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacedOrder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key is live and publishable, and this route requires a secret one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretKeyRequired"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A Step refused: there is no such Cart.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceOrderRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A Step refused: this Cart has expired and can no longer be placed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceOrderRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Step refused. The request was well formed and the Workflow declined it — the Cart is empty, a line can no longer be priced, or a Step this build of Core does not know said no.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceOrderRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/orders/{id}": {
+      "get": {
+        "summary": "Read an Order",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "So reloading a confirmation page needs no client-side cache. A secret key, like placing one: an Order names a Shopper and what they paid, which is not a browser's to read back (ADR-0055).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Order, exactly as Capture reported it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key is live and publishable, and this route requires a secret one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretKeyRequired"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Order exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderRefusal"
                 }
               }
             }

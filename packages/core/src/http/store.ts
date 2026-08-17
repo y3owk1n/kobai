@@ -1,7 +1,7 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { requireApiKey, type StoreEnv } from "../auth/store-gate.ts";
+import { requireApiKey, requireSecretApiKey, type StoreEnv } from "../auth/store-gate.ts";
 import { readCart } from "../cart/read.ts";
 import {
   addLineItem,
@@ -12,11 +12,13 @@ import {
   updateLineItem,
 } from "../cart/write.ts";
 import type { Database } from "../db/client.ts";
+import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
+import { readOrder } from "../order/read.ts";
 import type {
   PriceResolutionRefusal,
   PriceResolutionWorkflow,
 } from "../pricing/resolve-price.ts";
-import { openMetadata } from "../workflow/context.ts";
+import { openMetadata, type WorkflowRegistry } from "../workflow/context.ts";
 import type { WorkflowRun } from "../workflow/run.ts";
 import * as contract from "./contract.ts";
 import { API_KEY, invalidRequestHook, json, REFUSALS } from "./openapi.ts";
@@ -46,6 +48,18 @@ export type StoreDependencies = {
    * route that imported it would run Core's Steps whatever the Project had wired.
    */
   readonly priceWorkflow: PriceResolutionWorkflow;
+  /** The `place-order` declaration this deployment runs, for the same reason. */
+  readonly placeOrderWorkflow: PlaceOrderWorkflow;
+  /**
+   * Every declaration this deployment runs, for a Step that invokes another Workflow
+   * (ADR-0054).
+   *
+   * It goes on the context of **every** Workflow this surface runs, not only the one whose
+   * Steps compose today. A route that built its context without it would hand its Steps Core's
+   * own declarations whatever the Project had wired — and that failure is silent, which is why
+   * it is threaded here once rather than remembered per route (#113).
+   */
+  readonly workflows: WorkflowRegistry;
 };
 
 /**
@@ -276,17 +290,97 @@ const removeLineItemRoute = createRoute({
   },
 });
 
+// ---- Orders -------------------------------------------------------------------------------
+
+/**
+ * Placing an Order — one request, and the whole Order back.
+ *
+ * The `403` here is the store surface's **second gate** rather than a handler's answer, and the
+ * distinction is the one `CART_REFUSALS.needsSecretKey` documents from the other side: a Cart's
+ * `403` depends on whether the body asserts a Shopper, so it cannot be middleware, and this one
+ * is unconditional — no request with a publishable key may place an Order, whatever it says
+ * (ADR-0055). So it is a real gate, registered in `GATE_REFUSALS`, and `openapi.test.ts` holds
+ * the declaration below to a chain that actually makes it.
+ */
+const placeOrderRoute = createRoute({
+  method: "post",
+  path: "/orders",
+  summary: "Turn a Cart into an Order",
+  middleware: [requireSecretApiKey()] as const,
+  security: API_KEY,
+  description:
+    "Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards.",
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.PlaceOrderRequest } },
+    },
+  },
+  responses: {
+    201: json("The Order, and the Steps that produced it.", contract.PlacedOrder),
+    // The shared one, unlike a Cart route's: every refusal past the schema on this route comes
+    // from a Step, so `invalid` is the only reason a body can be turned back with here and
+    // there is nothing narrower to say.
+    400: REFUSALS.invalid,
+    401: REFUSALS.noApiKey,
+    403: REFUSALS.secretKeyRequired,
+    404: json("A Step refused: there is no such Cart.", contract.PlaceOrderRefusal),
+    409: json(
+      "A Step refused: this Cart has expired and can no longer be placed.",
+      contract.PlaceOrderRefusal,
+    ),
+    422: json(
+      "A Step refused. The request was well formed and the Workflow declined it — the Cart is empty, a line can no longer be priced, or a Step this build of Core does not know said no.",
+      contract.PlaceOrderRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readOrderRoute = createRoute({
+  method: "get",
+  path: "/orders/{id}",
+  summary: "Read an Order",
+  middleware: [requireSecretApiKey()] as const,
+  security: API_KEY,
+  description:
+    "So reloading a confirmation page needs no client-side cache. A secret key, like placing one: an Order names a Shopper and what they paid, which is not a browser's to read back (ADR-0055).",
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Order, exactly as Capture reported it.", contract.Order),
+    401: REFUSALS.noApiKey,
+    403: REFUSALS.secretKeyRequired,
+    404: json("No such Order exists.", contract.OrderRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv> {
   const store = new OpenAPIHono<StoreEnv>({ defaultHook: invalidRequestHook });
 
   store.use("*", requireApiKey(deps.db));
 
+  /**
+   * The context a Workflow this surface runs is given.
+   *
+   * `metadata` is everything the caller sent that Core does not model, carried through
+   * untouched — ADR-0013's open context, at the edge where it is filled. `workflows` is the
+   * deployment's registry, so a Step that invokes another Workflow reaches *this* deployment's
+   * declaration of it rather than Core's (ADR-0054); it is put here rather than at each call
+   * site because a route that forgot it would silently ignore a Project's override (#113).
+   */
+  const contextFor = (c: Context<StoreEnv>) => ({
+    db: deps.db,
+    metadata: openMetadata(new URL(c.req.url)),
+    workflows: deps.workflows,
+  });
+
   store.openapi(resolvePriceRoute, async (c) => {
     const run = await deps.priceWorkflow.run(
       { variantId: c.req.valid("param").id },
-      // Everything the caller sent that Core does not model, carried through untouched —
-      // ADR-0013's open context, at the edge where it is filled.
-      { db: deps.db, metadata: openMetadata(new URL(c.req.url)) },
+      contextFor(c),
     );
 
     if (!run.ok)
@@ -360,6 +454,44 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     const removed = await removeLineItem(deps.db, params.id, params.lineItemId);
     if (!removed.ok) return refusedCart(c, removed, REMOVE_LINE_ITEM_STATUS);
     return c.json(removed.cart, 200);
+  });
+
+  store.openapi(placeOrderRoute, async (c) => {
+    const run = await deps.placeOrderWorkflow.run(
+      { cartId: c.req.valid("json").cartId },
+      contextFor(c),
+    );
+
+    if (!run.ok)
+      return c.json(
+        refusal(run, deps.placeOrderWorkflow.name),
+        placeOrderStatusFor(run.reason),
+      );
+
+    return c.json(
+      {
+        ...run.output,
+        // The slots this deployment ran and what filled each, so a Project that replaced one
+        // sees its own Step here — the same field, and the same reason, as a resolved price.
+        workflow: { name: deps.placeOrderWorkflow.name, steps: run.steps },
+      },
+      201,
+    );
+  });
+
+  store.openapi(readOrderRoute, async (c) => {
+    const found = await readOrder(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Order exists. An Order is addressed by the identifier Capture reported, which is not its Order number.",
+          reason: "order-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
   });
 
   /**
@@ -460,13 +592,11 @@ function noSuchCart() {
 }
 
 /**
- * How a refusing Step becomes a status.
+ * How a refusing Step of `resolve-price` becomes a status.
  *
- * Core's own reasons are mapped, and `satisfies` makes an unmapped one a build failure
- * rather than an `undefined` status. Anything else came from a Step this Core version has
- * never heard of — a Project's or a Plugin's — and answers 422: the request was well formed
- * and the Workflow declined it, which is the most that can honestly be said about a refusal
- * whose meaning is not Core's to know.
+ * Core's own reasons are mapped, and `satisfies` makes an unmapped one a build failure rather
+ * than an `undefined` status. Anything else is a Step Core has never heard of — see
+ * {@link statusMapper}.
  */
 const PRICE_REFUSAL_STATUS = {
   "variant-not-found": 404,
@@ -483,12 +613,56 @@ type PriceRefusalStatus = 404 | 422;
 
 const REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW = 422;
 
-function statusFor(reason: string): PriceRefusalStatus {
-  return (
-    (PRICE_REFUSAL_STATUS as Record<string, PriceRefusalStatus>)[reason] ??
-    REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW
-  );
+/**
+ * Turns a Workflow's map of Core's own reasons into the function a route answers with.
+ *
+ * One of these per Workflow, built from that Workflow's map — the *map* is what says what a
+ * reason means and where `satisfies` makes forgetting one a build failure, and this is only the
+ * lookup around it. The cast is what the map deliberately gives up: a `reason` arriving here is
+ * a plain string, because a Step a Project or a Plugin supplied may refuse with anything, and
+ * anything Core has never heard of is 422 — the request was well formed and the Workflow
+ * declined it, which is the most that can honestly be said about a refusal whose meaning is not
+ * Core's to know.
+ */
+function statusMapper<Status extends ContentfulStatusCode>(
+  statuses: Readonly<Record<string, Status>>,
+): (reason: string) => Status | typeof REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW {
+  return (reason) => statuses[reason] ?? REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW;
 }
+
+const statusFor = statusMapper<PriceRefusalStatus>(PRICE_REFUSAL_STATUS);
+
+/**
+ * How a Step refusing to place an Order becomes a status — the same shape, and the same
+ * `satisfies`, as the price map above.
+ *
+ * It covers **two** unions, because two of Core's own Workflows can refuse on this path:
+ * `place-order`'s own Steps, and `resolve-price`'s, whose refusals travel out of `price-lines`
+ * as themselves so that a Plugin's or a Project's Step can do the same. Both are exhaustive, so
+ * a new reason in either turns this red naming it rather than silently answering 422.
+ *
+ * A price refusal is `422` here where the price route answers `404`, and the difference is what
+ * the path addresses: on `POST /orders` the thing named is the **Cart**, so a `404` would say
+ * that is what is missing. A line whose Variant has since lost its Price is a well-formed
+ * request the Workflow declined.
+ */
+const PLACE_ORDER_REFUSAL_STATUS = {
+  "cart-not-found": 404,
+  "cart-expired": 409,
+  "cart-empty": 422,
+  "variant-not-found": 422,
+  "price-not-set": 422,
+} as const satisfies Record<
+  PlaceOrderRefusal | PriceResolutionRefusal,
+  PlaceOrderRefusalStatus
+>;
+
+/** The three statuses a refused Capture can carry. The route declares exactly these. */
+type PlaceOrderRefusalStatus = 404 | 409 | 422;
+
+const placeOrderStatusFor = statusMapper<PlaceOrderRefusalStatus>(
+  PLACE_ORDER_REFUSAL_STATUS,
+);
 
 /**
  * A refusal, in the shape every other kobai refusal uses — plus which Step refused.

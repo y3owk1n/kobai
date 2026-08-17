@@ -119,6 +119,10 @@ export const REFUSALS = {
     "The Merchant's Role does not hold the permission this route requires.",
     contract.PermissionDenied,
   ),
+  secretKeyRequired: json(
+    "The API key is live and publishable, and this route requires a secret one.",
+    contract.SecretKeyRequired,
+  ),
   invalid: json("The request does not fit this endpoint's schema.", contract.Refusal),
   serverError: json("Something failed inside kobai.", contract.ServerError),
 } as const;
