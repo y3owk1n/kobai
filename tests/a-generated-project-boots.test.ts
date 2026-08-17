@@ -35,9 +35,6 @@ import { bootProject, PROJECT_TIMEOUT, runInProject } from "./support/project.ts
 
 const run = promisify(execFile);
 
-/** An install, a TypeScript build, a Vite build and a boot, on a cold CI runner. */
-const ACCEPTANCE_TIMEOUT = PROJECT_TIMEOUT;
-
 let registry: LocalRegistry;
 let workspace: string;
 let project: string;
@@ -54,7 +51,7 @@ beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "kobai-generated-"));
   project = join(workspace, "my-store");
   database = await createTestDatabase();
-}, ACCEPTANCE_TIMEOUT);
+}, PROJECT_TIMEOUT);
 
 afterAll(async () => {
   await database?.drop();
@@ -122,6 +119,6 @@ describe("a Project generated into a clean directory", () => {
         await served.stop();
       }
     },
-    ACCEPTANCE_TIMEOUT,
+    PROJECT_TIMEOUT,
   );
 });

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CODEMOD_SET_FORMAT, type Codemod } from "./codemods.ts";
 import { formatUpgradeReport } from "./report.ts";
+import { CodemodSetMissing } from "./set.ts";
 import { type LoadedCodemodSet, upgradeProject } from "./upgrade.ts";
 
 /**
@@ -100,7 +101,6 @@ describe("upgrading a Project across a version", () => {
     expect(report.from).toBe("0.1.0");
     expect(report.crossesMajor).toBe(true);
     expect(report.ranges.changed).toHaveLength(3);
-    expect(report.installed).toBe(true);
     expect(report.codemods).toMatchObject({ kind: "none-for-this-boundary", shipped: 0 });
   });
 
@@ -159,33 +159,30 @@ describe("upgrading a Project across a version", () => {
       to: "1.0.0",
       install: nothingInstalls,
       loadCodemodSet: async () => {
-        throw new Error("Cannot find module '@kobai/core/codemods'");
+        throw new CodemodSetMissing("@kobai/core@1.0.0 has no `./codemods` export");
       },
     });
 
     expect(report.codemods).toMatchObject({ kind: "no-set-shipped" });
   });
 
-  it("writes nothing on a dry run, and does not pretend to know the new version's set", async () => {
+  it("fails outright on a set it cannot read, rather than reporting none", async () => {
+    // The distinction ADR-0035 exists to make. A set that is *absent* is survivable and
+    // reported; a set that is present and written to a contract this runner does not
+    // understand must stop the command, because "no codemods" would be the same sentence a
+    // successful empty boundary prints.
     const at = await aProject("0.1.0");
-    let installed = false;
 
-    const report = await upgradeProject({
-      directory: at,
-      to: "1.0.0",
-      dryRun: true,
-      install: async () => {
-        installed = true;
-      },
-      loadCodemodSet: shipping(fake("1.0.0-a", "1.0.0")),
-    });
-
-    expect(installed).toBe(false);
-    expect(report.ranges.changed).toHaveLength(3);
-    expect(await readFile(join(at, "package.json"), "utf8")).toContain('"^0.1.0"');
-    // The set on disk is still the old version's, so reporting its codemods would be a
-    // confident answer to a question nobody asked.
-    expect(report.codemods).toMatchObject({ kind: "none-for-this-boundary" });
+    await expect(
+      upgradeProject({
+        directory: at,
+        to: "1.0.0",
+        install: nothingInstalls,
+        loadCodemodSet: async () => {
+          throw new Error("declares codemod set format 99");
+        },
+      }),
+    ).rejects.toThrow(/format 99/);
   });
 
   it("refuses to go backwards", async () => {
@@ -268,7 +265,7 @@ describe("what the command tells a Developer at an empty boundary", () => {
         to: "1.0.0",
         install: nothingInstalls,
         loadCodemodSet: async () => {
-          throw new Error("Cannot find module");
+          throw new CodemodSetMissing("no `./codemods` export");
         },
       }),
     );

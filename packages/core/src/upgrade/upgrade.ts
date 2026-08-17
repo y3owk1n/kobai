@@ -4,9 +4,10 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { type Codemod, codemodsCrossing, readCodemodSet } from "./codemods.ts";
+import type { Codemod } from "./codemods.ts";
 import { type RangeRewrite, rewriteKobaiRanges } from "./ranges.ts";
-import { compareVersions, crossesMajor, formatVersion, parseVersion } from "./version.ts";
+import { CodemodSetMissing, codemodsCrossing, readCodemodSet } from "./set.ts";
+import { compareVersions, crossesMajor, parseVersion } from "./version.ts";
 
 /**
  * `kobai-upgrade` — moving a Project from one version of kobai to the next.
@@ -20,21 +21,25 @@ import { compareVersions, crossesMajor, formatVersion, parseVersion } from "./ve
  * ## The bootstrap, which is the interesting part
  *
  * The runner executing these lines is whichever Core the Project had installed when the
- * command started — the *old* one. The set it applies is resolved out of the Project's
- * `node_modules` **after** the install, so it belongs to the new one. Two consequences worth
- * knowing:
+ * command started — the *old* one. The set it applies is found on disk **after** the
+ * install, so it belongs to the new one. Three consequences worth knowing:
  *
- * - The resolution is deliberate rather than relative. An `import("./codemods.js")` from here
+ * - The lookup is deliberate rather than relative. An `import("./codemods.js")` from here
  *   would load the running Core's own set, and under pnpm that is a real path inside the
- *   *old* version's store directory, which still exists after the install. So the installed
- *   package is found on disk instead, through the symlink the install rewrote.
- * - **Node's resolver cache is a trap here, and it was a real bug.** `require.resolve` caches
- *   by specifier and search path, so the same lookup before and after an install returns the
- *   answer from before it. The first version of this command reported the old version as the
- *   new one and would have run the old version's codemods — and at an empty boundary, where
- *   both sets are empty, nothing failed. See {@link installedCore}.
- * - An old runner can meet a set written to a contract it does not understand, which is what
- *   `CODEMOD_SET_FORMAT` is for. It refuses; it does not report an empty set.
+ *   *old* version's store directory, which still exists after the install.
+ * - **Node's resolver cache is a trap here, and it was a real bug.** `require.resolve`
+ *   caches by specifier and search path, so the same lookup before and after an install
+ *   returns the answer from before it. The first version of this command reported the old
+ *   version as the new one and would have run the old version's codemods — and at an empty
+ *   boundary, where both sets are empty, nothing failed. See {@link installedCore}.
+ * - An old runner can meet a set written to a contract it does not understand. It **fails**;
+ *   it does not report an empty set. Only a version exporting no set at all is survivable,
+ *   and even that exits non-zero — see {@link CodemodsReport}.
+ *
+ * There is deliberately no way to skip the install and no dry run. No codemod can run until
+ * the version being moved to is on disk, so either would be an upgrade that quietly ran none
+ * — and this command's whole job is that "no codemods ran" is never something a Developer
+ * has to infer.
  */
 
 const run = promisify(execFile);
@@ -60,7 +65,14 @@ export type CodemodsReport =
       readonly source: string;
     }
   | {
-      /** The version arrived at ships no set at all, which is not the same as an empty one. */
+      /**
+       * The version arrived at ships no set at all, which is not the same as an empty one.
+       *
+       * Survivable only in the sense that the report is worth printing: the ranges moved and
+       * the install ran, and a Developer needs to see both. The command still exits non-zero,
+       * because it could not do what it was asked to do — a version that intends to ship no
+       * codemods exports an empty set and says so.
+       */
       readonly kind: "no-set-shipped";
       readonly why: string;
     };
@@ -71,9 +83,7 @@ export type UpgradeReport = {
   /** Whether this is the kind of bump a codemod would ever be written for. */
   readonly crossesMajor: boolean;
   readonly ranges: RangeRewrite;
-  readonly installed: boolean;
   readonly codemods: CodemodsReport;
-  readonly dryRun: boolean;
 };
 
 export type UpgradeOptions = {
@@ -81,14 +91,10 @@ export type UpgradeOptions = {
   readonly directory: string;
   /** The version to move to. */
   readonly to: string;
-  /** Report what would happen, write nothing, install nothing, run nothing. */
-  readonly dryRun?: boolean;
-  /** Skip the install, for a Developer whose package manager is not pnpm. */
-  readonly skipInstall?: boolean;
   /**
    * Installs the Project's dependencies.
    *
-   * Injectable because everything above it can then be tested in milliseconds against a
+   * Injectable because everything around it can then be tested in milliseconds against a
    * Project made of two manifests, rather than only through a gate that installs for real.
    */
   readonly install?: (directory: string) => Promise<void>;
@@ -106,8 +112,6 @@ export async function upgradeProject(options: UpgradeOptions): Promise<UpgradeRe
   const {
     directory,
     to,
-    dryRun = false,
-    skipInstall = false,
     install = pnpmInstall,
     loadCodemodSet = codemodSetInstalledIn,
   } = options;
@@ -125,31 +129,15 @@ export async function upgradeProject(options: UpgradeOptions): Promise<UpgradeRe
     );
   }
 
-  const ranges = await rewriteKobaiRanges({ directory, to, dryRun });
-
-  const installed = !dryRun && !skipInstall;
-  if (installed) await install(directory);
+  const ranges = await rewriteKobaiRanges({ directory, to });
+  await install(directory);
 
   return {
     from,
     to,
     crossesMajor: crossesMajor(current, target),
     ranges,
-    installed,
-    // Nothing is loaded on a dry run and nothing is loaded when the install was skipped:
-    // in both cases the set on disk is still the old version's, and reporting *that* one's
-    // codemods would be a confident answer to a question nobody asked.
-    codemods:
-      installed === false
-        ? {
-            kind: "none-for-this-boundary",
-            shipped: 0,
-            source: dryRun
-              ? "not read: a dry run installs nothing, so the version arrived at is not on disk yet"
-              : "not read: the install was skipped, so the version arrived at is not on disk yet",
-          }
-        : await applyCodemods({ directory, from, to, loadCodemodSet }),
-    dryRun,
+    codemods: await applyCodemods({ directory, from, to, loadCodemodSet }),
   };
 }
 
@@ -165,9 +153,15 @@ async function applyCodemods(options: {
   try {
     set = await loadCodemodSet(directory);
   } catch (cause) {
+    // Only an *absent* set is survivable. A set that is present and wrong about itself — a
+    // format this runner does not understand, a codemod whose version cannot be ordered —
+    // propagates and fails the command, because reporting "no codemods" for it would be
+    // indistinguishable from the empty set that is the ordinary answer. Keeping those two
+    // apart is the whole point of ADR-0035.
+    if (!(cause instanceof CodemodSetMissing)) throw cause;
     return {
       kind: "no-set-shipped",
-      why: `@kobai/core ${to} exports no codemod set: ${(cause as Error).message}`,
+      why: `@kobai/core ${to} exports no codemod set: ${cause.message}`,
     };
   }
 
@@ -258,10 +252,20 @@ async function installedCore(directory: string): Promise<InstalledCore> {
  */
 async function codemodSetInstalledIn(directory: string): Promise<LoadedCodemodSet> {
   const core = await installedCore(directory);
-  const resolved = createRequire(join(core.packageDirectory, "package.json")).resolve(
-    "@kobai/core/codemods",
-  );
   const source = `@kobai/core@${core.version}`;
+
+  let resolved: string;
+  try {
+    resolved = createRequire(join(core.packageDirectory, "package.json")).resolve(
+      "@kobai/core/codemods",
+    );
+  } catch (cause) {
+    // The one survivable load failure, and the only one raised as this type: the export is
+    // not there at all. Everything past this line is a set that exists and is wrong.
+    throw new CodemodSetMissing(
+      `${source} has no \`./codemods\` export (${(cause as Error).message})`,
+    );
+  }
 
   return {
     codemods: readCodemodSet(await import(pathToFileURL(resolved).href), source),
@@ -279,10 +283,8 @@ async function pnpmInstall(directory: string): Promise<void> {
   } catch (cause) {
     const { stdout = "", stderr = "" } = cause as { stdout?: string; stderr?: string };
     throw new Error(
-      `\`pnpm install\` failed after the version bump, so this Project is on new ranges with old packages. Fix the install and run this again, or pass --no-install and install with your own package manager.\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`,
+      `\`pnpm install\` failed after the version bump, so this Project is on new ranges with old packages. Fix whatever the install complained about and run this command again.\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`,
       { cause },
     );
   }
 }
-
-export { formatVersion };

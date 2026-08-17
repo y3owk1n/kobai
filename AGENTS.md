@@ -332,8 +332,11 @@ things about it are easy to get wrong and expensive to discover late:
   pnpm's real path carries the version.
 - **The set is empty and the command says so.** "Nothing to do" and "did nothing" are
   different answers, and only the first tells a Developer the command would have spoken up.
-  `CODEMOD_SET_FORMAT` is the other half: a runner meeting a set it cannot read refuses rather
-  than reporting none.
+  There are three outcomes and they must stay three: codemods ran, none applied to this
+  boundary, or the set could not be read. A set that is present and wrong about itself —
+  an unreadable `CODEMOD_SET_FORMAT`, an unorderable version — **fails the command**; only an
+  absent set is survivable, and even that exits non-zero. The command has one argument and no
+  way to skip the install, because either would be an upgrade that quietly ran no codemods.
 
 **Do not reach for an AST tool to write a codemod without reopening ADR-0035.** A codemod
 gets the Project's directory and `node:fs`, which is all a manifest-level migration needs;

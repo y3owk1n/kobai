@@ -73,6 +73,15 @@ belongs to the new one. An old runner can therefore meet a set written to a cont
 not understand, which is what `CODEMOD_SET_FORMAT` is for: it refuses, loudly, rather than
 reporting that there were no codemods. Those are different answers.
 
+**Three answers, and they must stay three.** *Ran these codemods*, *found none for this
+boundary*, and *could not read the set at all* are different things, and collapsing the third
+into the second is the failure mode. So a set that is present and wrong about itself — an
+unreadable `CODEMOD_SET_FORMAT`, a codemod whose version cannot be ordered, an export that is
+not an array — **fails the command**. Only a version exporting no set at all is survivable,
+because the report is still worth printing: the ranges moved and the install ran. Even that
+exits non-zero, because a version that intends to ship no codemods exports an empty set and
+says so, and anything else means kobai shipped a broken package.
+
 **Node's module resolver cache is a trap in exactly this place, and it was a real bug in the
 first version of this command.** `require.resolve` caches by specifier and search path, so
 resolving `@kobai/core` from the Project before and after the install returns the same
@@ -131,7 +140,11 @@ Inventing a breaking change inside the gate would be inventing the thing under t
   generated Project, boots it, arranges a Store through the public API, upgrades, rebuilds,
   boots again and asks the same question. Every cheaper version proves something weaker.
 - **The upgrade command assumes pnpm.** A Project pins its own (ADR-0034), so this is the
-  package manager kobai knows about; `--no-install` is the way out for anyone using another.
+  package manager kobai knows about. There is deliberately no flag to skip the install and no
+  dry run: no codemod can run until the version being moved to is on disk, so either would be
+  an upgrade that quietly ran none — which is the one outcome this whole decision exists to
+  make impossible. A Developer on another package manager runs the install themselves and
+  then this command; if `pnpm` is not there, it fails saying so.
 - **Nothing has been released, and this does not change that.** ADR-0034's separation
   between *publishable* and *published* stands: the only registry any of this reaches is the
   verdaccio a test starts and kills.

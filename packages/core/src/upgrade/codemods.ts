@@ -1,5 +1,3 @@
-import { compareVersions, formatVersion, parseVersion, type Version } from "./version.ts";
-
 /**
  * `@kobai/core/codemods` — what a version of Core ships to carry a Project across its own
  * breaking changes.
@@ -8,6 +6,11 @@ import { compareVersions, formatVersion, parseVersion, type Version } from "./ve
  * merge". This module is the *shipped* half, and the reason it exists at `0.1.0` with an
  * empty set is that a runner which correctly runs nothing is a tested runner, and a runner
  * that does not exist is not. `tests/the-upgrade-gate.test.ts` runs it on every commit.
+ *
+ * **Everything in this file is a promise ADR-0019 makes permanent**, because it is what the
+ * `./codemods` export resolves to. So it holds the contract and nothing else: the shape of a
+ * codemod, the shape of what one is handed, the format number, and the set. Selecting from a
+ * set and reading one belong to `set.ts`, which no Project can import.
  *
  * ## A codemod is keyed to the version that broke something, not to a pair of versions
  *
@@ -74,65 +77,3 @@ export type Codemod = {
  * that will carry the first real one.
  */
 export const codemods: readonly Codemod[] = [];
-
-/**
- * The codemods a Project moving `from → to` has to run, in the order it has to run them.
- *
- * Exclusive of `from` and inclusive of `to`: a Project already on `1.0.0` has run `1.0.0`'s
- * codemods, and a Project arriving at `1.0.0` has not.
- */
-export function codemodsCrossing(
-  set: readonly Codemod[],
-  from: string,
-  to: string,
-): readonly Codemod[] {
-  const after = parseVersion(from, "The version this Project is upgrading from");
-  const until = parseVersion(to, "The version this Project is upgrading to");
-
-  return set
-    .map((codemod) => ({
-      codemod,
-      at: parseVersion(codemod.introducedIn, `Codemod ${codemod.id}'s \`introducedIn\``),
-    }))
-    .filter(({ at }) => compareVersions(at, after) > 0 && compareVersions(at, until) <= 0)
-    .sort((a, b) => compareVersions(a.at, b.at) || (a.codemod.id < b.codemod.id ? -1 : 1))
-    .map(({ codemod }) => codemod);
-}
-
-/**
- * A set loaded from somewhere, checked before anything is run from it.
- *
- * The check is the bootstrap: this runner may be older than the set it was handed, and the
- * only safe answers are "I understand this" and "I do not". Reporting zero codemods for a
- * set written to a contract this runner cannot read would be the worst of the three.
- */
-export function readCodemodSet(loaded: unknown, source: string): readonly Codemod[] {
-  const module = loaded as {
-    CODEMOD_SET_FORMAT?: unknown;
-    codemods?: unknown;
-  };
-
-  if (module.CODEMOD_SET_FORMAT !== CODEMOD_SET_FORMAT) {
-    throw new Error(
-      `${source} declares codemod set format ${JSON.stringify(module.CODEMOD_SET_FORMAT ?? null)}, and this upgrade command understands ${CODEMOD_SET_FORMAT}. It is refusing rather than reporting no codemods, because those are not the same answer. Upgrade in smaller steps, or run the command from the newer version.`,
-    );
-  }
-
-  if (!Array.isArray(module.codemods)) {
-    throw new Error(
-      `${source} exports no \`codemods\` array, so this upgrade has no set to run and cannot tell an empty one from a missing one.`,
-    );
-  }
-
-  for (const codemod of module.codemods as Codemod[]) {
-    // Parsed here rather than where it is compared, so a malformed `introducedIn` names the
-    // codemod that carries it instead of surfacing as a comparison that quietly excluded it.
-    formatVersion(
-      parseVersion(codemod.introducedIn, `Codemod ${codemod.id}'s \`introducedIn\``),
-    );
-  }
-
-  return module.codemods as readonly Codemod[];
-}
-
-export type { Version };

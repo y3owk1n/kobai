@@ -24,6 +24,7 @@ this Project's `node_modules` after the install, so there is nothing to upgrade 
 tells you what it found either way; a boundary with no codemods says so rather than
 succeeding in silence.
 
-Add `--dry-run` to see what it would do. Add `--no-install` if you install with something
-other than pnpm, and install yourself before running it again — no codemod can run until the
-new version is on disk.
+One argument, and no way to skip the install: no codemod can run until the version you are
+moving to is on disk, so an upgrade that installed nothing would be an upgrade that quietly
+ran none. If the command exits non-zero, read what it printed — the ranges may already have
+moved, and it will say what it could not finish.

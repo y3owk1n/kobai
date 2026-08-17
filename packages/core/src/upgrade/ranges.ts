@@ -61,10 +61,8 @@ export async function rewriteKobaiRanges(options: {
   readonly directory: string;
   /** The version every kobai dependency should now point at. */
   readonly to: string;
-  /** Work out what would change and write nothing. */
-  readonly dryRun?: boolean;
 }): Promise<RangeRewrite> {
-  const { directory, to, dryRun = false } = options;
+  const { directory, to } = options;
 
   const changed: RangeChange[] = [];
   const leftAlone: RangeLeftAlone[] = [];
@@ -107,7 +105,7 @@ export async function rewriteKobaiRanges(options: {
     // Written back with the formatting npm and Biome both produce, and with key order
     // untouched — including the `"// dependencies"` keys a kobai Project explains itself
     // with, which `JSON.parse` keeps and `JSON.stringify` writes back in place.
-    if (touched && !dryRun) {
+    if (touched) {
       await writeFile(manifestPath, `${JSON.stringify(json, null, 2)}\n`);
     }
   }
@@ -149,7 +147,7 @@ async function projectManifests(directory: string): Promise<string[]> {
 
   if (found.length === 0) {
     throw new Error(
-      `${directory} holds no package.json, so it is not a kobai Project. Run this from the Project's root, or pass --project.`,
+      `${directory} holds no package.json, so it is not a kobai Project. Run \`kobai-upgrade\` from the Project's root.`,
     );
   }
   return found;

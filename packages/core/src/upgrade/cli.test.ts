@@ -2,20 +2,11 @@ import { describe, expect, it } from "vitest";
 import { parseUpgradeArguments } from "./cli.ts";
 
 describe("what `kobai-upgrade` accepts", () => {
-  it("takes the version to move to", () => {
+  it("takes the version to move to, and nothing else", () => {
     expect(parseUpgradeArguments(["--to", "1.0.0"])).toEqual({
       kind: "upgrade",
       to: "1.0.0",
-      directory: undefined,
-      skipInstall: false,
-      dryRun: false,
     });
-  });
-
-  it("takes a Project somewhere other than here", () => {
-    expect(
-      parseUpgradeArguments(["--to", "1.0.0", "--project", "/tmp/store"]),
-    ).toMatchObject({ directory: "/tmp/store" });
   });
 
   it("will not guess a version", () => {
@@ -28,9 +19,15 @@ describe("what `kobai-upgrade` accepts", () => {
     expect(parseUpgradeArguments(["1.0.0"])).toMatchObject({ kind: "error" });
   });
 
-  it("takes the two ways of not doing the whole thing", () => {
-    expect(
-      parseUpgradeArguments(["--to", "1.0.0", "--no-install", "--dry-run"]),
-    ).toMatchObject({ skipInstall: true, dryRun: true });
+  it("refuses the flags it deliberately does not have", () => {
+    // `--dry-run` and `--no-install` were both considered and both removed: no codemod can
+    // run until the version being moved to is on disk, so either would be an upgrade that
+    // quietly ran none. Failing on them beats accepting and ignoring them.
+    expect(parseUpgradeArguments(["--to", "1.0.0", "--dry-run"])).toMatchObject({
+      kind: "error",
+    });
+    expect(parseUpgradeArguments(["--to", "1.0.0", "--no-install"])).toMatchObject({
+      kind: "error",
+    });
   });
 });

@@ -10,53 +10,51 @@ import type { UpgradeReport } from "./upgrade.ts";
  * teaches nobody that it would have said something at a full one.
  */
 export function formatUpgradeReport(report: UpgradeReport): string {
-  const lines: string[] = [];
-
   const crossing = report.crossesMajor
     ? "across a major, which is the boundary codemods exist for"
     : "within a major";
-  lines.push(
+
+  return [
     `kobai upgrade — @kobai/core ${report.from} → ${report.to}, ${crossing}.`,
-    ...(report.dryRun
-      ? ["", "A dry run: nothing below was written, installed or run."]
-      : []),
     "",
     "Dependency ranges",
-  );
-
-  if (report.ranges.changed.length === 0) {
-    lines.push("  Nothing to move: every kobai range already points at this version.");
-  } else {
-    const width = Math.max(...report.ranges.changed.map((change) => change.file.length));
-    const name = Math.max(...report.ranges.changed.map((c) => c.dependency.length));
-    for (const change of report.ranges.changed) {
-      lines.push(
-        `  ${change.file.padEnd(width)}  ${change.dependency.padEnd(name)}  ${change.from} → ${change.to}`,
-      );
-    }
-  }
-
-  for (const skipped of report.ranges.leftAlone) {
-    // Louder than the changes, because this is the one thing the command decided not to do.
-    lines.push(
-      `  ! ${skipped.file}  ${skipped.dependency}  left at ${skipped.range} — ${skipped.why}`,
-    );
-  }
-
-  lines.push(
+    ...rangeLines(report),
     "",
     "Install",
-    report.installed
-      ? "  `pnpm install` ran, so the version above is the one on disk."
-      : "  Skipped. Install before running any codemod: the set that runs is the one the version you are moving to ships, and it is not on disk until you do.",
+    "  `pnpm install` ran, so the version above is the one on disk.",
     "",
     "Codemods",
     ...codemodLines(report),
     "",
     summary(report),
-  );
+  ].join("\n");
+}
 
-  return lines.join("\n");
+function rangeLines(report: UpgradeReport): string[] {
+  const { changed, leftAlone } = report.ranges;
+
+  const lines =
+    changed.length === 0
+      ? ["  Nothing to move: every kobai range already points at this version."]
+      : (() => {
+          const fileWidth = Math.max(...changed.map((change) => change.file.length));
+          const nameWidth = Math.max(
+            ...changed.map((change) => change.dependency.length),
+          );
+          return changed.map(
+            (change) =>
+              `  ${change.file.padEnd(fileWidth)}  ${change.dependency.padEnd(nameWidth)}  ${change.from} → ${change.to}`,
+          );
+        })();
+
+  // Louder than the changes, because this is the one thing the command decided not to do.
+  return [
+    ...lines,
+    ...leftAlone.map(
+      (skipped) =>
+        `  ! ${skipped.file}  ${skipped.dependency}  left at ${skipped.range} — ${skipped.why}`,
+    ),
+  ];
 }
 
 function codemodLines(report: UpgradeReport): string[] {
@@ -82,10 +80,6 @@ function codemodLines(report: UpgradeReport): string[] {
     ];
   }
 
-  if (!report.installed) {
-    return [`  Not read: ${codemods.source}`];
-  }
-
   return [
     codemods.shipped === 0
       ? `  ${codemods.source} ships no codemods at all — nothing has needed migrating up to this version.`
@@ -99,7 +93,10 @@ function codemodLines(report: UpgradeReport): string[] {
 function summary(report: UpgradeReport): string {
   const moved = report.ranges.changed.length;
   const applied = report.codemods.kind === "applied" ? report.codemods.applied.length : 0;
-  const verb = report.dryRun ? "Would move" : "Moved";
+  const done = `Moved ${moved} dependency range${moved === 1 ? "" : "s"}, applied ${applied} codemod${applied === 1 ? "" : "s"}.`;
 
-  return `${verb} ${moved} dependency range${moved === 1 ? "" : "s"}, applied ${applied} codemod${applied === 1 ? "" : "s"}.`;
+  // The ranges moved and the install ran, so the last line must not read as a clean finish.
+  return report.codemods.kind === "no-set-shipped"
+    ? `${done} The codemod step did not run, so this upgrade is not finished.`
+    : done;
 }

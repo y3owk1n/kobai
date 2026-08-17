@@ -1,7 +1,11 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTestDatabase, type TestDatabase } from "@kobai/core/testing";
+import {
+  createTestDatabase,
+  inspectSchema,
+  type TestDatabase,
+} from "@kobai/core/testing";
 import { scaffold } from "create-kobai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -9,7 +13,7 @@ import {
   publishPackages,
   startLocalRegistry,
 } from "./support/local-registry.ts";
-import { bootProject, PROJECT_TIMEOUT, runInProject } from "./support/project.ts";
+import { bootProject, runInProject } from "./support/project.ts";
 
 /**
  * **The release gate.** The only test of the promise the whole project rests on: that a
@@ -40,9 +44,41 @@ import { bootProject, PROJECT_TIMEOUT, runInProject } from "./support/project.ts
  * still be testing the Project kobai's maintainers actually run.
  */
 
-/** The version this commit's packages carry, and the synthetic one they are republished as. */
-const THIS_VERSION = "0.1.0";
-const SYNTHETIC_MAJOR = "1.0.0";
+/**
+ * What this commit's packages are at, read rather than written down.
+ *
+ * A literal here would be a second copy of a version this repository already pins once, and
+ * the copy would go stale silently — the same failure `create-kobai`'s `contextFrom` exists
+ * to prevent. Bump the packages and this gate follows them.
+ */
+async function publishedVersion(): Promise<string> {
+  const { version } = JSON.parse(
+    await readFile(new URL("../packages/core/package.json", import.meta.url), "utf8"),
+  ) as { version?: string };
+
+  if (version === undefined || version === "0.0.0") {
+    throw new Error(
+      `@kobai/core's version is ${JSON.stringify(version ?? null)}, so there is nothing for this gate to upgrade from. See ADR-0034.`,
+    );
+  }
+  return version;
+}
+
+/**
+ * The next major above a version, by the rule kobai's own upgrade command uses.
+ *
+ * Below `1.0.0` the minor *is* the major — `^0.1.0` means `>=0.1.0 <0.2.0` — but the gate
+ * jumps straight to `1.0.0` from anywhere in `0.x`, because a first major is the boundary the
+ * promise is actually about, and the rule stays right once kobai is past it.
+ */
+function nextMajor(version: string): string {
+  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+  return major === 0 ? "1.0.0" : `${major + 1}.0.0`;
+}
+
+/** Filled in before anything else, so every message can name the two versions. */
+let THIS_VERSION: string;
+let SYNTHETIC_MAJOR: string;
 
 /** Two installs, two builds, two boots and a dozen requests, on a cold runner. */
 const GATE_TIMEOUT = 1_800_000;
@@ -63,6 +99,9 @@ let upgradeOutput: string;
 let after: Snapshot;
 
 beforeAll(async () => {
+  THIS_VERSION = await publishedVersion();
+  SYNTHETIC_MAJOR = nextMajor(THIS_VERSION);
+
   registry = await startLocalRegistry();
 
   // The same packages, twice: once as this commit built them, and once as a major that does
@@ -81,33 +120,62 @@ beforeAll(async () => {
     `@kobai:registry=${registry.url}\n//${registry.url.replace(/^https?:\/\//, "")}/:_authToken=kobai-local\n`,
   );
 
-  await runInProject(project, "pnpm", ["install"]);
-  await runInProject(project, "pnpm", ["-r", "--include-workspace-root", "build"]);
+  await phase("installing the generated Project", () =>
+    runInProject(project, "pnpm", ["install"]),
+  );
+  await phase("building it for the first time", () =>
+    runInProject(project, "pnpm", ["-r", "--include-workspace-root", "build"]),
+  );
 
   // One database for both halves. It is the whole point: "the Plugin's tables survive the
   // upgrade" means the rows that were there are still there, which a fresh database would
   // make vacuously true.
   database = await createTestDatabase();
 
-  before = await serve(project, database.url, arrange);
+  before = await phase("arranging a Store through the public API", () =>
+    serve(project, database.url, arrange),
+  );
 
   // **The upgrade, exactly as a Developer runs it.** `pnpm exec` finds the bin `@kobai/core`
   // declares, so the command is the one this Project has installed — not a script this test
   // wrote, and not a hand-edited manifest.
-  upgradeOutput = await runInProject(project, "pnpm", [
-    "exec",
-    "kobai-upgrade",
-    "--to",
-    SYNTHETIC_MAJOR,
-  ]);
+  upgradeOutput = await phase("running the shipped upgrade command", () =>
+    runInProject(project, "pnpm", ["exec", "kobai-upgrade", "--to", SYNTHETIC_MAJOR]),
+  );
 
   // The Developer's next command. `kobai-upgrade` installs and migrates source; building is
   // still theirs to do, and a Project that no longer compiles against the new major fails
   // here rather than at a boot that says something less useful.
-  await runInProject(project, "pnpm", ["-r", "--include-workspace-root", "build"]);
+  await phase("rebuilding against the new major", () =>
+    runInProject(project, "pnpm", ["-r", "--include-workspace-root", "build"]),
+  );
 
-  after = await serve(project, database.url, (origin) => observe(origin, before.store));
+  after = await phase("booting the upgraded Project and asking it again", () =>
+    serve(project, database.url, async () => before.store),
+  );
 }, GATE_TIMEOUT);
+
+/**
+ * One step of the sequence, named.
+ *
+ * Criterion 9 is that a failure says which part of the promise broke, and the assertions
+ * below do that by being named after their clause. Everything *before* them happens in one
+ * hook, so without this a failure to install, build, upgrade or boot would collapse six
+ * named diagnoses into one anonymous hook error. This is what keeps the sequence legible up
+ * to the point the assertions take over.
+ */
+async function phase<T>(what: string, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (cause) {
+    throw new Error(
+      `The upgrade gate failed while ${what}.\n\n${(cause as Error).message}`,
+      {
+        cause,
+      },
+    );
+  }
+}
 
 afterAll(async () => {
   await database?.drop();
@@ -191,7 +259,7 @@ describe("a customised Project taken across a Core major", () => {
     // to catch.
     expect(
       after.price.price,
-      `The Step override stopped taking effect across the upgrade: the storefront was served ${after.price.price.amount} rather than the 1 this Project's \`everything-costs-one-cent\` Step decides. Core's own \`select-price\` would answer ${before.pricedAt}. See reference/kobai.config.ts and ADR-0003.`,
+      `The Step override stopped taking effect across the upgrade: the storefront was served ${after.price.price.amount} rather than the 1 this Project's \`everything-costs-one-cent\` Step decides. Core's own \`select-price\` would answer ${PRICED_AT}. See reference/kobai.config.ts and ADR-0003.`,
     ).toMatchObject({ amount: 1, currency: "USD" });
 
     expect(
@@ -216,28 +284,33 @@ describe("a customised Project taken across a Core major", () => {
       "The Plugin's offered Step stopped recording after the upgrade, so its table survived and its wiring did not.",
     ).toBeGreaterThan(before.priceLog.length);
 
-    const tracking = await database.query<{ table_name: string }>(
-      "select table_name from information_schema.tables where table_schema = 'drizzle' order by table_name",
-    );
+    const tracking = await inspectSchema(database).migrationTracking();
     expect(
-      tracking.map((row) => row.table_name),
+      tracking.map((fact) => fact.table).sort(),
       "A migration set's tracking table went missing, so the runner can no longer tell what it has applied. Core, the Plugin and the Project each track their own (ADR-0030).",
     ).toEqual([
       "__drizzle_migrations_core",
       "__drizzle_migrations_plugin_price_log",
       "__drizzle_migrations_project",
     ]);
+
+    expect(
+      tracking.filter((fact) => fact.applied === 0),
+      "A migration set is tracked and has applied nothing, which is what an upgrade that dropped a package's migrations looks like from the outside.",
+    ).toEqual([]);
+
+    // The Plugin's own table, still owned by the Plugin's prefix.
+    await expect(
+      inspectSchema(database).tablesOwnedBy("price_log"),
+      "The Plugin's table did not survive the upgrade. A Plugin owns its tables and Core may not reach into them (ADR-0004).",
+    ).resolves.toEqual(["price_log_entry"]);
   });
 
   it("keeps the Project's own tables, which are the ones it owns outright", async () => {
-    const owned = await database.query<{ table_name: string }>(
-      "select table_name from information_schema.tables where table_schema = 'public' and table_name like 'project_%' order by table_name",
-    );
-
-    expect(
-      owned.map((row) => row.table_name),
+    await expect(
+      inspectSchema(database).tablesOwnedBy("project"),
       "The Project's own tables did not survive the upgrade. A Project owns its repository and its schema; Core may not reach into either (ADR-0004, ADR-0001).",
-    ).toEqual(["project_variant_note"]);
+    ).resolves.toEqual(["project_variant_note"]);
   });
 });
 
@@ -267,16 +340,21 @@ type Snapshot = {
   };
   readonly price: PriceBody;
   readonly priceLog: readonly PriceLogRow[];
-  /** What the Merchant actually set, so a failure can contrast it with what was served. */
-  readonly pricedAt: number;
   readonly logs: string;
 };
 
-/** Boots the Project, takes a snapshot through its public API, and stops it. */
+/**
+ * Boots the Project, asks it the same three questions, and stops it.
+ *
+ * `reach` is what differs between the two halves: the first arranges a Store and hands back
+ * the keys to it, the second hands the same keys straight back. Everything after that —
+ * health, the resolved price, the Plugin's rows — is asked identically, which is what makes
+ * the two snapshots comparable at all.
+ */
 async function serve(
   directory: string,
   databaseUrl: string,
-  take: (origin: string) => Promise<{ store: StoreKeys; price: PriceBody }>,
+  reach: (origin: string) => Promise<StoreKeys>,
 ): Promise<Snapshot> {
   await using booted = await bootProject(directory, databaseUrl);
 
@@ -284,17 +362,16 @@ async function serve(
     status: string;
     migrations: { sets: { name: string }[] };
   };
-  const { store, price } = await take(booted.origin);
+  const store = await reach(booted.origin);
 
   return {
     store,
     health,
-    price,
+    price: await resolvedPrice(booted.origin, store),
     // Read in the order the Plugin wrote them, so the two snapshots compare row for row.
     priceLog: await database.query<PriceLogRow>(
       "select variant_id, amount, currency from price_log_entry order by resolved_at, id",
     ),
-    pricedAt: PRICED_AT,
     logs: booted.logs(),
   };
 }
@@ -309,7 +386,7 @@ const PRICED_AT = 1250;
  * can do — and because the arrangement itself is part of what has to keep working across the
  * upgrade.
  */
-async function arrange(origin: string): Promise<{ store: StoreKeys; price: PriceBody }> {
+async function arrange(origin: string): Promise<StoreKeys> {
   const credentials = {
     email: "merchant@example.test",
     password: "a merchant's very long password",
@@ -367,22 +444,11 @@ async function arrange(origin: string): Promise<{ store: StoreKeys; price: Price
     "minting an API key",
   )) as { key: string };
 
-  const store: StoreKeys = {
-    variantId,
-    headers: { authorization: `Bearer ${key.key}` },
-  };
-  return { store, price: await observePrice(origin, store) };
+  return { variantId, headers: { authorization: `Bearer ${key.key}` } };
 }
 
-/** The same storefront request, made again by the upgraded Project against the same Store. */
-async function observe(
-  origin: string,
-  store: StoreKeys,
-): Promise<{ store: StoreKeys; price: PriceBody }> {
-  return { store, price: await observePrice(origin, store) };
-}
-
-async function observePrice(origin: string, store: StoreKeys): Promise<PriceBody> {
+/** The storefront's one question, asked identically before and after the upgrade. */
+async function resolvedPrice(origin: string, store: StoreKeys): Promise<PriceBody> {
   return (await expectStatus(
     await fetch(`${origin}/store/variants/${store.variantId}/price`, {
       headers: store.headers,

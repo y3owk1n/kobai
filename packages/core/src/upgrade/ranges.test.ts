@@ -138,23 +138,6 @@ describe("bumping a Project's kobai dependencies", () => {
     expect(rewrite.changed.map((change) => change.file)).toEqual(["package.json"]);
   });
 
-  it("writes nothing on a dry run, and still says what it would do", async () => {
-    const at = await aProject({
-      "package.json": { name: "my-store", dependencies: { "@kobai/core": "^0.1.0" } },
-    });
-
-    const rewrite = await rewriteKobaiRanges({
-      directory: at,
-      to: "1.0.0",
-      dryRun: true,
-    });
-
-    expect(rewrite.changed).toHaveLength(1);
-    expect((await readManifest(at, "package.json")).dependencies?.["@kobai/core"]).toBe(
-      "^0.1.0",
-    );
-  });
-
   it("keeps the explanatory keys a kobai Project carries", async () => {
     // A generated Project explains itself in `"// dependencies"` keys, and a command that
     // reserialised the manifest without them would delete the reasoning as a side effect.

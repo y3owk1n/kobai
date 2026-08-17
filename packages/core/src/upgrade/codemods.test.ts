@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  CODEMOD_SET_FORMAT,
-  type Codemod,
-  codemods,
-  codemodsCrossing,
-  readCodemodSet,
-} from "./codemods.ts";
+import { CODEMOD_SET_FORMAT, type Codemod, codemods } from "./codemods.ts";
+import { CodemodSetMissing, codemodsCrossing, readCodemodSet } from "./set.ts";
 
 /**
  * The resolution mechanism, which is the part of the upgrade path that is expensive to get
@@ -113,5 +108,25 @@ describe("reading a set that a newer version shipped", () => {
         "x",
       ),
     ).toThrow(/bad-one/);
+  });
+
+  it("refuses with an error the command must not survive", () => {
+    // `CodemodSetMissing` is the only load failure `upgradeProject` may report and continue
+    // from. Everything here is a set that exists and is wrong about itself, and reporting
+    // "no codemods" for one of those would be indistinguishable from the ordinary answer.
+    for (const wrong of [
+      { CODEMOD_SET_FORMAT: 99, codemods: [] },
+      { CODEMOD_SET_FORMAT },
+      { CODEMOD_SET_FORMAT, codemods: [fake("bad-one", "one-point-oh")] },
+    ]) {
+      let thrown: unknown;
+      try {
+        readCodemodSet(wrong, "x");
+      } catch (cause) {
+        thrown = cause;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(CodemodSetMissing);
+    }
   });
 });
