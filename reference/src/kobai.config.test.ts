@@ -7,11 +7,10 @@ import {
   type ResolvedPrice,
 } from "@kobai/core";
 import {
-  createTestApiKey,
   createTestKobai,
   inspectSchema,
+  seedTestCatalog,
   signInTestMerchant,
-  type TestKobai,
 } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
 import config from "../kobai.config.ts";
@@ -143,10 +142,10 @@ describe("the Step this Project replaced", () => {
 
   it("serves one cent for a Variant a Merchant priced at $12.50", async () => {
     await using kobai = await createTestKobai(config);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
@@ -161,10 +160,10 @@ describe("the Step this Project replaced", () => {
     // `step` is the slot Core declared and `implementation` is what filled it. A Developer
     // reads this and knows their Step ran, rather than taking it on trust (spec story 33).
     await using kobai = await createTestKobai(config);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -186,10 +185,10 @@ describe("the Step this Project replaced", () => {
     // what stands between $12.50 and a penny, which is what "customisation lives in a Project"
     // has to mean to be worth anything (ADR-0001).
     await using kobai = await createTestKobai({ ...config, workflows: {} });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -205,12 +204,16 @@ describe("the Step this Project replaced", () => {
 
   it("leaves a Variant with no Price refused, because the replacement is a real Step", async () => {
     await using kobai = await createTestKobai(config);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, {
+      // A priced Variant and an unpriced one, because what this test is about is the
+      // replacement refusing for the second while it serves the first.
+      variants: [{ prices: [1250] }, { prices: [] }],
+    });
 
     const response = await kobai.request(
-      `/store/variants/${store.unpricedVariantId}/price`,
+      `/store/variants/${catalog.variant("POSTER-A3").id}/price`,
       {
-        headers: store.headers,
+        headers: catalog.apiKey.headers,
       },
     );
 
@@ -233,17 +236,17 @@ describe("the Step this Project replaced", () => {
 describe("the Step this Project wired from a Plugin", () => {
   it("records each resolution to the Plugin's own table", async () => {
     await using kobai = await createTestKobai(config);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     // One cent, because this Project also replaced the rule — the Plugin records what was
     // *served*, which is the point of watching the Workflow rather than the database.
     await expect(
       kobai.database.query("select variant_id, amount, currency from price_log_entry"),
-    ).resolves.toEqual([{ variant_id: store.variantId, amount: 1, currency: "USD" }]);
+    ).resolves.toEqual([{ variant_id: catalog.variantId, amount: 1, currency: "USD" }]);
   });
 
   it("records nothing when the same Project boots without that line", async () => {
@@ -255,10 +258,10 @@ describe("the Step this Project wired from a Plugin", () => {
         "resolve-price": { steps: config.workflows?.["resolve-price"]?.steps },
       },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
@@ -331,44 +334,3 @@ describe("what this Project could not have wired", () => {
     expect(doubling).toBeDefined();
   });
 });
-
-type Priced = {
-  readonly variantId: string;
-  readonly unpricedVariantId: string;
-  /** A key's headers, ready to ask the store surface with. */
-  readonly headers: Record<string, string>;
-};
-
-/**
- * A Store holding one priced Variant and one unpriced one, created through the public API.
- *
- * Through the API rather than by writing rows, because this Project has no more access to
- * Core's tables than any other Project does.
- */
-async function priced(instance: TestKobai, amount: number): Promise<Priced> {
-  const merchant = await signInTestMerchant(instance);
-  const json = { ...merchant.headers, "content-type": "application/json" };
-
-  const product = (await (
-    await instance.request("/admin/products", {
-      method: "POST",
-      headers: json,
-      body: JSON.stringify({
-        title: "A poster",
-        variants: [{ sku: "POSTER-A2" }, { sku: "POSTER-A3" }],
-      }),
-    })
-  ).json()) as { variants: { id: string; sku: string }[] };
-  const idOf = (sku: string) => product.variants.find((row) => row.sku === sku)?.id ?? "";
-  const variantId = idOf("POSTER-A2");
-
-  await instance.request(`/admin/variants/${variantId}/prices`, {
-    method: "POST",
-    headers: json,
-    body: JSON.stringify({ amount }),
-  });
-
-  const key = await createTestApiKey(instance, merchant, { name: "storefront" });
-
-  return { variantId, unpricedVariantId: idOf("POSTER-A3"), headers: key.headers };
-}

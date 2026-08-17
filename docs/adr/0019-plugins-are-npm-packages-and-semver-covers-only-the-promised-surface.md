@@ -1,5 +1,10 @@
 # Plugins are npm packages, and semver covers only the promised surface
 
+> **Amended by [ADR-0047](./0047-the-test-harness-is-promised-surface.md).** "And nothing
+> else" now has exactly one exception: `@kobai/core/testing`, the shipped test harness, is
+> promised surface too. Everything else below stands, and the five Extension Points are still
+> five.
+
 Plugins are ordinary npm packages declaring a `peerDependency` on Core; local unpublished
 ones work through the workspace protocol. **There is no kobai registry and will not be
 one** — npm is the registry. Core's semver covers the five Extension Points of ADR-0003

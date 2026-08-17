@@ -2,9 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestApiKey,
   createTestKobai,
-  signInTestMerchant,
+  seedTestCatalog,
   type TestKobai,
-  type TestSession,
 } from "../testing/index.ts";
 
 /**
@@ -23,58 +22,12 @@ afterEach(async () => {
   kobai = undefined;
 });
 
-type Priced = {
-  readonly variantId: string;
-  /** A secret key's headers, ready to ask the store surface with. */
-  readonly headers: Record<string, string>;
-  readonly keyId: string;
-  readonly merchantHeaders: TestSession["headers"];
-  /** The value inside the session cookie, for the test that offers it as a key. */
-  readonly merchantToken: string;
-};
-
-/**
- * A Store holding one Variant at one Price, and a secret key to ask about it with.
- *
- * Everything goes through the public API, so nothing here can prove a capability the API
- * does not actually have.
- */
-async function priced(instance: TestKobai, amount = 1250): Promise<Priced> {
-  const merchant = await signInTestMerchant(instance);
-  const json = { ...merchant.headers, "content-type": "application/json" };
-
-  const product = (await (
-    await instance.request("/admin/products", {
-      method: "POST",
-      headers: json,
-      body: JSON.stringify({ title: "A poster", variants: [{ sku: "POSTER-A2" }] }),
-    })
-  ).json()) as { variants: { id: string }[] };
-  const variantId = product.variants[0]?.id ?? "";
-
-  await instance.request(`/admin/variants/${variantId}/prices`, {
-    method: "POST",
-    headers: json,
-    body: JSON.stringify({ amount }),
-  });
-
-  const key = await createTestApiKey(instance, merchant, { name: "storefront" });
-
-  return {
-    variantId,
-    headers: key.headers,
-    keyId: key.id,
-    merchantHeaders: merchant.headers,
-    merchantToken: merchant.token,
-  };
-}
-
 describe("the store surface is not open by default", () => {
   it("refuses a request carrying no key", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`);
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`);
 
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toBe("Bearer");
@@ -83,9 +36,9 @@ describe("the store surface is not open by default", () => {
 
   it("refuses a key that is not a kobai key at all", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
       headers: { authorization: "Bearer not-a-kobai-key" },
     });
 
@@ -95,9 +48,9 @@ describe("the store surface is not open by default", () => {
 
   it("refuses a well-formed key nobody issued", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
       headers: { authorization: `Bearer kobai_sk_${"a".repeat(43)}` },
     });
 
@@ -107,17 +60,17 @@ describe("the store surface is not open by default", () => {
 
   it("refuses a revoked key on the very next request", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
-    const before = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const before = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
-    await kobai.request(`/admin/api-keys/${store.keyId}`, {
+    await kobai.request(`/admin/api-keys/${catalog.apiKey.id}`, {
       method: "DELETE",
-      headers: store.merchantHeaders,
+      headers: catalog.merchant.headers,
     });
-    const after = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const after = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(before.status).toBe(200);
@@ -127,16 +80,16 @@ describe("the store surface is not open by default", () => {
 
   it("refuses a Merchant session, which is the other surface's credential", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
-    const path = `/store/variants/${store.variantId}/price`;
+    const catalog = await seedTestCatalog(kobai);
+    const path = `/store/variants/${catalog.variantId}/price`;
 
-    const asCookie = await kobai.request(path, { headers: store.merchantHeaders });
+    const asCookie = await kobai.request(path, { headers: catalog.merchant.headers });
     // And the value inside the cookie, handed over the way a key is. A browser would never
     // do this — the cookie is scoped to the admin surface — but the gate must refuse it,
     // because "neither credential is worth anything on the other surface" (ADR-0020) is a
     // property of the gate rather than of the browser that usually calls it.
     const asBearer = await kobai.request(path, {
-      headers: { authorization: `Bearer ${store.merchantToken}` },
+      headers: { authorization: `Bearer ${catalog.merchant.token}` },
     });
 
     expect(asCookie.status).toBe(401);
@@ -151,10 +104,10 @@ describe("the store surface is not open by default", () => {
 
   it("answers an unrouted store path in the same shape as every other refusal", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
     const response = await kobai.request("/store/nothing-here", {
-      headers: store.headers,
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(404);
@@ -176,10 +129,10 @@ describe("the store surface is not open by default", () => {
 describe("the store surface exposes no Merchant-only capability", () => {
   it("opens nothing under /admin", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
     for (const path of ["/admin/store", "/admin/products", "/admin/session"]) {
-      const response = await kobai.request(path, { headers: store.headers });
+      const response = await kobai.request(path, { headers: catalog.apiKey.headers });
       expect(response.status, path).toBe(401);
     }
   });
@@ -188,10 +141,10 @@ describe("the store surface exposes no Merchant-only capability", () => {
     // The whole surface, enumerated: one route. Anything a Merchant does — creating a
     // Product, listing the catalog, minting a key — is not reachable with a key at all.
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
     for (const path of ["/store/products", "/store/api-keys", "/store/store"]) {
-      const response = await kobai.request(path, { headers: store.headers });
+      const response = await kobai.request(path, { headers: catalog.apiKey.headers });
       expect(response.status, path).toBe(404);
     }
   });
@@ -200,15 +153,19 @@ describe("the store surface exposes no Merchant-only capability", () => {
 describe("resolving a price", () => {
   it("answers with the Variant's price, and with the Steps that ran", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai, 1250);
+    // Both the SKU and the amount are named here rather than defaulted, because the whole
+    // response is asserted below and every field in it should come from this test.
+    const catalog = await seedTestCatalog(kobai, {
+      variants: [{ sku: "POSTER-A2", prices: [1250] }],
+    });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      variant: { id: store.variantId, sku: "POSTER-A2" },
+      variant: { id: catalog.variantId, sku: "POSTER-A2" },
       price: { id: expect.any(String), amount: 1250, currency: "USD" },
       // Not a debugging nicety: this is what makes replacing a Step demonstrable rather
       // than asserted, so it is part of the response contract.
@@ -225,14 +182,13 @@ describe("resolving a price", () => {
   it("accepts a publishable key as readily as a secret one", async () => {
     // A price is what a browser is allowed to know, which is what a publishable key is for.
     kobai = await createTestKobai();
-    const store = await priced(kobai);
-    const publishable = await createTestApiKey(
-      kobai,
-      { headers: store.merchantHeaders },
-      { name: "browser", kind: "publishable" },
-    );
+    const catalog = await seedTestCatalog(kobai);
+    const publishable = await createTestApiKey(kobai, catalog.merchant, {
+      name: "browser",
+      kind: "publishable",
+    });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
       headers: publishable.headers,
     });
 
@@ -244,15 +200,12 @@ describe("resolving a price", () => {
     // in the same currency, because Region, Channel, quantity and customer group do not
     // exist. `select-price` is where that rule lives, and where a Project replaces it.
     kobai = await createTestKobai();
-    const store = await priced(kobai, 1250);
-    await kobai.request(`/admin/variants/${store.variantId}/prices`, {
-      method: "POST",
-      headers: { ...store.merchantHeaders, "content-type": "application/json" },
-      body: JSON.stringify({ amount: 900 }),
-    });
+    // Both amounts stay in the test, because which one is served is what it is about; 900
+    // is the newer, being the second set.
+    const catalog = await seedTestCatalog(kobai, { prices: [1250, 900] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     const body = (await response.json()) as { price: { amount: number } };
@@ -261,19 +214,19 @@ describe("resolving a price", () => {
 
   it("says which Step refused when the Variant has no Price", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
-    const unpriced = (await (
-      await kobai.request("/admin/products", {
-        method: "POST",
-        headers: { ...store.merchantHeaders, "content-type": "application/json" },
-        body: JSON.stringify({ title: "Unpriced", variants: [{ sku: "UNPRICED" }] }),
-      })
-    ).json()) as { variants: { id: string }[] };
+    const catalog = await seedTestCatalog(kobai);
+    // A second Product, priced by nobody, in a Store where the first one *is* priced — so
+    // what the refusal is about is this Variant carrying no Price rather than an empty
+    // catalog. The Merchant is handed over because a deployment has only ever one first one.
+    const unpriced = await seedTestCatalog(kobai, {
+      merchant: catalog.merchant,
+      title: "Unpriced",
+      variants: [{ sku: "UNPRICED", prices: [] }],
+    });
 
-    const response = await kobai.request(
-      `/store/variants/${unpriced.variants[0]?.id}/price`,
-      { headers: store.headers },
-    );
+    const response = await kobai.request(`/store/variants/${unpriced.variantId}/price`, {
+      headers: catalog.apiKey.headers,
+    });
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
@@ -284,11 +237,11 @@ describe("resolving a price", () => {
 
   it("accepts inputs Core does not model, and resolves the price regardless", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
     const response = await kobai.request(
-      `/store/variants/${store.variantId}/price?leadTimeDays=10`,
-      { headers: store.headers },
+      `/store/variants/${catalog.variantId}/price?leadTimeDays=10`,
+      { headers: catalog.apiKey.headers },
     );
 
     expect(response.status).toBe(200);
@@ -298,11 +251,11 @@ describe("resolving a price", () => {
 
   it("refuses a Variant that does not exist, and one that is not an identifier", async () => {
     kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
     for (const id of ["00000000-0000-4000-8000-000000000000", "not-an-id"]) {
       const response = await kobai.request(`/store/variants/${id}/price`, {
-        headers: store.headers,
+        headers: catalog.apiKey.headers,
       });
 
       expect(response.status, id).toBe(404);

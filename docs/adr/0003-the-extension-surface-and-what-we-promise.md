@@ -1,5 +1,11 @@
 # The extension surface, and what we promise stability on
 
+> **Amended by [ADR-0047](./0047-the-test-harness-is-promised-surface.md).** The five
+> Extension Points are still five and still closed — nothing attaches to a test harness at
+> runtime. But one thing outside them is promised anyway: `@kobai/core/testing`, which ships
+> for the Plugin author who needs the same seam Core tests through. So "anything not
+> reachable through the five surfaces above" below means anything but that.
+
 ADR-0001 removed the fork and moved the hard problem here: a Project and its Plugins can
 only stay upgradeable if they attach to a surface Core promises not to break. We promise
 stability on exactly four extension points — **configuration**, **events**, **dependency

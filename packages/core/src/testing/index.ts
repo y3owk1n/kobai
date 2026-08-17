@@ -4,6 +4,14 @@
  */
 export { createTestApiKey, type TestApiKey } from "./api-key.ts";
 export {
+  seedTestCatalog,
+  type TestCatalog,
+  type TestCatalogOptions,
+  type TestCatalogPrice,
+  type TestCatalogVariant,
+  type TestVariantSpec,
+} from "./catalog.ts";
+export {
   createTestDatabase,
   type TestDatabase,
   testPostgresUrl,

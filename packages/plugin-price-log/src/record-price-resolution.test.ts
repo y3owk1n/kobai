@@ -1,8 +1,7 @@
 import { defineStep, type ResolvedPrice, StepFailure } from "@kobai/core";
 import {
-  createTestApiKey,
   createTestKobai,
-  signInTestMerchant,
+  seedTestCatalog,
   type TestKobai,
   type TestKobaiOptions,
 } from "@kobai/core/testing";
@@ -52,29 +51,29 @@ const logged = (kobai: TestKobai) =>
 describe("a Plugin that offers a Step", () => {
   it("records what was resolved, once a Project has wired it", async () => {
     await using kobai = await createTestKobai(WIRED_STEP);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
     // The Plugin's own table, holding Core's Variant by ID and the amount and currency that
     // were served. Nothing in Core knows this table exists.
     await expect(logged(kobai)).resolves.toEqual([
-      { variant_id: store.variantId, amount: 1250, currency: "USD" },
+      { variant_id: catalog.variantId, amount: 1250, currency: "USD" },
     ]);
   });
 
   it("records one row per resolution", async () => {
     await using kobai = await createTestKobai(WIRED_STEP);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
-    await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(logged(kobai)).resolves.toHaveLength(2);
@@ -84,10 +83,10 @@ describe("a Plugin that offers a Step", () => {
     // An inserted Step cannot alter the output contract, and this one does not alter the
     // answer either: the Merchant's Price is what a storefront is told.
     await using kobai = await createTestKobai(WIRED_STEP);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(response.json()).resolves.toMatchObject({
@@ -106,10 +105,10 @@ describe("a Plugin that offers a Step", () => {
     // This module imports the Step. It is installed, in scope, and one line of config away
     // from running — and it does not run, because no Project asked for it (ADR-0017).
     await using kobai = await createTestKobai(WIRED_TABLES);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(200);
@@ -134,10 +133,10 @@ describe("a Workflow that fails after the Step has written its row", () => {
 
   it("leaves no row behind", async () => {
     await using kobai = await createTestKobai(withALaterFailure);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    const response = await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     expect(response.status).toBe(422);
@@ -164,10 +163,10 @@ describe("a Workflow that fails after the Step has written its row", () => {
         },
       },
     });
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
-    await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(logged(kobai)).resolves.toEqual([]);
@@ -177,54 +176,18 @@ describe("a Workflow that fails after the Step has written its row", () => {
     // Compensation undoes what *this* run did and nothing else. A failure now is not a
     // reason to lose the record of a resolution that was served an hour ago.
     await using kobai = await createTestKobai(withALaterFailure);
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
     await kobai.database.query(
       "insert into price_log_entry (variant_id, amount, currency) values ($1, $2, $3)",
-      [store.variantId, 900, "USD"],
+      [catalog.variantId, 900, "USD"],
     );
-    await kobai.request(`/store/variants/${store.variantId}/price`, {
-      headers: store.headers,
+    await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
     });
 
     await expect(logged(kobai)).resolves.toEqual([
-      { variant_id: store.variantId, amount: 900, currency: "USD" },
+      { variant_id: catalog.variantId, amount: 900, currency: "USD" },
     ]);
   });
 });
-
-type Priced = {
-  readonly variantId: string;
-  /** A key's headers, ready to ask the store surface with. */
-  readonly headers: Record<string, string>;
-};
-
-/**
- * A Store holding one Variant at one Price, created entirely through the public API.
- *
- * Through the API rather than by writing rows, because a Plugin has no more access to Core's
- * tables than anybody else does — which is the rule this package exists to demonstrate.
- */
-async function priced(instance: TestKobai, amount: number): Promise<Priced> {
-  const merchant = await signInTestMerchant(instance);
-  const json = { ...merchant.headers, "content-type": "application/json" };
-
-  const product = (await (
-    await instance.request("/admin/products", {
-      method: "POST",
-      headers: json,
-      body: JSON.stringify({ title: "A poster", variants: [{ sku: "POSTER-A2" }] }),
-    })
-  ).json()) as { variants: { id: string }[] };
-  const variantId = product.variants[0]?.id ?? "";
-
-  await instance.request(`/admin/variants/${variantId}/prices`, {
-    method: "POST",
-    headers: json,
-    body: JSON.stringify({ amount }),
-  });
-
-  const key = await createTestApiKey(instance, merchant, { name: "storefront" });
-
-  return { variantId, headers: key.headers };
-}

@@ -2,6 +2,7 @@ import type { MerchantIdentity, RoleSummary } from "../auth/identity.ts";
 import { seedInitialMerchant } from "../auth/seed.ts";
 import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Kobai } from "../kobai.ts";
+import { expectStatus } from "./expect-status.ts";
 
 /**
  * A signed-in Merchant, for every test whose subject is something *behind* the gate.
@@ -125,18 +126,4 @@ export function sessionOf(response: Response): Pick<TestSession, "headers" | "to
     );
   }
   return { token, headers: { cookie: `${SESSION_COOKIE}=${token}` } };
-}
-
-async function expectStatus(
-  response: Response,
-  status: number,
-  what: string,
-): Promise<unknown> {
-  const body: unknown = await response.json().catch(() => undefined);
-  if (response.status !== status) {
-    throw new Error(
-      `${what} answered ${response.status}, expected ${status}: ${JSON.stringify(body)}`,
-    );
-  }
-  return body;
 }

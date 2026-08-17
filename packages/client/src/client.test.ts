@@ -1,6 +1,6 @@
 import {
-  createTestApiKey,
   createTestKobai,
+  seedTestCatalog,
   seedTestMerchant,
   signInTestMerchant,
   type TestKobai,
@@ -59,36 +59,18 @@ function adminClientFor(instance: TestKobai, cookie: string): KobaiClient {
   return client;
 }
 
-/** A Store holding one Variant at one Price, arranged through the client itself. */
-async function priced(instance: TestKobai, amount = 1250) {
-  const merchant = await signInTestMerchant(instance);
-  const admin = adminClientFor(instance, merchant.headers.cookie);
-
-  const product = await admin.POST("/admin/products", {
-    body: { title: "A poster", variants: [{ sku: "POSTER-A2" }] },
-  });
-  if (!product.data)
-    throw new Error(`creating a Product failed: ${JSON.stringify(product.error)}`);
-  const variant = product.data.variants[0];
-  if (!variant) throw new Error("a created Product carried no Variant");
-
-  await admin.POST("/admin/variants/{id}/prices", {
-    params: { path: { id: variant.id } },
-    body: { amount },
-  });
-
-  const key = await createTestApiKey(instance, merchant, { name: "storefront" });
-  return { admin, merchant, variantId: variant.id, apiKey: key.key };
-}
-
 describe("consuming kobai through the generated client", () => {
   it("resolves a price on the store surface, and reads the Steps that ran", async () => {
     await using kobai = await createTestKobai();
-    const store = await priced(kobai, 1250);
+    const catalog = await seedTestCatalog(kobai, {
+      // Named rather than defaulted: the assertions below read the SKU and the amount back,
+      // so both belong to this test rather than to the helper.
+      variants: [{ sku: "POSTER-A2", prices: [1250] }],
+    });
 
-    const client = clientFor(kobai, { apiKey: store.apiKey });
+    const client = clientFor(kobai, { apiKey: catalog.apiKey.key });
     const { data, error } = await client.GET("/store/variants/{id}/price", {
-      params: { path: { id: store.variantId } },
+      params: { path: { id: catalog.variantId } },
     });
 
     expect(error).toBeUndefined();
@@ -105,10 +87,11 @@ describe("consuming kobai through the generated client", () => {
 
   it("reads the catalog on the admin surface", async () => {
     await using kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai, { title: "A poster", prices: [1250] });
+    const admin = adminClientFor(kobai, catalog.merchant.headers.cookie);
 
-    const listed = await store.admin.GET("/admin/products");
-    const detail = await store.admin.GET("/admin/products/{id}", {
+    const listed = await admin.GET("/admin/products");
+    const detail = await admin.GET("/admin/products/{id}", {
       params: { path: { id: listed.data?.products[0]?.id ?? "" } },
     });
 
@@ -116,18 +99,40 @@ describe("consuming kobai through the generated client", () => {
     expect(detail.data?.variants[0]?.prices[0]?.amount).toBe(1250);
   });
 
+  it("writes the catalog on the admin surface, through the paths it generated", async () => {
+    // The arrangement every other test here takes from `seedTestCatalog` — done through the
+    // client instead, because a generated write path is exactly as easy to get wrong as a
+    // read one and nothing else in this suite dispatches one at runtime.
+    await using kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const admin = adminClientFor(kobai, merchant.headers.cookie);
+
+    const product = await admin.POST("/admin/products", {
+      body: { title: "A mug", variants: [{ sku: "MUG-11OZ" }] },
+    });
+    const setPrice = await admin.POST("/admin/variants/{id}/prices", {
+      params: { path: { id: product.data?.variants[0]?.id ?? "" } },
+      body: { amount: 899 },
+    });
+
+    expect(product.error).toBeUndefined();
+    expect(product.data?.variants.map((variant) => variant.sku)).toEqual(["MUG-11OZ"]);
+    expect(setPrice.data?.amount).toBe(899);
+    expect(setPrice.data?.currency).toBe("USD");
+  });
+
   it("carries the credential each surface asks for, and neither opens the other", async () => {
     await using kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
     // The client attaches whichever credential it was given; the server decides. A key at
     // `/admin` is not a session, and a session at `/store` is not a key (ADR-0020).
-    const withKey = clientFor(kobai, { apiKey: store.apiKey });
-    const withSession = adminClientFor(kobai, store.merchant.headers.cookie);
+    const withKey = clientFor(kobai, { apiKey: catalog.apiKey.key });
+    const withSession = adminClientFor(kobai, catalog.merchant.headers.cookie);
 
     const adminWithKey = await withKey.GET("/admin/store");
     const storeWithSession = await withSession.GET("/store/variants/{id}/price", {
-      params: { path: { id: store.variantId } },
+      params: { path: { id: catalog.variantId } },
     });
 
     expect(adminWithKey.response.status).toBe(401);
@@ -143,9 +148,9 @@ describe("consuming kobai through the generated client", () => {
 
   it("hands back a refusal in the shape the description promised", async () => {
     await using kobai = await createTestKobai();
-    const store = await priced(kobai);
+    const catalog = await seedTestCatalog(kobai);
 
-    const client = clientFor(kobai, { apiKey: store.apiKey });
+    const client = clientFor(kobai, { apiKey: catalog.apiKey.key });
     const { data, error, response } = await client.GET("/store/variants/{id}/price", {
       params: { path: { id: "00000000-0000-4000-8000-000000000000" } },
     });

@@ -1,5 +1,6 @@
 import type { ApiKeyKind } from "../auth/api-key.ts";
 import type { Kobai } from "../kobai.ts";
+import { expectStatus } from "./expect-status.ts";
 import type { TestSession } from "./merchant.ts";
 
 /**
@@ -45,14 +46,11 @@ export async function createTestApiKey(
     body: JSON.stringify({ name: options?.name ?? "a test storefront", kind }),
   });
 
-  const body: unknown = await response.json().catch(() => undefined);
-  if (response.status !== 201) {
-    throw new Error(
-      `creating an API key answered ${response.status}, expected 201: ${JSON.stringify(body)}`,
-    );
-  }
-
-  const created = body as { id: string; key: string; kind: ApiKeyKind };
+  const created = (await expectStatus(response, 201, "creating an API key")) as {
+    id: string;
+    key: string;
+    kind: ApiKeyKind;
+  };
   return {
     id: created.id,
     key: created.key,
