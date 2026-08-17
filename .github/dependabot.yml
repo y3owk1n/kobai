@@ -1,0 +1,111 @@
+# What Dependabot watches, how often, and how it batches.
+#
+# Dependabot is switched on in repository settings, so it was already running before this
+# file existed — it just ran on its defaults. The result is what #28 audited: six direct
+# dependencies sitting behind a major boundary, `typescript` two majors back, while the
+# only pull request that had ever arrived was one dev-dependency bump (#15). A caret range
+# never crosses a major on its own, and nothing was watching. See #29.
+#
+# Every non-obvious line below is marked DECISION. Anything not marked is Dependabot's
+# default and is left alone deliberately.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------------
+  # npm — the pnpm workspace
+  # ---------------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    # DECISION: one entry at the workspace root, not one entry per package. kobai is a
+    # pnpm workspace (`pnpm-workspace.yaml`: `packages/*`, `reference`) resolved into a
+    # single root `pnpm-lock.yaml`. Dependabot's npm fetcher reads `pnpm-workspace.yaml`
+    # from this directory, expands those globs against the repository, and fetches each
+    # member manifest itself — so `packages/core/package.json`,
+    # `packages/plugin-price-log/package.json` and `reference/package.json` are all in
+    # scope from here. Listing them separately would run overlapping jobs over the one
+    # lockfile they share.
+    directory: "/"
+
+    schedule:
+      # DECISION: weekly, not daily. A merged bump rewrites `pnpm-lock.yaml`, and every
+      # open branch then has to rebase onto it. Work here lands from several branches at
+      # once, so one predictable batch a week costs far less churn than a daily trickle —
+      # and a week of drift is not the failure this repository actually had.
+      interval: "weekly"
+      day: "monday"
+      # `time` and `timezone` are left at their defaults (05:00 UTC).
+
+    # DECISION: raised from the default of 5. The routine batch below is one PR, but each
+    # outstanding major gets its own (see `groups`) — at the default limit, a backlog of
+    # majors is exactly what gets crowded out, which is the drift #28 found.
+    open-pull-requests-limit: 10
+
+    groups:
+      # DECISION: one PR for everything routine. Minor and patch across every workspace
+      # package, runtime and development alike, so an ordinary week is one branch, one CI
+      # run and one review rather than a PR per package.
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+    # DECISION: majors are deliberately left out of every group. A dependency matching no
+    # group falls back to its own pull request, so `typescript` 5 → 7 arrives alone, on
+    # its own branch, titled with the package and the boundary it crosses, with its own
+    # CI run. Folding majors into the routine batch would recreate the failure: one PR
+    # nobody reads to the bottom of, going red for a reason that is not obvious, and
+    # sitting. A major is meant to cost a decision — this makes it visibly ask for one.
+
+    cooldown:
+      # DECISION: hold a release briefly before proposing it, so a version yanked or
+      # hot-fixed within days never becomes a PR at all. Patches go straight through; a
+      # major waits a week, because a major's first days are where its regressions
+      # surface. Security updates ignore cooldown, which is the point.
+      default-days: 3
+      semver-major-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 0
+
+    commit-message:
+      # kobai writes Conventional Commits. Dependabot otherwise infers the convention from
+      # history — #15 happened to infer it correctly. Stated rather than guessed:
+      # `chore(deps): …` for runtime dependencies, `chore(deps-dev): …` for dev ones.
+      prefix: "chore"
+      include: "scope"
+
+    # `labels` is left at the default (`dependencies`, plus the ecosystem's own). Marking
+    # majors with a custom label was considered and rejected: Dependabot only applies a
+    # custom label that already exists in the repository and silently drops one that does
+    # not, so the label would have to be created out-of-band in repository settings to do
+    # anything — a guarantee this file cannot make on its own. The separate pull request
+    # above carries the same signal and is entirely checked in.
+
+  # ---------------------------------------------------------------------------------
+  # GitHub Actions — the CI workflow
+  # ---------------------------------------------------------------------------------
+  # Nothing watches these today, and a pinned action drifts exactly the way an npm
+  # dependency does: `actions/checkout@v4` stays on v4 forever until something asks.
+  - package-ecosystem: "github-actions"
+    # `/` is the whole repository for this ecosystem — Dependabot reads
+    # `.github/workflows/` from here, not one directory per workflow file.
+    directory: "/"
+
+    schedule:
+      # Same weekly cadence as npm, for the same reason.
+      interval: "weekly"
+      day: "monday"
+
+    groups:
+      # DECISION: same shape as npm. Routine action bumps batch into one PR; a major —
+      # `actions/checkout@v4` → `@v5` — is left ungrouped and arrives on its own.
+      #
+      # Note that `jetify-com/devbox-install-action` is on a 0.x version, where a
+      # breaking change is a minor by semver and so lands in this batch. That is
+      # tolerable here and nowhere else: the gate runs on the pull request that proposes
+      # it, so a devbox action that breaks the toolchain install fails its own PR.
+      github-actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+    commit-message:
+      # CI configuration rather than a dependency of the product.
+      prefix: "ci"
