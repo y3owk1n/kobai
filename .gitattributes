@@ -1,0 +1,3 @@
+# git autocrlf=true converts LF to CRLF on Windows, which breaks formatters and
+# produces noisy diffs. Force LF for every text file.
+* text=auto eol=lf

@@ -1,0 +1,64 @@
+name: Bug report
+description: Report broken behavior, a regression, a crash, or a reliability problem.
+title: "[Bug]: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for something that is broken. Feature ideas go through the
+        **Feature request** form instead.
+
+        Search existing issues first, and keep the report focused on one problem.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I included enough detail for someone else to reproduce this.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Numbered steps, starting from a clean state. If you have a minimal reproduction
+        repo or a failing test, link it — it is the single most useful thing you can
+        provide.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: kobai version or commit, OS, runtime version, database.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Paste relevant output. Redact secrets, tokens, and customer data.
+      render: shell
+    validations:
+      required: false

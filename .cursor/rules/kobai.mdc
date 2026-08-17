@@ -1,0 +1,20 @@
+---
+description: Points Cursor at the shared AGENTS.md and covers Cursor-only concerns for kobai
+alwaysApply: true
+---
+
+# kobai — Cursor
+
+Read [`AGENTS.md`](../../AGENTS.md) at the repo root first. It is the single source of
+truth for how kobai is built, and it applies to you in full.
+
+Nothing in this file overrides it. This file exists only for things that are true of
+Cursor and false of every other harness — Cursor Cloud VM setup, Cursor-specific tool
+caveats, and the like. **If a rule would apply to Codex or Claude Code too, it belongs in
+`AGENTS.md`, not here.**
+
+## Cursor-only notes
+
+_(None yet. kobai has no toolchain committed — see the greenfield note at the top of
+`AGENTS.md`. Add Cursor Cloud provisioning and run caveats here once there's something to
+run.)_

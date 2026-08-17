@@ -1,0 +1,18 @@
+# Codex project config for kobai.
+#
+# Codex reads AGENTS.md natively, so no instructions live here — this file exists so
+# project-scoped MCP servers work in Codex the way .mcp.json makes them work in Claude
+# Code. The two are hand-kept in sync: adding a server to one means adding it to the
+# other.
+#
+# Shape of an entry:
+#
+#   [mcp_servers.<name>]
+#   enabled = true
+#   required = false
+#   command = "npx"
+#   args = ["--yes", "some-mcp@1.0.0", "mcp"]
+#   startup_timeout_sec = 20.0
+#
+#   [mcp_servers.<name>.env]
+#   SOME_VAR = "value"

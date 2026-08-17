@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a capability kobai does not have yet.
+title: "[Feature]: "
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        kobai is early and the shape of the project is still being decided, so
+        well-argued proposals carry real weight. Lead with the **problem**, not the
+        solution you have in mind.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: |
+        Describe the situation you're in and why the current behavior doesn't work.
+        Concrete beats abstract — an actual store, an actual workflow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: Your proposed solution, if you have one. It's fine to leave this open.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered?
+      description: Workarounds you're using now, or approaches you rejected and why.
+    validations:
+      required: false

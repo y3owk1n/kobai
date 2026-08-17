@@ -1,0 +1,16 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Agent scratch space — /to-tickets and /prototype use this for anything not on the
+# issue tracker. Nothing here is a primary source; don't commit it.
+.scratch/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+.idea/

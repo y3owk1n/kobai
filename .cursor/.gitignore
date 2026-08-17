@@ -1,0 +1,2 @@
+# Cursor writes its own plan files here; they're session scratch, not primary sources.
+plans/
