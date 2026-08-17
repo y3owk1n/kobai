@@ -42,7 +42,7 @@ export type AdminEnv = { Variables: { auth: Authenticated } };
  * different fields and the OpenAPI description promises which arrives with which status. A
  * `Record<string, unknown>` here would make that promise uncheckable at the point it is kept.
  */
-export type SessionRefused = {
+type SessionRefused = {
   readonly ok: false;
   readonly status: 401;
   readonly body: {
@@ -51,7 +51,7 @@ export type SessionRefused = {
   };
 };
 
-export type PermissionRefused = {
+type PermissionRefused = {
   readonly ok: false;
   readonly status: 403;
   readonly body: {
@@ -61,18 +61,20 @@ export type PermissionRefused = {
   };
 };
 
-export type Refusal = SessionRefused | PermissionRefused;
+type Refusal = SessionRefused | PermissionRefused;
 
-export type Authorisation = { readonly ok: true; readonly auth: Authenticated } | Refusal;
+type Authorisation = { readonly ok: true; readonly auth: Authenticated } | Refusal;
 
 /**
  * The gate itself, as an ordinary function — the middlewares below are this, wired into Hono.
  *
- * It is exported because one route genuinely cannot be middleware-guarded: creating the
- * *first* Merchant has to work with no session at all, so that handler decides for itself and
- * then calls this. See `http/admin.ts`.
+ * It is **not** exported, and that is the shape of the surface rather than an accident: the
+ * only way to be let into `/admin` is to sit behind the middleware, so there is nothing for a
+ * handler to call. `POST /admin/merchants` used to be the exception, because the first
+ * Merchant had to be creatable with no session at all; #25 moved that to a boot-time seed and
+ * took the exception away with it.
  */
-export async function authorise(
+async function authorise(
   db: Database,
   cookieHeader: string | undefined,
   permission?: Permission,
@@ -98,10 +100,10 @@ export async function authorise(
  * `c.json` a union of bodies and a union of statuses would lose the pairing at exactly the
  * point the promise is kept, so a route's declaration could no longer be checked against it.
  *
- * Generic over the environment so both the middleware below and the one handler that gates
- * itself — `POST /admin/merchants`, which mints the first Merchant — can use it.
+ * Generic over the environment because a gate is mounted above a sub-app rather than inside
+ * one, so the context it is handed is whatever that sub-app declared.
  */
-export function refuse<E extends Env>(c: Context<E>, refusal: Refusal) {
+function refuse<E extends Env>(c: Context<E>, refusal: Refusal) {
   return refusal.status === 401 ? c.json(refusal.body, 401) : c.json(refusal.body, 403);
 }
 

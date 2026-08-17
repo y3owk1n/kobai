@@ -1,3 +1,8 @@
+import {
+  type InitialMerchantCredentials,
+  type InitialMerchantSeed,
+  seedInitialMerchant,
+} from "./auth/seed.ts";
 import { consoleLogger, type KobaiProjectConfig, type Logger } from "./config.ts";
 import { createDatabaseHandle, type Database } from "./db/client.ts";
 import { createHttpApp, describeHttpApp } from "./http/app.ts";
@@ -12,6 +17,17 @@ import { rewireWorkflow } from "./workflow/workflow.ts";
 export type KobaiOptions = KobaiProjectConfig & {
   /** Postgres connection string. */
   readonly databaseUrl: string;
+  /**
+   * Who this deployment's **first** Merchant is, for {@link Kobai.seedInitialMerchant}.
+   *
+   * A secret, so it belongs here beside `databaseUrl` rather than in the `kobai.config.ts`
+   * a Project checks in. The reference Project reads it from its environment
+   * (`KOBAI_INITIAL_MERCHANT_EMAIL` and `KOBAI_INITIAL_MERCHANT_PASSWORD`); a Project whose
+   * secrets live somewhere else — a vault, a mounted file — builds the object itself, which
+   * is the whole reason Core takes the credentials rather than reading the environment for
+   * itself.
+   */
+  readonly initialMerchant?: InitialMerchantCredentials;
   readonly logger?: Logger;
 };
 
@@ -45,6 +61,17 @@ export type Kobai = {
    * it on `/health`, then exit non-zero — is one of several defensible ones.
    */
   migrate(): Promise<MigrationOutcome>;
+  /**
+   * Creates the deployment's first Merchant from {@link KobaiOptions.initialMerchant}, if it
+   * has none yet. Call it once per boot, after {@link Kobai.migrate}.
+   *
+   * Safe on every boot: a deployment that already holds a Merchant is left exactly as it was
+   * found. It reports rather than throws, and does not stop a boot. An unconfigured Merchant
+   * is not a broken deployment — it is a working one nobody can administer yet — and a
+   * process that exited over it would be indistinguishable, to whatever supervises it, from
+   * the failed migration that must exit, while taking `/health` down with it.
+   */
+  seedInitialMerchant(): Promise<InitialMerchantSeed>;
   migrationState(): MigrationState;
   close(): Promise<void>;
 };
@@ -99,6 +126,39 @@ export function createKobai(options: KobaiOptions): Kobai {
       migrations.set({ status: "failed", set: outcome.set, message: outcome.message });
       logger.error("migrations failed", { set: outcome.set, reason: outcome.message });
       return outcome;
+    },
+
+    async seedInitialMerchant() {
+      const seed = await seedInitialMerchant(database.db, options.initialMerchant ?? {});
+
+      // What the boot log says, and what it deliberately never says. **The password is
+      // never printed, in any outcome** — it arrived through an environment, so it is
+      // already in a compose file or a shell history, and a log is the one copy of it that
+      // fans out to every aggregator a deployment ships to.
+      //
+      // Nor is the *configured* email printed when the configuration could not be used. An
+      // operator who swapped the two variables would otherwise have their password written
+      // to the log by the very line reporting the mistake. Once a Merchant exists the
+      // address is theirs and printing it says which account was created, which is worth
+      // knowing and is no longer a guess about what the variable held.
+      switch (seed.status) {
+        case "seeded":
+          logger.info("initial merchant seeded", { email: seed.merchant.email });
+          break;
+        case "already-present":
+          logger.info("initial merchant already present", { created: false });
+          break;
+        case "not-configured":
+          logger.error("no initial merchant", {
+            reason:
+              "this deployment was given no first Merchant, so nobody can sign in to it",
+          });
+          break;
+        default:
+          logger.error("initial merchant not created", { reason: seed.detail });
+      }
+
+      return seed;
     },
 
     close: () => database.close(),

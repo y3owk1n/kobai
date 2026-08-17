@@ -69,10 +69,16 @@ export type BootedProject = {
 export async function bootProject(
   directory: string,
   databaseUrl: string,
+  /**
+   * Anything else the Project's environment must carry — `KOBAI_INITIAL_MERCHANT_*` for a
+   * test that then signs in, since the first Merchant is seeded at boot and cannot be
+   * created over HTTP (#25).
+   */
+  environment: Readonly<Record<string, string>> = {},
 ): Promise<BootedProject> {
   const child = spawn("node", ["dist/src/server.js"], {
     cwd: directory,
-    env: { ...process.env, DATABASE_URL: databaseUrl, PORT: "0" },
+    env: { ...process.env, DATABASE_URL: databaseUrl, PORT: "0", ...environment },
     stdio: ["ignore", "pipe", "pipe"],
   });
 

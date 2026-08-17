@@ -32,63 +32,6 @@ export interface paths {
       };
     };
   };
-  "/admin/merchants": {
-    /**
-     * Create a Merchant
-     * @description Needs `merchant:write`, except on a deployment that holds no Merchant at all — the first Merchant claims it, anonymously and exactly once.
-     */
-    post: {
-      requestBody: {
-        content: {
-          "application/json": components["schemas"]["CreateMerchantRequest"];
-        };
-      };
-      responses: {
-        /** @description The Merchant, and the Role they hold. */
-        201: {
-          content: {
-            "application/json": components["schemas"]["Merchant"];
-          };
-        };
-        /** @description The request does not fit this endpoint's schema. */
-        400: {
-          content: {
-            "application/json": components["schemas"]["Refusal"];
-          };
-        };
-        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
-        401: {
-          content: {
-            "application/json": components["schemas"]["SessionRefusal"];
-          };
-        };
-        /** @description The Merchant's Role does not hold the permission this route requires. */
-        403: {
-          content: {
-            "application/json": components["schemas"]["PermissionDenied"];
-          };
-        };
-        /** @description Somebody got there first: the address is taken, or the deployment is already claimed. */
-        409: {
-          content: {
-            "application/json": components["schemas"]["Refusal"];
-          };
-        };
-        /** @description Something failed inside kobai. */
-        500: {
-          content: {
-            "application/json": components["schemas"]["ServerError"];
-          };
-        };
-        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
-        503: {
-          content: {
-            "application/json": components["schemas"]["Unavailable"];
-          };
-        };
-      };
-    };
-  };
   "/admin/session": {
     /**
      * Who the caller is
@@ -187,6 +130,63 @@ export interface paths {
         401: {
           content: {
             "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/merchants": {
+    /**
+     * Create a Merchant
+     * @description Adds a colleague. The deployment's *first* Merchant does not come from here — it is seeded at boot from the deployment's own configuration, because a deployment with no Merchant has nobody who could hold this permission.
+     */
+    post: {
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["CreateMerchantRequest"];
+        };
+      };
+      responses: {
+        /** @description The Merchant, and the Role they hold. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Merchant"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description A Merchant already holds that address. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -689,24 +689,48 @@ export interface components {
       /** @description Rows in this set's tracking table. */
       applied: number;
     };
-    Merchant: components["schemas"]["MerchantIdentity"] & {
+    Session: {
+      /** Format: date-time */
+      expiresAt: string;
+      merchant: components["schemas"]["MerchantIdentity"];
       role: components["schemas"]["RoleSummary"];
-    };
-    RoleSummary: {
-      name: string;
-      /** @description What this Role may do. A deployment may hold a permission this build of Core has never heard of. */
-      permissions: string[];
     };
     MerchantIdentity: {
       /** Format: uuid */
       id: string;
       email: string;
     };
+    RoleSummary: {
+      name: string;
+      /** @description What this Role may do. A deployment may hold a permission this build of Core has never heard of. */
+      permissions: string[];
+    };
     Refusal: {
       /** @description What went wrong, in prose. */
       error: string;
       /** @description Machine-readable. Branch on this. */
       reason: string;
+    };
+    InvalidCredentials: {
+      error: string;
+      /** @enum {string} */
+      reason: "invalid-credentials";
+    };
+    ServerError: {
+      error: string;
+    };
+    Unavailable: {
+      error: string;
+      /** @enum {string} */
+      status: "booting" | "error";
+      migrations: components["schemas"]["MigrationState"];
+    };
+    SignInRequest: {
+      email: string;
+      password: string;
+    };
+    Merchant: components["schemas"]["MerchantIdentity"] & {
+      role: components["schemas"]["RoleSummary"];
     };
     SessionRefusal: {
       error: string;
@@ -720,35 +744,11 @@ export interface components {
       /** @description The permission the Role does not hold. */
       required: string;
     };
-    ServerError: {
-      error: string;
-    };
-    Unavailable: {
-      error: string;
-      /** @enum {string} */
-      status: "booting" | "error";
-      migrations: components["schemas"]["MigrationState"];
-    };
     CreateMerchantRequest: {
       email: string;
       password: string;
       /** @description A Role by name. Defaults to `owner`. */
       role?: string;
-    };
-    Session: {
-      /** Format: date-time */
-      expiresAt: string;
-      merchant: components["schemas"]["MerchantIdentity"];
-      role: components["schemas"]["RoleSummary"];
-    };
-    InvalidCredentials: {
-      error: string;
-      /** @enum {string} */
-      reason: "invalid-credentials";
-    };
-    SignInRequest: {
-      email: string;
-      password: string;
     };
     Store: {
       name: string;

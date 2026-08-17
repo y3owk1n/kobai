@@ -64,9 +64,10 @@ export type KobaiClientOptions = {
    * Presented as `Authorization: Bearer …` on every request.
    *
    * Optional, and omitted entirely by an Admin: `/store` is what a key opens, and `/admin` is
-   * opened by the session cookie the browser carries. Two admin routes are reachable with no
-   * credential at all — `POST /admin/merchants` on a deployment nobody has claimed, and
-   * `POST /admin/session`, which is how a session is obtained in the first place.
+   * opened by the session cookie the browser carries. Exactly one admin route is reachable
+   * with no credential at all — `POST /admin/session`, which is how a session is obtained in
+   * the first place. A deployment's first Merchant is seeded when it boots and cannot be
+   * created over HTTP at all.
    */
   readonly credential?: KobaiCredential;
   /**

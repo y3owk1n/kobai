@@ -1,3 +1,4 @@
+import type { InitialMerchantCredentials } from "../auth/seed.ts";
 import type { KobaiProjectConfig, Logger } from "../config.ts";
 import { createKobai, type Kobai } from "../kobai.ts";
 import type { MigrationOutcome } from "../migrations/run.ts";
@@ -18,6 +19,14 @@ export type TestKobaiOptions = KobaiProjectConfig & {
    * a successful one.
    */
   readonly migrate?: boolean;
+  /**
+   * What this deployment was configured with, for a test whose subject is seeding.
+   *
+   * Nothing is seeded by creating the harness, deliberately: `seedInitialMerchant()` is a
+   * separate call at boot, and a test about what it does has to be able to watch it happen.
+   * A test that just needs somebody signed in reaches for `signInTestMerchant` instead.
+   */
+  readonly initialMerchant?: InitialMerchantCredentials;
   readonly logger?: Logger;
 };
 
@@ -48,6 +57,7 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
   const database = await createTestDatabase();
   const kobai = createKobai({
     databaseUrl: database.url,
+    initialMerchant: options?.initialMerchant,
     migrationSets: options?.migrationSets,
     // A Project's Step overrides, so a test can boot with one swapped and ask the API what
     // changed — the seam ADR-0017's promise is actually experienced at.

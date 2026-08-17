@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTestKobai, TEST_MERCHANT, type TestKobai } from "../testing/index.ts";
+import {
+  createTestKobai,
+  seedTestMerchant,
+  TEST_MERCHANT,
+  type TestKobai,
+} from "../testing/index.ts";
 
 /**
  * Where the session cookie is actually sent, driven the way a browser drives it.
@@ -36,9 +41,9 @@ describe("a Project mounting Core", () => {
     "signs a Merchant in and keeps them signed in — %s",
     async (_case, prefix) => {
       kobai = await createTestKobai();
+      await seedTestMerchant(kobai);
       const browser = openBrowser(mounted(kobai, prefix));
 
-      await browser.request(`${prefix}/admin/merchants`, signIn());
       const signedIn = await browser.request(`${prefix}/admin/session`, signIn());
       // Nothing carried across by hand: the jar sends what a browser would send, or nothing.
       const afterwards = await browser.request(`${prefix}/admin/store`);
@@ -54,6 +59,7 @@ describe("a Project mounting Core", () => {
     "keeps the session off the store surface and off /health — %s",
     async (_case, prefix) => {
       kobai = await createTestKobai();
+      await seedTestMerchant(kobai);
       const browser = await signedIn(mounted(kobai, prefix), prefix);
 
       // Narrowing the cookie to the admin surface was deliberate (ADR-0032): a credential
@@ -70,6 +76,7 @@ describe("a Project mounting Core", () => {
 
   it.each(MOUNTS)("signs the Merchant back out — %s", async (_case, prefix) => {
     kobai = await createTestKobai();
+    await seedTestMerchant(kobai);
     const browser = await signedIn(mounted(kobai, prefix), prefix);
 
     const signedOut = await browser.request(`${prefix}/admin/session`, {
@@ -108,12 +115,15 @@ function mounted(instance: TestKobai, prefix: string): Handler {
 type Handler = (request: Request) => Response | Promise<Response>;
 
 /**
- * A browser that has claimed the deployment and signed in — three requests of setup in front
- * of the assertion that matters, which is why it is here rather than in each test.
+ * A browser that has signed in as the seeded Merchant — the setup in front of the assertion
+ * that matters, which is why it is here rather than in each test.
+ *
+ * The Merchant is seeded by the caller, the way a boot does it: there is no HTTP way to
+ * create the first one (#25), so a browser can only ever sign in as somebody a deployment
+ * was already given.
  */
 async function signedIn(handler: Handler, prefix: string) {
   const browser = openBrowser(handler);
-  await browser.request(`${prefix}/admin/merchants`, signIn());
   const response = await browser.request(`${prefix}/admin/session`, signIn());
   if (response.status !== 201) {
     throw new Error(`signing in at ${prefix}/admin/session answered ${response.status}`);

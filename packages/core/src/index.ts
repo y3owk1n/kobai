@@ -11,6 +11,14 @@ export { API_KEY_KINDS, API_KEY_PREFIX } from "./auth/api-key.ts";
 export type { MerchantIdentity, RoleSummary } from "./auth/identity.ts";
 export type { Permission } from "./auth/permissions.ts";
 export { ALL_PERMISSIONS, OWNER_ROLE, PERMISSIONS } from "./auth/permissions.ts";
+/**
+ * Exported because a Project hands the credentials in and reads the outcome back: the first
+ * Merchant is seeded at boot, and Core has no unauthenticated way to create one (#25).
+ */
+export type {
+  InitialMerchantCredentials,
+  InitialMerchantSeed,
+} from "./auth/seed.ts";
 export type { Price, Product, ProductDetail, Variant } from "./catalog/read.ts";
 export {
   type CoreWorkflowOverrides,

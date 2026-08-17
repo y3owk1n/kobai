@@ -23,11 +23,11 @@ import { messageOf } from "@/lib/refusal";
  * nothing here to store, and the next request the Admin makes carries the session because
  * the browser attaches it on its own (ADR-0032).
  *
- * The second button is for a deployment nobody has claimed yet. `POST /admin/merchants` is
- * anonymous exactly once — the first Merchant claims the deployment — and after that it
- * answers 409. Without it a fresh `docker compose up` would need a `curl` before the Admin
- * could be used at all, which would make "sign in to the Admin" a promise the Admin could
- * not keep on its own.
+ * **There is no "claim this deployment" here, and there must not be one.** A second button
+ * used to call `POST /admin/merchants`, which answered an anonymous request exactly once —
+ * so whoever reached a fresh deployment first owned the Store. kobai has no unauthenticated
+ * write path now (#25): the first Merchant is seeded at boot from the deployment's own
+ * configuration, and the Admin's whole job on a fresh deployment is to say so.
  */
 export function SignIn({
   client,
@@ -60,20 +60,6 @@ export function SignIn({
     setBusy(true);
     setProblem(null);
     await signIn();
-    setBusy(false);
-  }
-
-  async function claim(): Promise<void> {
-    setBusy(true);
-    setProblem(null);
-    const created = await client.POST("/admin/merchants", {
-      body: { email, password },
-    });
-    if (created.data) {
-      await signIn();
-    } else {
-      setProblem(messageOf(created.error, "Claiming this deployment failed."));
-    }
     setBusy(false);
   }
 
@@ -123,20 +109,18 @@ export function SignIn({
             <Button type="submit" disabled={busy}>
               Sign in
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy}
-              onClick={() => void claim()}
-            >
-              Claim this deployment
-            </Button>
           </CardFooter>
         </form>
       </Card>
       <p className="text-muted-foreground text-xs">
         Nothing on this screen is stored in the browser. The session comes back as an
         httpOnly cookie no script can read.
+      </p>
+      <p className="text-muted-foreground text-xs">
+        No Merchant yet? A deployment's first one is seeded when it boots, from{" "}
+        <code>KOBAI_INITIAL_MERCHANT_EMAIL</code> and{" "}
+        <code>KOBAI_INITIAL_MERCHANT_PASSWORD</code>. There is deliberately no way to
+        create one from here.
       </p>
     </main>
   );

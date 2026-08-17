@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestKobai,
   inspectSchema,
+  seedTestMerchant,
   sessionOf,
   signInTestMerchant,
   TEST_MERCHANT,
@@ -38,7 +39,7 @@ const json = (body: unknown, headers: Record<string, string> = {}) =>
   }) satisfies RequestInit;
 
 describe("creating a Merchant", () => {
-  it("lets the first one claim a deployment that has none", async () => {
+  it("refuses an anonymous request, even on a deployment that has no Merchant", async () => {
     kobai = await createTestKobai();
 
     const response = await kobai.request(
@@ -46,13 +47,16 @@ describe("creating a Merchant", () => {
       json({ email: EMAIL, password: PASSWORD }),
     );
 
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toEqual({
-      id: expect.any(String),
-      email: EMAIL,
-      // The seeded Role, holding every permission Core defines.
-      role: { name: "owner", permissions: [...ALL_PERMISSIONS] },
-    });
+    // This route used to answer an anonymous request while no Merchant existed, so whoever
+    // reached a fresh deployment first owned the Store. The first Merchant is seeded at boot
+    // now (#25), and this is an ordinary guarded route with nothing special about it.
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-missing" });
+    // Nothing was created on the way to being refused: the gate answers before the handler.
+    const [row] = await kobai.database.query<{ count: string }>(
+      "select count(*)::text as count from core_merchant",
+    );
+    expect(row?.count).toBe("0");
   });
 
   it("refuses a second one to a request with no session", async () => {
@@ -64,8 +68,6 @@ describe("creating a Merchant", () => {
       json({ email: "second@example.test", password: PASSWORD }),
     );
 
-    // Claiming a deployment is possible exactly once. After that this route is as closed as
-    // every other one.
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toMatchObject({ reason: "session-missing" });
   });
@@ -80,6 +82,12 @@ describe("creating a Merchant", () => {
     );
 
     expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      id: expect.any(String),
+      email: "second@example.test",
+      // The seeded Role, holding every permission Core defines.
+      role: { name: "owner", permissions: [...ALL_PERMISSIONS] },
+    });
     const created = await kobai.request(
       "/admin/session",
       json({ email: "second@example.test", password: PASSWORD }),
@@ -89,10 +97,11 @@ describe("creating a Merchant", () => {
 
   it("refuses a password short enough to be guessed", async () => {
     kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
 
     const response = await kobai.request(
       "/admin/merchants",
-      json({ email: EMAIL, password: "short" }),
+      json({ email: "second@example.test", password: "short" }, owner.headers),
     );
 
     expect(response.status).toBe(400);
@@ -153,7 +162,7 @@ describe("creating a Merchant", () => {
 describe("signing in", () => {
   it("issues a session, and says what it is good for", async () => {
     kobai = await createTestKobai();
-    await kobai.request("/admin/merchants", json({ email: EMAIL, password: PASSWORD }));
+    await seedTestMerchant(kobai, { email: EMAIL, password: PASSWORD });
 
     const response = await kobai.request(
       "/admin/session",
@@ -172,7 +181,7 @@ describe("signing in", () => {
 
   it("puts the credential in an httpOnly cookie and nowhere in the body", async () => {
     kobai = await createTestKobai();
-    await kobai.request("/admin/merchants", json({ email: EMAIL, password: PASSWORD }));
+    await seedTestMerchant(kobai, { email: EMAIL, password: PASSWORD });
 
     const response = await kobai.request(
       "/admin/session",
@@ -216,7 +225,7 @@ describe("the session cookie's attributes", () => {
     url = "http://kobai.test/admin/session",
     headers: Record<string, string> = {},
   ): Promise<string> {
-    await harness.request("/admin/merchants", json({ email: EMAIL, password: PASSWORD }));
+    await seedTestMerchant(harness, { email: EMAIL, password: PASSWORD });
     const response = await harness.request(
       url,
       json({ email: EMAIL, password: PASSWORD }, headers),
@@ -266,7 +275,7 @@ describe("the session cookie's attributes", () => {
 
     const cookie = await cookieFrom(kobai);
 
-    // `devbox run up` serves http://localhost:3000. A cookie that only ever set over HTTPS
+    // `devbox run up` serves http://localhost. A cookie that only ever set over HTTPS
     // would make signing in impossible there.
     expect(cookie).not.toContain("Secure");
   });
@@ -345,6 +354,104 @@ describe("a session authenticates the admin surface", () => {
     // by a cookie now, so naming `Bearer` would be an instruction that cannot work. The store
     // gate still sends it, because there it is still true.
     expect(response.headers.get("www-authenticate")).toBeNull();
+  });
+});
+
+/**
+ * The property #25 exists to establish, and the one that has to outlive it: **nothing under
+ * `/admin` may be reached without a session.**
+ *
+ * It is swept rather than listed, off the description this build produces, so a route added
+ * to the wrong half of `admin.ts` fails here on the day it is written instead of on the day
+ * somebody notices. `POST /admin/session` is the one operation excused, because it is what
+ * mints a session — and it is excused by name, so removing the exception is a deliberate act.
+ */
+describe("the admin surface has no unauthenticated write path", () => {
+  /** Every admin operation the description carries, in the spelling a request is made in. */
+  function adminOperations(harness: TestKobai): { method: string; path: string }[] {
+    const paths = harness.openapi().paths ?? {};
+    return Object.entries(paths)
+      .filter(([path]) => path.startsWith("/admin"))
+      .flatMap(([path, item]) =>
+        Object.keys(item as object)
+          .filter((method) => METHODS.includes(method))
+          .map((method) => ({
+            method: method.toUpperCase(),
+            // A parameter has to be some value; which one cannot matter, because the gate
+            // answers before anything reads it.
+            path: path.replace(/\{\w+\}/g, "00000000-0000-4000-8000-000000000000"),
+          })),
+      )
+      .filter(({ method, path }) => !(method === "POST" && path === "/admin/session"));
+  }
+
+  const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
+
+  it("refuses every operation it serves to a request carrying no session", async () => {
+    kobai = await createTestKobai();
+    const operations = adminOperations(kobai);
+
+    for (const { method, path } of operations) {
+      const response = await kobai.request(path, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: method === "GET" || method === "DELETE" ? undefined : JSON.stringify({}),
+      });
+
+      expect(response.status, `${method} ${path}`).toBe(401);
+      await expect(response.json(), `${method} ${path}`).resolves.toMatchObject({
+        reason: "session-missing",
+      });
+    }
+
+    // A sweep that found nothing would pass every assertion made over it. Eleven is every
+    // admin operation but `POST /admin/session`; the number moving is a route being added or
+    // removed, which is exactly when somebody should look at this file.
+    expect(operations).toHaveLength(11);
+    // …and every one of them is refused on a deployment that has no Merchant at all, which
+    // is the state the old anonymous path existed for.
+    const [row] = await kobai.database.query<{ count: string }>(
+      "select count(*)::text as count from core_merchant",
+    );
+    expect(row?.count).toBe("0");
+  });
+
+  it("refuses a write to a path it does not serve, rather than saying it is not there", async () => {
+    kobai = await createTestKobai();
+
+    // The gate is mounted `use("*")`, so it answers before routing (ADR-0040). A caller
+    // cannot map the surface by watching which paths 404, and — the half that matters here —
+    // a write to a path nothing serves is refused for the same reason as a write to one that
+    // is: nobody asked.
+    const response = await kobai.request("/admin/anything-at-all", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ reason: "session-missing" });
+  });
+
+  it("mints nothing on the one operation that answers without a session", async () => {
+    kobai = await createTestKobai();
+
+    // `POST /admin/session` is the exception above, so it is the one route worth asserting
+    // *cannot write*: on a deployment with no Merchant it answers the same refusal it
+    // answers a wrong password with, and leaves the database exactly as it found it.
+    const response = await kobai.request(
+      "/admin/session",
+      json({ email: EMAIL, password: PASSWORD }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "invalid-credentials",
+    });
+    const [row] = await kobai.database.query<{ count: string }>(
+      "select count(*)::text as count from core_merchant",
+    );
+    expect(row?.count).toBe("0");
   });
 });
 
@@ -487,7 +594,7 @@ describe("permissions gate the endpoint", () => {
     expect(session.status).toBe(200);
   });
 
-  it("refuses a Role without merchant:write on the one route that gates itself", async () => {
+  it("refuses the route that adds a colleague to a Role without merchant:write", async () => {
     kobai = await createTestKobai();
     const owner = await signInTestMerchant(kobai);
     await kobai.db.execute(
@@ -512,11 +619,11 @@ describe("permissions gate the endpoint", () => {
       json({ email: "third@example.test", password: PASSWORD }, headers),
     );
 
-    // `POST /admin/merchants` is the one route that cannot carry `requirePermission` — the
-    // *first* Merchant has to be creatable with no session at all — so it asks the same
-    // question in its handler instead. This is what says that detour actually refuses:
-    // `openapi.test.ts` excuses this route from the gate check on the strength of it, and an
-    // excused route that had quietly stopped checking would be the worst of both.
+    // `POST /admin/merchants` was the one route that could not carry `requirePermission`,
+    // because the *first* Merchant had to be creatable with no session at all; it asked the
+    // same question in its handler and `openapi.test.ts` excused it from the gate check on
+    // the strength of that. The first Merchant is seeded at boot now (#25), so the route is
+    // gated like every other one and the excuse is gone from both places.
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
       reason: "permission-denied",

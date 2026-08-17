@@ -28,9 +28,23 @@ services:
       # registry, so there is nothing outside this folder to build from.
       context: .
       dockerfile: Dockerfile
+    # A list rather than a map, and that is load-bearing for the last two entries. Compose
+    # forwards no variable a service does not name, and the two forms differ in what they do
+    # when one is unset: `KOBAI_…: ${KOBAI_…}` sets it to an empty string (and warns every
+    # time this file is parsed), while a bare name sets it *not at all*. The second is what
+    # kobai is owed — "nobody configured a Merchant" is an answer it reports, not a blank one
+    # it has to interpret. Both forms read `.env` as well as the shell, which is where
+    # `.env.example` sends you. A map cannot hold a bare name, so the whole block is a list.
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
-      PORT: 3000
+      - DATABASE_URL=postgres://${POSTGRES_USER:-kobai}:${POSTGRES_PASSWORD:-kobai}@db:5432/${POSTGRES_DB:-kobai}
+      - PORT=3000
+      # Who this deployment's first Merchant is — the account you sign in to the Admin with,
+      # created on the first boot that finds none. Passed through with no default on purpose:
+      # a value written here would be a password every deployment that never read this line
+      # shared. Unset, the application still boots and serves, and says in its log that
+      # nobody can administer it. Set both in `.env`; see `.env.example`.
+      - KOBAI_INITIAL_MERCHANT_EMAIL
+      - KOBAI_INITIAL_MERCHANT_PASSWORD
     ports:
       - "${PORT:-3000}:3000"
     depends_on:
