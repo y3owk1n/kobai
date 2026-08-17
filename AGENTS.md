@@ -305,6 +305,16 @@ saying whether a path exists, and an endpoint handing out the whole surface anon
 undo that. A Developer reads it from the package (`@kobai/core/openapi.json`); a TypeScript
 one installs `@kobai/client`.
 
+**A path no route serves is a refusal too, and it is not in the description.** One
+`app.notFound` in `app.ts` answers every unrouted path — on both surfaces and at the root —
+with the same `{ error, reason: "not-found" }` at 404, because a client that got JSON for
+every failure it could anticipate and plain text for the one it could not would find out at
+runtime (#33). It is a handler rather than a route, so it is deliberately absent from the
+description: a description enumerates the paths that exist. It also runs *after* both
+credential gates, which are mounted `use("*")` and therefore answer before routing — so an
+anonymous caller gets 401 for a nonexistent admin path, not 404, and cannot map either
+surface. That ordering is a decision, not an accident; ADR-0040 says where the line is.
+
 `openapi-typescript` is pinned to **6.7.6, exactly**, and `.github/dependabot.yml` holds the
 major back. Version 7 builds its output with the TypeScript compiler API and TypeScript 7
 ships none — see below.

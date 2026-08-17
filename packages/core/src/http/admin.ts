@@ -583,8 +583,9 @@ function refused<Reason extends string, Status extends ContentfulStatusCode>(
 /**
  * There is deliberately no catch-all here.
  *
- * An unrouted `/admin` path falls through to Hono's own plain-text 404, which is not the
- * JSON shape `/store` answers with — an inconsistency between the two surfaces, filed as
- * #33 and fixed there rather than here. The description says what is true today: it names
- * the routes that exist, and promises nothing about the ones that do not.
+ * An unrouted `/admin` path is answered by `app.notFound` in `app.ts`, in the same
+ * `{ error, reason }` shape every refusal above uses (#33, ADR-0040). One handler covers
+ * every surface rather than one per surface, so there is nothing to keep in step here. The
+ * description is unchanged either way: it names the routes that exist, and promises nothing
+ * about the ones that do not.
  */

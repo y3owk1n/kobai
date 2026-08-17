@@ -45,10 +45,11 @@ function describeCore() {
  */
 function servedOperations(routes: readonly RouteEntry[]): string[] {
   const served = routes
-    // `ALL` is what a wildcard mount registers as, and there are exactly two: `/admin/*`
-    // and `/store/*`, carrying the migration gate, the two credential gates, and the store
-    // surface's own JSON 404. None of them is a path a caller asks for by name, and a
-    // description enumerates paths, so none belongs in one.
+    // `ALL` is what a wildcard mount registers as, and there are exactly two paths:
+    // `/admin/*` and `/store/*`, carrying the migration gate and the two credential gates.
+    // None of them is a path a caller asks for by name, and a description enumerates paths,
+    // so none belongs in one. The JSON 404 an unrouted path gets is not here at all — it is
+    // `app.notFound`, which is not a route (ADR-0040).
     .filter((route) => route.method !== "ALL")
     .map(operationOf);
 

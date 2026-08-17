@@ -97,6 +97,46 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
     return c.json({ error: "Internal Server Error" }, 500);
   });
 
+  /**
+   * Anything no route answered — the one refusal a client cannot anticipate.
+   *
+   * Every other refusal is declared: a route names the statuses it answers with, those reach
+   * `packages/core/openapi.json`, and `@kobai/client` turns them into a union a storefront
+   * narrows on. This one belongs to no route, which is exactly why it used to be the odd
+   * shape out: Hono's own 404 is plain text, so a client got JSON for every failure it could
+   * plan for and text for the one it could not, and found out at runtime (#33).
+   *
+   * **One handler for the whole application**, rather than one per surface. A typo at the
+   * root is the same mistake as a typo under `/admin`, and a Project hands kobai every path
+   * it does not serve itself (`reference/src/app.ts`), so the surface that has to answer in
+   * one shape is all of it. A request with a known path and an unserved method lands here
+   * too, and is reported as a path that is not there: distinguishing the two would mean
+   * enumerating the methods of every path, which the description already does for anyone who
+   * needs the list.
+   *
+   * **It is not a route, so it is deliberately absent from the description** — the same
+   * bargain the store surface's catch-all made before this replaced it. A description
+   * enumerates the paths that exist; this answers the paths that do not. A generated client
+   * therefore has no type for this body, which is consistent rather than a gap: it also has
+   * no way to make the call that produces one.
+   *
+   * **It never runs before a gate.** Hono reaches a not-found handler only after every
+   * middleware that matched has called `next()`, and both surfaces mount their credential
+   * gate with `use("*")` — so an anonymous request to a nonexistent `/admin` path is answered
+   * 401 by the session gate and never gets here. That is the intended order (ADR-0040): an
+   * anonymous caller is told the same thing about a path that exists and a path that does
+   * not, and cannot map either surface by watching which ones 404.
+   */
+  app.notFound((c) =>
+    c.json(
+      {
+        error: `kobai serves no ${c.req.method} ${c.req.path}.`,
+        reason: "not-found" as const,
+      },
+      404,
+    ),
+  );
+
   app.openapi(healthRoute, (c) => {
     const body = health(deps.migrations.get());
     return c.json(body, body.status === "ok" ? 200 : 503);
