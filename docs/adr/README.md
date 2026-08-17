@@ -66,6 +66,8 @@ New to the project? These five carry the shape of everything else:
 | [0038](./0038-widening-a-populated-table-takes-three-migrations.md) | Widening a populated table takes three migrations, and the middle one is hand-written | Accepted |
 | [0039](./0039-the-lint-gate-fails-on-every-finding.md) | The lint gate fails on every finding, and `biome.json` says so out loud | Accepted — sharpens 0031 |
 | [0040](./0040-an-unrouted-path-is-a-refusal-and-the-gate-answers-before-it.md) | An unrouted path is a refusal like any other, and the gate answers before it | Accepted |
+| [0041](./0041-the-first-merchant-is-seeded-at-boot.md) | The first Merchant is seeded at boot, and Core has no unauthenticated write path | Accepted — supersedes part of 0020 |
+| [0044](./0044-the-cli-and-migrator-agreement-is-asserted-in-the-gate.md) | The CLI/migrator agreement is asserted in the gate, not behind an opt-in step | Accepted — enforces 0030 |
 
 ## Prototypes
 
