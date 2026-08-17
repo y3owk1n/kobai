@@ -72,6 +72,24 @@ carries the reasoning in full. Three parts of it are durable enough to belong he
   Node than the one that runs means typechecking against functions that do not exist at
   runtime. The Node pin is recorded in ADR-0031; when it moves, lift the `ignore`.
 
+### There is no TypeScript compiler API
+
+TypeScript 7 ships **no programmatic API**. Its `exports` map has one root entry,
+`./lib/version.cjs`, declaring `version` and `versionMajorMinor` and nothing else. Code
+that reached for `ts.readConfigFile`, `ts.sys` or `ts.createProgram` under 5.x has no
+equivalent to move to.
+
+So: **do not reach for the compiler to do a job a parser can do.** `vitest.config.ts` reads
+`tsconfig.base.json` with `jsonc-parser`, because what it needed was JSON-with-comments,
+not a compiler. That is the pattern — a `tsconfig` is a file, and reading one is parsing.
+
+Two escape hatches exist and were both rejected in #28: `@typescript/typescript6` pins a
+second, older compiler alongside the real one, and `typescript/unstable/sync` is unstable
+by name and spawns the Go binary to read a single file.
+
+TypeScript 7.1 is expected to reintroduce an API, and it will be a **different** one. Treat
+anything written against the old shape as needing a rewrite rather than a version bump.
+
 ### Layout
 
 | Path | What |
