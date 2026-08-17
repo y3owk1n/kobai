@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createTestKobai, inspectSchema } from "@kobai/core/testing";
+import { createTestKobai, inspectSchema, signInTestMerchant } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
 import config from "../kobai.config.ts";
 
@@ -50,8 +50,9 @@ describe("the reference Project's configuration", () => {
 
   it("still serves the Store, because a wired Plugin changes no Core behaviour", async () => {
     await using kobai = await createTestKobai(config);
+    const merchant = await signInTestMerchant(kobai);
 
-    const response = await kobai.request("/admin/store");
+    const response = await kobai.request("/admin/store", { headers: merchant.headers });
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({

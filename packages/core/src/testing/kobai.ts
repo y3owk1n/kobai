@@ -36,10 +36,13 @@ export const silentLogger: Logger = { info: () => {}, error: () => {} };
  *
  * ```ts
  * await using kobai = await createTestKobai();
- * const response = await kobai.request("/admin/store");
+ * const merchant = await signInTestMerchant(kobai);
+ * const response = await kobai.request("/admin/store", { headers: merchant.headers });
  * ```
  *
- * `await using` drops the database on the way out. Without it, call `close()`.
+ * The admin surface is closed by default, so anything behind it needs a session — see
+ * `signInTestMerchant`. `await using` drops the database on the way out; without it,
+ * call `close()`.
  */
 export async function createTestKobai(options?: TestKobaiOptions): Promise<TestKobai> {
   const database = await createTestDatabase();

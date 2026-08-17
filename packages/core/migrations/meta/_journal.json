@@ -15,6 +15,20 @@
       "when": 1786938414167,
       "tag": "0001_seed_store",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786941986154,
+      "tag": "0002_tired_secret_warriors",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786941997774,
+      "tag": "0003_seed_owner_role",
+      "breakpoints": true
     }
   ]
 }

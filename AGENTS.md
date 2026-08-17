@@ -75,11 +75,19 @@ Reach for `createTestKobai` from `@kobai/core/testing`: it creates a throwaway d
 every migration set into it, and hands back an object you dispatch requests at.
 
 ```ts
-import { createTestKobai } from "@kobai/core/testing";
+import { createTestKobai, signInTestMerchant } from "@kobai/core/testing";
 
 await using kobai = await createTestKobai(); // `using` drops the database on the way out
-const response = await kobai.request("/admin/store");
+const merchant = await signInTestMerchant(kobai);
+const response = await kobai.request("/admin/store", { headers: merchant.headers });
 ```
+
+The **admin surface is closed by default**: `/admin/*` sits behind a Merchant session, and
+each route names the one permission its Role must hold. `signInTestMerchant` creates the
+deployment's first Merchant and signs them in through the public API, which is what anything
+behind the gate needs before it can assert on the thing it actually cares about. A test about
+*not* holding a permission should create a narrower Role itself — that is the subject, and a
+helper would hide it.
 
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive

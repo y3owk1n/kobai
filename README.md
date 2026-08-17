@@ -3,8 +3,8 @@
 Open source headless commerce engine with a pre-built admin UI, built to be extended
 without forking.
 
-> **Status: walking skeleton in progress.** It boots, migrates and serves a Store; the
-> catalog, the Workflows and the Admin are being built on top of it. See
+> **Status: walking skeleton in progress.** It boots, migrates, and a Merchant signs in to
+> read their Store; the catalog, the Workflows and the Admin are being built on top of it. See
 > [`CONTEXT.md`](./CONTEXT.md) for the vocabulary and [`docs/adr/`](./docs/adr/) for the
 > decisions made so far.
 

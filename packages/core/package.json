@@ -28,6 +28,7 @@
     "// db:push": "There is deliberately no db:push script — not here, not in any Plugin, and not in the reference Project. `drizzle-kit push` diffs a schema against the LIVE database, so pushing Core's schema at a database holding Plugin tables reports `[/] Changes applied` and silently DROPS every Plugin table, while leaving their migration tracking rows intact so the migration runner believes the work is done and cannot repair it. Observed, not theorised: see FINDINGS.md section E on branch prototype/drizzle-multi-migration, and docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md. `tablesFilter` mitigates it and is set below anyway, but the primary control is that the dangerous command is never available."
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.1.0",
     "drizzle-orm": "^0.44.6",
     "hono": "^4.6.14",
     "pg": "^8.16.3"
