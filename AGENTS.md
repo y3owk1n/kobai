@@ -122,6 +122,20 @@ behind the gate needs before it can assert on the thing it actually cares about.
 *not* holding a permission should create a narrower Role itself — that is the subject, and a
 helper would hide it.
 
+The **store surface is closed by default too, behind a different gate**: `/store/*` sits
+behind an API key rather than a Merchant session (ADR-0020), so neither credential is worth
+anything on the other surface. `createTestApiKey` mints one through the public API, which
+means a Merchant has to be signed in first:
+
+```ts
+const merchant = await signInTestMerchant(kobai);
+const key = await createTestApiKey(kobai, merchant); // secret unless you ask otherwise
+const price = await kobai.request("/store/variants/…/price", { headers: key.headers });
+```
+
+A test whose subject is the *kind* of key should ask for the kind it means
+(`{ kind: "publishable" }`) and say why, rather than leaning on the default.
+
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive
 the runner yourself:
@@ -147,6 +161,14 @@ await expect(schema.columnsOwnedBy("core")).resolves.toEqual(stockCoreColumns);
 It also reads `migrationTracking()`, `columnsOf()` and `indexedColumnsOf()`, and it scans
 every non-system schema rather than only `public` — the prototype's inspector reported "no
 tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
+
+The **Workflow seam** is the one place a test may reach past HTTP into a module, and it is
+allowed because a declared Workflow *is* a public interface: it is one of ADR-0003's five
+Extension Points, imported and read by a Project. `describe()` naming its Steps in order, and
+a replacement being rejected by the compiler, are promises no response body can carry — so
+`packages/core/src/workflow/workflow.test.ts` asserts them directly, including the type-level
+ones, which the `typecheck` step of the gate is what actually runs. Everything a Workflow
+*does* is still tested through HTTP.
 
 The **packaging seam** covers what none of those can, because it is not about a running
 database at all: that the `migrations/` directory each package resolves relative to its

@@ -151,6 +151,54 @@ export const session = pgTable(
 export type SessionRow = typeof session.$inferSelect;
 
 /**
+ * An API key — the credential the **store surface** is gated by (ADR-0020).
+ *
+ * Not a second kind of Merchant session, and deliberately not in the same table: a Session
+ * is a person who signed in, expires on its own, and carries a Role; a key is a deployment
+ * a Developer wired up, lives until it is revoked, and carries no Role at all. Merging them
+ * would put "which permissions does a storefront hold" on the same axis as "which
+ * permissions does a person hold", and there is no Shopper in Core for it to answer about
+ * (ADR-0020).
+ *
+ * What is stored is a SHA-256 of the key and never the key — the same property the password
+ * and session-token columns have, for the same reason: a dump of this table hands an
+ * attacker nothing they can present. The consequence is that a key is shown once, at
+ * creation, and cannot be recovered afterwards.
+ *
+ * `kind` is `publishable` or `secret`, and it is a *record* of a distinction the key value
+ * already carries in its prefix (spec story 45). Reading it needs no database lookup, which
+ * is the point — a Developer must be able to see that a key is secret while looking at the
+ * string they are about to paste into a browser bundle.
+ */
+export const apiKey = pgTable(
+  "core_api_key",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** What the key is for, so a Merchant can tell which one to revoke. */
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    /** SHA-256 of the whole key, prefix included. Unique, so it is also the lookup index. */
+    tokenHash: text("token_hash").notNull().unique(),
+    /**
+     * When the key stopped working, or null while it still does. Revocation is a column
+     * rather than a delete because a Merchant asking "was this key ever used here" after an
+     * incident should not be answered by an absence.
+     */
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // In DDL rather than only in TypeScript: a third kind would need a decision about where
+    // it may safely be put, and that decision should not be reachable by an insert.
+    check("core_api_key_kind_is_known", sql`${table.kind} in ('publishable', 'secret')`),
+  ],
+);
+
+export type ApiKeyRow = typeof apiKey.$inferSelect;
+
+/**
  * A Product — a catalog entry a Merchant manages and a Shopper browses.
  *
  * It carries no price, no SKU and no stock, because it is **never sellable in itself**

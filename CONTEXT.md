@@ -38,6 +38,14 @@ One named thing a Role may do, as a string — `store:read`. Additive: a new Per
 new string, not a new structure.
 _Avoid_: scope, grant, right, capability, claim
 
+**API key**:
+The credential a storefront authenticates with, and the only thing that opens the store
+surface. **Publishable** or **secret**, and which one is visible in the value itself —
+`kobai_pk_…` against `kobai_sk_…` — so a secret shipped to a browser is a mistake a
+Developer can see. Belongs to a deployment rather than to a person, so it carries no Role.
+Core owns these; Shopper credentials it does not (ADR-0020).
+_Avoid_: token, secret (that is one *kind* of key), credential, access key, API token
+
 **Session**:
 A signed-in Merchant, held as a row with an expiry, presented on a request as a bearer
 token. Ending one is deleting the row, so signing out takes effect immediately. There is no

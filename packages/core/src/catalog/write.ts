@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
+import { isUuid } from "../db/uuid.ts";
 import { readStore } from "../store/read.ts";
-import { isUuid, type Price, type ProductDetail, readProduct } from "./read.ts";
+import { type Price, type ProductDetail, readProduct } from "./read.ts";
 
 /**
  * Changing the catalog: creating a Product, and pricing a Variant.

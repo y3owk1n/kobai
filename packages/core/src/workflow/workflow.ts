@@ -1,0 +1,149 @@
+import { runSteps, type WorkflowRun } from "./run.ts";
+import type { AnyStep, Step, WorkflowContext } from "./step.ts";
+
+/**
+ * A **Workflow** — a named, declared commerce process composed of ordered Steps
+ * (`CONTEXT.md`).
+ *
+ * A Workflow is a *declaration* first and a thing that runs second. That order matters:
+ * ADR-0003 promises a Developer can see what the system does before changing it, so the
+ * object below can be read — `describe()` names every Step in order — without opening Core.
+ *
+ * It is built one Step at a time, and the builder carries the type of what the last Step
+ * produced. Declaring a Step whose input does not match is a compile error at the point of
+ * declaration, which is what makes "the runner executes the Steps in declared order" safe to
+ * implement with a single cast rather than with runtime checks nobody can act on.
+ *
+ * ```ts
+ * const workflow = defineWorkflow<Request>("resolve-price")
+ *   .step(loadPrices)   // Request      → LoadedPrices
+ *   .step(selectPrice)  // LoadedPrices → ResolvedPrice
+ *   .build();
+ * ```
+ */
+
+/** The declared input and output of one Step, as the compiler sees it. */
+export type StepShape = { readonly input: unknown; readonly output: unknown };
+
+/** Every Step's shape, keyed by the slot it fills. */
+export type StepShapes = { readonly [slot: string]: StepShape };
+
+/** A Workflow that has no Steps yet — the shape map a builder starts from. */
+export type NoStepShapes = Readonly<Record<never, never>>;
+
+/**
+ * One position in a Workflow: the **slot** the declaration named, and the Step filling it.
+ *
+ * The two are separate because they stop being the same thing the moment a Project replaces
+ * a Step (ADR-0017): the slot is what the override map is keyed by and what stays stable
+ * across the swap, while `step.name` is whatever the implementation calls itself. Today
+ * every entry has them equal, because nothing has been replaced yet.
+ */
+export type WorkflowStep = {
+  readonly slot: string;
+  readonly step: AnyStep;
+};
+
+/** One Step, as a Developer inspecting the declaration sees it. */
+export type StepDescriptor = { readonly name: string };
+
+/**
+ * A Workflow as plain data — what it is called and what it is made of, in order.
+ *
+ * Serialisable on purpose: this is the answer to "what does this Workflow do", and it should
+ * be as easy to log or serve as it is to read in a debugger.
+ */
+export type WorkflowDescription = {
+  readonly name: string;
+  readonly steps: readonly StepDescriptor[];
+};
+
+export type Workflow<In, Out, Shapes extends StepShapes = StepShapes> = {
+  readonly name: string;
+  /** Every position, in declared order. */
+  readonly steps: readonly WorkflowStep[];
+  /** What this Workflow is made of, without reading Core's implementation. */
+  describe(): WorkflowDescription;
+  /** Runs the declared Steps in order, through Core's runner. */
+  run(input: In, context: WorkflowContext): Promise<WorkflowRun<Out>>;
+  /**
+   * The input and output type of each slot, **for the compiler only**. Nothing assigns it,
+   * so reading it at runtime yields `undefined`; it is declared so that a replacement can be
+   * checked against the Step it replaces (ADR-0017, spec story 27). Read it through
+   * {@link StepInput} and {@link StepOutput} rather than directly.
+   */
+  readonly stepShapes?: Shapes;
+};
+
+/** Any Workflow at all — the supertype the helpers below match against. */
+export type AnyWorkflow = Workflow<never, unknown, StepShapes>;
+
+/** The slots a Workflow declares, as a union of string literals. */
+export type WorkflowSlots<W extends AnyWorkflow> =
+  W extends Workflow<never, unknown, infer Shapes> ? keyof Shapes & string : never;
+
+/** What the Step in `Slot` is given. A replacement must accept it. */
+export type StepInput<W extends AnyWorkflow, Slot extends WorkflowSlots<W>> =
+  W extends Workflow<never, unknown, infer Shapes>
+    ? Slot extends keyof Shapes
+      ? Shapes[Slot]["input"]
+      : never
+    : never;
+
+/** What the Step in `Slot` must produce. A replacement may not widen or narrow it. */
+export type StepOutput<W extends AnyWorkflow, Slot extends WorkflowSlots<W>> =
+  W extends Workflow<never, unknown, infer Shapes>
+    ? Slot extends keyof Shapes
+      ? Shapes[Slot]["output"]
+      : never
+    : never;
+
+/**
+ * Declares a Workflow, one Step at a time.
+ *
+ * `Current` is the type the Steps declared so far have arrived at, so the next Step is
+ * checked against it. `Shapes` accumulates what each slot takes and gives back, which is the
+ * record a Project's override is measured against.
+ */
+export type WorkflowBuilder<In, Current, Shapes extends StepShapes> = {
+  step<Name extends string, Out>(
+    step: Step<Name, Current, Out>,
+  ): WorkflowBuilder<
+    In,
+    Out,
+    Shapes & {
+      readonly [Slot in Name]: { readonly input: Current; readonly output: Out };
+    }
+  >;
+  /** Freezes the declaration. The result is data, plus the two ways of reading it. */
+  build(): Workflow<In, Current, Shapes>;
+};
+
+export function defineWorkflow<In>(name: string): WorkflowBuilder<In, In, NoStepShapes> {
+  return builder(name, []);
+}
+
+function builder<In, Current, Shapes extends StepShapes>(
+  name: string,
+  steps: readonly WorkflowStep[],
+): WorkflowBuilder<In, Current, Shapes> {
+  return {
+    step(step) {
+      // The declaration is rebuilt rather than mutated, so a builder is never half a
+      // Workflow and holding on to an earlier one keeps meaning what it meant.
+      return builder(name, [...steps, { slot: step.name, step: step as AnyStep }]);
+    },
+
+    build() {
+      return {
+        name,
+        steps,
+        describe: () => ({
+          name,
+          steps: steps.map((entry) => ({ name: entry.slot })),
+        }),
+        run: (input, context) => runSteps<Current>(steps, input, context),
+      };
+    },
+  };
+}

@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Database } from "../db/client.ts";
+import { bearerToken } from "./bearer.ts";
 import type { Permission } from "./permissions.ts";
 import {
   type Authenticated,
@@ -30,9 +31,6 @@ import {
 
 /** Hono's typing for the guarded sub-app: `c.get("auth")` is available below the gate. */
 export type AdminEnv = { Variables: { auth: Authenticated } };
-
-/** How a session is presented on a request. */
-const SCHEME = "bearer";
 
 /**
  * Why the gate said no, ready to be sent. 401 when nobody is asking, 403 when somebody is and
@@ -151,18 +149,3 @@ const REFUSAL = {
   unknown: "This session does not exist. Sign in again at POST /admin/session.",
   expired: "This session has expired and you have been signed out. Sign in again.",
 } as const satisfies Record<SessionRejection, string>;
-
-type BearerToken =
-  | { readonly ok: true; readonly token: string }
-  | { readonly ok: false; readonly reason: "missing" | "malformed" };
-
-function bearerToken(header: string | undefined): BearerToken {
-  if (header === undefined) return { ok: false, reason: "missing" };
-
-  const parts = header.trim().split(/\s+/);
-  const [scheme, token] = parts;
-  if (scheme?.toLowerCase() !== SCHEME || parts.length !== 2 || !token) {
-    return { ok: false, reason: "malformed" };
-  }
-  return { ok: true, token };
-}

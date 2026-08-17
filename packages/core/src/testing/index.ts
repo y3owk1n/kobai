@@ -2,6 +2,7 @@
  * `@kobai/core/testing` — the test harness, shipped rather than kept private, because a
  * Plugin author needs the same seam Core tests through.
  */
+export { createTestApiKey, type TestApiKey } from "./api-key.ts";
 export {
   createTestDatabase,
   type TestDatabase,

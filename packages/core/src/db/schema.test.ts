@@ -18,12 +18,15 @@ import { createTestKobai, inspectSchema } from "../testing/index.ts";
  * fails this test, which is the point of the list.
  *
  * A session is deliberately absent: it is a Merchant's transient claim rather than a row
- * anybody would hang a field off, and it is deleted the moment it stops being useful.
+ * anybody would hang a field off, and it is deleted the moment it stops being useful. An
+ * API key is not absent for the same reason it is not a session — it is a long-lived,
+ * named thing a Merchant manages, and a Plugin wanting to hang a field off one is ordinary.
  */
 const PRINCIPAL_ENTITIES = [
   "core_store",
   "core_merchant",
   "core_role",
+  "core_api_key",
   "core_product",
   "core_variant",
   "core_price",
