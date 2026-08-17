@@ -153,6 +153,31 @@ _Avoid_: basket, bag, session, checkout, order (never)
 The immutable financial record of a completed purchase. Never edited after capture.
 _Avoid_: purchase, transaction, sale, checkout, receipt
 
+**Order number**:
+The human-facing identifier of an Order, distinct from its ID — what a Shopper reads over the
+phone and an accountant puts in a spreadsheet. Monotonic per Store and stable forever, and
+**not promised gapless**: gapless numbering is an invoicing requirement, and invoicing is not
+Core's.
+_Avoid_: reference, order ID (that is the other one), invoice number, receipt number
+
+**Capture**:
+The moment an Order comes into existence and becomes immutable, and the moment Reservations
+are consumed — one database transaction, and the last thing in `place-order` that can fail.
+Nothing that happens after it can be compensated, because an Order is never edited.
+_Avoid_: checkout, place (the Workflow is `place-order`; the moment is Capture), confirm,
+submit, payment capture (that is money, and is always written in full)
+
+**Payment**:
+The record that money was received against an Order. Core's, because without it an Order
+holds no record of the money and a Return has nothing to refund against.
+_Avoid_: transaction, charge, transfer, settlement
+
+**Payment Provider**:
+The named interface Core calls to take a Payment, substituted by the Project. Core defines it
+and ships no implementation — a deployment with none configured still boots and still serves
+its catalog, and refuses only to place an Order. See ADR-0053.
+_Avoid_: gateway, PSP, processor, payment method (that is what a Shopper chooses)
+
 **Line Item**:
 One row of a Cart or an Order. On an Order it holds a **snapshot** of title, SKU, price
 and tax as at capture, and references its Variant for navigation only — never for display
@@ -239,6 +264,11 @@ These appeared in early descriptions of kobai and should not be used again:
 - **"override control base"** — what was meant is the **Project**, plus the extension
   points a Plugin registers against. See ADR-0001.
 - **"time-based pricing"** — see the ban below.
+- **"checkout"** — it was already refused under both **Cart** and **Order**, and it kept
+  coming back as the name for the process between them. It names three different things at
+  once: the Cart being edited, the act of placing an Order, and the page a storefront builds.
+  The Workflow is **`place-order`** and the moment it ends at is **Capture**; the page belongs
+  to whoever built the storefront (ADR-0002) and is not kobai's to name.
 
 A note on **Bundle**: a Variant composed of other Variants is a **Plugin** concept, never
 Core (ADR-0027). If the word is wanted for a mere marketing grouping, the term is

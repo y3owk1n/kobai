@@ -54,7 +54,7 @@ New to the project? These five carry the shape of everything else:
 | [0026](./0026-postgres-backed-jobs-pluggable-storage-in-process-worker.md) | Postgres-backed jobs, pluggable storage, in-process worker | Accepted |
 | [0027](./0027-holds-roles-and-bundles-re-decided-on-platform-terms.md) | Holds, roles and bundles, re-decided on platform terms | Accepted |
 | [0028](./0028-the-core-membership-rule.md) | The Core membership rule | Accepted |
-| [0029](./0029-the-reference-project-is-the-release-gate-and-content-is-built-first.md) | The reference Project is the release gate, and the content Plugin is built first | Accepted |
+| [0029](./0029-the-reference-project-is-the-release-gate-and-content-is-built-first.md) | The reference Project is the release gate, and ~~the content Plugin is built first~~ | **"Content first" amended by 0051.** Release gate stands |
 | [0030](./0030-generate-and-migrate-only-never-drizzle-kit-push.md) | `generate` and `migrate` only — never `drizzle-kit push` | Accepted |
 | [0031](./0031-the-runtime-shape-devbox-a-pnpm-workspace-hono-and-one-gate.md) | The runtime shape: devbox, a pnpm workspace, Hono, and one gate command | Accepted |
 | [0032](./0032-merchant-sessions-travel-in-an-httponly-cookie.md) | Merchant sessions travel in an httpOnly cookie, and SameSite is the CSRF answer | Accepted |
@@ -74,6 +74,9 @@ New to the project? These five carry the shape of everything else:
 | [0048](./0048-readiness-is-asked-over-the-transport-the-application-uses.md) | Readiness is asked over the transport the application uses, and waiting is not migrating | Accepted |
 | [0049](./0049-migration-counts-are-derived-and-the-strength-moved-to-the-effect.md) | Migration counts are derived, and the strength moved to the effect | Accepted |
 | [0050](./0050-the-idle-window-is-a-projects-the-cap-is-cores.md) | The idle window is a Project's, the absolute cap is Core's | Accepted — supersedes part of 0045 |
+| [0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md) | The commerce spine comes before the content Plugin | Accepted — amends 0029 |
+| [0052](./0052-a-fulfilment-strategy-is-dependency-substitution.md) | A Fulfilment Strategy is dependency substitution, not a sixth Extension Point | Accepted — reconciles 0014 with 0003 |
+| [0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) | Core owns the Payment record and ships no provider | Accepted |
 
 ## Prototypes
 
@@ -92,6 +95,13 @@ Throwaway code kept as a primary source, on branches out of main.
   now exists (`tests/the-upgrade-gate.test.ts`, ADR-0035) and runs on every commit; what it
   cannot yet prove is that a codemod transforms anything, because kobai has broken nothing
   and so ships none.
+
+- **[ADR-0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md)** — the spine
+  spec is justified over content only if it actually runs one of the three named proofs, and
+  made-to-order is the cheapest. Cut it for size and the spine grows Core while proving
+  nothing new about the surface, which is what ADR-0029 exists to prevent. The correct
+  response to that pressure is to reopen ADR-0051, not to ship the spine and promise the
+  proof later.
 
 _ADR-0011's Drizzle risk was closed by prototype — see above._
 

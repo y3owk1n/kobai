@@ -1,5 +1,13 @@
 # The reference Project is the release gate, and the content Plugin is built first
 
+> **"Content first" amended by
+> [ADR-0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md).** The rule below
+> is unchanged — the hardest proof of the extension surface is built earliest. What moved is
+> which case that names: kobai has since named *three* proofs, in ADR-0014 and ADR-0027 as
+> well as here, and two of them are unbuildable until Cart, Order and Adjustments exist. The
+> commerce spine goes first because it is what unblocks them; content follows immediately.
+> The release-gate clause is untouched and is implemented — `tests/the-upgrade-gate.test.ts`.
+
 ADR-0024 removed the compensating test that ADR-0007 and ADR-0013 relied on — a real store
 exercising the extension surface as a side effect of shipping. This replaces it deliberately.
 
