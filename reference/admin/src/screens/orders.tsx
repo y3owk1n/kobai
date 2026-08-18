@@ -26,9 +26,10 @@ import { messageOf } from "@/lib/refusal";
  *
  * `GET /admin/orders` answers newest first, a page at a time (ADR-0064), and this screen asks
  * for no page and shows what arrives — **so it shows the first page and no more**, with no way
- * to reach the second. That is a known gap rather than a bargain: following `nextCursor` wants
- * somewhere to keep it, and this Admin has no router to keep it in. The frame that has one is
- * what closes it, and the Products and API key lists are in the same position.
+ * to reach the second. That is a known gap rather than a bargain, and what it was waiting for
+ * has arrived: there is a router now, the cursor has somewhere to live, and the Products list
+ * pages through it. Bringing this list — the one guaranteed to grow without bound — onto the
+ * same frame is #176's, with the rest of the screens the frame carries but did not rewrite.
  *
  * There is no form under this one, unlike the Products screen. An Order is placed by a
  * storefront over `/store` and is immutable once it exists (ADR-0009), so there is nothing here
