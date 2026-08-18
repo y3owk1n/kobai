@@ -88,6 +88,8 @@ New to the project? These five carry the shape of everything else:
 | [0060](./0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md) | The HTTP surface is promised, and a refusal's `reason` is part of it | Accepted — **amends 0019 and 0003** |
 | [0061](./0061-what-the-first-publish-owes.md) | What the first publish owes is one list, and the next obligation joins it | Accepted — **a live list until the first publish** |
 | [0062](./0062-a-variant-is-corrected-in-place-and-a-price-is-superseded.md) | A Variant is corrected in place, and a Price is superseded | Accepted — the other half of 0059 |
+| [0063](./0063-the-admins-frame-is-conventional-because-a-developer-inherits-it.md) | The Admin's frame is conventional, because a Developer inherits it | Accepted — extends 0010 and 0033 |
+| [0064](./0064-list-pagination-is-a-cursor-and-the-page-number-is-given-up.md) | List pagination is a cursor, and the page number is given up | Accepted — constrains 0060 |
 
 ## Prototypes
 
