@@ -87,6 +87,45 @@ migration depends on a shape Core promises nothing about
 [ADR-0004](./0004-plugins-own-their-tables-core-tables-are-closed.md)) — and it would have
 recorded today's currency as though it were the one that applied then.
 
+## The same three steps answer a constraint, and the guardrail reads three statements
+
+A column is not the only thing an existing table can refuse. Postgres refuses `CREATE UNIQUE
+INDEX` against a table already holding two rows that agree on the indexed columns (#119), and
+refuses `ALTER TABLE … ADD CONSTRAINT … UNIQUE` — what a `.unique()` on a column generates, and
+so the likelier of the two spellings — for the same reason (#153). Both arrive unprompted from
+an ordinary declaration, and both take this record's shape one door along: **deduplicate in a
+`--custom` migration, then let the generated migration add the index or the constraint.** The
+middle step is hand-written for the reason a backfill is — an `UPDATE` or a `DELETE` is a data
+change drizzle-kit will neither write nor notice is missing — and it has to be defensible in the
+same way: keeping the newest of a set of duplicates is right only if the others are genuinely
+the same fact, and where they are not, that is a finding about the constraint rather than
+something to solve in SQL.
+
+So `tests/migrations-are-safe-against-populated-tables.test.ts` reads **three** statements: a
+required column with no default, and uniqueness arriving in either spelling at a table the same
+migration did not create. Those last two have exactly one excuse, and it is the only one a
+reading of a single file can make — the table was created here, so it can hold no row the
+constraint has not seen, which is what Core's `ADD CONSTRAINT … FOREIGN KEY` statements already
+rest on. Whether an earlier migration deduplicated an inherited table is not a property of this
+text, so a constraint meeting one is named, and answered where a reason can be written down
+beside it.
+
+**What that reading deliberately leaves out is as much of the decision as what it covers.** A
+plain `CREATE INDEX` is not a fault a row can commit: its cost against a populated table is a
+lock rather than a refusal, and the remedy is `CONCURRENTLY`, which cannot run inside the
+transaction the migrator wraps a set in — so naming it would name a fault with no shape
+available to answer it. And `ALTER TABLE … ADD CONSTRAINT … CHECK` is left unread for the reason
+`ALTER COLUMN … SET NOT NULL` is: the correct answer and the fault are the same text.
+`packages/core/migrations/0027` adds one and is safe, and what makes it safe is the statement
+immediately before it, which adds `tax` with `DEFAULT 0` and so answers the predicate for every
+row already there — telling that from the same pair under a default the check would refuse means
+*evaluating* the predicate, which is a SQL engine rather than a reading. Reading earlier
+migrations rescues nothing either, because the shape this record prescribes puts the backfill in
+a `--custom` migration of its own: the generated migration that adds a constraint holds the
+constraint and nothing else, so a check that flagged it would be red for every correct answer as
+well as every wrong one. **A `CHECK` arriving at a populated table is backed by a backfill on
+purpose, then, and never because something noticed it was not.**
+
 ## This does not bend "generated, never hand-edited"
 
 AGENTS.md § Layout says a migration set is generated and never hand-edited except for
@@ -126,17 +165,25 @@ step and the constraint step have to be generated for that reason too, not only 
   repository that meets a migration with data in front of it — it uses `migrationSetUpTo`
   from `@kobai/core/testing`, which truncates a set at a named migration so a test can stand
   where a real deployment stands. `tests/migrations-are-safe-against-populated-tables.test.ts`
-  reads every migration in the repository for the statement itself, because the fault is a
-  property of the text and seeding every table in the repository is a suite nobody would keep.
+  reads every migration in the repository for the three statements above, because the fault is
+  a property of the text and seeding every table in the repository is a suite nobody would keep.
 - **Core is clear and was checked.** Every `NOT NULL` in `packages/core/migrations` is inside
   a `CREATE TABLE`, where no existing row can be met; its only `ALTER TABLE` statements add
   foreign keys to tables created in the same migration. So is `reference/migrations`. The
-  reading test is what keeps that true.
+  reading test is what keeps that true — and it names one statement Core ships anyway, `0016`'s
+  unique index on `core_order.cart_id`, which is acknowledged in the test by file and by text
+  with the argument that no deployment old enough to hold duplicates exists yet (#119). That
+  acknowledgement is an equality rather than an ignore list, so it cannot outlive the statement
+  it excuses.
 - **The static check cannot see `ALTER COLUMN … SET NOT NULL`**, which fails on a populated
   table too — but only when the backfill before it was missing or wrong, and no reading of
   the text can tell. It is the third step of the correct shape, so flagging it would fail the
   fix along with the fault. The seeded test is what covers that one, and it covers it for one
   table.
+- **Nor can it see `ALTER TABLE … ADD CONSTRAINT … CHECK`**, and that is the same trade taken
+  again rather than an omission (#153): the backfill that makes one survivable is a statement in
+  a different migration, so the safe shape and the broken one read alike. See the section above
+  for the argument and `packages/core/migrations/0027` for the shape.
 - **Three migrations is three round trips of locking**, which is the price of the option that
   keeps no default behind. On a large table the `UPDATE` should be batched and the steps
   spread across deployments; nothing here is large, and nothing here pretends to have solved

@@ -7,12 +7,15 @@ import { describe, expect, it } from "vitest";
  * No migration in this repository asks a table that already exists for something the rows
  * already in it might not be able to give.
  *
- * Two statements can, and both arrive from an ordinary schema declaration rather than from
+ * Three statements can, and each arrives from an ordinary schema declaration rather than from
  * anyone's carelessness. Postgres refuses `ALTER TABLE … ADD COLUMN … NOT NULL` against a
  * table holding even one row: the column has to have a value for every row already there,
  * and the statement offers none. It refuses `CREATE UNIQUE INDEX` against a table already
  * holding two rows that agree on the indexed columns, for the same reason one door along —
- * the constraint is a claim about rows nobody has checked (#119).
+ * the constraint is a claim about rows nobody has checked (#119). And it refuses
+ * `ALTER TABLE … ADD CONSTRAINT … UNIQUE`, which is that same claim in the spelling a
+ * `.unique()` on a column produces — the likelier of the two, since `schema.ts` declares
+ * eight of those against three `uniqueIndex()` (#153).
  *
  * Every test database in this repository is created seconds before it is migrated, so both
  * are green everywhere here and red at the first Project with traffic — and under ADR-0030
@@ -20,13 +23,21 @@ import { describe, expect, it } from "vitest";
  * the application (#2). The failure lands on a Developer who wrote none of it.
  *
  * `drizzle-kit generate` emits each of them from an ordinary declaration — a `.notNull()` on
- * a new field, a `uniqueIndex()` on an existing table — so they are hazards of the tool, and
- * they will arrive again. ADR-0038 has the shape that replaces the first: add the column
+ * a new field, a `uniqueIndex()` or a `.unique()` on an existing table — so they are hazards
+ * of the tool, and they will arrive again. ADR-0038 has the shape that replaces the first: add the column
  * nullable, backfill in a `--custom` migration, then constrain — three migrations, two of
  * them generated. `packages/plugin-price-log` is the worked example and
  * `packages/plugin-price-log/src/migrations.test.ts` proves it against a seeded table. The
- * second takes the same shape: deduplicate in a `--custom` migration, then let the generated
- * one add the index.
+ * second and third take the same shape: deduplicate in a `--custom` migration, then let the
+ * generated one add the index or the constraint.
+ *
+ * What is read is narrower than what can fail, and every narrowing is on purpose rather than
+ * by omission. `ALTER COLUMN … SET NOT NULL` and `ADD CONSTRAINT … CHECK` are hazards whose
+ * correct answer and whose bug look the same in the text, so a reading that named them would
+ * be red for the fix as well as for the fault; a plain `CREATE INDEX` is a cost rather than a
+ * refusal, and has no remedy a migration may use; and two further spellings of a uniqueness
+ * claim go unread because nothing writes them here yet. Each is argued where it is not read,
+ * below.
  *
  * This is a reading of the SQL rather than a run of it, because the fault is a property of
  * the text: what the statement offers for the rows it may find. Running it would need every
@@ -152,12 +163,9 @@ function withoutComments(sql: string): string {
  * would name a fault with no shape available to answer it, which is the mistake the blindness
  * above avoids.
  *
- * Two spellings of the same hazard are still unread, and #119 stopped short of both on
- * purpose: `ALTER TABLE … ADD CONSTRAINT … UNIQUE`, and `… ADD CONSTRAINT … CHECK`, which
- * fails against rows that do not satisfy it. The excuse below cannot cover a `CHECK` — the
- * shape that makes one safe is the statement *before* it in the same migration, as
- * `packages/core/migrations/0027` shows, so reading it is a question about what came earlier
- * rather than about what this migration created.
+ * The other spelling of this hazard, `ALTER TABLE … ADD CONSTRAINT … UNIQUE`, is read just
+ * below and rests on the same excuse. `… ADD CONSTRAINT … CHECK` is not, and the argument for
+ * leaving it is there too.
  */
 const ADDS_A_UNIQUE_INDEX =
   /\bcreate\s+unique\s+index\b[^;]*?\bon\s+(?:only\s+)?([^\s(;]+)[^;]*/gis;
@@ -190,6 +198,18 @@ function tableName(reference: string | undefined): string {
 }
 
 /**
+ * The tables one migration brings into existence, by name — the whole of the excuse the two
+ * readers below can make, read once so they cannot disagree about it.
+ */
+function tablesCreatedBy(sql: string): Set<string> {
+  return new Set(
+    [...sql.matchAll(CREATES_A_TABLE)].flatMap(([, table]) =>
+      table === undefined ? [] : [tableName(table)],
+    ),
+  );
+}
+
+/**
  * One finding: the file it was read out of, and the statement on a single line, so a failure
  * reads as a list of places rather than as a diff of two blobs of SQL. Every reader below
  * labels through this one, so the next hazard reads the same way without copying it.
@@ -207,24 +227,65 @@ function addsRequiredColumnsWithNoDefault(migration: Migration): string[] {
 }
 
 /**
- * The unique indexes in one migration that meet a table the same migration did not create.
+ * `ALTER TABLE … ADD CONSTRAINT … UNIQUE`, and the table it alters — up to the end of that one
+ * statement, for the same reason the two above stop at a `;`. That bound is what keeps the
+ * constraint the business of its own statement: without it a match opened at one statement's
+ * `ALTER TABLE` runs on to the next statement's `UNIQUE` and names a table that never met it.
+ * No migration here carries this statement yet, so the fixture holding that is written rather
+ * than taken from a set — but the neighbours it needs are ordinary: Core's files already put a
+ * foreign key on an inherited table beside a constraint on one they create.
  *
- * A table created here can hold no row the index has not seen, which is the same excuse
- * Core's `ADD CONSTRAINT … FOREIGN KEY` statements rest on — and it is the only excuse a
- * reading of one file can make. Whether the deduplication that makes such an index
- * survivable happened in an earlier migration is not a property of this text, so an index
- * arriving at a table this migration inherited is named, and answered where a reason can be
- * written down beside it.
+ * The constraint name is optional, because `ADD UNIQUE (…)` is legal SQL and drizzle-kit is
+ * not the only thing that writes a migration here. The keyword has to *follow* the name
+ * rather than merely appear somewhere in the statement — otherwise any statement carrying the
+ * word elsewhere would be read as one, and drizzle-kit puts it in a name every time it writes
+ * a unique constraint at all. Two further spellings claim uniqueness of rows nobody has
+ * checked and are unread for now, because drizzle-kit emits neither and this repository holds
+ * neither: a column-level `ADD COLUMN … UNIQUE`, and `ADD CONSTRAINT … PRIMARY KEY`, which is
+ * that claim and `NOT NULL` at once. Both would take the excuse below unchanged.
+ *
+ * `ALTER TABLE … ADD CONSTRAINT … CHECK` is the same statement one word along, and it is
+ * deliberately not read — a decision rather than an omission (#153). Postgres refuses one
+ * against a row that does not satisfy it, so the hazard is as real as the two above; what is
+ * missing is any way to tell from the text whether the rows do. `packages/core/migrations/0027`
+ * adds one and is safe, and what makes it safe is the statement *before* it, which adds `tax`
+ * with `DEFAULT 0` and so answers the predicate for every row already there. Telling that
+ * apart from the same pair with `DEFAULT 5` under `CHECK (… = 0)` means evaluating the
+ * predicate, which is a SQL engine rather than a reading. Nor would reading earlier statements
+ * help in general: under ADR-0038 the backfill goes in a `--custom` migration of its own, so
+ * the generated migration that adds a constraint holds the constraint and nothing else, and a
+ * check that flagged it would be red for the correct shape as well as for the broken one —
+ * the mistake `ALTER COLUMN … SET NOT NULL` is left unread to avoid. This repository would
+ * meet it at once: `0027` would need acknowledging on the day this was written, and
+ * `schema.ts` declares twelve `check()`s to seed the next one. So a `CHECK` is answered by
+ * ADR-0038's shape and by whoever writes it, and the fixtures below pin that it is not named.
  */
-function addsUniqueIndexesToTablesItDidNotCreate(migration: Migration): string[] {
-  const sql = withoutComments(migration.sql);
-  const created = new Set(
-    [...sql.matchAll(CREATES_A_TABLE)].flatMap(([, table]) =>
-      table === undefined ? [] : [tableName(table)],
-    ),
-  );
+const ADDS_A_UNIQUE_CONSTRAINT =
+  /\balter\s+table\s+(?:only\s+)?([^\s(;]+)[^;]*?\badd\s+(?:constraint\s+(?:"[^"]*"|[^\s(;]+)\s+)?unique\b[^;]*/gis;
 
-  return [...sql.matchAll(ADDS_A_UNIQUE_INDEX)]
+/**
+ * The statements matching one pattern that claim uniqueness of a table this migration did not
+ * create — the reading both spellings above get, because they earn the same excuse.
+ *
+ * A table created here can hold no row the constraint has not seen, which is what Core's
+ * `ADD CONSTRAINT … FOREIGN KEY` statements already rest on, and it is the only excuse a
+ * reading of one file can make. Whether the deduplication that makes such a constraint
+ * survivable happened in an earlier migration is not a property of this text, so one arriving
+ * at a table this migration inherited is named, and answered where a reason can be written
+ * down beside it.
+ *
+ * The pattern is asked for its first group, which must be the table the statement claims
+ * against; a pattern whose group went missing would produce a name no `CREATE TABLE` can
+ * match, so the statement is flagged rather than excused.
+ */
+function claimsUniquenessOfATableItDidNotCreate(
+  migration: Migration,
+  pattern: RegExp,
+): string[] {
+  const sql = withoutComments(migration.sql);
+  const created = tablesCreatedBy(sql);
+
+  return [...sql.matchAll(pattern)]
     .filter(([, table]) => !created.has(tableName(table)))
     .map(([statement]) => labelled(migration, statement));
 }
@@ -233,7 +294,8 @@ function addsUniqueIndexesToTablesItDidNotCreate(migration: Migration): string[]
 function unsafeStatements(migration: Migration): string[] {
   return [
     ...addsRequiredColumnsWithNoDefault(migration),
-    ...addsUniqueIndexesToTablesItDidNotCreate(migration),
+    ...claimsUniquenessOfATableItDidNotCreate(migration, ADDS_A_UNIQUE_INDEX),
+    ...claimsUniquenessOfATableItDidNotCreate(migration, ADDS_A_UNIQUE_CONSTRAINT),
   ];
 }
 
@@ -362,6 +424,66 @@ describe("reading a migration for the fault", () => {
     expect(
       reading(
         `CREATE TABLE "core_payment" (\n\t"order_id" uuid NOT NULL\n);\n--> statement-breakpoint\nCREATE UNIQUE INDEX "core_payment_order_idx" ON "public"."core_payment" USING btree ("order_id");`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("catches a unique constraint arriving at a table it did not create", () => {
+    expect(
+      reading(
+        `ALTER TABLE "core_variant" ADD CONSTRAINT "core_variant_sku_unique" UNIQUE("sku");`,
+      ),
+    ).toEqual([
+      'example.sql: ALTER TABLE "core_variant" ADD CONSTRAINT "core_variant_sku_unique" UNIQUE("sku")',
+    ]);
+  });
+
+  it("passes a unique constraint on a table the same migration creates", () => {
+    expect(
+      reading(
+        `CREATE TABLE "core_variant" (\n\t"id" uuid PRIMARY KEY NOT NULL,\n\t"sku" text\n);\n--> statement-breakpoint\nALTER TABLE "core_variant" ADD CONSTRAINT "core_variant_sku_unique" UNIQUE("sku");`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("reads a UNIQUE as the business of the ALTER TABLE in its own statement", () => {
+    // Core's sets put an `ADD CONSTRAINT … FOREIGN KEY` on an inherited table beside an
+    // `ADD CONSTRAINT` on one they create, in either order. A reading that ran past the `;`
+    // would hand the second statement's UNIQUE to the first statement's table and name it.
+    expect(
+      reading(
+        `CREATE TABLE "core_inventory" (\n\t"variant_id" uuid\n);\n--> statement-breakpoint\nALTER TABLE "core_order" ADD CONSTRAINT "core_order_cart_id_fk" FOREIGN KEY ("cart_id") REFERENCES "public"."core_cart"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint\nALTER TABLE "core_inventory" ADD CONSTRAINT "core_inventory_variant_id_unique" UNIQUE("variant_id");`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("is not fooled by the schema qualifier on the ALTER TABLE either", () => {
+    expect(
+      reading(
+        `CREATE TABLE "core_variant" (\n\t"sku" text\n);\n--> statement-breakpoint\nALTER TABLE "public"."core_variant" ADD CONSTRAINT "core_variant_sku_unique" UNIQUE("sku");`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("passes the CHECK 0027 ships, whose safety is the statement before it", () => {
+    // `packages/core/migrations/0027`, exactly. The column arrives with `DEFAULT 0`, so
+    // every row already there satisfies the constraint by the time it is added — and
+    // nothing short of evaluating the predicate against that default tells this apart from
+    // a `DEFAULT 5` under the same check, which Postgres would refuse.
+    expect(
+      reading(
+        `ALTER TABLE "core_order_adjustment" ADD COLUMN "tax" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE "core_order_adjustment" ADD CONSTRAINT "core_order_adjustment_line_level_is_untaxed" CHECK ("core_order_adjustment"."order_line_item_id" is null or "core_order_adjustment"."tax" = 0);`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("passes a CHECK arriving alone, which is what the safe shape looks like", () => {
+    // The shape ADR-0038 prescribes puts the backfill in a `--custom` migration of its own,
+    // so the generated migration that adds the constraint holds nothing else at all. Reading
+    // this file for a reason to allow it can only ever come up empty.
+    expect(
+      reading(
+        `ALTER TABLE "core_price" ADD CONSTRAINT "core_price_amount_is_not_negative" CHECK ("core_price"."amount" >= 0);`,
       ),
     ).toEqual([]);
   });
