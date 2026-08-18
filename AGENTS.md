@@ -43,8 +43,11 @@ exits *zero* on warnings by default, and Biome 2 re-tiered most of what Biome 1 
 error down to `warn` or `info` — so `devbox run lint` and the gate both pass
 `--error-on-warnings`, and `biome.json` lifts the 28 recommended rules that default to `info`
 up to `warn`, which no flag can do. **`devbox run lint` and the lint step of `devbox run ci`
-are the identical command**, deliberately: a gate stricter than the command you are told to
-run is a difference that shows up nowhere until CI goes red. `devbox run format` is the
+run the identical biome invocation**, deliberately: a gate stricter than the command you are
+told to run is a difference that shows up nowhere until CI goes red. The `lint` script opens
+with the fresh-checkout guard below and `ci` does not, because `ci` installs first; that
+prefix is what the identity assertion strips, and it strips nothing else. `devbox run format`
+is the
 forgiving one — it rewrites rather than reports, so it is where a finding gets fixed. Reach
 for it first; most findings below `error` carry a safe fix.
 
@@ -72,7 +75,8 @@ Three things follow, and each has a test rather than a convention behind it:
 
 | Command | What it does |
 | --- | --- |
-| `devbox run ci` | **The gate.** Everything below, in order. |
+| `devbox run install` | `pnpm install --frozen-lockfile`. **The first command in a checkout that has never installed** — every command below that runs a binary out of `node_modules` refuses until it has, and says so. |
+| `devbox run ci` | **The gate.** Everything below, in order — it installs first, so it needs nothing run before it. |
 | `devbox run up` | Postgres and the reference Project, on this checkout's own port — it prints the URL. `/health`, Admin at `/admin-ui`. |
 | `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
 | `devbox run admin:dev` | The Admin with a reload loop, beside `devbox run dev`. See [The Admin](#the-admin). |
@@ -82,6 +86,43 @@ Three things follow, and each has a test rather than a convention behind it:
 | `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
 | `devbox run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
 | `devbox run template:generate` | Regenerate what `create-kobai` generates, from the reference Project. |
+
+**A checkout that has never installed is an ordinary state, and every command says so rather
+than working around it.** A fresh clone, a `git worktree add`, an agent's worktree: in all of
+them `node_modules` is absent, and `devbox run lint` and `devbox run format` used to fail there
+with `Command "biome" not found` — a message naming a binary, leaving the reader to work out
+that a package manager never ran, on the command this file tells you to reach for *first*
+(#133). So every script in the workspace's `devbox.json` that runs a binary out of
+`node_modules` opens with **`sh scripts/require-install.sh <its own name> &&`**, and the
+refusal names the command, both ways to fix it, and this section. `install` and `ci` carry no
+guard, because they *are* the install.
+
+It is a guard rather than an install in front of each script, deliberately. Prefixing
+`pnpm install --frozen-lockfile` would make the fast commands pay for an install every time —
+and would make them **refuse whenever the lockfile is stale**, so `devbox run format`, the
+command you reach for to fix a finding, would stop working exactly while a dependency change
+is in flight. The guard costs a stat and can introduce no failure a working checkout does not
+already have. It answers "nothing has installed here", never "what is installed is current":
+a stale `node_modules` is what the gate's own `--frozen-lockfile` is for.
+
+**It is a file rather than a shell function in the `init_hook`, and that part is not a
+preference.** devbox generates one script per key and has it source the hook *only when a
+devbox shell is not already active* — the generated script guards `. .hooks.sh` on
+`__DEVBOX_SKIP_INIT_HOOK_<hash>`. An exported **variable** survives into that child shell,
+which is why the port derivation in the same hook never showed this; a shell **function** does
+not, so a guard defined there was missing from every script run the second way this section
+documents, and `devbox run lint` inside `devbox shell` died at 127 naming an internal
+function. **The hook may export variables a script reads; a script may call none of its
+functions.** `tests/a-fresh-checkout-is-told-what-to-run.test.ts` holds that, holds the
+message against a checkout with no `node_modules`, and derives from `devbox.json` itself the
+list of scripts needing the guard — so **a new script that runs `pnpm` needs the guard,
+passing its own name**, and the sweep names it if it does not.
+
+**This covers the workspace's `devbox.json` and not the Project's.** `reference/devbox.json`
+— and so the `devbox.json` every generated Project receives — still has the gap, and closing
+it there means a second copy of the guard in a tree that is byte-compared against its
+template. That is a decision nobody has taken; the sweep above reads the workspace file only,
+and says so rather than appearing to cover both.
 
 **`devbox run -- <cmd>` runs from the project root and ignores a preceding `cd`.** So this:
 
