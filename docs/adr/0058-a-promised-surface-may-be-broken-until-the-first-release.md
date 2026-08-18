@@ -193,15 +193,56 @@ Four things about that edit:
    both the Step that charges and the Step that writes. A tax stated here is money the Shopper
    is charged.
 
+## The register of breaks taken under this licence
+
+The rule above says a break is owed two things: **the argument written where the type is, and
+the break recorded here.** This is *here* — the list every subsequent break appends a paragraph
+to, so that a reader hitting a compile error can date it against the licence rather than guess.
+It is deliberately a list rather than a section per break: what a reader needs is the whole set
+at a glance, and if it ever grows long enough to be unreadable that is itself a finding about how
+freely the licence is being spent.
+
+- **#117 — `TaxedLines.adjustments` widened to `readonly TaxedAdjustment[]`.** Extension Point 2,
+  a replaced `calculate-tax`. The whole of this record above is that break; the argument lives on
+  `core_order_adjustment.tax` in `packages/core/src/db/schema.ts`.
+- **#127 — `Logger`, `ReservationProvider` and `Codemod.apply` moved from method syntax to
+  function-valued properties.** Extension Point 3, dependency substitution. TypeScript checks
+  method parameters *bivariantly*, so a Project's logger could declare `info: (message, fields: {
+  requestId: string })`, compile, and read `.requestId` off `undefined` the moment Core called
+  `logger.info("listening")` with no fields — the check `PaymentProvider` and `FulfilmentStrategy`
+  had already been spelled to make. The argument is the doc comment on `Logger` in
+  `packages/core/src/config.ts`. **This one is a tightening rather than a widening, and the blast
+  radius is correspondingly small**: every logger that accepted what Core actually sends still
+  compiles, and the two shapes that stop — `fields` declared required, and `fields` declared
+  narrower than `Record<string, unknown>` — were each being handed `undefined` at runtime already.
+
+  **Only `Logger` needed the licence, and the other two are recorded here anyway.** `Logger` is
+  exported from `@kobai/core` and a Project passes one to `createKobai` today, so it is the one a
+  reader could actually hit a compile error on. `ReservationProvider` is exported from nothing and
+  no config key takes one; `Codemod` *is* exported, at `@kobai/core/codemods`, but the runner
+  reads only the set the installed Core ships and that set has been empty in every version there
+  has ever been — so nothing outside this repository can have declared either. They are in the
+  register regardless, because a register that listed only the breaks somebody judged
+  consequential would be a worse instrument than one that lists them all: the reader arrives
+  holding an error, not a judgement. Both moved so that **every interface kobai asks somebody else
+  to implement now spells its operations the same way**, which is the property that stops the next
+  one being copied from whichever file was opened first.
+
+  Pinned by `@ts-expect-error` in `packages/core/src/config.test.ts`,
+  `packages/core/src/reservation/reservation.test.ts` and
+  `packages/core/src/upgrade/codemods.test.ts`, which the gate's `typecheck` step runs. Each was
+  watched failing against the method spelling — `TS2578: Unused '@ts-expect-error' directive` —
+  before the change it pins was made.
+
 ## Consequences
 
 - **The codemod set is still empty and now honestly so.** ADR-0035's zero has meant "nothing
   has been broken" since it shipped; it now means "nothing has been broken that a codemod could
   migrate", which is a different claim and needed stating.
 - **ADR-0024's open risk stays open, and the index now says why.** The upgrade gate still cannot
-  prove a codemod transforms anything, because the one break kobai has taken is not the kind a
-  codemod migrates. The first break that *is* — a renamed config key, a moved file — will close
-  it.
+  prove a codemod transforms anything, because every break kobai has taken is the kind the
+  Project's own compiler announces rather than the kind a codemod migrates. The first break that
+  *is* — a renamed config key, a moved file — will close it.
 - **The first release has a task in it, and nothing in the gate can assert that task is done.**
   `tests/publish-guard.test.ts` guards the loopback pin; removing that pin on purpose is the act
   that ends this record's first rule, and whoever takes it should say so here.

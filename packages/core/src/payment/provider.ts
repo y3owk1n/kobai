@@ -32,11 +32,14 @@ import type { OrderShopper } from "../order/read.ts";
  * a contract about a thing Core does not manage. Anything that does the operations is
  * acceptable, which is what makes an adapter around somebody's SDK a five-line object.
  *
- * **Changed from `Logger`.** Each operation is a **property holding a function** rather than a
- * method, exactly as `Step.run` is and for the identical reason: TypeScript checks method
- * parameters bivariantly and function-property parameters contravariantly, so only this spelling
- * makes a provider that demands *more* than Core sends a compile error rather than a runtime
- * surprise. The mistake it catches is a plausible one here —
+ * **Changed from `Logger` as it stood, and since kept by it.** Each operation is a **property
+ * holding a function** rather than a method, exactly as `Step.run` is and for the identical
+ * reason: TypeScript checks method parameters bivariantly and function-property parameters
+ * contravariantly, so only this spelling makes a provider that demands *more* than Core sends a
+ * compile error rather than a runtime surprise. This was the first interface to say so, and #127
+ * then moved `Logger`, `ReservationProvider` and `Codemod` to it — so **every interface kobai
+ * asks somebody else to implement now agrees**, and the next one is copied from a set rather than
+ * from whichever file was opened first. The mistake it catches is a plausible one here —
  * `charge: (request: PaymentRequest & { token: string }) => …`, from an SDK that wants a payment
  * method Core does not model — and the honest answer to it is that such a token arrives through
  * {@link PaymentRequest.metadata}, which is ADR-0013's open context and needs no change to Core.

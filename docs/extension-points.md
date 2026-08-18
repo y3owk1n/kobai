@@ -470,9 +470,9 @@ const kobai = createKobai({ ...config, databaseUrl, logger });
 
 Two operations, and anything that does them is acceptable. The substitution point is real and
 exercised — the reference Project passes a console logger and the test harness passes a
-silent one — though both of those implementations are still Core's own. It is also the one
-interface here whose *spelling* is out of step with the rest, which is its own subsection
-below.
+silent one — though both of those implementations are still Core's own. Its *spelling* used to
+be out of step with `PaymentProvider`'s and `FulfilmentStrategy`'s, in a way that let a logger
+demand more than Core sends; #127 settled that, and the subsection below says what moved.
 
 **`PaymentProvider` is the second, and Core implements it nowhere on purpose** (ADR-0053): a
 deployment with none wired boots, serves its catalog and its Admin, and refuses only the
@@ -508,7 +508,7 @@ is what Core acts on: a Variant whose Strategy says it consumes no stock holds n
 and every Order records what its Strategies answered *at Capture*, as a snapshot that a later
 rewiring cannot rewrite.
 
-### What every one of these interfaces looks like, and the one that is out of step
+### What every one of these interfaces looks like
 
 An interface's *shape* is under semver forever from the moment it ships (ADR-0019), so the
 four Core has named were deliberately compared against each other rather than each copying
@@ -526,13 +526,15 @@ the last. What they agree on is worth knowing before you write one:
   because a Reservation row names who must give the units back. `FulfilmentStrategy` carries
   none — it is named by the key you wired it under, exactly as a replaced Step is named by its
   slot — and `Logger` needs none at all.
+- **Every operation is a property holding a function, never a method** — and that one is
+  load-bearing rather than stylistic. TypeScript checks method parameters *bivariantly* and
+  function-property parameters *contravariantly*, so only this spelling makes an implementation
+  that demands **more** than Core sends a compile error. You do not have to remember it: write
+  an implementation that reads a field Core does not send and your own build says so, naming
+  the file and the parameter.
 
-**Where they disagree is a real hazard, and it is filed rather than fixed.** `PaymentProvider`
-and `FulfilmentStrategy` declare their operations as **properties holding functions**;
-`Logger` and `ReservationProvider` declare them as **methods**. TypeScript checks method
-parameters *bivariantly* and function-property parameters *contravariantly*, so only the first
-spelling makes an implementation that demands **more** than Core sends a compile error. Under
-the second, this compiles:
+The four used to disagree about that last point, and until **#127** they were two safe and two
+not. `Logger` and `ReservationProvider` were declared with methods, so this compiled:
 
 ```ts
 const logger: Logger = {
@@ -541,14 +543,19 @@ const logger: Logger = {
 };
 ```
 
-and then Core calls `logger.info("listening")` with no second argument. **So the two newest
-interfaces are safe and the oldest — the one your Project actually passes today — is not.**
-Tightening it would almost certainly be a widening in practice, because it can only reject
-implementations that were already lying about what they are given; but "almost certainly" is
-not the standard for a surface ADR-0019 makes permanent, so it is **#127** to decide
-deliberately rather than something to change quietly. Until it is decided: **write your
-`Logger` to accept exactly what Core sends**, and reach for the property spelling in anything
-you design yourself.
+and then Core called `logger.info("listening")` with no second argument and your logger read
+`.requestId` off `undefined`. Both have moved to the property spelling, which is a *tightening*
+of a surface ADR-0019 makes permanent — takeable because nothing has been released yet, on the
+rule [ADR-0058](./adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md) states:
+a promised surface may be broken outright before the first publish, and a break your own
+compiler catches is announced by the compiler rather than by a codemod.
+
+**Almost nothing was broken even so.** Every logger that accepted what Core actually sends
+still compiles. Two shapes stop compiling, and both were already reading a key off `undefined`
+at runtime: one demanding a **narrower** `fields` than `Record<string, unknown>`, and one
+declaring `fields` **required** rather than optional. The second is a one-character fix —
+`fields?` — and the first is a finding about the logger. The break itself is in ADR-0058's
+register, which is the list to date any compile error you hit against.
 
 **What is not here yet, and this is the honest half of the status above.** ADR-0026 names
 Media storage as the archetypal case of this Extension Point: a pluggable driver defaulting to

@@ -35,8 +35,9 @@
  * ADR-0019 puts an interface's shape under semver **forever** once shipped, and #72 asked for a
  * deliberate look at `Logger`'s before more interfaces copied it. Three of them now exist to
  * compare against — `Logger`, `PaymentProvider`, `ReservationProvider` — so what was kept from
- * each and what was changed is written down here rather than inferred later. #110 is where the
- * comparison belongs as documentation; this is the record it is owed.
+ * each and what was changed is written down here rather than inferred later. #110 published that
+ * comparison on `docs/extension-points.md`; this is the record it is owed. The one difference it
+ * found — the spelling below — was the last of them, and #127 closed it.
  *
  * **Kept from all three.** A plain object type, wired through `kobai.config.ts` and substituted
  * whole. No class to extend, no base to inherit, no `init` and no `close` — Core never constructs
@@ -44,16 +45,17 @@
  * does not manage. Anything that answers the questions is acceptable, which is what makes a
  * Plugin's Strategy a five-line object.
  *
- * **Kept from `PaymentProvider`, and not from `Logger` or `ReservationProvider`: the operation is
- * a property holding a function rather than a method.** TypeScript checks method parameters
- * *bivariantly* and function-property parameters *contravariantly*, so only this spelling makes a
- * Strategy that demands **more** than Core sends a compile error instead of a `undefined` at
- * runtime. The mistake it catches is a plausible one here — `answersFor: (variant:
- * FulfilledVariant & { leadTimeDays: number }) => …`, from a made-to-order Strategy that wants a
- * number Core does not model — and the honest answer to it is that such a number arrives through
- * {@link FulfilledVariant.metadata}, which is ADR-0013's open door and needs no change to Core.
- * `Logger` and `ReservationProvider` are both spelled with methods and are the older shape; that
- * is a finding about them rather than a precedent to follow, and #110 is where it is recorded.
+ * **Kept from `PaymentProvider`: the operation is a property holding a function rather than a
+ * method.** TypeScript checks method parameters *bivariantly* and function-property parameters
+ * *contravariantly*, so only this spelling makes a Strategy that demands **more** than Core sends
+ * a compile error instead of a `undefined` at runtime. The mistake it catches is a plausible one
+ * here — `answersFor: (variant: FulfilledVariant & { leadTimeDays: number }) => …`, from a
+ * made-to-order Strategy that wants a number Core does not model — and the honest answer to it is
+ * that such a number arrives through {@link FulfilledVariant.metadata}, which is ADR-0013's open
+ * door and needs no change to Core. `Logger` and `ReservationProvider` were spelled with methods
+ * when this was written, and #127 moved both — under ADR-0058's licence to break a promised
+ * surface before the first release — so **all four now agree** and this paragraph records a
+ * settled shape rather than a difference.
  *
  * **Changed from all three: there is no `name` on the Strategy.** `Logger` needs none,
  * `PaymentProvider` carries one because a Payment records which system holds the money, and

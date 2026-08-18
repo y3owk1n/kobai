@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CODEMOD_SET_FORMAT, type Codemod, codemods } from "./codemods.ts";
+import {
+  CODEMOD_SET_FORMAT,
+  type Codemod,
+  codemods,
+  type ProjectUnderUpgrade,
+} from "./codemods.ts";
 import { CodemodSetMissing, codemodsCrossing, readCodemodSet } from "./set.ts";
 
 /**
@@ -128,5 +133,34 @@ describe("reading a set that a newer version shipped", () => {
       expect(thrown).toBeInstanceOf(Error);
       expect(thrown).not.toBeInstanceOf(CodemodSetMissing);
     }
+  });
+});
+
+/**
+ * **What the compiler refuses to accept as a codemod** (#127).
+ *
+ * `apply` is a property holding a function rather than a method, so a codemod that demands more
+ * than the runner hands it does not compile. Nothing outside Core declares a `Codemod` today, so
+ * this is the pin that keeps the shape safe until something does. The assertion is the
+ * `@ts-expect-error`, run by the `typecheck` step of the gate rather than by vitest; the `expect`
+ * only keeps the block a test.
+ */
+describe("what could not have been a codemod", () => {
+  it("rejects one that demands more of the Project than the runner hands it", () => {
+    // The intersection is the honest probe. Bivariance rescues an implementation only when one
+    // direction is assignable, so a parameter type that overlapped `ProjectUnderUpgrade` in
+    // neither direction would be refused under either spelling and prove nothing.
+    const nosy: Codemod = {
+      id: "1.0.0-nosy",
+      title: "Reads where the Project came from",
+      introducedIn: "1.0.0",
+      // @ts-expect-error the runner hands over a directory, and `introducedIn` is the whole of
+      // what a codemod may know about the boundary it is crossing.
+      apply: async (project: ProjectUnderUpgrade & { kobaiVersion: string }) => [
+        `${project.directory}/${project.kobaiVersion}.txt`,
+      ],
+    };
+
+    expect(nosy).toBeDefined();
   });
 });
