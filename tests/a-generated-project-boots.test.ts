@@ -103,7 +103,12 @@ describe("a Project generated into a clean directory", () => {
         await expect(health.json()).resolves.toMatchObject({
           status: "ok",
           migrations: {
-            sets: [{ name: "core" }, { name: "plugin-price-log" }, { name: "project" }],
+            sets: [
+              { name: "core" },
+              { name: "plugin-price-log" },
+              { name: "plugin-made-to-order" },
+              { name: "project" },
+            ],
           },
         });
 

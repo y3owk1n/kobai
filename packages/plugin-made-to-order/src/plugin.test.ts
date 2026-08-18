@@ -96,50 +96,46 @@ describe("a Plugin owns its own tables", () => {
   });
 });
 
+describe("an installed Plugin does nothing until the Project wires it", () => {
+  it("brings no table into being when the Project has not named its migration set", async () => {
+    // This package is a dependency of the test that is running: installed, imported, and its
+    // migration set in scope on the line above. None of that is installation (ADR-0017).
+    expect(madeToOrderMigrationSet.name).toBe("plugin-made-to-order");
+
+    await using kobai = await createTestKobai();
+    const schema = inspectSchema(kobai.database);
+
+    await expect(schema.tablesOwnedBy("made_to_order")).resolves.toEqual([]);
+    // Not even a tracking table: an unwired Plugin leaves no trace of itself at all.
+    expect((await schema.migrationTracking()).map((entry) => entry.table)).toEqual([
+      "__drizzle_migrations_core",
+    ]);
+  });
+});
+
 describe("install order is not a hidden constraint", () => {
-  it("ends up with the same database whichever set is applied first", async () => {
+  it("applies before Core's set as readily as after it", async () => {
     // What the no-foreign-key rule buys beyond ADR-0004's own reasons: with nothing crossing
     // the boundary, Postgres imposes no ordering between the two sets, so a Project may wire
-    // its Plugins in whatever order it likes.
+    // its Plugins in whatever order it likes. The property belongs to *this* package's set,
+    // which is why it is asked here rather than trusted from the Plugin next door.
     await using backwards = await createTestKobai({ migrate: false });
-    await using forwards = await createTestKobai({ migrate: false });
 
-    const pluginFirst = await runMigrations(backwards.db, [
+    const outcome = await runMigrations(backwards.db, [
       madeToOrderMigrationSet,
       coreMigrationSet,
     ]);
-    const coreFirst = await runMigrations(forwards.db, [
-      coreMigrationSet,
-      madeToOrderMigrationSet,
-    ]);
 
-    expect(pluginFirst.ok).toBe(true);
-    expect(coreFirst.ok).toBe(true);
-
-    const backwardsSchema = inspectSchema(backwards.database);
-    const forwardsSchema = inspectSchema(forwards.database);
-
-    // Said outright before the comparison, because two empty databases are also equal.
-    await expect(backwardsSchema.tablesOwnedBy("made_to_order")).resolves.toEqual([
-      "made_to_order_surcharge",
-    ]);
+    expect(outcome.ok).toBe(true);
+    // Said outright, because a database in which nothing ran is also a database in which
+    // nothing conflicted.
+    await expect(
+      inspectSchema(backwards.database).tablesOwnedBy("made_to_order"),
+    ).resolves.toEqual(["made_to_order_surcharge"]);
     for (const set of [coreMigrationSet, madeToOrderMigrationSet]) {
       const declared = await declaredMigrations(set);
       expect(declared.length).toBeGreaterThan(0);
       await expect(appliedMigrations(backwards.database, set)).resolves.toEqual(declared);
     }
-
-    await expect(backwardsSchema.tables()).resolves.toEqual(
-      await forwardsSchema.tables(),
-    );
-    await expect(backwardsSchema.columnsOwnedBy("core")).resolves.toEqual(
-      await forwardsSchema.columnsOwnedBy("core"),
-    );
-    await expect(backwardsSchema.columnsOwnedBy("made_to_order")).resolves.toEqual(
-      await forwardsSchema.columnsOwnedBy("made_to_order"),
-    );
-    await expect(backwardsSchema.migrationTracking()).resolves.toEqual(
-      await forwardsSchema.migrationTracking(),
-    );
   });
 });

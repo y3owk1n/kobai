@@ -615,9 +615,16 @@ need a new entry, check first whether it belongs in the reference Project instea
 shared should live where it is booted and tested, not in a template nobody runs.
 
 **kobai's packages are published** (ADR-0034). `@kobai/core`, `@kobai/plugin-price-log`,
-`@kobai/client` and `create-kobai` are at `0.1.0` and are no longer `private`, because a
-generated Project depends on them as ordinary versioned dependencies and `workspace:*`
-resolves nowhere outside this workspace. Nothing has actually been released; choosing a
+`@kobai/plugin-made-to-order`, `@kobai/client` and `create-kobai` are at `0.1.0` and are no
+longer `private`, because a generated Project depends on them as ordinary versioned
+dependencies and `workspace:*` resolves nowhere outside this workspace. **A package the
+reference Project depends on has to be published**, and in three more places than its own
+manifest: `PUBLISHED_KOBAI_PACKAGES` in `packages/create-kobai/src/adaptations.ts`, so a
+generated Project asks a registry for a version rather than for `workspace:*`, and the
+`publishPackages` list in each acceptance test that stands a registry up
+(`tests/a-generated-project-boots.test.ts`, `tests/a-project-boots-from-its-own-compose-file.test.ts`,
+`tests/the-upgrade-gate.test.ts`) — a package missing from one of those fails deep inside an
+install with a 404 naming the registry rather than the list. Nothing has actually been released; choosing a
 release process is a separate decision.
 
 What stands where `private: true` stood is `publishConfig.registry`, pinned at a loopback

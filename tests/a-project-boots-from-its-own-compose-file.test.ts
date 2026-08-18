@@ -142,6 +142,7 @@ describe("a generated Project, brought up by its own compose file", () => {
       ).toEqual([
         ["core", true],
         ["plugin-price-log", true],
+        ["plugin-made-to-order", true],
         ["project", true],
       ]);
 

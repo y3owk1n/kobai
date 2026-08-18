@@ -116,10 +116,12 @@ export const leadTimeSurcharge = defineStep(
 
   async (input: PricedLines, context): Promise<AdjustedLines> => {
     const requested = requestedLeadTimeDays(context.metadata);
-    const daysSaved =
-      requested === undefined
-        ? 0
-        : Math.max(0, MADE_TO_ORDER_TERMS.standardLeadTimeDays - requested);
+    // Nobody is in a hurry, which is every Cart in every Store that does not send this key —
+    // so this Step costs such a Cart one comparison and leaves it exactly as Core's own
+    // `apply-adjustments` would have.
+    if (requested === undefined) return unadjusted(input);
+
+    const daysSaved = Math.max(0, MADE_TO_ORDER_TERMS.standardLeadTimeDays - requested);
 
     const lines: AdjustedLine[] = input.lines.map((line) => ({
       ...line,
@@ -128,20 +130,21 @@ export const leadTimeSurcharge = defineStep(
       // Strategy is named by the key a Project wired it under (ADR-0052), so this Plugin does
       // not know what it is called and must not pretend to.
       adjustments:
-        requested !== undefined && daysSaved > 0 && line.fulfilment.hasLeadTime
+        daysSaved > 0 && line.fulfilment.hasLeadTime
           ? [surchargeFor(line, requested, daysSaved)]
           : [],
     }));
 
-    // Deliberately before the Adjustments are anything but a promise: this row records what was
-    // *asked for*, which is the half Core will never hold. It names the Cart because there is
-    // no Order yet — `apply-adjustments` runs a long way in front of Capture, which is exactly
-    // why this Step declares a compensation.
+    // One row per Adjustment just declared, reading the amount off the Adjustment rather than
+    // working it out a second time — so the row and the Order can never disagree about what was
+    // charged. It records what was *asked for*, which is the half Core will never hold, and it
+    // names the Cart because there is no Order yet: `apply-adjustments` runs a long way in
+    // front of Capture, which is exactly why this Step declares a compensation.
     const rows = lines.flatMap((line) =>
       line.adjustments.map((adjustment) => ({
         cartId: input.cart.id,
         variantId: line.variantId,
-        requestedLeadTimeDays: requested ?? MADE_TO_ORDER_TERMS.standardLeadTimeDays,
+        requestedLeadTimeDays: requested,
         standardLeadTimeDays: MADE_TO_ORDER_TERMS.standardLeadTimeDays,
         amount: adjustment.amount,
         currency: line.currency,
@@ -159,13 +162,7 @@ export const leadTimeSurcharge = defineStep(
       written.set(input, stack);
     }
 
-    return {
-      cart: input.cart,
-      lines,
-      // Nothing on the Order as a whole: a Lead Time belongs to the line that has one, so a
-      // Return for that line refunds the hurry along with the goods (ADR-0022).
-      adjustments: [],
-    };
+    return { cart: input.cart, lines, adjustments: [] };
   },
 
   async (input, context) => {
@@ -179,6 +176,22 @@ export const leadTimeSurcharge = defineStep(
       .where(inArray(madeToOrderSurcharge.id, ids));
   },
 );
+
+/**
+ * The Cart priced, adjusted by nothing — what this slot produces when there is no hurry to
+ * charge for.
+ *
+ * Adjustments on the Order as a whole are always empty here, and that is the decision rather
+ * than a gap: a Lead Time belongs to the line that has one, so a Return for that line refunds
+ * the hurry along with the goods (ADR-0022).
+ */
+function unadjusted(input: PricedLines): AdjustedLines {
+  return {
+    cart: input.cart,
+    lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+    adjustments: [],
+  };
+}
 
 /** The Adjustment for one line: signed minor units, positive because a surcharge adds. */
 function surchargeFor(
@@ -213,6 +226,12 @@ function surchargeFor(
  * worse answer than declining. A Step's refusal travels to the caller as itself, which is what
  * makes a Plugin able to decline a purchase at all.
  *
+ * It is read **before** the lines are looked at, so a Cart holding nothing made to order is
+ * refused too. That is deliberate: the value is unreadable whatever is in the Cart, and a
+ * storefront that spells this key wrong should find out at its first Order rather than at its
+ * first commission. The cost is that one broken parameter refuses every placement, which is the
+ * loud half of a choice between loud and late.
+ *
  * The value arrives as a string, because the open context is filled from a query string (#121).
  * A number is accepted too, so that a transport which one day carries typed values needs no
  * change here.
@@ -241,7 +260,7 @@ function requestedLeadTimeDays(
 function notADuration(asked: unknown): StepFailure {
   return new StepFailure(
     "lead-time-not-understood",
-    `${JSON.stringify(LEAD_TIME_DAYS_KEY)} was ${JSON.stringify(asked)}, and a Lead Time is a whole number of days from now. This Store makes such things to order, so it declines rather than guessing at when the Shopper wanted it.`,
+    `${JSON.stringify(LEAD_TIME_DAYS_KEY)} was ${JSON.stringify(asked)}, and a Lead Time is a whole number of days from now. This Store makes some of what it sells to order, so it declines rather than guessing at when the Shopper wanted it.`,
   );
 }
 
