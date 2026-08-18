@@ -1,6 +1,6 @@
 import { asc, eq, sql } from "drizzle-orm";
 import type { Queryable } from "../db/client.ts";
-import { cart, cartLineItem, variant } from "../db/schema.ts";
+import { cart, cartLineItem, order, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 
 /**
@@ -31,6 +31,21 @@ import { isUuid } from "../db/uuid.ts";
  * `core_price.variant_id` to `core_price.id`.
  */
 export const cartHasExpired = sql<boolean>`now() > ${cart}.${cart.expiresAt}`;
+
+/**
+ * Whether this Cart has already become an Order — and is therefore **spent** (#102).
+ *
+ * Asked of the Order rather than recorded on the Cart, because the Order *is* the record that
+ * this Cart was placed: a column here would be a second copy of that fact, and a second copy is
+ * something that can disagree. The unique index on `core_order.cart_id` is what makes the
+ * question cheap and what makes the answer atomic — the check and the claim are the same
+ * operation, so no pair of simultaneous requests can both find no Order and both write one.
+ *
+ * Correlated on the Cart of whatever query this is used in, and every one of those selects from
+ * `core_cart`. Both sides are table-qualified for the reason {@link cartHasExpired} spells out:
+ * an unqualified `id` inside this subquery would bind to `core_order`'s own.
+ */
+export const cartHasBeenPlaced = sql<boolean>`exists (select 1 from ${order} where ${order}.${order.cartId} = ${cart}.${cart.id})`;
 
 /** One line of a Cart: a Variant, and how many of it. */
 export type CartLineItem = {
@@ -80,6 +95,15 @@ export type Cart = {
    * showing nothing — and refuses every change.
    */
   readonly expired: boolean;
+  /**
+   * Whether this Cart has already become an Order, and is therefore **spent** (#102).
+   *
+   * A Cart becomes exactly one Order, so a `true` here is final: it reads for as long as the
+   * row lives and refuses every change and every further placement. Distinct from `expired`
+   * because the two are different things to tell a Shopper — one Cart ran out of time, and the
+   * other has already been bought.
+   */
+  readonly placed: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -99,6 +123,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
+      placed: cartHasBeenPlaced,
       createdAt: cart.createdAt,
       updatedAt: cart.updatedAt,
     })
@@ -137,6 +162,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
     metadata: row.metadata,
     expiresAt: row.expiresAt.toISOString(),
     expired: row.expired,
+    placed: row.placed,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

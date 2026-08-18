@@ -841,6 +841,10 @@
             "type": "boolean",
             "description": "Whether that moment has passed, as the server judges it. Branch on this rather than comparing `expiresAt` against a browser's clock. An expired Cart still reads and refuses every change."
           },
+          "placed": {
+            "type": "boolean",
+            "description": "Whether this Cart has already become an Order. A Cart becomes exactly one, so this is final: a placed Cart still reads, and refuses every change and every further placement. Distinct from `expired` — an expired Cart ran out of time, and a placed one has already been bought."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -857,6 +861,7 @@
           "metadata",
           "expiresAt",
           "expired",
+          "placed",
           "createdAt",
           "updatedAt"
         ]
@@ -924,6 +929,7 @@
               "secret-key-required",
               "cart-not-found",
               "cart-expired",
+              "cart-placed",
               "line-item-not-found",
               "variant-not-found",
               "variant-not-priced"
@@ -1031,37 +1037,70 @@
           }
         }
       },
-      "PlacedOrder": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Order"
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           },
-          {
-            "type": "object",
-            "properties": {
-              "workflow": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "steps": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/components/schemas/StepReport"
-                    }
-                  }
-                },
-                "required": [
-                  "name",
-                  "steps"
-                ]
+          "number": {
+            "type": "integer",
+            "description": "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's."
+          },
+          "shopper": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CartShopper"
+              },
+              {
+                "description": "As at Capture. `null` for a guest, which is the ordinary path."
               }
-            },
-            "required": [
-              "workflow"
             ]
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217. Every amount here is in it."
+          },
+          "total": {
+            "type": "integer",
+            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments."
+          },
+          "lineItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLineItem"
+            },
+            "description": "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position."
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderAdjustment"
+            },
+            "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The moment of Capture, when this Order became immutable."
           }
+        },
+        "required": [
+          "id",
+          "number",
+          "shopper",
+          "currency",
+          "total",
+          "lineItems",
+          "adjustments",
+          "metadata",
+          "createdAt"
         ]
       },
       "OrderLineItem": {
@@ -1161,70 +1200,37 @@
           "metadata"
         ]
       },
-      "Order": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
+      "PlacedOrder": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Order"
           },
-          "number": {
-            "type": "integer",
-            "description": "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's."
-          },
-          "shopper": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CartShopper"
-              },
-              {
-                "description": "As at Capture. `null` for a guest, which is the ordinary path."
-              }
-            ]
-          },
-          "currency": {
-            "type": "string",
-            "description": "ISO 4217. Every amount here is in it."
-          },
-          "total": {
-            "type": "integer",
-            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments."
-          },
-          "lineItems": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OrderLineItem"
-            },
-            "description": "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position."
-          },
-          "adjustments": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OrderAdjustment"
-            },
-            "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
-          },
-          "metadata": {
+          {
             "type": "object",
-            "additionalProperties": {},
-            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "description": "The moment of Capture, when this Order became immutable."
+            "properties": {
+              "workflow": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/StepReport"
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "steps"
+                ]
+              }
+            },
+            "required": [
+              "workflow"
+            ]
           }
-        },
-        "required": [
-          "id",
-          "number",
-          "shopper",
-          "currency",
-          "total",
-          "lineItems",
-          "adjustments",
-          "metadata",
-          "createdAt"
         ]
       },
       "SecretKeyRequired": {
@@ -1275,13 +1281,13 @@
               "name",
               "failed",
               "steps"
-            ]
+            ],
+            "description": "How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this."
           }
         },
         "required": [
           "error",
-          "reason",
-          "workflow"
+          "reason"
         ]
       },
       "PlaceOrderRequest": {
@@ -2637,7 +2643,7 @@
             }
           },
           "409": {
-            "description": "This Cart has expired. It still reads, and it can no longer be changed.",
+            "description": "This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2755,7 +2761,7 @@
             }
           },
           "409": {
-            "description": "This Cart has expired. It still reads, and it can no longer be changed.",
+            "description": "This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2893,7 +2899,7 @@
             }
           },
           "409": {
-            "description": "This Cart has expired. It still reads, and it can no longer be changed.",
+            "description": "This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2999,7 +3005,7 @@
             }
           },
           "409": {
-            "description": "This Cart has expired. It still reads, and it can no longer be changed.",
+            "description": "This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3039,7 +3045,21 @@
             "apiKey": []
           }
         ],
-        "description": "Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards.",
+        "description": "Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards. Send an `Idempotency-Key` so that retrying after a timeout answers with the Order already placed rather than placing a second one; a Cart becomes exactly one Order either way.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "description": "A value of your own choosing, unique to this purchase. Send the same one on every retry of the same request and at most one Order is placed; the retry answers 200 with that Order instead of 201. Reusing one for a different body is refused. Optional, and a request without one is not protected against a retry after a timeout."
+            },
+            "required": false,
+            "description": "A value of your own choosing, unique to this purchase. Send the same one on every retry of the same request and at most one Order is placed; the retry answers 200 with that Order instead of 201. Reusing one for a different body is refused. Optional, and a request without one is not protected against a retry after a timeout.",
+            "name": "idempotency-key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3051,6 +3071,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "This idempotency key has already placed an Order, and this is that Order — nothing was placed again. There is no `workflow` here, because which Steps ran is a fact about the request that placed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
           "201": {
             "description": "The Order, and the Steps that produced it.",
             "content": {
@@ -3115,7 +3145,7 @@
             }
           },
           "409": {
-            "description": "A Step refused: this Cart has expired and can no longer be placed.",
+            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the idempotency key names a different request, or one still in flight.",
             "content": {
               "application/json": {
                 "schema": {

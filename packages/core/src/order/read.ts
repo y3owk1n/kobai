@@ -115,6 +115,30 @@ export type Order = {
  * One Order with its Line Items, or `undefined` when there is no such Order — including when
  * `id` is not an identifier at all, which is the same answer for the caller.
  */
+/**
+ * The Order a Cart became, or `undefined` while it has not become one.
+ *
+ * There is at most one — `core_order.cart_id` is unique, which is what makes a Cart spent by the
+ * Order it became (#102) — so this is a lookup rather than a search. It exists because the Order
+ * is the **record** of that placement and an idempotency key is only a pointer at it: a request
+ * that captured and then died before naming its Order on its key leaves the key saying nothing,
+ * and this is how the answer is recovered from the thing that cannot be wrong.
+ */
+export async function readOrderPlacedFrom(
+  db: Queryable,
+  cartId: string,
+): Promise<Order | undefined> {
+  if (!isUuid(cartId)) return undefined;
+
+  const [row] = await db
+    .select({ id: order.id })
+    .from(order)
+    .where(eq(order.cartId, cartId))
+    .limit(1);
+
+  return row ? readOrder(db, row.id) : undefined;
+}
+
 export async function readOrder(db: Queryable, id: string): Promise<Order | undefined> {
   if (!isUuid(id)) return undefined;
 

@@ -1,6 +1,7 @@
 import { asc, eq } from "drizzle-orm";
-import { cartHasExpired } from "../cart/read.ts";
+import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
 import type { Transaction } from "../db/client.ts";
+import { violatesUniqueIndex } from "../db/errors.ts";
 import {
   cart,
   cartLineItem,
@@ -36,8 +37,8 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  *
  * Five slots today:
  *
- * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired
- *   or empty. It applies no pricing rule; it hands over what was selected.
+ * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired,
+ *   already placed or empty. It applies no pricing rule; it hands over what was selected.
  * - **`price-lines`** invokes `resolve-price` for each line, through the deployment's own
  *   declaration (ADR-0054) — so a Project that replaced `select-price` charges its own prices
  *   at Capture without wiring the same customisation twice.
@@ -73,7 +74,11 @@ export type PlaceOrderRequest = {
  * travel out of `price-lines` as themselves, and the store surface maps them from
  * `PriceResolutionRefusal` in the same exhaustive way.
  */
-export type PlaceOrderRefusal = "cart-not-found" | "cart-expired" | "cart-empty";
+export type PlaceOrderRefusal =
+  | "cart-not-found"
+  | "cart-expired"
+  | "cart-placed"
+  | "cart-empty";
 
 /** One line of the Cart being placed, with everything the snapshot will need. */
 export type CartLineToPlace = {
@@ -227,6 +232,7 @@ export const loadCart = defineStep(
         // rewritten: a second spelling of it would be a second answer to whether a Cart is
         // still alive.
         expired: cartHasExpired,
+        placed: cartHasBeenPlaced,
       })
       .from(cart)
       .where(eq(cart.id, input.cartId))
@@ -239,6 +245,12 @@ export const loadCart = defineStep(
         "This Cart has expired, so it can no longer be placed. It is still readable and its Line Items are still there — start a new Cart.",
       );
     }
+
+    // Refused here so that nothing is priced and — when they arrive — no Reservation is held
+    // and no Payment is taken for a Cart that already has an Order. It is not what *makes* the
+    // rule true: the unique index on `core_order.cart_id` is, and it is what catches the pair
+    // of requests that get past this check at the same instant. See {@link captureOrder}.
+    if (found.placed) throw alreadyPlaced(input.cartId);
 
     const lines = await context.db
       .select({
@@ -386,6 +398,12 @@ export const calculateTax = defineStep(
  * `apply-adjustments` says what it is adding and a replaced `calculate-tax` says what it is
  * charging; neither is asked for a total, because a Step that had to keep one in step with what
  * it changed is a Step that can forget to.
+ *
+ * **It has one refusal of its own, and it is the database's.** A Cart becomes exactly one Order
+ * (#102), which `load-cart` checks and this index enforces — so a Capture that loses the race
+ * for a Cart refuses with `cart-placed` rather than raising a constraint violation at a
+ * storefront. Nothing else here is a refusal: everything a Step can decide has been decided by
+ * now, which is what makes this the point of no return.
  */
 export const captureOrder = defineStep(
   "capture-order",
@@ -409,51 +427,66 @@ export const captureOrder = defineStep(
     const total =
       lines.reduce((sum, line) => sum + line.total, 0) + sumOf(input.adjustments);
 
-    return context.db.transaction(async (tx: Transaction): Promise<Order> => {
-      const [written] = await tx
-        .insert(order)
-        .values({
-          cartId: input.cart.id,
-          shopperEmail: input.cart.shopper?.email ?? null,
-          shopperExternalId: input.cart.shopper?.externalId ?? null,
-          currency,
-          total,
-          metadata: input.cart.metadata,
-        })
-        .returning({ id: order.id });
-      if (!written) throw new Error("Writing an Order returned no row.");
+    try {
+      return await context.db.transaction(async (tx: Transaction): Promise<Order> => {
+        const [written] = await tx
+          .insert(order)
+          .values({
+            cartId: input.cart.id,
+            shopperEmail: input.cart.shopper?.email ?? null,
+            shopperExternalId: input.cart.shopper?.externalId ?? null,
+            currency,
+            total,
+            metadata: input.cart.metadata,
+          })
+          .returning({ id: order.id });
+        if (!written) throw new Error("Writing an Order returned no row.");
 
-      const insertedLines = await tx
-        .insert(orderLineItem)
-        .values(
-          lines.map(({ adjustments: _adjustments, ...line }) => ({
-            ...line,
-            orderId: written.id,
-          })),
-        )
-        // By SKU rather than by the order the rows came back in: a Cart holds one line per
-        // Variant and a SKU is unique across the deployment, so this is a real correlation
-        // rather than a bet on what `returning` happens to preserve.
-        .returning({ id: orderLineItem.id, sku: orderLineItem.sku });
-      const lineIdBySku = lineIdsBySku(insertedLines);
+        const insertedLines = await tx
+          .insert(orderLineItem)
+          .values(
+            lines.map(({ adjustments: _adjustments, ...line }) => ({
+              ...line,
+              orderId: written.id,
+            })),
+          )
+          // By SKU rather than by the order the rows came back in: a Cart holds one line per
+          // Variant and a SKU is unique across the deployment, so this is a real correlation
+          // rather than a bet on what `returning` happens to preserve.
+          .returning({ id: orderLineItem.id, sku: orderLineItem.sku });
+        const lineIdBySku = lineIdsBySku(insertedLines);
 
-      const adjustments = [
-        ...lines.flatMap((line) =>
-          rowsFor(line.adjustments, written.id, idOf(lineIdBySku, line.sku)),
-        ),
-        // The Order's own go in with a null line, which is what makes them the Order's.
-        ...rowsFor(input.adjustments, written.id, null),
-      ];
-      // Skipped rather than run empty: an `insert … values ()` with no rows is a syntax error
-      // in Postgres, and no Adjustment at all is the ordinary case.
-      if (adjustments.length > 0) await tx.insert(orderAdjustment).values(adjustments);
+        const adjustments = [
+          ...lines.flatMap((line) =>
+            rowsFor(line.adjustments, written.id, idOf(lineIdBySku, line.sku)),
+          ),
+          // The Order's own go in with a null line, which is what makes them the Order's.
+          ...rowsFor(input.adjustments, written.id, null),
+        ];
+        // Skipped rather than run empty: an `insert … values ()` with no rows is a syntax error
+        // in Postgres, and no Adjustment at all is the ordinary case.
+        if (adjustments.length > 0) await tx.insert(orderAdjustment).values(adjustments);
 
-      const captured = await readOrder(tx, written.id);
-      if (!captured) throw new Error("An Order was written and could not be read back.");
-      return captured;
-    });
+        const captured = await readOrder(tx, written.id);
+        if (!captured)
+          throw new Error("An Order was written and could not be read back.");
+        return captured;
+      });
+    } catch (cause) {
+      // The other request won. `load-cart` asks the same question and this request got past
+      // it, which is exactly the pair a check can never separate — so the answer comes from
+      // the index the Order is written against, and the loser is told the same thing it would
+      // have been told a moment earlier.
+      if (violatesUniqueIndex(cause, ONE_ORDER_PER_CART)) {
+        throw alreadyPlaced(input.cart.id);
+      }
+      throw cause;
+    }
   },
 );
+
+/** The unique index that makes a Cart become exactly one Order — see `db/schema.ts`. */
+const ONE_ORDER_PER_CART = "core_order_cart_idx";
 
 /**
  * Every amount about to be written is a **whole number of minor units**, or nothing is.
@@ -603,6 +636,18 @@ export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order
  * run Core's Steps no matter what the Project had wired.
  */
 export type PlaceOrderWorkflow = typeof placeOrderWorkflow;
+
+/**
+ * A Cart that has already become an Order, refused — from either of the two places that can
+ * find out, so a Shopper who pressed the button twice is told the same thing whichever request
+ * lost.
+ */
+function alreadyPlaced(cartId: string): StepFailure {
+  return refuse(
+    "cart-placed",
+    `Cart ${JSON.stringify(cartId)} has already been placed, and a Cart becomes exactly one Order. The Order it became is still readable; start a new Cart to buy anything else.`,
+  );
+}
 
 function noSuchCart(cartId: string): StepFailure {
   return refuse(

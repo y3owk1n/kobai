@@ -200,6 +200,70 @@ describe("a Cart becomes an Order", () => {
   });
 });
 
+/**
+ * What becomes of a Cart once it has been placed — **it is spent** (#102).
+ *
+ * A Cart is mutable, disposable and unauthoritative (ADR-0009), and the Order it becomes is
+ * none of those things. So the moment it produces one it stops being a Cart anybody can act
+ * on: it still reads, the way an expired one does, and every further request against it is
+ * refused. The alternative — leaving it placeable — is a second Order from one selection, which
+ * is a second charge and a second claim on stock for a Shopper who pressed the button twice.
+ */
+describe("a Cart is spent by the Order it became", () => {
+  it("refuses to place the same Cart a second time", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+
+    const first = await placeOrder(kobai, cart.apiKey.headers, cart.id);
+    const second = await placeOrder(kobai, cart.apiKey.headers, cart.id);
+
+    expect(first.status).toBe(201);
+    // 409 like an expired Cart, and for the same kind of reason: the request is well formed
+    // and this Cart is no longer in a state that can produce an Order.
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toMatchObject({
+      reason: "cart-placed",
+      workflow: { name: "place-order", failed: "load-cart" },
+    });
+    // Asserted against the database rather than the response: what matters is that a second
+    // Order was never written, not that a second request was answered tidily.
+    await expect(kobai.database.query("select id from core_order")).resolves.toHaveLength(
+      1,
+    );
+  });
+
+  /**
+   * The half a sequential test cannot reach: two requests that both find no Order.
+   *
+   * The check in `load-cart` is a courtesy — it stops a doomed run before anything is priced —
+   * and it is not what makes the rule true. What makes it true is the unique index the Order is
+   * written against, so this is dispatched concurrently on purpose: every one of these requests
+   * gets past the check, and the database is the only thing standing between them and four
+   * Orders for one selection.
+   */
+  it("writes one Order when several requests place the same Cart at once", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () => placeOrder(kobai, cart.apiKey.headers, cart.id)),
+    );
+
+    // Exactly one placed it, and the others were refused rather than met with a 500 — a
+    // constraint violation reaching a storefront as a broken server would be this rule holding
+    // by accident.
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      201, 409, 409, 409,
+    ]);
+    for (const refused of responses.filter((response) => response.status === 409)) {
+      await expect(refused.json()).resolves.toMatchObject({ reason: "cart-placed" });
+    }
+    await expect(kobai.database.query("select id from core_order")).resolves.toHaveLength(
+      1,
+    );
+  });
+});
+
 describe("an Order does not depend on the catalog it was placed from", () => {
   it("survives the Variant being deleted, with its snapshot intact", async () => {
     await using kobai = await createTestKobai();

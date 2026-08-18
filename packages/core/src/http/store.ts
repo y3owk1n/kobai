@@ -12,8 +12,9 @@ import {
   updateLineItem,
 } from "../cart/write.ts";
 import type { Database } from "../db/client.ts";
+import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
-import { readOrder } from "../order/read.ts";
+import { type Order, readOrder, readOrderPlacedFrom } from "../order/read.ts";
 import type {
   PriceResolutionRefusal,
   PriceResolutionWorkflow,
@@ -143,8 +144,8 @@ const CART_REFUSALS = {
     "No such Cart exists, or this Cart carries no such Line Item.",
     contract.CartRefusal,
   ),
-  expired: json(
-    "This Cart has expired. It still reads, and it can no longer be changed.",
+  notChangeable: json(
+    "This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way.",
     contract.CartRefusal,
   ),
   notSellable: json(
@@ -215,7 +216,7 @@ const updateCartRoute = createRoute({
     401: REFUSALS.noApiKey,
     403: CART_REFUSALS.needsSecretKey,
     404: CART_REFUSALS.noCart,
-    409: CART_REFUSALS.expired,
+    409: CART_REFUSALS.notChangeable,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -240,7 +241,7 @@ const addLineItemRoute = createRoute({
     400: CART_REFUSALS.invalid,
     401: REFUSALS.noApiKey,
     404: CART_REFUSALS.noCartOrVariant,
-    409: CART_REFUSALS.expired,
+    409: CART_REFUSALS.notChangeable,
     422: CART_REFUSALS.notSellable,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -266,7 +267,7 @@ const updateLineItemRoute = createRoute({
     400: CART_REFUSALS.invalid,
     401: REFUSALS.noApiKey,
     404: CART_REFUSALS.noCartOrLineItem,
-    409: CART_REFUSALS.expired,
+    409: CART_REFUSALS.notChangeable,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -284,7 +285,7 @@ const removeLineItemRoute = createRoute({
     200: json(CART_BODY, contract.Cart),
     401: REFUSALS.noApiKey,
     404: CART_REFUSALS.noCartOrLineItem,
-    409: CART_REFUSALS.expired,
+    409: CART_REFUSALS.notChangeable,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -301,6 +302,10 @@ const removeLineItemRoute = createRoute({
  * is unconditional — no request with a publishable key may place an Order, whatever it says
  * (ADR-0055). So it is a real gate, registered in `GATE_REFUSALS`, and `openapi.test.ts` holds
  * the declaration below to a chain that actually makes it.
+ *
+ * **Two success statuses, and the difference between them is whether anything was created.**
+ * `201` is a placement; `200` is a retry carrying the idempotency key of one — the same Order,
+ * without the account of a Workflow run that did not happen this time (#102).
  */
 const placeOrderRoute = createRoute({
   method: "post",
@@ -309,14 +314,19 @@ const placeOrderRoute = createRoute({
   middleware: [requireSecretApiKey()] as const,
   security: API_KEY,
   description:
-    "Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards.",
+    "Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards. Send an `Idempotency-Key` so that retrying after a timeout answers with the Order already placed rather than placing a second one; a Cart becomes exactly one Order either way.",
   request: {
+    headers: contract.IdempotencyKeyHeader,
     body: {
       required: true,
       content: { "application/json": { schema: contract.PlaceOrderRequest } },
     },
   },
   responses: {
+    200: json(
+      "This idempotency key has already placed an Order, and this is that Order — nothing was placed again. There is no `workflow` here, because which Steps ran is a fact about the request that placed it.",
+      contract.Order,
+    ),
     201: json("The Order, and the Steps that produced it.", contract.PlacedOrder),
     // The shared one, unlike a Cart route's: every refusal past the schema on this route comes
     // from a Step, so `invalid` is the only reason a body can be turned back with here and
@@ -326,7 +336,7 @@ const placeOrderRoute = createRoute({
     403: REFUSALS.secretKeyRequired,
     404: json("A Step refused: there is no such Cart.", contract.PlaceOrderRefusal),
     409: json(
-      "A Step refused: this Cart has expired and can no longer be placed.",
+      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the idempotency key names a different request, or one still in flight.",
       contract.PlaceOrderRefusal,
     ),
     422: json(
@@ -457,16 +467,54 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   });
 
   store.openapi(placeOrderRoute, async (c) => {
-    const run = await deps.placeOrderWorkflow.run(
-      { cartId: c.req.valid("json").cartId },
-      contextFor(c),
+    const body = c.req.valid("json");
+    // Claimed before the Workflow runs, so a retry of a request that is still being served
+    // never reaches the Cart at all — and released below unless an Order comes of it, because
+    // a key standing for a purchase that never happened would refuse the retry that fixes it.
+    const claim = await claimIdempotencyKey(
+      deps.db,
+      c.req.valid("header")["idempotency-key"],
+      body,
     );
+    if (claim.outcome === "replayed") return c.json(claim.order, 200);
+    if (claim.outcome === "refused") {
+      // A key in flight may belong to a request that captured and then died before it could
+      // name its Order — the Order is the record, so ask it rather than the key. It also means
+      // the loser of a race is handed the Order the moment the winner commits, instead of being
+      // told to try again for a request that is already done.
+      const placed =
+        claim.reason === "idempotency-key-in-progress"
+          ? await readOrderPlacedFrom(deps.db, body.cartId)
+          : undefined;
+      if (placed) return c.json(placed, 200);
 
-    if (!run.ok)
+      return c.json(
+        { error: claim.detail, reason: claim.reason },
+        IDEMPOTENCY_REFUSAL_STATUS[claim.reason],
+      );
+    }
+
+    let run: WorkflowRun<Order>;
+    try {
+      run = await deps.placeOrderWorkflow.run({ cartId: body.cartId }, contextFor(c));
+    } catch (bug) {
+      // A Step threw. The key goes back for the same reason a refusal returns it — nothing was
+      // placed — and the bug travels on as the 500 it is.
+      await claim.release();
+      throw bug;
+    }
+
+    if (!run.ok) {
+      await claim.release();
       return c.json(
         refusal(run, deps.placeOrderWorkflow.name),
         placeOrderStatusFor(run.reason),
       );
+    }
+
+    // After Capture, never before: until the Order exists there is nothing for the key to
+    // name, and a key completed early would answer a retry with an Order that is not there.
+    await claim.complete(run.output.id);
 
     return c.json(
       {
@@ -550,32 +598,44 @@ const CREATE_CART_STATUS = {
 
 const READ_CART_STATUS = { "cart-not-found": 404 } as const;
 
-const UPDATE_CART_STATUS = {
-  invalid: 400,
-  "secret-key-required": 403,
+/**
+ * The refusals **every** Cart mutation can make, because `mutate` makes them before the
+ * operation's own work: there is no such Cart, or there is and it can no longer be changed.
+ *
+ * Spread into each map below rather than written out in all four, so the next state that freezes
+ * a Cart is one edit here instead of four that have to agree. It is a *part* of each map and not
+ * a shared table, which is the distinction the note above draws: each route still declares
+ * exactly the statuses its own map holds, and `satisfies` still holds each map to the reasons
+ * that operation can actually produce.
+ */
+const NOT_CHANGEABLE_STATUS = {
   "cart-not-found": 404,
   "cart-expired": 409,
+  "cart-placed": 409,
+} as const;
+
+const UPDATE_CART_STATUS = {
+  ...NOT_CHANGEABLE_STATUS,
+  invalid: 400,
+  "secret-key-required": 403,
 } as const satisfies StatusesFor<typeof updateCart>;
 
 /** 422 for a Variant with no Price: well formed, and still refused. */
 const ADD_LINE_ITEM_STATUS = {
+  ...NOT_CHANGEABLE_STATUS,
   invalid: 400,
-  "cart-not-found": 404,
-  "cart-expired": 409,
   "variant-not-found": 404,
   "variant-not-priced": 422,
 } as const satisfies StatusesFor<typeof addLineItem>;
 
 const UPDATE_LINE_ITEM_STATUS = {
+  ...NOT_CHANGEABLE_STATUS,
   invalid: 400,
-  "cart-not-found": 404,
-  "cart-expired": 409,
   "line-item-not-found": 404,
 } as const satisfies StatusesFor<typeof updateLineItem>;
 
 const REMOVE_LINE_ITEM_STATUS = {
-  "cart-not-found": 404,
-  "cart-expired": 409,
+  ...NOT_CHANGEABLE_STATUS,
   "line-item-not-found": 404,
 } as const satisfies StatusesFor<typeof removeLineItem>;
 
@@ -649,6 +709,7 @@ const statusFor = statusMapper<PriceRefusalStatus>(PRICE_REFUSAL_STATUS);
 const PLACE_ORDER_REFUSAL_STATUS = {
   "cart-not-found": 404,
   "cart-expired": 409,
+  "cart-placed": 409,
   "cart-empty": 422,
   "variant-not-found": 422,
   "price-not-set": 422,
@@ -663,6 +724,25 @@ type PlaceOrderRefusalStatus = 404 | 409 | 422;
 const placeOrderStatusFor = statusMapper<PlaceOrderRefusalStatus>(
   PLACE_ORDER_REFUSAL_STATUS,
 );
+
+/**
+ * What an idempotency key turns a request back with — a map of its own, and mapped for the same
+ * reason every other refusal here is.
+ *
+ * These are made *before* the Workflow runs, so they are not in
+ * {@link PLACE_ORDER_REFUSAL_STATUS} and could not be: nothing refused, and there is no slot to
+ * name. What they share with it is the `satisfies`, which is the part that matters — a third way
+ * a key can turn a request back has no entry here and does not compile, rather than being
+ * answered 409 because 409 is what the line above happened to say.
+ *
+ * Both are `409` today and that is a coincidence of meaning rather than a shortcut: a key used
+ * for something else and a key still in flight are both "this request conflicts with one that
+ * came first", and they are told apart by `reason`.
+ */
+const IDEMPOTENCY_REFUSAL_STATUS = {
+  "idempotency-key-reused": 409,
+  "idempotency-key-in-progress": 409,
+} as const satisfies Record<IdempotencyRefusal, PlaceOrderRefusalStatus>;
 
 /**
  * A refusal, in the shape every other kobai refusal uses — plus which Step refused.

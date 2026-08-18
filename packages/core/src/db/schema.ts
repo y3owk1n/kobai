@@ -450,46 +450,65 @@ export type CartLineItemRow = typeof cartLineItem.$inferSelect;
  * that somebody wrote to a row ADR-0009 says is never written to. A column nothing should ever
  * move is a tamper detector rather than a formality.
  */
-export const order = pgTable("core_order", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  /**
-   * The **Order number** — human-facing, distinct from `id`, monotonic, and **not promised
-   * gapless** (`CONTEXT.md`).
-   *
-   * A sequence rather than a count of the rows: counting is a read followed by a write, which
-   * two simultaneous Captures both lose, and a sequence is the one mechanism Postgres will not
-   * hand the same value out of twice. What that costs is the gaps — a sequence advances even
-   * for a transaction that rolls back — and the gaps are exactly what is not promised, because
-   * gapless numbering is an invoicing requirement and invoicing is not Core's. Promising it
-   * would mean serialising every Capture behind one lock forever.
-   *
-   * Per Store, which needs no column: one deployment is one Store (ADR-0005).
-   */
-  number: bigserial("number", { mode: "number" }).notNull().unique(),
-  /**
-   * The Cart this Order was placed from — for navigation, never for arithmetic.
-   *
-   * `set null` rather than `cascade` or `restrict`: a Cart is disposable and an Order is not,
-   * so the Cart going away must leave this record whole, and it must not be able to hold a
-   * Cart's rows hostage either. Everything a person reads is copied onto this row and the
-   * Line Items below, so losing the reference loses nothing but the trail back.
-   */
-  cartId: uuid("cart_id").references(() => cart.id, { onDelete: "set null" }),
-  /** The Shopper reference as at Capture. Null for a guest, which is the ordinary case. */
-  shopperEmail: text("shopper_email"),
-  shopperExternalId: text("shopper_external_id"),
-  /** ISO 4217, copied at Capture — the currency every amount on this Order is in. */
-  currency: text("currency").notNull(),
-  /**
-   * What was charged, in the minor units of `currency`. The sum of the Line Items' totals
-   * today; Adjustments arrive as their own lines and are accounted for here (ADR-0022).
-   */
-  total: bigint("total", { mode: "number" }).notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-  /** The moment of **Capture** — when this Order came into existence and became immutable. */
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const order = pgTable(
+  "core_order",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * The **Order number** — human-facing, distinct from `id`, monotonic, and **not promised
+     * gapless** (`CONTEXT.md`).
+     *
+     * A sequence rather than a count of the rows: counting is a read followed by a write, which
+     * two simultaneous Captures both lose, and a sequence is the one mechanism Postgres will not
+     * hand the same value out of twice. What that costs is the gaps — a sequence advances even
+     * for a transaction that rolls back — and the gaps are exactly what is not promised, because
+     * gapless numbering is an invoicing requirement and invoicing is not Core's. Promising it
+     * would mean serialising every Capture behind one lock forever.
+     *
+     * Per Store, which needs no column: one deployment is one Store (ADR-0005).
+     */
+    number: bigserial("number", { mode: "number" }).notNull().unique(),
+    /**
+     * The Cart this Order was placed from — for navigation, never for arithmetic.
+     *
+     * `set null` rather than `cascade` or `restrict`: a Cart is disposable and an Order is not,
+     * so the Cart going away must leave this record whole, and it must not be able to hold a
+     * Cart's rows hostage either. Everything a person reads is copied onto this row and the
+     * Line Items below, so losing the reference loses nothing but the trail back.
+     */
+    cartId: uuid("cart_id").references(() => cart.id, { onDelete: "set null" }),
+    /** The Shopper reference as at Capture. Null for a guest, which is the ordinary case. */
+    shopperEmail: text("shopper_email"),
+    shopperExternalId: text("shopper_external_id"),
+    /** ISO 4217, copied at Capture — the currency every amount on this Order is in. */
+    currency: text("currency").notNull(),
+    /**
+     * What was charged, in the minor units of `currency`. The sum of the Line Items' totals
+     * today; Adjustments arrive as their own lines and are accounted for here (ADR-0022).
+     */
+    total: bigint("total", { mode: "number" }).notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    /** The moment of **Capture** — when this Order came into existence and became immutable. */
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    /**
+     * **One Order per Cart, in DDL** — which is what makes a Cart spent by the Order it became
+     * (#102).
+     *
+     * The constraint is the decision rather than a guard on it. Two requests placing one Cart
+     * at the same instant both find no Order and both write one; a unique index is the check
+     * and the claim in a single operation, so the second insert waits on the first and is then
+     * told the value is taken — the same shape as the Cart's own one-line-per-Variant index,
+     * and the one ADR-0018 asks for wherever something scarce is claimed.
+     *
+     * A `null` here is a Cart that has since been deleted, and Postgres treats two nulls as
+     * distinct — so Orders outliving their Carts do not collide with each other.
+     */
+    uniqueIndex("core_order_cart_idx").on(table.cartId),
+  ],
+);
 
 export type OrderRow = typeof order.$inferSelect;
 
@@ -610,3 +629,74 @@ export const orderAdjustment = pgTable(
 );
 
 export type OrderAdjustmentRow = typeof orderAdjustment.$inferSelect;
+
+/**
+ * A **client-supplied idempotency key**, and the Order it produced (#102).
+ *
+ * What it is for is one fact a request cannot carry: that a `POST /store/orders` this
+ * storefront gave up waiting for is the same intention as the one it is sending now. A retry is
+ * indistinguishable from a fresh purchase at the network — the timeout happens on the way back —
+ * so a key the caller chooses is the only thing that can tell them apart, and without one a
+ * retry after a timeout is a second charge.
+ *
+ * **The row is claimed before the Workflow runs and completed after it.** That order is what
+ * makes it work: `key` is unique, so of two simultaneous requests exactly one writes this row,
+ * and the other finds it and is refused rather than placing anything. `order_id` is null while
+ * the first is still running and set the moment it captures — so "another request is using this
+ * key" and "this key already produced that Order" are different states with different answers.
+ *
+ * **No `updated_at`, deliberately** — the second Core table without one, and for `core_session`'s
+ * reason (ADR-0037, ADR-0045). This row is written twice for exactly one reason, which is that
+ * the Order was captured, and `order_id` records that fact along with the Order's own
+ * `created_at` saying when. A column advancing on the same write would be that fact in a second
+ * place, kept there by a trigger on every claim.
+ *
+ * **It expires, and nothing sweeps it yet.** `expires_at` is what stops a key being held forever
+ * by a request whose process died mid-run: past it, the row no longer binds and the next claim
+ * on that key takes it over. The rows themselves accumulate — one per placement attempt, each a
+ * few hundred bytes beside the Order it names — and deleting them is a background sweep kobai
+ * does not have until the Reservation sweeper arrives (#98). Until then this grows with Orders
+ * rather than without bound, which is the same rate the Orders themselves do.
+ */
+export const idempotencyKey = pgTable(
+  "core_idempotency_key",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * The value the caller chose, stored as they wrote it.
+     *
+     * Not hashed, unlike every other credential-shaped column here: an idempotency key opens
+     * nothing and authorises nothing — a caller holding one can learn only about the Order they
+     * placed with it, and they already have that. What it needs to be is comparable, and an
+     * unguessable value is the caller's business rather than kobai's.
+     */
+    key: text("key").notNull().unique(),
+    /**
+     * A digest of the request this key was first used with.
+     *
+     * The same key with a *different* body is a programming error rather than a retry, and
+     * answering it with somebody else's Order would be worse than failing — so what the first
+     * request asked for has to be recoverable. A digest rather than the body, because comparing
+     * is all this is for and a stored copy of every request is a second place a Shopper's data
+     * lives.
+     */
+    fingerprint: text("fingerprint").notNull(),
+    /**
+     * The Order this key produced, or null while the request that claimed it is still running.
+     *
+     * `cascade`, so a key cannot outlive the Order it names and go on replaying a record that is
+     * no longer there. Nothing in Core deletes an Order (ADR-0009); this is what the column
+     * means if anything ever does.
+     */
+    orderId: uuid("order_id").references(() => order.id, { onDelete: "cascade" }),
+    /** When this key stops binding, and may be claimed again. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Expired rows are what a sweep will delete, and what a claim looks past.
+    index("core_idempotency_key_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export type IdempotencyKeyRow = typeof idempotencyKey.$inferSelect;
