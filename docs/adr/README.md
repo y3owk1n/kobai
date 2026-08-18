@@ -67,6 +67,8 @@ New to the project? These five carry the shape of everything else:
 | [0039](./0039-the-lint-gate-fails-on-every-finding.md) | The lint gate fails on every finding, and `biome.json` says so out loud | Accepted — sharpens 0031 |
 | [0040](./0040-an-unrouted-path-is-a-refusal-and-the-gate-answers-before-it.md) | An unrouted path is a refusal like any other, and the gate answers before it | Accepted |
 | [0041](./0041-the-first-merchant-is-seeded-at-boot.md) | The first Merchant is seeded at boot, and Core has no unauthenticated write path | Accepted — supersedes part of 0020 |
+| 0042 | *Never used* — a number reserved and then given up | **Burned.** Never reassigned — see [Conventions](#conventions) |
+| 0043 | *Never used* — a number reserved and then given up | **Burned.** Never reassigned — see [Conventions](#conventions) |
 | [0044](./0044-the-cli-and-migrator-agreement-is-asserted-in-the-gate.md) | The CLI/migrator agreement is asserted in the gate, not behind an opt-in step | Accepted — enforces 0030 |
 | [0045](./0045-sessions-expire-on-inactivity-under-an-absolute-cap.md) | Sessions expire on inactivity, under an absolute cap | **"The window is hardcoded" superseded by 0050.** Rest stands |
 | [0046](./0046-the-postgres-credentials-belong-to-dot-env-too.md) | The Postgres credentials come from `.env`, and devbox is where they are encoded | Accepted — completes 0031 |
@@ -126,3 +128,26 @@ and **the result of a real trade-off**. If any of the three is missing, it isn't
 
 Superseded records are kept and their titles left intact. Add a blockquote note at the top
 pointing at whatever replaced them, and update the Status column here.
+
+**A burned number gets a row, not a gap.** A number reserved by a ticket that then turns out
+not to need an ADR is given up, and it is never handed to a later decision: a number that once
+meant something else is a footgun for every commit message, doc comment and issue that cites
+it, and those citations are the whole reason a record has a number at all. Giving one up means
+writing it into the table above as an unused row, because the alternative is a sequence that
+jumps and cannot say why.
+
+That is what 0042 and 0043 are (#147). They were reserved by #61 and #19 — the other two of a
+round of four concurrent tickets, whose other halves produced 0041 (#25) and 0044 (#46). #61
+gave `devbox run up` a port derived from the checkout, and #19 moved a hand-rolled
+`information_schema` query onto `inspectSchema`; both landed as ordinary changes that met no
+part of the three-way test above, so neither number was ever spent. Which of the two held
+which is the one thing nobody wrote down, so neither row above claims it.
+
+**Nothing was lost, and the rule exists because the record still read as though something
+had been.** No file named `0042*` or `0043*` has ever existed here — across every reachable
+commit and every unreachable one `git fsck` can still find, the ADR paths go 0041 to 0044 —
+and nothing in the repository cites either number. The reservation was even explained twice,
+in the commit messages behind PR #89 and PR #97, and both were squash-merged, which keeps the
+subject and drops the body; the account naming the two tickets is in PR #89's description.
+None of that is anywhere a reader of this file would look, which is the whole point: neither
+a commit message nor a pull request is the index.
