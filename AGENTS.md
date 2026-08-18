@@ -504,16 +504,33 @@ Core's own set is otherwise clear and stays clear that way: every `NOT NULL` in 
 `CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to tables created in the same
 migration.
 
-**One statement in the repository is named by that check and shipped anyway**: `0016`'s unique
-index on `core_order.cart_id`, which a deployment left anywhere between `0012` — where
-`core_order` is created — and `0015` could meet with the very duplicates `0016` exists to
-prevent, since until then a Cart could become two Orders. **That
-one is a release decision and it lives in ADR-0058**, under "What else the licence is holding
-up" — with why the deduplication was not written, the one question to ask before the first
-publish, and both answers to it. Do not re-take it here or in the test; the test's entry points
-at it. What belongs in this file is the mechanism: the acknowledgement is an equality rather
-than an ignore list, so it fails if that statement changes or if a second one joins it, and
-answering a finding there is a decision written down, never a line added to a list.
+**`0016`'s unique index on `core_order.cart_id` is named by that check and shipped anyway**: a
+deployment left anywhere between `0012` — where `core_order` is created — and `0015` could meet
+it with the very duplicates `0016` exists to prevent, since until then a Cart could become two
+Orders. **That one is a release decision and it lives in ADR-0058**, under "What else the licence
+is holding up" — with why the deduplication was not written, the one question to ask before the
+first publish, and both answers to it. Do not re-take it here or in the test; the test's entry
+points at it. What belongs in this file is the mechanism: the acknowledgement is an equality
+rather than an ignore list, so a statement it names that changes fails it and one it does not
+name that appears fails it too, and answering a finding there is a decision written down, never a
+line added to a list.
+
+**An acknowledgement says which of two judgements it is, because the correct shape produces the
+identical finding** (#161). The reading is per-file and has to be — ADR-0038 puts the
+deduplication in a `--custom` migration of its own — so "safe, because the migration before it
+deduplicated" and "unsafe, but unreachable while nothing is published" arrive as the same text,
+and a list that told them apart in prose alone would be one list of two meanings. So each entry
+carries a **kind**, and each kind carries the one thing that would show it false: a
+`deduplicated-ahead-of-it` entry names the migration that removed the duplicates, which has to
+run ahead of it in the same set; an `unreachable-until-release` entry names the record arguing it
+**and the section of that record which lists what falls due**, which has to name the migration
+back — so ADR-0058's "What else the licence is holding up" cannot be shorter than the constant,
+and emptying or renaming it fails rather than quietly emptying the list. **Both checks are
+assertions, not conventions**, and a kind added without a warrant does not compile. What neither
+check reads is the argument itself — that the migration named really did remove the right
+duplicates, that the record's prose is still true — because reading it would be checking wording.
+That stays the author's to argue in prose beside the entry, which is where the reasoning still
+lives.
 
 ### Scarcity is claimed in one statement, and the sweeper is a plain interval
 

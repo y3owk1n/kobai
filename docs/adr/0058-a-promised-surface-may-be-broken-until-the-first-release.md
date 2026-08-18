@@ -293,7 +293,11 @@ placed two of them.
   index to refuse — so the statement is safe for good, and
   `tests/migrations-are-safe-against-populated-tables.test.ts` should say *that* rather than cite
   this record. It stops being true only if some released version cuts Core's set between the two,
-  which is not a thing a release does.
+  which is not a thing a release does. **What changes there is the kind and not only the
+  wording** (#161): the entry records which of two judgements it is, and the reason above is
+  neither of them — nothing has been deduplicated, and the debt is no longer waiting on a
+  release — so retiring it means adding a kind, with the one thing that would show *that* kind
+  false. The union in that file is what makes stating it unavoidable rather than optional.
 - **Yes.** Then either the deduplication is owed after all, in front of `0016` and with the
   renumbering it costs — or that database is dropped and recreated, which is the same answer at a
   fraction of the price and is available for exactly as long as it holds nothing anybody needs.
@@ -309,6 +313,18 @@ written down beside it". So the entry is a place for a reason rather than a supp
 section is that reason, and what the first publish calls for is a rewritten reason. Deleting the
 entry while `0016` stands turns the gate red — watched rather than assumed, by emptying the
 constant and reading the failure, which names `0016` and that one statement.
+
+**This section cannot be shorter than that constant, and that is asserted rather than trusted**
+(#161). The correct ADR-0038 shape produces the identical finding, so the constant fills up with
+two unlike judgements — a statement that is safe because an earlier migration deduplicated, and a
+debt like this one that is merely unreachable while the licence holds. An entry now says which,
+and an entry of the second kind **names this record and this heading**; the check fails unless
+what stands under that heading names the migration back. So the reader this section is for —
+somebody about to remove a loopback pin, who arrives here rather than at a test file — is holding
+every debt that constant carries: one acknowledged on this licence's credit and argued in the
+test alone cannot pass the gate, and neither can this section being emptied or renamed out from
+under it. It says nothing about a debt taken somewhere else in the repository, which is why the
+admission rule above is stated rather than enforced.
 
 ## Consequences
 
