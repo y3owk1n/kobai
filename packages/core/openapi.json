@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "kobai",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "description": "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session in an httpOnly cookie, and `/store`, behind a bearer API key (ADR-0020, ADR-0032). `/health` is open, and is the only route that answers before migrations have applied.",
     "license": {
       "name": "MIT",
