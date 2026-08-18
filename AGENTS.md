@@ -697,10 +697,30 @@ The **upgrade seam** is `tests/the-upgrade-gate.test.ts`, and it is the release 
 asks for: a generated Project — which *is* the reference Project — is arranged through the
 public API, taken across a **synthetic major** manufactured by republishing this commit's
 packages under another version, then rebuilt, rebooted against the same database, and asked
-the same question. Each assertion is one clause of ADR-0001's promise and says which clause
-broke, because `exit 1` at three in the morning is not a diagnosis. What it deliberately does
-not prove is that a codemod transforms anything — there is no breaking change to migrate —
-and that is pinned against fixtures in `packages/core/src/upgrade/codemods.test.ts`.
+every question it was asked before. **It asks several, and each is one clause of ADR-0001's
+promise**: that the shipped command moved every `@kobai/*` range, installed it, rewrote
+`pnpm-lock.yaml` and reported both the codemods it found and the lockfile it touched; that the
+Project still boots and still applies every migration set into the database it already had;
+that the Step it put in Core's `select-price` slot still decides the price; that the Plugin's
+tables, its rows and its migration tracking survived *and its offered Step is still writing to
+them*, and that the Project's own tables survived too; that the Fulfilment Strategy a **Plugin**
+supplies still answers, and the Step reading that answer still puts the Lead Time surcharge on
+the Order; that the Payment Provider the **Project's own source** supplies still takes the
+money; and — the strongest of them, and the one nothing else in this repository asks — that an
+Order placed *before* the upgrade reads back **byte for byte** after it, the whole body of
+`GET /store/orders/{id}` compared as text. So the gate carries both dependency-substitution
+surfaces (ADR-0052, ADR-0053) and ADR-0009's immutability across a Core major, which is what to
+weigh it as. Each assertion says which clause broke, because `exit 1` at three in the morning is
+not a diagnosis.
+
+**That byte comparison is only as stable as the read path underneath it**, so a query the Order
+route reads through needs an `order by` that cannot tie — `readFulfilmentsOf` ends its one in
+`id` for exactly that reason (#132), as the Line Item query beside it always did. A tie there
+would not redden this gate honestly; it would redden it *sometimes*.
+
+What the gate deliberately does not prove is that a codemod transforms anything — there is no
+breaking change to migrate — and that is pinned against fixtures in
+`packages/core/src/upgrade/codemods.test.ts`.
 
 
 ### Writing tests

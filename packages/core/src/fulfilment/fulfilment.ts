@@ -53,11 +53,14 @@ export type Fulfilment = {
  * Two queries rather than a join, exactly as an Order's Adjustments are read: a Fulfilment
  * multiplied by its lines would have to be folded apart in TypeScript anyway.
  *
- * **In a fixed order**: by the Strategy's name, then by what it answered. Capture writes every
- * row in one transaction, so `created_at` is identical across all of them and the tie would fall
- * to a random uuid — an Order would report its Fulfilments differently every time it was read.
- * The four columns together are a total order, because no two rows on one Order can share all
- * four: that is precisely what `writeFulfilments` groups by.
+ * **In a fixed order**: by the Strategy's name, then by what it answered, then by id. Capture
+ * writes every row in one transaction, so `created_at` is identical across all of them and
+ * cannot order anything — and without a last column that cannot tie, an Order holding two
+ * Fulfilments that answered identically would report them in whichever order Postgres happened
+ * to hand them back, which is a different Order on two reads. `writeFulfilments` groups by
+ * exactly those four columns today, so no Order kobai places can hold such a pair; the
+ * tiebreaker is here because the grouping rule is a decision that may change and the read path
+ * must not silently depend on it — the query below ends in one for the same reason.
  */
 export async function readFulfilmentsOf(
   db: Queryable,
@@ -77,6 +80,7 @@ export async function readFulfilmentsOf(
       asc(fulfilment.requiresShipping),
       asc(fulfilment.tracksInventory),
       asc(fulfilment.hasLeadTime),
+      asc(fulfilment.id),
     )
     .where(eq(fulfilment.orderId, orderId));
   if (rows.length === 0) return [];
