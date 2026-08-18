@@ -457,13 +457,49 @@ backfill. And **a backfill value has to say the fact was never recorded, not gue
 because no real currency code could be told apart from one the Plugin had actually observed.
 If no such value exists, that is a finding about the column, not something to solve in SQL.
 
+**A unique index is the same hazard through a different statement, and the same shape answers
+it** (#119). Postgres refuses `CREATE UNIQUE INDEX` against a table already holding two rows
+that agree on the indexed columns, and `drizzle-kit generate` writes exactly that from a
+`uniqueIndex()` added to a table that already exists — unprompted, from an ordinary
+declaration, like the column. So: **deduplicate in a `--custom` migration first, then generate
+the index**, so the constraint arrives onto data that can satisfy it. The middle step is
+hand-written for the same reason a backfill is — an `UPDATE` or a `DELETE` is a data change
+drizzle-kit will neither write nor notice is missing — and it has to be defensible in the same
+way: keeping the newest of a set of duplicates is right only if the others are genuinely the
+same fact, and where they are not, that is a finding about the constraint rather than
+something to solve in SQL. A **plain** `CREATE INDEX` is not this: no row can refuse one, its
+cost on a populated table is a lock, and the remedy for that is `CONCURRENTLY`, which cannot
+run inside the transaction a migration is applied in.
+
+**The check reads one spelling of that hazard and there are three.** `ALTER TABLE … ADD
+CONSTRAINT … UNIQUE` — what a `.unique()` on a column generates, and so the *likelier* of the
+two — and `… ADD CONSTRAINT … CHECK`, which fails against rows that do not satisfy it, are
+both unread. The shape above answers all three; only the index is caught for you. A `CHECK` is
+the awkward one and is why it was left: what makes `0027`'s safe is the statement immediately
+before it, so reading it means reading what came earlier rather than what the migration
+created, which is a different question from the one this check asks.
+
 Two tests hold this. `packages/plugin-price-log/src/migrations.test.ts` seeds a row and then
 applies the rest of the set — the only place in this repository a migration meets data —
 using `migrationSetUpTo` from `@kobai/core/testing`.
 `tests/migrations-are-safe-against-populated-tables.test.ts` reads every migration in the
-repository for the statement itself. Core's own set is clear and stays clear that way: every
-`NOT NULL` in it is inside a `CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to
-tables created in the same migration.
+repository for the statements themselves: a required column with no default, and a unique
+index on a table the same migration did not create. That second reading has only the one
+excuse a reading of a single file can make — **the table was created here, so no row it has
+not seen can refuse anything** — which is the same excuse Core's foreign keys already rest on.
+Core's own set is otherwise clear and stays clear that way: every `NOT NULL` in it is inside a
+`CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to tables created in the same
+migration.
+
+**One statement in the repository is named by that check and shipped anyway**, and it is
+acknowledged in the test by file and text with the reason: `0016`'s unique index on
+`core_order.cart_id`, which a deployment sitting on `0015` could meet with the very duplicates
+`0016` exists to prevent, since until then a Cart could become two Orders. It survives only
+because nothing has been released, which is an argument about today — **before the first
+release it needs either the deduplication above in front of it or a decision that it does
+not.** The acknowledgement is an equality rather than an ignore list, so it fails if that
+statement changes or if a second one joins it; answering a finding there is a decision written
+down, never a line added to a list.
 
 ### Scarcity is claimed in one statement, and the sweeper is a plain interval
 
