@@ -12,6 +12,9 @@
 /** Postgres's SQLSTATE for a unique violation. Every one of them arrives under this code. */
 const UNIQUE_VIOLATION = "23505";
 
+/** And for a `check` constraint refusing a value — how Inventory refuses to go negative. */
+const CHECK_VIOLATION = "23514";
+
 /**
  * How far down a `cause` chain to look, so that a cycle cannot become a hung request.
  *
@@ -31,14 +34,37 @@ const DEEPEST_CAUSE = 16;
  * the same table must not be mistaken for the one being claimed against.
  */
 export function violatesUniqueIndex(cause: unknown, index: string): boolean {
+  return violates(cause, UNIQUE_VIOLATION, index);
+}
+
+/**
+ * Whether this is Postgres refusing a write against the named `check` constraint.
+ *
+ * The same reading as above, for the other half of the same idea: a constraint is where a rule
+ * lives when Core does not mediate every writer (ADR-0004), and `core_inventory`'s are what stop
+ * stock going negative or being reserved beyond what the Store has. A Merchant counting a shelf
+ * below what is already claimed is an ordinary conflict, so it is read here and answered rather
+ * than travelling as a broken server.
+ */
+export function violatesCheckConstraint(cause: unknown, constraint: string): boolean {
+  return violates(cause, CHECK_VIOLATION, constraint);
+}
+
+/**
+ * The walk both of them do, because the driver's error does not arrive bare: Drizzle wraps it in
+ * a `DrizzleQueryError` carrying the query, and a caller may wrap it again. Matching the
+ * constraint by name as well as by code is what keeps each one narrow — a second constraint on
+ * the same table must not be mistaken for the one being claimed against.
+ */
+function violates(cause: unknown, sqlstate: string, constraint: string): boolean {
   let error: unknown = cause;
 
   for (let depth = 0; depth < DEEPEST_CAUSE; depth++) {
     if (error === null || typeof error !== "object") return false;
 
-    const { code, constraint } = error as { code?: unknown; constraint?: unknown };
-    if (code === UNIQUE_VIOLATION && constraint === index) return true;
-    error = (error as { cause?: unknown }).cause;
+    const failure = error as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (failure.code === sqlstate && failure.constraint === constraint) return true;
+    error = failure.cause;
   }
 
   return false;

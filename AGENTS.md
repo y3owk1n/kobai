@@ -385,6 +385,50 @@ repository for the statement itself. Core's own set is clear and stays clear tha
 `NOT NULL` in it is inside a `CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to
 tables created in the same migration.
 
+### Scarcity is claimed in one statement, and the sweeper is a plain interval
+
+**A claim on something scarce is a conditional write, never a read followed by a write**
+(ADR-0018). `packages/core/src/reservation/inventory.ts` holds stock with a single
+`update … set reserved = reserved + n where on_hand - reserved >= n`, so Postgres takes the row
+lock before it evaluates the condition and the loser of a race re-evaluates against the row the
+winner left. A `select` and then an `update` cannot do this and no amount of care makes it — the
+Store oversells and has merely implemented the appearance of safety, which is worse than none.
+The same shape is already how a Cart keeps one line per Variant and how a Cart becomes exactly
+one Order; those are unique indexes rather than conditional updates, and both are the ADR's
+"a row lock or a unique constraint".
+
+`tests/`-style emptiness assertions cannot see this, so **the guardrail is a concurrent test**:
+`packages/core/src/reservation/the-last-unit.test.ts` dispatches many `POST /store/orders` at one
+unit of stock and asserts exactly one Order, every other request refused with
+`insufficient-inventory`, and the shelf left at zero rather than at minus something. It was
+watched failing against a deliberately non-atomic hold before it was made to pass — one 201 and
+five 500s, every loser stopped by the guard inside Capture and refunded by a compensation that
+should never have run. **Write the next such test the same way round.**
+
+**One interface, and the providers are Core's own.** `reservation/provider.ts` is ADR-0018's
+single Reservation interface; Inventory is its only implementation and Capacity joins
+`RESERVATION_PROVIDERS` when it is built. `core_reservation` is Core's record for every provider
+alike — `provider` and `subject`, so a Capacity claim needs no column and no table of its own —
+and only the provider knows what a subject means. Nothing on the promised surface hands a Project
+a way to supply one; that would be a config key and an ADR, and neither exists.
+
+**Consuming happens inside the Capture transaction, and releasing is guarded by the row.** That
+is why `hold-reservations` sits before `take-payment` and why `capture-order` declares no
+compensation: the database unwinds a claim and an Order together. A release — from the Step's
+compensation or from the sweeper — is an
+`update core_reservation set released_at = now() where … released_at is null … returning`, and
+the rows it actually claims are the only ones whose units go back, so the two can race and the
+units are returned exactly once.
+
+**The sweeper is a plain interval and deliberately not ADR-0026's job queue** (ADR-0057) — a
+queue brings retry, visibility and failure semantics that deserve their own spec, and the queue
+spec will have to migrate this (#98). `packages/core/src/sweep.ts` releases lapsed holds and deletes expired
+`core_idempotency_key` rows in the same pass; a Project starts it with `kobai.startSweeper()`
+**after** `migrate()`, exactly as it seeds its first Merchant, and `kobai.close()` stops it.
+**Test it by winding rows back and calling `kobai.sweep()`** — never by waiting for a
+fifteen-minute hold — the way `packages/core/src/sweep.test.ts` does; the one test that waits is
+the one whose subject is the timer itself.
+
 ### The API contract
 
 **A route is a declaration, and the description is generated from it.** Core's HTTP surface
@@ -692,6 +736,12 @@ const product = await kobai.request(`/admin/products/${catalog.productId}`, {
 **Amounts are integer minor units** — 1250 is USD 12.50 — and a Price's currency is the
 Store's default, which since #5 is the only currency a Price may carry. So the helper takes
 no currency at all: the correct thing is the only thing.
+
+**Nothing it seeds is counted**, and there is deliberately no option that counts it. A Variant
+with no Inventory row sells freely and holds no Reservation (ADR-0018), which is what every test
+that is not about stock wants; a test that *is* about stock says so with
+`PUT /admin/variants/{id}/inventory`, in the open, the way `reservation/reservation.test.ts`
+does.
 
 It hides the arrangement a test does not care about and **never the thing the test is
 about**, which is the same line `signInTestMerchant` draws. A test asserting on the OpenAPI

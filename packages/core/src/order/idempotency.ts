@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { idempotencyKey } from "../db/schema.ts";
 import { type Order, readOrder } from "./read.ts";
@@ -133,6 +133,25 @@ export async function claimIdempotencyKey(
     );
   }
   return { outcome: "replayed", order };
+}
+
+/**
+ * Deletes every key that has stopped binding — the sweeper's second errand (#98, `sweep.ts`).
+ *
+ * A row past `expires_at` already answers nobody: a claim on that key takes it over, and no
+ * request is answered from it. So deleting it changes no behaviour at all, which is exactly what
+ * makes this safe to run on a timer — the only thing it affects is how many rows the table holds.
+ * Nothing did it before this sweeper existed, and `db/schema.ts` said so.
+ *
+ * `now()` is Postgres's own, so a clock that has drifted on whichever instance is sweeping cannot
+ * delete a key that still binds.
+ */
+export async function deleteExpiredIdempotencyKeys(db: Database): Promise<number> {
+  const deleted = await db
+    .delete(idempotencyKey)
+    .where(lt(idempotencyKey.expiresAt, sql`now()`))
+    .returning({ id: idempotencyKey.id });
+  return deleted.length;
 }
 
 /** The claim a request that named no key gets: it owns nothing, so it gives nothing back. */

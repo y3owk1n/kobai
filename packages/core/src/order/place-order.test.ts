@@ -56,6 +56,7 @@ describe("the declaration", () => {
         { slot: "price-lines" },
         { slot: "apply-adjustments" },
         { slot: "calculate-tax" },
+        { slot: "hold-reservations" },
         { slot: "take-payment" },
         { slot: "capture-order" },
       ],
@@ -69,20 +70,30 @@ describe("the declaration", () => {
    * Both halves are the decision. Charging before the total is settled would charge a figure no
    * Step had finished working out; charging *after* Capture would put a failure past the point of
    * no return, where an Order exists and no compensation may edit it (ADR-0009). So `take-payment`
-   * sits in the one gap left, and it is the only Step here that declares a compensation —
-   * everything before it decides rather than does, and the Step after it is the point of no
-   * return.
+   * sits in the one gap left, with the hold immediately in front of it — stock is claimed before
+   * a Shopper is charged for it — and the Step after it is the point of no return.
+   *
+   * **The two Steps that do something outside their own transaction are exactly the two that
+   * declare a compensation**, and that is the property worth pinning rather than the count. Every
+   * Step before them decides rather than does; consuming the holds is inside Capture's own
+   * transaction, so the database unwinds it and a compensation there would be undoing something
+   * that never happened (ADR-0018).
    */
-  it("takes payment after the total is settled and before the point of no return", () => {
+  it("holds stock and takes payment after the total is settled and before the point of no return", () => {
     const slots = placeOrderWorkflow.steps.map((step) => step.slot);
 
-    expect(slots.indexOf("calculate-tax")).toBeLessThan(slots.indexOf("take-payment"));
+    expect(slots.indexOf("calculate-tax")).toBeLessThan(
+      slots.indexOf("hold-reservations"),
+    );
+    expect(slots.indexOf("hold-reservations")).toBeLessThan(
+      slots.indexOf("take-payment"),
+    );
     expect(slots.indexOf("take-payment")).toBeLessThan(slots.indexOf("capture-order"));
     expect(
       placeOrderWorkflow.steps
         .filter((step) => step.step.compensate !== undefined)
         .map((step) => step.slot),
-    ).toEqual(["take-payment"]);
+    ).toEqual(["hold-reservations", "take-payment"]);
   });
 
   /**
@@ -234,6 +245,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
           { step: "price-lines", implementation: "everything-is-a-penny" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "calculate-tax" },
+          { step: "hold-reservations", implementation: "hold-reservations" },
           { step: "take-payment", implementation: "take-payment" },
           { step: "capture-order", implementation: "capture-order" },
         ],
@@ -275,6 +287,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
           { step: "price-lines" },
           { step: "apply-adjustments" },
           { step: "calculate-tax" },
+          { step: "hold-reservations" },
           { step: "take-payment" },
         ],
       },
@@ -458,6 +471,7 @@ describe("the tax Step", () => {
           { step: "price-lines", implementation: "price-lines" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "ten-per-cent" },
+          { step: "hold-reservations", implementation: "hold-reservations" },
           { step: "take-payment", implementation: "take-payment" },
           { step: "capture-order", implementation: "capture-order" },
         ],

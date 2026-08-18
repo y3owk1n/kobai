@@ -325,8 +325,17 @@ describe("GET /admin/products/:id", () => {
 
     // A Product always has at least one Variant, priced or not — a read that dropped the
     // unpriced ones would produce exactly the zero-Variant Product ADR-0008 forbids.
+    // `inventory: null` for the same reason `prices: []` is here: a Variant nobody has counted
+    // is not one with none left, and the two are told apart by the absence rather than by a zero
+    // (ADR-0018).
     expect(detail.variants).toEqual([
-      { id: product.variants[0]?.id, sku: "POSTER-A2", metadata: {}, prices: [] },
+      {
+        id: product.variants[0]?.id,
+        sku: "POSTER-A2",
+        metadata: {},
+        prices: [],
+        inventory: null,
+      },
     ]);
   });
 

@@ -31,6 +31,11 @@ import { createTestKobai, inspectSchema } from "../testing/index.ts";
  * anybody would hang a field off, and it is deleted the moment it stops being useful. An
  * API key is not absent for the same reason it is not a session — it is a long-lived,
  * named thing a Merchant manages, and a Plugin wanting to hang a field off one is ordinary.
+ *
+ * Inventory is here and a Reservation is not, and the line between them is the session's line
+ * again: what the Store has of a Variant is a long-lived fact a Plugin might want a warehouse
+ * bay or a reorder level against, while a Reservation is a claim that lives for minutes and ends
+ * as an Order or as nothing at all.
  */
 const PRINCIPAL_ENTITIES = [
   "core_store",
@@ -45,6 +50,7 @@ const PRINCIPAL_ENTITIES = [
   "core_order",
   "core_order_line_item",
   "core_order_adjustment",
+  "core_inventory",
 ];
 
 describe("metadata, the cheap case", () => {

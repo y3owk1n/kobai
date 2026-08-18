@@ -460,6 +460,75 @@ export interface paths {
       };
     };
   };
+  "/admin/variants/{id}/inventory": {
+    /**
+     * Count a Variant's stock
+     * @description A statement of what the Store has, replacing whatever was there — not an adjustment to it. The first call is what makes a Variant tracked; an untracked Variant sells freely, which is not the same as one counted at zero. `reserved` is never set here: it belongs to the Reservations currently being placed. Read it back with the Product.
+     */
+    put: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["SetInventoryRequest"];
+        };
+      };
+      responses: {
+        /** @description What the Store now has of this Variant. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Inventory"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Variant exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description More than that is currently claimed by Reservations being placed. Those either become Orders or lapse, and the count can be set once they have. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/orders": {
     /**
      * List Orders
@@ -1185,7 +1254,7 @@ export interface paths {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
           };
         };
-        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight. */
+        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight. */
         409: {
           content: {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
@@ -1388,6 +1457,7 @@ export interface components {
       };
       /** @description Every Price set on this Variant. A Price is a row, so there may be several. */
       prices: components["schemas"]["Price"][];
+      inventory: components["schemas"]["Inventory"];
     };
     Price: {
       /** Format: uuid */
@@ -1400,6 +1470,17 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    /** @description What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely. */
+    Inventory: {
+      /** Format: uuid */
+      variantId: string;
+      /** @description What the Store physically has. */
+      onHand: number;
+      /** @description How much of it is claimed by Reservations still being placed. */
+      reserved: number;
+      /** @description `onHand - reserved` — what is left to sell. */
+      available: number;
+    } | null;
     Product: {
       /** Format: uuid */
       id: string;
@@ -1436,6 +1517,10 @@ export interface components {
       metadata?: {
         [key: string]: unknown;
       };
+    };
+    SetInventoryRequest: {
+      /** @description What the Store has, counted. Replaces whatever was there; it is not added to it. */
+      onHand: number;
     };
     OrderList: {
       orders: components["schemas"]["OrderSummary"][];

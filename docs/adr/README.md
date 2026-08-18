@@ -80,6 +80,7 @@ New to the project? These five carry the shape of everything else:
 | [0054](./0054-a-step-may-invoke-another-workflow.md) | A Step may invoke another Workflow, and the deployment's declaration is the one that runs | Accepted — extends 0017 |
 | [0055](./0055-placing-an-order-requires-a-secret-key.md) | Placing an Order requires a secret key, and that is a gate rather than a check | Accepted — extends 0020 |
 | [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053 |
+| [0057](./0057-the-reservation-sweeper-is-an-interval-not-a-job.md) | The Reservation sweeper is an interval, not a job | Accepted — amends part of 0026 |
 
 ## Prototypes
 

@@ -19,6 +19,12 @@ import type { MigrationSet } from "./migrations/set.ts";
 import { createMigrationStateHolder, type MigrationState } from "./migrations/state.ts";
 import { placeOrderWorkflow } from "./order/place-order.ts";
 import { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
+import {
+  type SweeperOptions,
+  type SweepOutcome,
+  startSweeper,
+  sweepExpired,
+} from "./sweep.ts";
 import type { WorkflowRegistry } from "./workflow/context.ts";
 import { rewireWorkflow } from "./workflow/workflow.ts";
 
@@ -107,6 +113,31 @@ export type Kobai = {
    * the failed migration that must exit, while taking `/health` down with it.
    */
   seedInitialMerchant(): Promise<InitialMerchantSeed>;
+  /**
+   * Starts the background sweep: lapsed Reservation holds released, expired idempotency keys
+   * deleted. Call it once per boot, after {@link Kobai.migrate}, and {@link Kobai.close} stops
+   * it.
+   *
+   * A plain interval rather than a job (ADR-0026 is deliberately not involved; see `sweep.ts`),
+   * and **explicit rather than automatic** for the same reason `migrate()` and
+   * `seedInitialMerchant()` are: it needs the tables to exist, and a boot that swept before
+   * migrating would log a failure about a missing relation on every deployment's first minute.
+   * Calling it again replaces the interval rather than adding a second one, so a deployment that
+   * changes its mind about how often to sweep does not end up sweeping twice as often.
+   *
+   * A deployment that never calls it still works — nothing is left broken, only untidy: holds
+   * from placements that died mid-run stay claimed until somebody sweeps, and the idempotency
+   * table grows.
+   */
+  startSweeper(options?: SweeperOptions): void;
+  /**
+   * Sweeps once, now, and says what it did.
+   *
+   * What the interval calls, exposed because a deployment may want to sweep on its own schedule
+   * — and because a test asserting on a lapsed hold winds the row back and then asks for a
+   * sweep, rather than waiting a quarter of an hour for one.
+   */
+  sweep(): Promise<SweepOutcome>;
   migrationState(): MigrationState;
   close(): Promise<void>;
 };
@@ -119,6 +150,8 @@ export function createKobai(options: KobaiOptions): Kobai {
   const logger = options.logger ?? consoleLogger;
   const database = createDatabaseHandle(options.databaseUrl);
   const migrations = createMigrationStateHolder();
+  /** Set while the sweeper is running, so `close()` can stop what `startSweeper()` began. */
+  let stopSweeping: (() => void) | undefined;
 
   // Core's own set is one entry in the same list, applied by the same runner as a Plugin's.
   // That is the point: the mechanism third parties depend on is exercised on every commit.
@@ -238,6 +271,19 @@ export function createKobai(options: KobaiOptions): Kobai {
       return seed;
     },
 
-    close: () => database.close(),
+    startSweeper(sweeperOptions) {
+      stopSweeping?.();
+      stopSweeping = startSweeper(database.db, logger, sweeperOptions);
+    },
+
+    sweep: () => sweepExpired(database.db),
+
+    async close() {
+      // The timer first: a sweep that started against a pool being closed would report a failure
+      // nobody can act on, from a process that is on its way out.
+      stopSweeping?.();
+      stopSweeping = undefined;
+      await database.close();
+    },
   };
 }

@@ -349,7 +349,7 @@ const placeOrderRoute = createRoute({
     403: REFUSALS.secretKeyRequired,
     404: json("A Step refused: there is no such Cart.", contract.PlaceOrderRefusal),
     409: json(
-      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
+      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
       contract.PlaceOrderRefusal,
     ),
     422: json(
@@ -725,6 +725,10 @@ const PLACE_ORDER_REFUSAL_STATUS = {
   "cart-expired": 409,
   "cart-placed": 409,
   "cart-empty": 422,
+  // 409 beside the Cart that can no longer be placed, and for the same reason: the request was
+  // fine and the state of the Store refuses it, and retrying the same request changes nothing
+  // until somebody restocks — or until a hold somebody else is holding lapses.
+  "insufficient-inventory": 409,
   "variant-not-found": 422,
   "price-not-set": 422,
   // 402 is the one status on this surface that means "the money did not move", and it is the

@@ -1,4 +1,4 @@
-import type { KobaiClient, ProductDetail } from "@kobai/client";
+import type { KobaiClient, ProductDetail, Variant } from "@kobai/client";
 import { useCallback, useEffect, useState } from "react";
 import { Problem } from "@/components/problem";
 import { StorefrontPrice } from "@/components/storefront-price";
@@ -119,6 +119,10 @@ export function ProductScreen({
 
                   <Separator />
 
+                  <Stock inventory={variant.inventory} />
+
+                  <Separator />
+
                   <StorefrontPrice
                     client={client}
                     variantId={variant.id}
@@ -132,5 +136,49 @@ export function ProductScreen({
           })
         : null}
     </div>
+  );
+}
+
+/**
+ * What the Store has of a Variant, and what is left to sell (ADR-0018).
+ *
+ * **Untracked is `null` and says so in words**, because it is not the same as none left: a
+ * Variant nobody counts sells freely, and a Merchant looking at a blank number would have no way
+ * to tell which of the two they were looking at.
+ *
+ * `reserved` is shown beside `available` rather than folded into it. It is the stock claimed by
+ * Orders currently being placed, so a Merchant who sees fewer available than they counted has the
+ * explanation in the same row instead of a discrepancy to chase.
+ *
+ * Read-only here. Counting stock is `PUT /admin/variants/{id}/inventory` and the API has it; a
+ * form for it is a screen this Admin has not grown yet.
+ */
+function Stock({ inventory }: { readonly inventory: Variant["inventory"] }) {
+  if (inventory === null) {
+    return (
+      <p className="text-muted-foreground text-sm">
+        Nobody is counting this Variant, so it sells freely — which is not the same as
+        having none left.
+      </p>
+    );
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>On hand</TableHead>
+          <TableHead>Reserved</TableHead>
+          <TableHead>Available</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow>
+          <TableCell className="font-medium">{inventory.onHand}</TableCell>
+          <TableCell>{inventory.reserved}</TableCell>
+          <TableCell>{inventory.available}</TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
   );
 }
