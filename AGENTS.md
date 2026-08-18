@@ -529,8 +529,14 @@ one Order; those are unique indexes rather than conditional updates, and both ar
 
 No sequential assertion can see any of this, so **the guardrail is a concurrent test** —
 `packages/core/src/reservation/the-last-unit.test.ts`, dispatching many `POST /store/orders` at
-one unit of stock. How one of those is written, and why each of its assertions is there, is in
-[Writing tests](#writing-tests) with the other seams; **write the next one the same way round.**
+one unit of stock. **There are two of them**, and the second is
+`packages/core/src/reservation/the-variant-that-vanished.test.ts` — the same shape on the path
+where no money is involved (#145), dispatching six
+`DELETE /admin/variants/{id}` and six `PUT …/inventory` together after the count path was found
+reading a Variant in one statement and writing against it in another. How one of those is
+written, why each of its assertions is there, and why a green run proves less than you would
+think, is in [Writing tests](#writing-tests) with the other seams; **write the next one the same
+way round.**
 
 **One interface, and the providers are Core's own.** `reservation/provider.ts` is ADR-0018's
 single Reservation interface; Inventory is its only implementation and Capacity joins
@@ -638,6 +644,20 @@ promises and the handler does not produce fails the build.** Do not add a route 
 `app.get(…)`; it would be served and undescribed, and `openapi.test.ts` fails when the
 router's table and the description disagree.
 
+**The surface is promised, so a rename on it costs a major** (ADR-0060). kobai's HTTP surface
+is under Core's semver commitment — the paths and methods that exist, the fields a request
+accepts and a response carries, the status each outcome is answered at, and the `reason` string
+inside a refusal. **Renaming or removing any of those is a breaking change rather than a
+refactor**, and nothing below can tell you so: the drift checks prove the description matches
+the routes, never that the change was allowed. What may still arrive in a minor is additive, and
+**ADR-0060's table is what says which** — but one edge of it belongs here, because it is the case
+that looks additive and is not: a new `reason`, or a new status, turns an exhaustive `switch`
+over a regenerated `@kobai/client` into an incomplete one, so an addition is owed a written note
+in the release too. Prose is not promised — a refusal's `error`, a route's `summary` and
+`description`, and the description's own serialisation. The licence that makes any of this free
+until the first publish is ADR-0058's. Read both before editing `contract.ts`;
+`docs/extension-points.md` is where the same promise is written for a Developer.
+
 The schemas live in `packages/core/src/http/contract.ts` and are **structural** — names,
 types, presence, closed sets. Rules stay in the module that owns them: whether an address
 looks like one, whether a SKU is taken, whether this Store prices in that currency. A rule
@@ -659,6 +679,16 @@ enumerated different paths per deployment is not a contract.
 `devbox run ci`. Regenerate with `devbox run openapi:generate` — Core first, then the client,
 because pnpm walks the workspace in dependency order.
 
+**A version bump in `packages/core/package.json` drifts the description too** (#158). `info.version`
+is `coreVersion()` in `http/app.ts`, read from Core's own manifest when the document is built,
+because ADR-0060 makes the surface's version the package's — one fact, not a second copy kept by
+hand. The checked-in artifact only moves when somebody regenerates it, so **bumping the version
+without running `devbox run openapi:generate` fails `openapi.test.ts` twice**: once as a byte
+diff, once as an assertion naming both versions. The asymmetry is the part that surprises people
+and it is verified rather than assumed — **`packages/client/src/schema.ts` does not move**,
+because `openapi-typescript` emits paths, components and operations and never the `info` block,
+so a regenerated client is byte-identical across a version bump.
+
 **A declared refusal must have the gate that makes it.** Five of the statuses a route
 declares are not the handler's to answer — they are made above it, by middleware: `503` by the
 migration gate, `401` by the session gate at `/admin` and by the API-key gate at `/store`,
@@ -679,10 +709,23 @@ twice**, and a new gate needs one entry in `GATE_REFUSALS`.
 The check deliberately covers **all of them**, not just the `403` #56 asked for: the session and
 API-key gates are mounted per surface with `use("*")`, so the mistake they catch is a route
 registered on the wrong half of `admin.ts` — anonymous access to the admin surface, which
-nothing else here would notice. It stops at the status: the `session-*` and `api-key-*`
-*reasons* inside a `401` are pinned one level down, by the mapped `satisfies` on
-`SESSION_REASONS` and `API_KEY_REASONS` in `contract.ts`, which makes each declared set exactly
-the rejections its gate can produce. **No route is excused.** `POST /admin/merchants` was the
+nothing else here would notice. It stops at the status: the *reasons* inside a refusal are
+pinned one level down, in `contract.ts`, and **a reason a module refuses with is bound to that
+module's own union by a mapped `satisfies`** — so the declared set is exactly the refusals that
+module can make, a new one has no key and does not compile, and a rename turns `contract.ts` red
+naming the word. `SESSION_REASONS` and `API_KEY_REASONS` are the two gates'; #149 built the rest
+of Core's the same way (ADR-0060). **Read the file rather than counting them here**, because the
+construction is not uniform and each departure has a reason. A reason written *above* every
+handler has no module to map over: `REQUEST_REASONS` is `invalidRequestHook`'s and
+`app.onError`'s two, spread into every family a body can reach. A reason a **handler** writes by
+hand is bound instead by the schema it is typechecked against — `ApiKeyNotFound`'s `z.literal`
+answering the handler's own `reason: "…" as const`, `OrderRefusal`'s one-member enum,
+`PlaceOrderRequestRefusal`'s `metadata-in-both` — where a rename on either side still fails the
+build, which was checked rather than assumed. And the two families a **Step** refuses through —
+`PriceRefusal` and `PlaceOrderRefusal` — keep `reason` an **open string**, because closing them
+would close Extension Point 2; Core's own words are listed in each schema's `description`, built
+from the constant rather than retyped, and that constant *is* held to the modules' unions by the
+same mapped `satisfies`. **No route is excused.** `POST /admin/merchants` was the
 one that had to be, because the first Merchant had to be creatable with no session at all, so
 it asked the same question inside its handler; #25 moved the first Merchant to a boot-time
 seed and the route took the ordinary middleware, so every refusal every operation declares is
@@ -1117,8 +1160,11 @@ be a row lock or a unique constraint and **never a `select` followed by an `upda
 nothing sequential can tell those apart, because the forbidden shape passes every assertion in
 `reservation.test.ts`. So the test *dispatches at once*:
 `packages/core/src/reservation/the-last-unit.test.ts` puts one unit on the shelf, builds a Cart
-per Shopper, and fires `POST /store/orders` at all of them inside one `Promise.all`. Four things
-about how it is written carry to the next one:
+per Shopper, and fires `POST /store/orders` at all of them inside one `Promise.all`.
+`packages/core/src/reservation/the-variant-that-vanished.test.ts` is the second, and the pair is
+what makes this a technique rather than a special case: it dispatches six deletes and six counts
+at six Variants together and holds every count to one of the two answers that are true (#145).
+Four things about how they are written carry to the next one:
 
 - **Assert on what the losers were told, and on the books, not only on the winner.** One 201, and
   every other request refused with the *reason that is true* rather than failing some other way;
@@ -1131,9 +1177,16 @@ about how it is written carry to the next one:
 - **How many is a named constant with its reason beside it.** Big enough that more than one
   request is inside the gap on any scheduling, small enough to stay well inside the connection
   pool — queueing behind connections serialises the very thing the test exists to overlap.
-- **It was watched failing against a deliberately non-atomic implementation before it was made to
-  pass**, and what it did then is written down in the file. **Write the next such test the same
-  way round**; a race nobody has seen lost is not yet known to be losable.
+- **Each was watched failing before it was made to pass** — the first against a deliberately
+  non-atomic hold, the second against the two loose statements it was written about — and what
+  each run did is written down in its own file. **Write the next such test the same way round**;
+  a race nobody has seen lost is not yet known to be losable. **That recorded run is the whole of
+  the proof, because once the fix is in the test can no longer show the window was reached** — a
+  request that landed in the gap and one that arrived after the other transaction committed now
+  answer identically, which is what the fix is for, so a green run cannot tell a contended race
+  from an arrangement that quietly stopped overlapping. `the-variant-that-vanished.test.ts` says
+  that in as many words and it is true of both. Changing how the requests are dispatched
+  therefore obliges you to watch it fail again rather than to trust that it still would.
 
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive

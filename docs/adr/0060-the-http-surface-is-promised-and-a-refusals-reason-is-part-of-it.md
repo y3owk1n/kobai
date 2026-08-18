@@ -122,11 +122,11 @@ two deliberately open sets already demand of everybody.
   `summary` and `description` are the same: the behaviour they document is promised, the
   sentence is not.
 - **The description's serialisation.** Key order, the OpenAPI dialect emitted, the absence of
-  `operationId`s, and the `info` block — which today says `version: "0.0.0"` and therefore
-  names no release at all, while `app.ts`'s comment beside it claims it "moves with
-  `@kobai/core`'s". That is a gap this record names and does not close: making a description
-  say which kobai it describes is a build-time decision (inject at generation, or hand-keep)
-  that nobody has taken.
+  `operationId`s, and the `info` block. The block is *unpromised*, not meaningless: when this
+  was written it said `version: "0.0.0"` and named no release at all, while `app.ts`'s comment
+  beside it claimed it "moved with `@kobai/core`'s" — a gap this record named and left open.
+  #158 closed it, by reading the version off `@kobai/core`'s own manifest where the document is
+  built. What is promised is the surface the block describes, not the block.
 - **Identifier formats.** An identifier is an opaque string. That it is a UUID today is not a
   promise, and a client that parses one is depending on something it was not offered.
 - **Timing, ordering not documented, performance, and anything about the database.** The
@@ -310,26 +310,36 @@ it wrote down two reason strings and observed that nothing was watching them.
 - **`Refusal` is gone from the description**, replaced by `InvalidRequest`, `MerchantRefusal`,
   `CatalogRefusal` and `ApiKeyNotFound`. Taken under ADR-0058's licence, and it is the last
   moment such a rename is free.
-- **`AGENTS.md` § The API contract is where this becomes an instruction, and the edit is owed
-  rather than made.** That section describes how the description is *kept honest* and says
+- **`AGENTS.md` § The API contract is where this becomes an instruction, and the edit was owed
+  rather than made here.** That section described how the description is *kept honest* and said
   nothing about what changing it costs; and its one sentence about reason strings — "it stops
   at the status: the `session-*` and `api-key-*` *reasons* inside a `401` are pinned one level
-  down, by the mapped `satisfies` on `SESSION_REASONS` and `API_KEY_REASONS`" — now describes
-  two of five such sets rather than the only two there are. Both changes were held back
+  down, by the mapped `satisfies` on `SESSION_REASONS` and `API_KEY_REASONS`" — described two
+  of the closed sets rather than the only two there were. Both changes were held back
   deliberately: the file was another ticket's while this was written, and a half-edit to the
-  single source of truth is worse than a pointer. This record is the pointer.
-- **`docs/extension-points.md` is owed the same edit, and for a sharper reason.** Its second
-  section is headed "Core's semver covers these five and nothing else" and its third lists
+  single source of truth is worse than a pointer. **#157 made them**, and the reason-strings
+  sentence now describes the construction rather than counting the sets, which is ADR-0049's
+  lesson about a number in prose applied to this one.
+- **`docs/extension-points.md` was owed the same edit, and for a sharper reason.** Its second
+  section was headed "Core's semver covers these five and nothing else" and its third lists
   what is not promised — and it is the page a Developer is *sent to* to find out what they may
   lean on, so it is the one place this record's absence would still mislead somebody after
-  this record exists. It is also another ticket's file today, hence a pointer rather than an
-  edit.
+  this record exists. It was another ticket's file the day this was written, hence a pointer
+  rather than an edit; **#157 made it**, and that section now carries the called-versus-consumed
+  argument and names all three things semver covers.
 - **ADR-0019 and ADR-0003 gain a second amendment note each**, pointing here, so a reader
   looking for "what is under semver" finds all three answers from either end.
-- **The description names no release.** `info.version` is `"0.0.0"`; the comment beside it in
-  `app.ts` says it moves with `@kobai/core`'s and it does not. A consumer holding an
-  `openapi.json` cannot tell which kobai it describes, which is a thing a semver promise makes
-  worth fixing and a decision nobody has taken.
+- **The description now names the release it describes** — the one thing here that has already
+  moved. This record left `info.version` at `"0.0.0"`, with `app.ts` claiming beside it that the
+  value moved with `@kobai/core`'s, and called closing that a decision nobody had taken. #158
+  took it, hours later and for this record's own reason: a consumer holding an `openapi.json`
+  has no manifest beside it, so a promise it cannot date is a promise it cannot use. `coreVersion()`
+  reads the manifest where the document is built, so the surface's version *is* the package's
+  rather than a second copy kept by hand, and `openapi.test.ts` fails when the checked-in
+  artifact and the manifest disagree. The consequence to know is a workflow one: **a version
+  bump has to regenerate `packages/core/openapi.json` in the same commit**, while
+  `packages/client/src/schema.ts` does not move at all, because `openapi-typescript` emits no
+  `info` block.
 - **ADR-0059's two refusals are no longer promised in prose alone.** That record said the
   question of whether they get "the enum treatment" was a decision nobody had taken. This is
   it, and they got it.
