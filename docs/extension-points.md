@@ -6,7 +6,9 @@ true if there is a surface Core promises not to break under you. This page is th
 written down: **five Extension Points, what each is for, and — because it matters more
 than the list does — which of them actually work today.**
 
-Read the status column before you build on a row.
+Read the status column before you build on a row. Two other things are promised and are
+*not* Extension Points — the shipped test harness, and kobai's HTTP API. The next section
+says why the difference is real and where each one is written down.
 
 | # | Extension Point | What it is for | Status today |
 |---|---|---|---|
@@ -16,7 +18,7 @@ Read the status column before you build on a row.
 | 4 | **Events** | React to something happening, without being in the path of it | **Promised only** — nothing to attach to; no bus, no emitter, no subscriber |
 | 5 | **Admin UI slots** | Put your own UI inside the Admin at a declared position | **Promised only** — no slot mechanism exists |
 
-## Core's semver covers these five and nothing else
+## Core's semver covers three things, and these five are one of them
 
 This is the unusual part of the promise and the part most likely to burn you, so it is
 here in the second section rather than in a footnote.
@@ -31,9 +33,46 @@ The two halves of that follow, and both are meant literally:
 
 - If you reached into a Core internal and a minor release broke you, that is the trade you
   made. It should have been visible to you at the time — that is what this page is for.
-- If you stayed inside the five and a minor release broke you, **that is a bug in kobai**.
-  Report it. The promise is not aspirational and a break in it is not your problem to work
-  around.
+- If you stayed inside what is promised and a minor release broke you, **that is a bug in
+  kobai**. Report it. The promise is not aspirational and a break in it is not your problem
+  to work around.
+
+**What is promised is three things, and only the first of them is a list of Extension
+Points:**
+
+| Promised | What it is | Recorded in |
+|---|---|---|
+| The **five Extension Points** | Where code of yours is *called* by Core | [ADR-0003](./adr/0003-the-extension-surface-and-what-we-promise.md) |
+| **`@kobai/core/testing`** | The harness Core tests itself through, shipped so you and a Plugin author get the same seam | [ADR-0047](./adr/0047-the-test-harness-is-promised-surface.md) |
+| **kobai's HTTP surface** | Its paths and methods, the shapes it takes and answers with, the status each outcome carries, and the `reason` inside a refusal | [ADR-0060](./adr/0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md) |
+
+**Called versus consumed is the distinction, and it is why five is still five.** An Extension
+Point is a place your code — or a Plugin's — is *called*: Core resolves it by name at boot and
+runs it inside its own process, which makes every one of them a permanent constraint on how
+Core may be built. That is what the one-way door below is about. **Nothing attaches to an
+HTTP route.** A storefront *consumes* kobai over a socket, in whatever language it likes —
+[ADR-0006](./adr/0006-typescript-on-node-with-a-rest-openapi-contract.md) rejected tRPC
+outright so that it need not share kobai's — so the surface constrains what kobai *answers*
+and not what kobai is made of, and Core may rewrite every module behind a route without
+touching it. Two different kinds of thing; one semver promise.
+
+**So do not read the API as unpromised because it is not one of the five.** It is promised in
+as much detail as they are: an operation keeps its path and its method, a field a response
+carries keeps its name, its type and its meaning, an outcome keeps the status it is answered
+at, and a refusal's `reason` — the field kobai's own schemas tell you to branch on, as against
+`error`, which is prose for a person and may be rewritten at any time — keeps its spelling and
+its meaning. What may arrive in a minor is additive: a new path, or a new method on one that
+exists; a new **optional** request field, or a widening of what an existing one accepts; a new
+response field; and a status or a `reason` for an outcome that could not previously happen. That last one has an edge worth knowing before it catches you — a new
+`reason` turns an exhaustive `switch` over a regenerated `@kobai/client` into an incomplete
+one — so **treat an unrecognised `reason` as "refused" rather than as impossible.** ADR-0060 is
+the whole of it, including the two `reason` sets that stay deliberately open because a Step of
+*yours* is what refuses through them.
+
+`@kobai/client` carries that promise one level removed: it is promised to be a faithful
+projection of `packages/core/openapi.json` — proved on every build by regenerating it and
+comparing — so its types move exactly when the surface moves and never otherwise. What it does
+not promise is the *spelling* its generator chose, which may change when the generator does.
 
 ## What is explicitly not promised
 
@@ -52,8 +91,14 @@ Named, so their absence from the list above is legible rather than accidental
   ([ADR-0004](./adr/0004-plugins-own-their-tables-core-tables-are-closed.md)), and closed
   to your Project by consequence: querying them directly works and will keep working right
   up until a migration you did not write changes them. The stable way to reach Core's data
-  is the API and the Workflow context, both of which are on the list.
-- **Anything not reachable through the five.** The list is the definition, not a summary of
+  is the API and the Workflow context, and the second section is why both of those are
+  promised while the tables under them are not.
+- **Prose, and the description file's shape.** A refusal's `error` string, a route's `summary`
+  and `description`, and the key order and dialect of `packages/core/openapi.json`. The
+  *behaviour* those sentences document is promised; the sentence is not. Nor is the format of
+  an identifier — an id is an opaque string, and that it is a UUID today is not an offer
+  (ADR-0060).
+- **Anything none of the three above reaches.** The list is the definition, not a summary of
   one.
 
 Two things Core does put in your hands and does *not* consider internals, because they are
@@ -96,6 +141,13 @@ registry is a surface — so the spine spec would have settled it by accident, w
 the implementation took. It was decided on purpose instead, and the answer was number three
 again ([ADR-0052](./adr/0052-a-fulfilment-strategy-is-dependency-substitution.md)). That is
 the standard a sixth has to fail before it earns a place.
+
+**Two things have been promised without joining the list, and neither was a sixth.** The test
+harness (ADR-0047) and the HTTP surface (ADR-0060) are both under Core's semver and neither is
+an Extension Point, for the reason the second section gives: nothing of yours is *called*
+through either. That is the question a candidate has to answer — not "does this matter enough
+to promise?", which is a different question with a different answer, but "does Core load and
+run somebody else's code through it?"
 
 ---
 
@@ -631,6 +683,11 @@ about the API rather than a reason to reach around it — the same rule kobai ho
   it is closed. The decision this page reports.
 - [ADR-0019](./adr/0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md)
   — Plugins are npm packages, and what semver does and does not cover.
+- [ADR-0060](./adr/0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md) —
+  the HTTP surface is promised, a refusal's `reason` with it, and what may still grow in a
+  minor. The table to read before you depend on a response.
+- [ADR-0047](./adr/0047-the-test-harness-is-promised-surface.md) — the other thing promised
+  without being an Extension Point, and the argument this page borrows for both.
 - [ADR-0017](./adr/0017-plugins-offer-steps-and-the-project-wires-them.md) — why a Plugin
   offers and a Project wires, and why a replacement is type-checked.
 - [ADR-0058](./adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md) — the
