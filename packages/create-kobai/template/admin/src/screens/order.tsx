@@ -1,5 +1,5 @@
 import type { KobaiClient, Order } from "@kobai/client";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { PaymentBadge } from "@/components/payment-badge";
 import { Problem } from "@/components/problem";
 import { Button } from "@/components/ui/button";
@@ -143,10 +143,28 @@ export function OrderScreen({
             </CardHeader>
             <CardContent className="grid gap-2 text-sm">
               {order.adjustments.map((adjustment) => (
-                <div className="flex justify-between" key={adjustment.id}>
-                  <span className="text-muted-foreground">{adjustment.description}</span>
-                  <span>{formatAmount(adjustment.amount, order.currency)}</span>
-                </div>
+                <Fragment key={adjustment.id}>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      {adjustment.description}
+                    </span>
+                    <span>{formatAmount(adjustment.amount, order.currency)}</span>
+                  </div>
+                  {/*
+                   * An Order-level Adjustment carries its own tax, because there is no line
+                   * whose tax could carry it — a delivery surcharge is taxable and belongs to
+                   * no line. Shown only when there is some: this deployment's tax Step decides,
+                   * and Core charges none, so a row of zeroes would be noise on every Order.
+                   */}
+                  {adjustment.tax !== 0 && (
+                    <div className="flex justify-between pl-4">
+                      {/* Just "Tax": the description beside it is the Merchant's own text,
+                          and composing a sentence out of it would mangle a proper noun. */}
+                      <span className="text-muted-foreground">Tax</span>
+                      <span>{formatAmount(adjustment.tax, order.currency)}</span>
+                    </div>
+                  )}
+                </Fragment>
               ))}
               <div className="flex justify-between font-medium">
                 <span>Total</span>

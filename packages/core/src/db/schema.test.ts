@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTestKobai, inspectSchema } from "../testing/index.ts";
+import { createTestKobai, inspectSchema, seedTestOrder } from "../testing/index.ts";
 
 /**
  * Core's tables, as Postgres holds them.
@@ -82,5 +82,60 @@ describe("metadata, the cheap case", () => {
       // surface is a promise; ADR-0004 says a Plugin that needs one needs its own table.
       await expect(schema.indexedColumnsOf(table)).resolves.not.toContain("metadata");
     }
+  });
+});
+
+/**
+ * An Adjustment's tax, and the one row it may never sit on (#117).
+ *
+ * `core_order_adjustment.tax` is where a replaced `calculate-tax` records what it charged on an
+ * Adjustment belonging to no line — a delivery surcharge, ADR-0022's own example. A line's
+ * Adjustments have no such figure: `calculate-tax` runs after `apply-adjustments` and taxes the
+ * *adjusted* line, so their tax is already inside `core_order_line_item.tax`, and a second one
+ * here would be charged twice or silently dropped.
+ *
+ * Core's own types make that unreachable over HTTP — the Adjustments a Step attaches to a line
+ * have no `tax` to set — which is exactly why the rule is asserted against Postgres instead.
+ * ADR-0037's argument applies: the writers Core does not mediate are the normal case, and a rule
+ * held only by a TypeScript type is held only for Core.
+ */
+describe("tax on an Adjustment", () => {
+  it("is refused on one that belongs to a Line Item", async () => {
+    await using kobai = await createTestKobai();
+    const order = await seedTestOrder(kobai);
+    const [line] = await kobai.database.query<{ id: string }>(
+      "select id from core_order_line_item where order_id = $1",
+      [order.id],
+    );
+
+    await expect(
+      kobai.database.query(
+        `insert into core_order_adjustment
+           (order_id, order_line_item_id, position, code, description, amount, tax)
+         values ($1, $2, 0, 'taxed-line-discount', 'A line discount with a tax of its own', -100, 10)`,
+        [order.id, line?.id],
+      ),
+    ).rejects.toThrow(/core_order_adjustment_line_level_is_untaxed/);
+  });
+
+  it("is written on one that belongs to the Order as a whole", async () => {
+    await using kobai = await createTestKobai();
+    const order = await seedTestOrder(kobai);
+
+    await kobai.database.query(
+      `insert into core_order_adjustment
+         (order_id, order_line_item_id, position, code, description, amount, tax)
+       values ($1, null, 0, 'delivery', 'Delivery', 500, 50)`,
+      [order.id],
+    );
+
+    // Scoped to the row this test wrote rather than to the Order: what else `seedTestOrder`
+    // arranges on the way is promised to nobody (ADR-0047).
+    await expect(
+      kobai.database.query(
+        "select tax from core_order_adjustment where order_id = $1 and code = 'delivery'",
+        [order.id],
+      ),
+    ).resolves.toEqual([{ tax: "50" }]);
   });
 });

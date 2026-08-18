@@ -673,7 +673,7 @@
           },
           "total": {
             "type": "integer",
-            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments."
+            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments and the tax on each of them."
           },
           "payment": {
             "$ref": "#/components/schemas/Payment"
@@ -782,9 +782,9 @@
               "adjustments": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/OrderAdjustment"
+                  "$ref": "#/components/schemas/OrderLevelAdjustment"
                 },
-                "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
+                "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher or a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own, because there is no Line Item whose tax could carry it."
               },
               "fulfilments": {
                 "type": "array",
@@ -903,6 +903,25 @@
           "description",
           "amount",
           "metadata"
+        ]
+      },
+      "OrderLevelAdjustment": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OrderAdjustment"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "tax": {
+                "type": "integer",
+                "description": "Tax on this Adjustment, in minor units, signed with `amount`. Zero until a tax Step is wired. A line's own Adjustments carry no such figure: a line is taxed after they are applied, so their tax is inside the line's `tax`."
+              }
+            },
+            "required": [
+              "tax"
+            ]
+          }
         ]
       },
       "Fulfilment": {

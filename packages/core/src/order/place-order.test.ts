@@ -451,7 +451,9 @@ describe("the tax Step", () => {
           ...line,
           tax: Math.round(line.unitAmount * line.quantity * 0.1),
         })),
-        adjustments: input.adjustments,
+        // A rule that taxes lines and nothing else still has to say so of the Order's own
+        // Adjustments: the compiler asks, because leaving one untaxed is a decision (#117).
+        adjustments: input.adjustments.map((adjustment) => ({ ...adjustment, tax: 0 })),
       }),
     );
     await using kobai = await createTestKobai({
@@ -512,7 +514,7 @@ describe("the tax Step", () => {
               0.1,
           ),
         })),
-        adjustments: input.adjustments,
+        adjustments: input.adjustments.map((adjustment) => ({ ...adjustment, tax: 0 })),
       }),
     );
     await using kobai = await createTestKobai({
@@ -529,6 +531,63 @@ describe("the tax Step", () => {
       // would have produced.
       lineItems: [{ tax: 125, total: 1375 }],
       total: 1375,
+    });
+  });
+
+  /**
+   * An Adjustment on the **Order** carries its own tax, and it is the only Adjustment that does.
+   *
+   * A delivery surcharge is ADR-0022's own example of an Adjustment belonging to no line, and it
+   * is taxable in most jurisdictions — so without this a replaced `calculate-tax` would have
+   * nowhere to put the number and the Order would be charged the goods' tax and none of the
+   * carriage's. A line's own Adjustments need no such field: `calculate-tax` taxes the adjusted
+   * line, so their tax is already inside `lineItems[].tax`.
+   */
+  it("records tax against an Order-level Adjustment, and the total accounts for it", async () => {
+    const delivery = defineStep(
+      "delivery-surcharge",
+      (input: PricedLines): AdjustedLines => ({
+        cart: input.cart,
+        lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+        adjustments: [{ code: "delivery", description: "Delivery", amount: 500 }],
+      }),
+    );
+    /** Ten per cent of everything taxable — every line, and the carriage beside them. */
+    const tenPerCentOnEverything = defineStep(
+      "ten-per-cent-on-everything",
+      (input: AdjustedLines): TaxedLines => ({
+        cart: input.cart,
+        lines: input.lines.map((line) => ({
+          ...line,
+          tax: Math.round(line.unitAmount * line.quantity * 0.1),
+        })),
+        adjustments: input.adjustments.map((adjustment) => ({
+          ...adjustment,
+          tax: Math.round(adjustment.amount * 0.1),
+        })),
+      }),
+    );
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": {
+          steps: {
+            "apply-adjustments": delivery,
+            "calculate-tax": tenPerCentOnEverything,
+          },
+        },
+      },
+    });
+
+    const { response } = await placePricedCart(kobai, 2);
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      // 2500 of goods and 250 of tax on them; 500 of carriage and 50 of tax on that.
+      total: 3300,
+      lineItems: [{ tax: 250, total: 2750 }],
+      adjustments: [{ code: "delivery", amount: 500, tax: 50 }],
+      // The money charged is the money recorded, because one expression computes both.
+      payment: { amount: 3300 },
     });
   });
 });
