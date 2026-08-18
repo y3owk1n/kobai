@@ -4,6 +4,7 @@ import {
   createTestKobai,
   seedTestCart,
   seedTestCatalog,
+  seedTestOrder,
   type TestKobai,
 } from "../testing/index.ts";
 
@@ -139,16 +140,15 @@ describe("a Cart becomes an Order", () => {
         { sku: "MUG", prices: [400] },
       ],
     });
-    const cart = await seedTestCart(kobai, {
+    const placed = await seedTestOrder(kobai, {
       catalog,
       lines: [{ sku: "MUG" }, { sku: "POSTER-A2" }],
     });
 
-    const placed = (await (
-      await placeOrder(kobai, cart.apiKey.headers, cart.id)
-    ).json()) as { id: string; lineItems: readonly { sku: string }[] };
     const read = (await (
-      await kobai.request(`/store/orders/${placed.id}`, { headers: cart.apiKey.headers })
+      await kobai.request(`/store/orders/${placed.id}`, {
+        headers: placed.apiKey.headers,
+      })
     ).json()) as { lineItems: readonly { sku: string }[] };
 
     expect(read.lineItems.map((line) => line.sku)).toEqual(
@@ -196,15 +196,9 @@ describe("a Cart becomes an Order", () => {
   it("gives each Order a number that increases and is not its identifier", async () => {
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
-    const first = await seedTestCart(kobai, { catalog });
-    const second = await seedTestCart(kobai, { catalog });
 
-    const one = (await (
-      await placeOrder(kobai, catalog.apiKey.headers, first.id)
-    ).json()) as { id: string; number: number };
-    const two = (await (
-      await placeOrder(kobai, catalog.apiKey.headers, second.id)
-    ).json()) as { id: string; number: number };
+    const one = await seedTestOrder(kobai, { catalog });
+    const two = await seedTestOrder(kobai, { catalog });
 
     expect(two.number).toBeGreaterThan(one.number);
     // Two identifiers, on purpose: one is the row's and one is the Shopper's. Gapless is
@@ -285,9 +279,7 @@ describe("an Order does not depend on the catalog it was placed from", () => {
       title: "A poster",
       variants: [{ sku: "POSTER-A2", prices: [1250] }],
     });
-    const cart = await seedTestCart(kobai, { catalog });
-    const placed = await placeOrder(kobai, cart.apiKey.headers, cart.id);
-    const order = (await placed.json()) as { id: string };
+    const order = await seedTestOrder(kobai, { catalog });
 
     // In SQL, because there is no route that deletes a Product yet — and because a Merchant
     // deleting a row directly is the writer ADR-0004 says is the normal case rather than the
@@ -346,9 +338,7 @@ describe("placing an Order needs a secret key", () => {
       name: "browser",
       kind: "publishable",
     });
-    const cart = await seedTestCart(kobai, { catalog });
-    const placed = await placeOrder(kobai, catalog.apiKey.headers, cart.id);
-    const order = (await placed.json()) as { id: string };
+    const order = await seedTestOrder(kobai, { catalog });
 
     const response = await kobai.request(`/store/orders/${order.id}`, {
       headers: publishable.headers,

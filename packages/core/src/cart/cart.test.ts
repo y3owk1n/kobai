@@ -4,6 +4,7 @@ import {
   createTestKobai,
   seedTestCart,
   seedTestCatalog,
+  seedTestOrder,
   type TestCatalog,
   type TestKobai,
 } from "../testing/index.ts";
@@ -456,7 +457,7 @@ describe("a Cart that has been placed", () => {
     await using kobai = await createTestKobai();
     const cart = await seedTestCart(kobai, { quantity: 3 });
 
-    await placeCart(kobai, cart.id, cart.apiKey.headers);
+    await seedTestOrder(kobai, { cart });
 
     const response = await kobai.request(`/store/carts/${cart.id}`, {
       headers: cart.apiKey.headers,
@@ -478,7 +479,7 @@ describe("a Cart that has been placed", () => {
     const headers = cart.apiKey.headers;
     const line = cart.lineItem("POSTER-A2");
 
-    await placeCart(kobai, cart.id, headers);
+    await seedTestOrder(kobai, { cart });
 
     for (const [path, init] of changesTo(cart.id, line.id, headers, cart.catalog)) {
       const response = await kobai.request(path, init);
@@ -626,22 +627,6 @@ function changesTo(
     ],
     [`/store/carts/${cartId}/line-items/${lineItemId}`, { method: "DELETE", headers }],
   ];
-}
-
-/** The Cart, turned into the Order it becomes — over the secret key placing one needs. */
-async function placeCart(
-  kobai: TestKobai,
-  cartId: string,
-  headers: Record<string, string>,
-): Promise<void> {
-  const response = await kobai.request("/store/orders", {
-    method: "POST",
-    headers: jsonHeaders(headers),
-    body: JSON.stringify({ cartId }),
-  });
-  if (response.status !== 201) {
-    throw new Error(`placing the Cart answered ${response.status}`);
-  }
 }
 
 /** The Cart's identifier, which is the whole of what a storefront then holds. */

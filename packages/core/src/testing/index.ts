@@ -43,6 +43,12 @@ export {
   migrationSetUpTo,
   type PartialMigrationSet,
 } from "./migrations.ts";
+export {
+  seedTestOrder,
+  type TestOrder,
+  type TestOrderLineItem,
+  type TestOrderOptions,
+} from "./order.ts";
 export { testPaymentProvider } from "./payments.ts";
 export {
   type ColumnFact,

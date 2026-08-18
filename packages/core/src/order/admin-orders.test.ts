@@ -4,12 +4,10 @@ import { PERMISSIONS } from "../auth/permissions.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import {
   createTestKobai,
-  seedTestCart,
   seedTestCatalog,
+  seedTestOrder,
   sessionOf,
   signInTestMerchant,
-  type TestCart,
-  type TestKobai,
 } from "../testing/index.ts";
 import { defineStep } from "../workflow/step.ts";
 import type { AdjustedLines, PricedLines } from "./place-order.ts";
@@ -25,25 +23,13 @@ import type { AdjustedLines, PricedLines } from "./place-order.ts";
  * (ADR-0027 — a named Permission on a Role, never a rule about which Orders).
  */
 
-/** Places the Cart a test seeded, the way a storefront does, and answers with the Order. */
-async function placeOrder(kobai: TestKobai, cart: TestCart) {
-  const response = await kobai.request("/store/orders", {
-    method: "POST",
-    headers: { ...cart.apiKey.headers, "content-type": "application/json" },
-    body: JSON.stringify({ cartId: cart.id }),
-  });
-  expect(response.status).toBe(201);
-  return (await response.json()) as { id: string; number: number };
-}
-
 describe("a Merchant sees the Orders the Store has taken", () => {
   it("lists them, with the number a Shopper quotes and what each came to", async () => {
     await using kobai = await createTestKobai();
-    const cart = await seedTestCart(kobai, { quantity: 2 });
-    const order = await placeOrder(kobai, cart);
+    const order = await seedTestOrder(kobai, { quantity: 2 });
 
     const response = await kobai.request("/admin/orders", {
-      headers: cart.catalog.merchant.headers,
+      headers: order.catalog.merchant.headers,
     });
 
     expect(response.status).toBe(200);
@@ -77,8 +63,8 @@ describe("a Merchant sees the Orders the Store has taken", () => {
   it("lists them newest first, so the one just taken is at the top", async () => {
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
-    const first = await placeOrder(kobai, await seedTestCart(kobai, { catalog }));
-    const second = await placeOrder(kobai, await seedTestCart(kobai, { catalog }));
+    const first = await seedTestOrder(kobai, { catalog });
+    const second = await seedTestOrder(kobai, { catalog });
 
     const response = await kobai.request("/admin/orders", {
       headers: catalog.merchant.headers,
@@ -110,11 +96,10 @@ describe("a Merchant sees the Orders the Store has taken", () => {
       refund: async () => {},
     };
     await using kobai = await createTestKobai({ payments: { provider: invoiced } });
-    const cart = await seedTestCart(kobai);
-    const order = await placeOrder(kobai, cart);
+    const order = await seedTestOrder(kobai);
 
     const response = await kobai.request("/admin/orders", {
-      headers: cart.catalog.merchant.headers,
+      headers: order.catalog.merchant.headers,
     });
 
     const { orders } = (await response.json()) as {
@@ -138,8 +123,7 @@ describe("a Merchant opens one Order", () => {
       title: "A poster",
       variants: [{ sku: "POSTER-A2", prices: [1250] }],
     });
-    const cart = await seedTestCart(kobai, { catalog, quantity: 2 });
-    const order = await placeOrder(kobai, cart);
+    const order = await seedTestOrder(kobai, { catalog, quantity: 2 });
 
     const response = await kobai.request(`/admin/orders/${order.id}`, {
       headers: catalog.merchant.headers,
@@ -200,11 +184,10 @@ describe("a Merchant opens one Order", () => {
     await using kobai = await createTestKobai({
       workflows: { "place-order": { steps: { "apply-adjustments": handling } } },
     });
-    const cart = await seedTestCart(kobai, { quantity: 2 });
-    const order = await placeOrder(kobai, cart);
+    const order = await seedTestOrder(kobai, { quantity: 2 });
 
     const response = await kobai.request(`/admin/orders/${order.id}`, {
-      headers: cart.catalog.merchant.headers,
+      headers: order.catalog.merchant.headers,
     });
 
     const opened = (await response.json()) as {
@@ -231,14 +214,13 @@ describe("a Merchant opens one Order", () => {
 
   it("reads back exactly what the storefront that placed it reads", async () => {
     await using kobai = await createTestKobai();
-    const cart = await seedTestCart(kobai);
-    const order = await placeOrder(kobai, cart);
+    const order = await seedTestOrder(kobai);
 
     const admin = await kobai.request(`/admin/orders/${order.id}`, {
-      headers: cart.catalog.merchant.headers,
+      headers: order.catalog.merchant.headers,
     });
     const storefront = await kobai.request(`/store/orders/${order.id}`, {
-      headers: cart.apiKey.headers,
+      headers: order.apiKey.headers,
     });
 
     // One record, and two credentials for reading it. A Merchant answering a question about an
@@ -266,9 +248,8 @@ describe("a Merchant opens one Order", () => {
 describe("reading the books is its own Permission", () => {
   it("refuses a Role that maintains the catalog and does not hold order:read", async () => {
     await using kobai = await createTestKobai();
-    const cart = await seedTestCart(kobai);
-    const order = await placeOrder(kobai, cart);
-    const owner = cart.catalog.merchant;
+    const order = await seedTestOrder(kobai);
+    const owner = order.catalog.merchant;
 
     // The colleague this Permission exists for: they keep the catalog, and what every Shopper
     // paid is none of their business. A Role is a row and a narrower one is a narrower row
