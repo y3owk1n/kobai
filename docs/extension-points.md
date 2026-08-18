@@ -12,7 +12,7 @@ Read the status column before you build on a row.
 |---|---|---|---|
 | 1 | **Configuration** | One file where everything your Project has changed is declared | **Proven** — `reference/kobai.config.ts`, exercised on every commit |
 | 2 | **Workflow Step override** | Replace one named Step of a declared process; watch one without owning it | **Proven** — a replaced Step changes what the API serves, under test |
-| 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Partial** — three interfaces you can supply (`Logger`, `PaymentProvider`, `FulfilmentStrategy`) |
+| 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Proven** — three interfaces you can supply, two of them taking an implementation that is not Core's |
 | 4 | **Events** | React to something happening, without being in the path of it | **Promised only** — nothing to attach to; no bus, no emitter, no subscriber |
 | 5 | **Admin UI slots** | Put your own UI inside the Admin at a declared position | **Promised only** — no slot mechanism exists |
 
@@ -86,11 +86,16 @@ Five, and growing it is a one-way door. Every promised surface is a permanent co
 Core's own refactoring, which is why the list is short and deliberately boring, and why each
 addition would have to be its own recorded decision (ADR-0003).
 
-The test has been run once already in kobai's own history and it held: pluggable Media
-storage looked like it needed a sixth mechanism and turned out to be dependency
-substitution, which was already number three
-([ADR-0026](./adr/0026-postgres-backed-jobs-pluggable-storage-in-process-worker.md)). That
-is the standard a sixth has to fail before it earns a place.
+The test has been run **twice** in kobai's own history and held both times. Pluggable Media
+storage looked like it needed a sixth mechanism and turned out to be dependency substitution,
+which was already number three
+([ADR-0026](./adr/0026-postgres-backed-jobs-pluggable-storage-in-process-worker.md)). Then
+Fulfilment Strategies did the same thing and more visibly: ADR-0014 had been promising for a
+long time that a Variant points at a Strategy "registered by Core or by a Plugin", and a
+registry is a surface — so the spine spec would have settled it by accident, whichever shape
+the implementation took. It was decided on purpose instead, and the answer was number three
+again ([ADR-0052](./adr/0052-a-fulfilment-strategy-is-dependency-substitution.md)). That is
+the standard a sixth has to fail before it earns a place.
 
 ---
 
@@ -106,27 +111,50 @@ differently from stock kobai.**
 
 ```ts
 import { defineKobaiConfig } from "@kobai/core";
+import {
+  leadTimeSurcharge,
+  madeToOrder,
+  madeToOrderMigrationSet,
+} from "@kobai/plugin-made-to-order";
 import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
+import { manualPaymentProvider } from "./src/payments/manual.ts";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
 
 export default defineKobaiConfig({
-  migrationSets: [priceLogMigrationSet],
+  migrationSets: [priceLogMigrationSet, madeToOrderMigrationSet],
   workflows: {
     "resolve-price": {
       steps: { "select-price": everythingCostsOneCent },
       after: { "select-price": [recordPriceResolution] },
     },
+    "place-order": {
+      steps: { "apply-adjustments": leadTimeSurcharge },
+    },
   },
+  payments: { provider: manualPaymentProvider },
+  fulfilment: { strategies: { "made-to-order": madeToOrder } },
 });
 ```
 
-Two keys today. `migrationSets` is the Plugin tables your Project has agreed to have, and
-`workflows` is the next section.
+**Five keys today**, and every one of them names a *subject* rather than a scalar — a key
+holding one setting is how a file gets a second top-level key the day it needs to say
+anything else about the same thing
+([ADR-0050](./adr/0050-the-idle-window-is-a-projects-the-cap-is-cores.md)):
+
+- `migrationSets` — the Plugin tables your Project has agreed to have.
+- `workflows` — the next section, and the flagship.
+- `session` — how long a signed-in Merchant stays signed in, as `{ idleWindowMs }`. The one
+  key the example above does not use, because this Project is content with Core's default;
+  a window Core will not enforce stops the boot rather than being quietly clamped.
+- `payments` — the Payment Provider, of which Core ships none. Section 3.
+- `fulfilment` — the Strategies your Variants may point at. Section 3 as well.
 
 **Installing a Plugin does nothing.** `@kobai/plugin-price-log` above is an ordinary npm
 dependency, and adding it to `package.json` creates no table and runs no code. The two lines
 naming it here are what make it real; delete them and it is still installed, still
-importable, and still inert. A Plugin *offers*, and your Project *wires*
+importable, and still inert. `@kobai/plugin-made-to-order` is the same story with three lines
+instead of two — a migration set, a Step, and a Fulfilment Strategy — and neither Plugin has
+heard of the other. A Plugin *offers*, and your Project *wires*
 ([ADR-0017](./adr/0017-plugins-offer-steps-and-the-project-wires-them.md)). That costs a few
 lines and buys you a debuggable upgrade: when a version bump changes behaviour, the list of
 things that could have caused it is in one file rather than distributed across eleven
@@ -140,9 +168,11 @@ about the running process rather than about what you have customised. See sectio
 
 **Status: proven end to end.** In the reference Project, `select-price` is replaced with a
 Step that answers one cent; a Variant whose Price row says `1250` is served `1` by the API,
-and `reference/src/kobai.config.test.ts` asserts exactly that through HTTP. Insertion,
-compensation and composition — one Step invoking another Workflow — are built and tested. This
-is the only one of the five you can lean your whole weight on today.
+and `reference/src/kobai.config.test.ts` asserts exactly that through HTTP. The same Project
+hands `place-order`'s `apply-adjustments` slot to a Step a *Plugin* offers, and an Order it
+places carries the surcharge that Step decided on. Insertion, compensation and composition —
+one Step invoking another Workflow — are built and tested. It is still the deepest of the
+five, and the one the rest of this page keeps pointing back at.
 
 Commerce customisation is overwhelmingly *process* customisation — tax calculation, price
 resolution, shipping rate selection, discount stacking, fulfilment routing, payment capture
@@ -164,6 +194,33 @@ priceResolutionWorkflow.describe();
 So "what does kobai do to resolve a price" is answered by the same object that answers "what
 does kobai *run*". Two Steps: `load-prices` asks the database what Prices a Variant carries
 and applies no rule; `select-price` chooses among them, and *that* is the rule.
+
+**There are two declared Workflows today**, and the second is where the money is.
+`placeOrderWorkflow` is `place-order` — the one request that turns a Cart into an Order — and
+it declares seven slots, in this order:
+
+| Slot | What it does | Compensation |
+| --- | --- | --- |
+| `load-cart` | Reads the Cart, its Line Items, and what each one's Fulfilment Strategy answers | — |
+| `price-lines` | Invokes `resolve-price` for each line | — |
+| `apply-adjustments` | Attaches discounts and surcharges as their own lines — **Core attaches none** | — |
+| `calculate-tax` | Works out the tax per line. Core's returns zero; tax is its own spec | — |
+| `hold-reservations` | Claims everything scarce, atomically | Release |
+| `take-payment` | Asks your Payment Provider for what the Order comes to | Refund |
+| `capture-order` | Consumes those Reservations and writes the immutable Order, in one transaction | none — the point of no return |
+
+Read that order as the argument it is. `capture-order` declares no compensation
+because there is nothing it could honestly do —
+[ADR-0009](./adr/0009-cart-and-order-are-separate-and-orders-snapshot.md) makes an Order
+immutable — so it is
+last, `take-payment` sits immediately in front of it because money is the one thing here that
+moves outside the database, and `hold-reservations` sits in front of *that* so losing a race
+for the last unit costs a Shopper nothing.
+
+Which Workflows you may override is a written-out list rather than a registry —
+`CoreWorkflowOverrides` in `@kobai/core` names each one, and adding a line to it is the
+decision to expose a Workflow. So the two above are the whole of it, and a third arrives as a
+promise somebody made on purpose.
 
 The word for a position is **slot**. It is what an override map is keyed by, and it stays put
 when you swap the implementation filling it — after which `slot` and the Step's own `name`
@@ -248,7 +305,14 @@ afterwards means rewriting every Workflow that exists by then (ADR-0017).
 ### Invoking another Workflow from a Step
 
 A Step may run another declared Workflow, and there is one way to do it
-([ADR-0054](./adr/0054-a-step-may-invoke-another-workflow.md)):
+([ADR-0054](./adr/0054-a-step-may-invoke-another-workflow.md)).
+
+**Core does this to itself, and it is the reason you wire a pricing rule once.**
+`place-order`'s `price-lines` runs `resolve-price` per Line Item — so the deployment that
+replaced `select-price` charges *its* prices at Capture, from the config line it already
+wrote, and the price a storefront was quoted and the price an Order records come out of the
+same declaration rather than out of two that have to be kept in step. Nothing in
+`kobai.config.ts` mentions `price-lines` to make that happen.
 
 ```ts
 import {
@@ -304,13 +368,35 @@ contract — reaches your Step **without changing Core**. If it could not, the e
 surface would be wrong (ADR-0013). The cost is type safety at that one boundary, and it is
 paid deliberately.
 
-## 3. Dependency substitution behind named interfaces — **partial**
+## 3. Dependency substitution behind named interfaces — **proven**
 
-**Status: partially present.** The mechanism works, and there are **three** interfaces you can
-use it on: `Logger`, `PaymentProvider` and `FulfilmentStrategy`. One of them already takes an
-implementation that is not Core's own — the reference Project supplies the Payment Provider
-kobai ships none of (ADR-0053). (Core names a fourth, `ReservationProvider`, and deliberately
-does not export it: ADR-0018 promises one interface with two providers and both are Core's.)
+**Status: proven, and here is exactly what moved it.** This row read *partial* until the
+commerce spine shipped, and the complaint behind that word was precise: there was one named
+interface, `Logger`, and both implementations of it were Core's own — so what was proven was
+that the seam worked, not that anybody had ever put something of their own through it (#72).
+Two things closed that, in the same spec:
+
+- **A Payment Provider from a Project.** Core defines `PaymentProvider` and implements it
+  nowhere on purpose (ADR-0053). The only one that exists is `reference/src/payments/manual.ts`
+  — the reference Project's own source, reached by Core through one line of `kobai.config.ts`
+  and by nothing else. **You get that file too**: `create-kobai`'s template is generated from
+  the reference Project, so a scaffolded Project receives `manual.ts` as its own, and a Store
+  that takes cards replaces that file's export with an adapter and changes nothing else.
+- **A Fulfilment Strategy from a Plugin.** `@kobai/plugin-made-to-order` offers one and the
+  reference Project wires it (ADR-0052). Installing that Plugin does nothing; the wiring is
+  what lets a Variant point at `made-to-order` at all, and what puts a Lead Time surcharge on
+  an Order that a Store without the line would have sold at the ordinary price.
+
+Both are observably different from stock kobai and both are exercised on every commit, which
+is the standard #72 set. **What is still absent is interfaces, not evidence** — see the end of
+this section.
+
+There are **three** interfaces you can use it on today: `Logger`, `PaymentProvider` and
+`FulfilmentStrategy`. Core names a fourth, `ReservationProvider`, and deliberately does *not*
+export it. ADR-0018 promises one interface with two providers — Inventory, which exists, and
+Capacity, which does not yet — and both of them are Core's, so nothing here hands you a way to
+bring a kind of scarcity of your own. That is a decision rather than an oversight: a config
+key and an ADR would be needed, and neither exists.
 
 The idea is that where Core needs a collaborator, it names an interface and takes yours. The
 oldest is `Logger`:
@@ -322,9 +408,11 @@ const logger: Logger = { info: (message, fields) => {/* … */}, error: (message
 const kobai = createKobai({ ...config, databaseUrl, logger });
 ```
 
-Two methods, and anything that does them is acceptable. The substitution point is real and
+Two operations, and anything that does them is acceptable. The substitution point is real and
 exercised — the reference Project passes a console logger and the test harness passes a
-silent one — though both of those implementations are still Core's own.
+silent one — though both of those implementations are still Core's own. It is also the one
+interface here whose *spelling* is out of step with the rest, which is its own subsection
+below.
 
 **`PaymentProvider` is the second, and Core implements it nowhere on purpose** (ADR-0053): a
 deployment with none wired boots, serves its catalog and its Admin, and refuses only the
@@ -360,12 +448,61 @@ is what Core acts on: a Variant whose Strategy says it consumes no stock holds n
 and every Order records what its Strategies answered *at Capture*, as a snapshot that a later
 rewiring cannot rewrite.
 
-**What is not here yet.** ADR-0026 names Media storage as the archetypal case: a pluggable
-driver defaulting to local disk, with an S3-compatible one shipped. It also names a
-Postgres-backed job queue. **Neither exists.** The walking-skeleton spec puts both out of
-scope on purpose, so their seams are described and carry no work. Do not read ADR-0026 as
-documentation of something you can configure — read it as the argument for why storage did
-not need a sixth Extension Point.
+### What every one of these interfaces looks like, and the one that is out of step
+
+An interface's *shape* is under semver forever from the moment it ships (ADR-0019), so the
+four Core has named were deliberately compared against each other rather than each copying
+the last. What they agree on is worth knowing before you write one:
+
+- **A plain object type, substituted whole.** No class to extend, no base to inherit, no
+  `init` and no `close` — Core never constructs one of these and never disposes of one, so a
+  lifecycle would be a contract about something Core does not manage. That is what makes an
+  adapter around somebody's SDK a five-line object.
+- **Wired in `kobai.config.ts`**, under a key naming a subject — except `Logger`, which goes
+  to `createKobai` beside `databaseUrl` because it is about the running process rather than
+  about what you customised.
+- **A name only where a *record* needs one.** `PaymentProvider` carries one because a Payment
+  has to say which system holds the money a year later; `ReservationProvider` carries one
+  because a Reservation row names who must give the units back. `FulfilmentStrategy` carries
+  none — it is named by the key you wired it under, exactly as a replaced Step is named by its
+  slot — and `Logger` needs none at all.
+
+**Where they disagree is a real hazard, and it is filed rather than fixed.** `PaymentProvider`
+and `FulfilmentStrategy` declare their operations as **properties holding functions**;
+`Logger` and `ReservationProvider` declare them as **methods**. TypeScript checks method
+parameters *bivariantly* and function-property parameters *contravariantly*, so only the first
+spelling makes an implementation that demands **more** than Core sends a compile error. Under
+the second, this compiles:
+
+```ts
+const logger: Logger = {
+  info: (message: string, fields: { requestId: string }) => console.log(fields.requestId),
+  error: () => {},
+};
+```
+
+and then Core calls `logger.info("listening")` with no second argument. **So the two newest
+interfaces are safe and the oldest — the one your Project actually passes today — is not.**
+Tightening it would almost certainly be a widening in practice, because it can only reject
+implementations that were already lying about what they are given; but "almost certainly" is
+not the standard for a surface ADR-0019 makes permanent, so it is **#127** to decide
+deliberately rather than something to change quietly. Until it is decided: **write your
+`Logger` to accept exactly what Core sends**, and reach for the property spelling in anything
+you design yourself.
+
+**What is not here yet, and this is the honest half of the status above.** ADR-0026 names
+Media storage as the archetypal case of this Extension Point: a pluggable driver defaulting to
+local disk, with an S3-compatible one shipped. It also names a Postgres-backed job queue.
+**Neither exists.** The walking-skeleton spec put both out of scope on purpose and the
+commerce spine spec renewed the exclusion — kobai's first periodic work, the sweeper that
+releases lapsed Reservations, is a plain `setInterval` and explicitly *not* a job
+([ADR-0057](./adr/0057-the-reservation-sweeper-is-an-interval-not-a-job.md)), which is a thing
+the queue spec will have to migrate rather than a queue you can attach to.
+
+So do not read ADR-0026 as documentation of something you can configure — read it as the
+argument for why storage did not need a sixth Extension Point. Moving this row to *proven*
+says the mechanism has carried somebody else's code; it does not say the interfaces you
+were promised are all here.
 
 The database is not substitutable either, and is not meant to be: `createKobai` takes a
 connection string, not a handle. Postgres is a decision, not a driver
