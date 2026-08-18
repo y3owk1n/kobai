@@ -8,6 +8,7 @@ import type {
   ProductDeletion,
   VariantDeletion,
 } from "../catalog/delete.ts";
+import type { VariantUpdate } from "../catalog/update.ts";
 import type { PriceCreation, ProductCreation } from "../catalog/write.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
@@ -676,6 +677,37 @@ export const CreateProductRequest = z
   })
   .openapi("CreateProductRequest");
 
+/**
+ * What a Merchant may change on a Variant that already exists — and, by its absence, what they
+ * may not (ADR-0062).
+ *
+ * **Every field is optional and each one absent means "leave it".** That is what makes this a
+ * `PATCH` rather than a `PUT`: a full replacement would make a client that omitted `metadata`
+ * clear it, which is data loss written as an ordinary request. A body naming none of them is
+ * refused rather than answered with the row unchanged, because it is the shape a body naming
+ * a field this route does not carry collapses to.
+ *
+ * **There is no Price here, and that is a decision rather than an omission.** A Price is a row
+ * (ADR-0008), so a new one is how a Variant says something new about what it costs and
+ * `select-price` resolves the newest — `POST /admin/variants/{id}/prices` supersedes, and
+ * `DELETE …/prices/{priceId}` removes the one that was wrong.
+ */
+export const UpdateVariantRequest = z
+  .object({
+    sku: z.string().optional().meta({
+      description:
+        "A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused.",
+    }),
+    fulfilment: VariantFulfilment.optional().meta({
+      description:
+        "The Fulfilment Strategy this Variant is delivered by, replacing the one it points at — how a poster becomes a download. Naming one this deployment has not wired is refused. Whatever stock has been counted for this Variant stays counted either way: the Strategy answers whether selling one takes something off a shelf, and the count only ever said how many.",
+    }),
+    metadata: Metadata.optional().meta({
+      description: "Replaces what is stored rather than merging into it.",
+    }),
+  })
+  .openapi("UpdateVariantRequest");
+
 /** Setting a Price is an insert, never an update: calling this twice leaves two Prices. */
 export const SetPriceRequest = z
   .object({
@@ -701,16 +733,18 @@ export const VariantPriceParams = IdParam.extend({
  * Every way a catalog operation can be refused, as a closed set — {@link CartRefusal}'s shape
  * on the other surface.
  *
- * **One set across eight routes**, because that is what the handlers can be held to: `refused`
+ * **One set across nine routes**, because that is what the handlers can be held to: `refused`
  * returns one body type across every status its route declares, so the schema at a route's 404
  * and the schema at its 409 have to be the same one. Which of these a given route can actually
  * answer is in that route's own prose, where the distinction between three different 404s
  * already lives.
  *
- * The keys are checked against the unions the catalog modules already declare — the six
- * operations below, whose reasons overlap heavily — so a rename in `catalog/write.ts` or
- * `catalog/delete.ts` turns *this* red naming the reason, rather than regenerating a
- * description that quietly says something else. `last-variant` and `stock-is-reserved` are the
+ * The keys are checked against the unions the catalog modules already declare — the seven
+ * operations below, whose reasons overlap heavily — so a rename in `catalog/write.ts`,
+ * `catalog/update.ts` or `catalog/delete.ts` turns *this* red naming the reason, rather than
+ * regenerating a description that quietly says something else. **Correcting a Variant added no
+ * key at all**: every way it refuses is a word creation already answers with, so a client that
+ * branches on this set needed no new arm the day that route shipped (ADR-0062). `last-variant` and `stock-is-reserved` are the
  * two ADR-0059 recorded as promised in prose and nowhere else; they are here now.
  */
 const CATALOG_REASONS = {
@@ -728,6 +762,7 @@ const CATALOG_REASONS = {
     | Refused<ProductCreation>
     | Refused<ProductDeletion>
     | Refused<VariantDeletion>
+    | Refused<VariantUpdate>
     | Refused<PriceCreation>
     | Refused<PriceDeletion>
     | Refused<InventoryUpdate>

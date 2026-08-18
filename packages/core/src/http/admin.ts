@@ -36,6 +36,7 @@ import {
   type VariantDeletion,
 } from "../catalog/delete.ts";
 import { listProducts, readProduct } from "../catalog/read.ts";
+import { updateVariant, type VariantUpdate } from "../catalog/update.ts";
 import {
   createProduct,
   type PriceCreation,
@@ -354,6 +355,57 @@ const deleteVariantRoute = createRoute({
     404: json("No such Variant exists.", contract.CatalogRefusal),
     409: json(
       "Two reasons: `last-variant`, this is the only Variant of its Product and every Product has at least one (ADR-0008) — delete the Product instead, which takes this Variant with it; or `stock-is-reserved`, its stock is currently claimed by Reservations being placed, which either become Orders or lapse.",
+      contract.CatalogRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Corrects a Variant — its SKU, the Fulfilment Strategy it points at, its metadata.
+ *
+ * The route ADR-0059 said was missing when it recorded that "recreate it" was the supported
+ * repair, and the cost of that repair was a Variant's price history and its stock count. It is
+ * safe for ADR-0009's reason and no other: an Order's Line Items snapshot the SKU, the title
+ * and the amount, so nothing a Shopper or an accountant reads is joined to the row this
+ * changes.
+ *
+ * **A `PATCH` and not a `PUT`.** A Variant has an open `metadata` bag on it, and a full
+ * replacement makes a client that omitted the bag clear it — data loss spelled as an ordinary
+ * request. `PUT …/inventory` beside it is the opposite case and stays a `PUT`: a count *is* a
+ * statement of the whole fact.
+ *
+ * Which fields are here, and the three that are deliberately not — a Price, an Inventory count,
+ * and the Product this Variant belongs to — is ADR-0062.
+ */
+const updateVariantRoute = createRoute({
+  method: "patch",
+  path: "/variants/{id}",
+  summary: "Correct a Variant",
+  description:
+    "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateVariantRequest } },
+    },
+  },
+  responses: {
+    200: json("The Variant, as a read of its Product reports it.", contract.Variant),
+    400: CATALOG_INVALID_REQUEST,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Variant exists.", contract.CatalogRefusal),
+    409: json(
+      "`sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant.",
+      contract.CatalogRefusal,
+    ),
+    422: json(
+      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -706,6 +758,17 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.body(null, 204);
   });
 
+  guarded.openapi(updateVariantRoute, async (c) => {
+    const corrected = await updateVariant(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+      deps.fulfilment,
+    );
+    if (!corrected.ok) return refused(c, corrected, VARIANT_UPDATE_STATUS);
+    return c.json(corrected.variant, 200);
+  });
+
   guarded.openapi(setPriceRoute, async (c) => {
     const created = await setPrice(deps.db, c.req.valid("param").id, c.req.valid("json"));
     if (!created.ok) return refused(c, created, PRICE_STATUS);
@@ -823,6 +886,25 @@ const VARIANT_DELETION_STATUS = {
   "last-variant": 409,
   "stock-is-reserved": 409,
 } as const satisfies Record<Exclude<VariantDeletion, { ok: true }>["reason"], 404 | 409>;
+
+/**
+ * Correcting a Variant answers at the statuses creating one already does, because every way it
+ * can be refused is a way creating one can be refused (ADR-0062).
+ *
+ * `sku-taken` at 409 and `unknown-fulfilment-strategy` at 422 are `PRODUCT_STATUS`'s own two,
+ * for its own reasons: somebody else has that SKU, and this Store has not wired that Strategy —
+ * the second being well formed and refused by the *deployment*, which is fixed in
+ * `kobai.config.ts` rather than in the request.
+ */
+const VARIANT_UPDATE_STATUS = {
+  invalid: 400,
+  "variant-not-found": 404,
+  "sku-taken": 409,
+  "unknown-fulfilment-strategy": 422,
+} as const satisfies Record<
+  Exclude<VariantUpdate, { ok: true }>["reason"],
+  400 | 404 | 409 | 422
+>;
 
 /** Both halves of a Price's address can be wrong, and neither is more than a 404. */
 const PRICE_DELETION_STATUS = {

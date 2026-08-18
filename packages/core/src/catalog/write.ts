@@ -96,19 +96,7 @@ export async function createProduct(
   const unwired = variants.value.find(
     (row) => !fulfilmentStrategyFor(strategies, row.fulfilmentStrategy),
   );
-  if (unwired) {
-    return {
-      ok: false,
-      reason: "unknown-fulfilment-strategy",
-      detail: `This deployment has no Fulfilment Strategy called ${JSON.stringify(unwired.fulfilmentStrategy)}. It has ${fulfilmentStrategyNames(
-        strategies,
-      )
-        .map((name) => JSON.stringify(name))
-        .join(
-          ", ",
-        )} — Core ships \`physical\` and \`digital\`, and a Plugin's is wired under \`fulfilment.strategies\` in this Project's \`kobai.config.ts\`.`,
-    };
-  }
+  if (unwired) return unknownFulfilmentStrategy(strategies, unwired.fulfilmentStrategy);
 
   let productId: string;
   try {
@@ -323,7 +311,7 @@ function parseVariants(value: unknown): ParsedVariants {
     // Read out of the body here; whether this deployment *has* that Strategy is asked once,
     // against the wired set, by the caller. A name and not an enum, because the set is open
     // (ADR-0014) — a schema listing Core's two would be exactly the closed set it rules out.
-    const fulfilment = parseFulfilment(entry.fulfilment);
+    const fulfilment = parseFulfilment(entry.fulfilment, "Each Variant's `fulfilment`");
     if (!fulfilment.ok) return fulfilment;
 
     parsed.push({ sku, fulfilmentStrategy: fulfilment.value, metadata });
@@ -337,20 +325,29 @@ type ParsedFulfilment =
   | { readonly ok: false; readonly reason: "invalid"; readonly detail: string };
 
 /**
- * The Strategy a Variant was created pointing at, or `physical` when it said nothing.
+ * The Strategy a Variant points at, read out of the `fulfilment` object a request carries —
+ * or `physical` when it carried none, which only a create may mean.
  *
  * `{ strategy: … }` rather than a bare name, so that the next thing a Variant needs to say
  * about how it is fulfilled goes beside it instead of forcing this field's shape after the
  * fact — the same reason `payments` and `session` are keys holding a subject (ADR-0050).
+ *
+ * **Exported for `catalog/update.ts`**, which reads the same object out of a different body:
+ * one shape read one way, so a correction cannot come to a different judgement about a
+ * `fulfilment` than the create that would have been written instead. `field` is how it says
+ * which body it is reading — a create names a list of Variants and an update names one — and
+ * it is the only difference between the two readings. **An update calls this only when the key
+ * is present**, because there the default above would mean silently making a download a poster
+ * again.
  */
-function parseFulfilment(value: unknown): ParsedFulfilment {
+export function parseFulfilment(value: unknown, field: string): ParsedFulfilment {
   if (value === undefined) return { ok: true, value: DEFAULT_FULFILMENT_STRATEGY };
 
   if (!isJsonObject(value)) {
     return {
       ok: false,
       reason: "invalid",
-      detail: `Each Variant's \`fulfilment\` must be an object naming a Strategy, e.g. { "strategy": "digital" }.`,
+      detail: `${field} must be an object naming a Strategy, e.g. { "strategy": "digital" }.`,
     };
   }
 
@@ -359,9 +356,35 @@ function parseFulfilment(value: unknown): ParsedFulfilment {
     return {
       ok: false,
       reason: "invalid",
-      detail: "Each Variant's `fulfilment.strategy` must be a non-empty string.",
+      detail: `${field} must name a Strategy: its \`strategy\` must be a non-empty string.`,
     };
   }
 
   return { ok: true, value: strategy };
+}
+
+/**
+ * What a Variant pointing at a Strategy this deployment has not wired is told — wherever it is
+ * said, which is creating one and correcting one to it.
+ *
+ * One sentence rather than two, because it is one fact about the Store rather than about the
+ * route: installing a Plugin is not what wires its Strategy, a line of `kobai.config.ts` is
+ * (ADR-0017), and a Merchant told that in two different ways would reasonably wonder whether
+ * they were two different problems.
+ */
+export function unknownFulfilmentStrategy(
+  strategies: FulfilmentStrategies,
+  strategy: string,
+) {
+  return {
+    ok: false,
+    reason: "unknown-fulfilment-strategy",
+    detail: `This deployment has no Fulfilment Strategy called ${JSON.stringify(strategy)}. It has ${fulfilmentStrategyNames(
+      strategies,
+    )
+      .map((name) => JSON.stringify(name))
+      .join(
+        ", ",
+      )} — Core ships \`physical\` and \`digital\`, and a Plugin's is wired under \`fulfilment.strategies\` in this Project's \`kobai.config.ts\`.`,
+  } as const;
 }

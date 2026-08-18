@@ -1,5 +1,12 @@
 # Catalog deletion refuses rather than cascading or releasing
 
+> **The open question at the foot of this record is settled by
+> [ADR-0062](./0062-a-variant-is-corrected-in-place-and-a-price-is-superseded.md).** "Until #144,
+> recreate it is the supported repair" was true when this was written and is not now:
+> `PATCH /admin/variants/{id}` corrects a Variant's SKU, its Fulfilment Strategy and its
+> metadata, and it is never refused for a live hold. Both refusals below are unchanged — the
+> argument that separates them from an update is in that record.
+
 #115 (PR #143) gave a Merchant three delete routes, and two of them can refuse for a reason that
 is a decision rather than an accident:
 

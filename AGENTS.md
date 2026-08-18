@@ -595,13 +595,20 @@ by the name its Variants point at — so a Strategy has no `name` of its own, ex
 Workflow Step is named by the slot it fills. **The key is the name, and there is one of it.**
 Building this as anything a Plugin can register into is how the list of five quietly becomes six.
 
-Three things follow, and each is a decision rather than an implementation detail:
+Four things follow, and each is a decision rather than an implementation detail:
 
 - **A Variant may only point at a Strategy the deployment has wired.** `POST /admin/products`
-  refuses `unknown-fulfilment-strategy` at 422, naming the ones it does have; `place-order`
-  refuses the same reason at 409, which is only reachable by *unwiring* a Strategy Variants
-  already point at. Guessing `physical` for an unknown name would claim stock nobody asked to
-  claim and record an Order as shipping something that does not ship.
+  and `PATCH /admin/variants/{id}` both refuse `unknown-fulfilment-strategy` at 422, naming the
+  ones it does have; `place-order` refuses the same reason at 409, which is only reachable by
+  *unwiring* a Strategy Variants already point at. Guessing `physical` for an unknown name would
+  claim stock nobody asked to claim and record an Order as shipping something that does not ship.
+- **A Variant's Strategy is swappable, and the stock count under it never moves** (ADR-0062).
+  `PATCH /admin/variants/{id}` is how a poster becomes a download and how a Variant left pointing
+  at an unwired Strategy is repaired — the state `place-order`'s 409 exists for, which until #144
+  could only be mended by deleting the Product. **Do not make a swap delete the `core_inventory`
+  row**: it discards a count a Merchant took, and `consume` is guarded, so it would fail a
+  Capture past `take-payment` and refund a Shopper — ADR-0059's argument, reached through an
+  update. That is also why no update is refused for a live hold: an update takes nothing away.
 - **The answers are asked once per placement and carried.** `load-cart` resolves each line's
   `AppliedFulfilment`; `hold-reservations` reads `tracksInventory` off it and `capture-order`
   snapshots it. A Step that asked again could get a different answer, because a Strategy is asked

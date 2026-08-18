@@ -661,6 +661,30 @@
           "products"
         ]
       },
+      "UpdateVariantRequest": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "description": "A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused."
+          },
+          "fulfilment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VariantFulfilment"
+              },
+              {
+                "description": "The Fulfilment Strategy this Variant is delivered by, replacing the one it points at — how a poster becomes a download. Naming one this deployment has not wired is refused. Whatever stock has been counted for this Variant stays counted either way: the Strategy answers whether selling one takes something off a shelf, and the count only ever said how many."
+              }
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Replaces what is stored rather than merging into it."
+          }
+        }
+      },
       "SetPriceRequest": {
         "type": "object",
         "properties": {
@@ -2413,6 +2437,129 @@
           },
           "409": {
             "description": "Two reasons: `last-variant`, this is the only Variant of its Product and every Product has at least one (ADR-0008) — delete the Product instead, which takes this Variant with it; or `stock-is-reserved`, its stock is currently claimed by Reservations being placed, which either become Orders or lapse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Correct a Variant",
+        "description": "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVariantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Variant, as a read of its Product reports it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Variant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Variant exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
             "content": {
               "application/json": {
                 "schema": {
