@@ -9,8 +9,10 @@ import {
 import {
   createTestKobai,
   inspectSchema,
+  seedTestCart,
   seedTestCatalog,
   signInTestMerchant,
+  type TestKobai,
 } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
 import config from "../kobai.config.ts";
@@ -268,6 +270,72 @@ describe("the Step this Project wired from a Plugin", () => {
     await expect(kobai.database.query("select id from price_log_entry")).resolves.toEqual(
       [],
     );
+  });
+});
+
+/**
+ * The interface this Project implements because kobai does not.
+ *
+ * A replaced Step changes a decision Core would have made; this fills a hole Core deliberately
+ * left (ADR-0053). It is the first implementation of a named kobai interface to come from outside
+ * kobai, which is the standard #72 sets for dependency substitution being proven rather than
+ * merely present — so both halves are asserted here: that wiring it is what lets this deployment
+ * take an Order, and that removing the line leaves everything else working.
+ */
+describe("the Payment Provider this Project supplies", () => {
+  /** A Cart with something in it, placed — the shortest path to the money. */
+  async function placeAnOrder(kobai: TestKobai) {
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
+    const cart = await seedTestCart(kobai, { catalog });
+
+    return kobai.request("/store/orders", {
+      method: "POST",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ cartId: cart.id }),
+    });
+  }
+
+  it("takes the payment, and the Order records that it was this Project's", async () => {
+    await using kobai = await createTestKobai(config);
+
+    const response = await placeAnOrder(kobai);
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      // One cent, because this Project also replaced the pricing rule — the two customisations
+      // meet here, and the Payment is for what was actually charged.
+      total: 1,
+      payment: {
+        provider: "manual",
+        amount: 1,
+        currency: "USD",
+        reference: expect.stringMatching(/^manual-/),
+      },
+    });
+  });
+
+  it("refuses to place an Order when the same Project boots without that line", async () => {
+    // The same Project, the same Core, one entry removed from one file. Everything else still
+    // serves — this is a Store that cannot be bought from rather than a Store that is down.
+    await using kobai = await createTestKobai({ ...config, payments: {} });
+
+    const response = await placeAnOrder(kobai);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "no-payment-provider",
+    });
+  });
+
+  it("still serves the catalog with no provider wired, because only money is missing", async () => {
+    await using kobai = await createTestKobai({ ...config, payments: {} });
+    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
+
+    const response = await kobai.request(`/store/variants/${catalog.variantId}/price`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    expect(response.status).toBe(200);
   });
 });
 

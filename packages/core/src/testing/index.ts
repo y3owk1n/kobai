@@ -43,6 +43,7 @@ export {
   migrationSetUpTo,
   type PartialMigrationSet,
 } from "./migrations.ts";
+export { testPaymentProvider } from "./payments.ts";
 export {
   type ColumnFact,
   type ForeignKeyFact,

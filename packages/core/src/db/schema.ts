@@ -631,6 +631,60 @@ export const orderAdjustment = pgTable(
 export type OrderAdjustmentRow = typeof orderAdjustment.$inferSelect;
 
 /**
+ * A **Payment** — the record that money was taken for an Order (ADR-0053).
+ *
+ * Core's row, behind an interface Core does not implement. Omit the record and an Order holds no
+ * account of the money and a Return has nothing to refund against, which is ADR-0028's membership
+ * test answered; ship a provider and dependency substitution would still have no implementation
+ * from outside Core, which is why there is none.
+ *
+ * **Everything here is a copy, and `reference` is the only handle out.** `provider` is what took
+ * the money and `reference` is that system's own name for the payment — a `PaymentIntent` id, an
+ * invoice number. Core stores both and parses neither: a deployment that changes provider still
+ * has to know which one is holding the money behind an Order placed last year, and a reference
+ * without the system that issued it means nothing.
+ *
+ * **Written in the same transaction as the Order**, so neither can exist without the other. The
+ * payment itself moved a moment earlier, outside any transaction, which is exactly why
+ * `take-payment` is the one Step of `place-order` that carries a compensation.
+ *
+ * `updated_at` is here on a record nothing updates, for `core_order`'s reason: a column that
+ * should equal `created_at` forever is a tamper detector rather than a formality.
+ */
+export const payment = pgTable(
+  "core_payment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      // An Order's Payment is the Order's, exactly as its Line Items are.
+      .references(() => order.id, { onDelete: "cascade" }),
+    /** What took the money — the provider's own `name`, as it was wired at the time. */
+    provider: text("provider").notNull(),
+    /** The provider's handle on this payment. Opaque to Core, and what a refund is asked against. */
+    reference: text("reference").notNull(),
+    /** What was taken, in the minor units of `currency`. The Order's total, as at Capture. */
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    /**
+     * **One Payment per Order, in DDL.**
+     *
+     * `place-order` takes exactly one payment for exactly one Order, so this says in the schema
+     * what the Workflow does — and a second row arriving from anywhere is a Shopper charged
+     * twice, which is the failure worth refusing at the constraint rather than detecting later.
+     * Split tender is not built, and when it is, this index is the decision it has to reopen.
+     */
+    uniqueIndex("core_payment_order_idx").on(table.orderId),
+  ],
+);
+
+export type PaymentRow = typeof payment.$inferSelect;
+
+/**
  * A **client-supplied idempotency key**, and the Order it produced (#102).
  *
  * What it is for is one fact a request cannot carry: that a `POST /store/orders` this

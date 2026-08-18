@@ -10,6 +10,7 @@ import { defineStep, StepFailure } from "../workflow/step.ts";
 import {
   type AdjustedLines,
   type LoadedCart,
+  type PaidOrder,
   type PricedLines,
   placeOrderWorkflow,
   type TaxedLines,
@@ -55,9 +56,33 @@ describe("the declaration", () => {
         { slot: "price-lines" },
         { slot: "apply-adjustments" },
         { slot: "calculate-tax" },
+        { slot: "take-payment" },
         { slot: "capture-order" },
       ],
     });
+  });
+
+  /**
+   * Money moves after everything that decides what to charge, and before the one thing nothing
+   * can undo.
+   *
+   * Both halves are the decision. Charging before the total is settled would charge a figure no
+   * Step had finished working out; charging *after* Capture would put a failure past the point of
+   * no return, where an Order exists and no compensation may edit it (ADR-0009). So `take-payment`
+   * sits in the one gap left, and it is the only Step here that declares a compensation —
+   * everything before it decides rather than does, and the Step after it is the point of no
+   * return.
+   */
+  it("takes payment after the total is settled and before the point of no return", () => {
+    const slots = placeOrderWorkflow.steps.map((step) => step.slot);
+
+    expect(slots.indexOf("calculate-tax")).toBeLessThan(slots.indexOf("take-payment"));
+    expect(slots.indexOf("take-payment")).toBeLessThan(slots.indexOf("capture-order"));
+    expect(
+      placeOrderWorkflow.steps
+        .filter((step) => step.step.compensate !== undefined)
+        .map((step) => step.slot),
+    ).toEqual(["take-payment"]);
   });
 
   /**
@@ -209,6 +234,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
           { step: "price-lines", implementation: "everything-is-a-penny" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "calculate-tax" },
+          { step: "take-payment", implementation: "take-payment" },
           { step: "capture-order", implementation: "capture-order" },
         ],
       },
@@ -223,7 +249,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
         "place-order": {
           before: {
             "capture-order": [
-              defineStep("no-orders-over-a-tenner", (_taxed: TaxedLines): TaxedLines => {
+              defineStep("no-orders-over-a-tenner", (_paid: PaidOrder): PaidOrder => {
                 throw new StepFailure(
                   "over-the-limit",
                   "This Store does not take an Order for more than a tenner.",
@@ -249,6 +275,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
           { step: "price-lines" },
           { step: "apply-adjustments" },
           { step: "calculate-tax" },
+          { step: "take-payment" },
         ],
       },
     });
@@ -431,6 +458,7 @@ describe("the tax Step", () => {
           { step: "price-lines", implementation: "price-lines" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "ten-per-cent" },
+          { step: "take-payment", implementation: "take-payment" },
           { step: "capture-order", implementation: "capture-order" },
         ],
       },

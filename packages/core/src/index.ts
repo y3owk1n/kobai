@@ -66,11 +66,13 @@ export type {
   CartLineToPlace,
   CartToPlace,
   LoadedCart,
+  PaidOrder,
   PlaceOrderRefusal,
   PlaceOrderRequest,
   PlaceOrderWorkflow,
   PricedLine,
   PricedLines,
+  TakenPayment,
   TaxedLine,
   TaxedLines,
 } from "./order/place-order.ts";
@@ -81,13 +83,30 @@ export {
   loadCart,
   placeOrderWorkflow,
   priceLines,
+  takePayment,
 } from "./order/place-order.ts";
 export type {
   Order,
   OrderAdjustment,
   OrderLineItem,
   OrderShopper,
+  Payment,
 } from "./order/read.ts";
+/**
+ * The interface Core defines and implements nowhere (ADR-0053) — Extension Point 3's second, and
+ * the first whose only implementations come from outside kobai.
+ *
+ * Types alone: a Project writes an object satisfying `PaymentProvider` and names it in
+ * `kobai.config.ts`, so there is nothing here to call and nothing to extend. `PaymentsOptions` is
+ * the shape of that key.
+ */
+export type {
+  PaymentOutcome,
+  PaymentProvider,
+  PaymentRequest,
+  PaymentsOptions,
+  RefundRequest,
+} from "./payment/provider.ts";
 export type {
   LoadedPrices,
   PriceCandidate,

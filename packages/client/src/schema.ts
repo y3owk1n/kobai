@@ -1075,6 +1075,12 @@ export interface paths {
             "application/json": components["schemas"]["ApiKeyRefusal"];
           };
         };
+        /** @description The Payment Provider declined. No Order exists — money is taken before Capture precisely so that a refused card leaves nothing in the Merchant's books — and `error` carries whatever the provider said for itself. */
+        402: {
+          content: {
+            "application/json": components["schemas"]["PlaceOrderRefusal"];
+          };
+        };
         /** @description The API key is live and publishable, and this route requires a secret one. */
         403: {
           content: {
@@ -1087,7 +1093,7 @@ export interface paths {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
           };
         };
-        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the idempotency key names a different request, or one still in flight. */
+        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight. */
         409: {
           content: {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
@@ -1516,6 +1522,7 @@ export interface components {
       metadata: {
         [key: string]: unknown;
       };
+      payment: components["schemas"]["Payment"];
       /**
        * Format: date-time
        * @description The moment of Capture, when this Order became immutable.
@@ -1562,16 +1569,26 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    /** @description The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as, and it is the difference between an Order somebody has settled and one nobody has. */
+    Payment: {
+      /** Format: uuid */
+      id: string;
+      /** @description What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money. */
+      provider: string;
+      /** @description The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against. */
+      reference: string;
+      /** @description What was taken, in minor units of `currency` — the Order's total. */
+      amount: number;
+      /** @description ISO 4217. */
+      currency: string;
+      /** Format: date-time */
+      createdAt: string;
+    } | null;
     PlacedOrder: components["schemas"]["Order"] & {
       workflow: {
         name: string;
         steps: components["schemas"]["StepReport"][];
       };
-    };
-    SecretKeyRequired: {
-      error: string;
-      /** @enum {string} */
-      reason: "secret-key-required";
     };
     PlaceOrderRefusal: {
       error: string;
@@ -1583,6 +1600,11 @@ export interface components {
         failed: string;
         steps: components["schemas"]["StepReport"][];
       };
+    };
+    SecretKeyRequired: {
+      error: string;
+      /** @enum {string} */
+      reason: "secret-key-required";
     };
     PlaceOrderRequest: {
       /** @description The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020). */

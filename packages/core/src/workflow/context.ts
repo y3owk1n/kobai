@@ -1,4 +1,5 @@
 import type { Database } from "../db/client.ts";
+import type { PaymentProvider } from "../payment/provider.ts";
 import type { AnyWorkflow } from "./workflow.ts";
 
 /**
@@ -41,6 +42,20 @@ export type WorkflowContext = {
    * from the registry `createKobai` publishes as `Kobai.workflows`.
    */
   readonly workflows?: WorkflowRegistry;
+  /**
+   * The Payment Provider this deployment was wired with, for the Step that takes money
+   * (ADR-0053).
+   *
+   * It reaches a Step the way the database does — on the context — because a Step is a
+   * module-level declaration a Project may replace, so there is nothing to hand a dependency to
+   * at construction time. It is threaded from `createKobai` through whatever builds a context
+   * for a request, exactly as `workflows` is.
+   *
+   * **Optional, and absent is a configuration rather than a fault.** Core ships no provider and
+   * a deployment is free to wire none, so `take-payment` refuses with `no-payment-provider`
+   * rather than raising — see `order/place-order.ts`.
+   */
+  readonly paymentProvider?: PaymentProvider;
 };
 
 /**

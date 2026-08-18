@@ -1,6 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import type { Queryable } from "../db/client.ts";
-import { order, orderAdjustment, orderLineItem } from "../db/schema.ts";
+import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 
 /**
@@ -68,6 +68,26 @@ export type OrderShopper = {
   readonly externalId: string | null;
 };
 
+/**
+ * The **Payment** taken for an Order — the record that money moved (ADR-0053).
+ *
+ * Core's record behind an interface Core does not implement, so everything here came from the
+ * provider or from what Core charged it: `provider` names the system holding the money and
+ * `reference` is that system's own handle on this payment, stored and never parsed.
+ */
+export type Payment = {
+  readonly id: string;
+  /** The provider's `name` as it was wired when the money moved — `manual`, `stripe`. */
+  readonly provider: string;
+  /** What the provider called this payment. Opaque to kobai; quote it at the provider. */
+  readonly reference: string;
+  /** What was taken, in minor units of the Order's currency. */
+  readonly amount: number;
+  readonly currency: string;
+  /** When the money moved, which is within the same request that captured the Order. */
+  readonly createdAt: string;
+};
+
 export type Order = {
   readonly id: string;
   /**
@@ -101,6 +121,16 @@ export type Order = {
    */
   readonly adjustments: readonly OrderAdjustment[];
   readonly metadata: Record<string, unknown>;
+  /**
+   * The money taken for this Order, or `null` if none is recorded against it.
+   *
+   * `place-order` takes payment before it captures and writes both in one transaction, so an
+   * Order **this** version placed always has one — a declined payment leaves no Order at all.
+   * `null` is what an Order placed before the Payment record existed reads as, which is every
+   * Order already in a database kobai has just been upgraded in, and it is the difference a
+   * Merchant needs to see between an Order somebody has settled and one nobody has.
+   */
+  readonly payment: Payment | null;
   /**
    * The moment of **Capture**, when this Order came into existence and became immutable.
    *
@@ -200,6 +230,20 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     .orderBy(asc(orderAdjustment.position), asc(orderAdjustment.id))
     .where(eq(orderAdjustment.orderId, row.id));
 
+  // At most one, in DDL — see `core_payment`'s unique index on `order_id`.
+  const [paid] = await db
+    .select({
+      id: payment.id,
+      provider: payment.provider,
+      reference: payment.reference,
+      amount: payment.amount,
+      currency: payment.currency,
+      createdAt: payment.createdAt,
+    })
+    .from(payment)
+    .where(eq(payment.orderId, row.id))
+    .limit(1);
+
   const adjustmentsOf = (lineItemId: string | null): readonly OrderAdjustment[] =>
     adjustments
       .filter((one) => one.orderLineItemId === lineItemId)
@@ -218,6 +262,7 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     // The Order's own: the ones attached to no line at all.
     adjustments: adjustmentsOf(null),
     metadata: row.metadata,
+    payment: paid ? { ...paid, createdAt: paid.createdAt.toISOString() } : null,
     createdAt: row.createdAt.toISOString(),
   };
 }

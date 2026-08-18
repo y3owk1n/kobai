@@ -127,6 +127,20 @@
       "when": 1787017692441,
       "tag": "0017_aromatic_madrox",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787019890733,
+      "tag": "0018_noisy_pretty_boy",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787019899624,
+      "tag": "0019_payment_updated_at_trigger",
+      "breakpoints": true
     }
   ]
 }

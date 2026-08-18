@@ -37,6 +37,10 @@ function describeCore() {
     // Empty for the same reason: composition decides what a Step reaches, never what is
     // served, and nothing below dispatches a request.
     workflows: {},
+    // None, because Core ships none (ADR-0053) and a description does not move with one: a
+    // deployment that wired a provider serves exactly these routes and answers exactly these
+    // statuses — 402 among them, whether or not anything is there to decline.
+    paymentProvider: undefined,
     // The default, because `packages/core/openapi.json` is the description of stock kobai.
     // What a *configured* window does to it is asserted through the running application, in
     // `auth/auth.test.ts`.

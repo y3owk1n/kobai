@@ -152,6 +152,10 @@ export function createKobai(options: KobaiOptions): Kobai {
 
   const app = createHttpApp({
     db: database.db,
+    // The one dependency Core names an interface for and implements nowhere (ADR-0053). Absent
+    // is a configuration rather than a fault: this boot proceeds exactly as any other, and the
+    // deployment refuses to place an Order and nothing else.
+    paymentProvider: options.payments?.provider,
     migrations,
     logger,
     priceWorkflow,
