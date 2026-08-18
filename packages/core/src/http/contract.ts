@@ -1,6 +1,18 @@
 import { z } from "@hono/zod-openapi";
 import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
+import type { MerchantCreation } from "../auth/merchant.ts";
 import type { SessionPolicy, SessionRejection } from "../auth/session.ts";
+import type { CartRefusal as CartRefusalReason } from "../cart/write.ts";
+import type {
+  PriceDeletion,
+  ProductDeletion,
+  VariantDeletion,
+} from "../catalog/delete.ts";
+import type { PriceCreation, ProductCreation } from "../catalog/write.ts";
+import type { IdempotencyRefusal } from "../order/idempotency.ts";
+import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
+import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
+import type { InventoryUpdate } from "../reservation/inventory.ts";
 
 /**
  * Every shape kobai's HTTP surface accepts or answers with, as one set of schemas.
@@ -71,14 +83,89 @@ export const OpenMetadata = z
  *
  * One shape whether the caller was turned back at the door or by the handler, so a client
  * parses refusals one way. `reason` is the field to branch on; `error` is the field to
- * show.
+ * show — and only the first of those is promised (ADR-0060). The prose may be rewritten in
+ * a patch; the word a client branches on may not.
+ *
+ * **There is no shared `Refusal` schema, and its absence is the decision.** One existed, with
+ * `reason` typed `z.string()`, and it was what thirteen of Core's own reasons were declared
+ * through — so renaming one compiled, passed every test, and regenerated the description and
+ * the client byte for byte identically, while breaking a caller at runtime (ADR-0060). Each
+ * family below therefore names the closed set it can actually answer with, built by a mapped
+ * `satisfies` over the union the module already declares, exactly as {@link SessionRefusal}'s
+ * is. The two schemas that keep an open `reason` — {@link PriceRefusal} and
+ * {@link PlaceOrderRefusal} — are the ones a Step of a Project's or a Plugin's own can refuse
+ * through, and closing those would close Extension Point 2.
+ *
+ * One schema per family rather than one per status, following {@link CartRefusal}. A per-status
+ * schema *would* compile — `refused` returns one body type across every status its route names,
+ * and the compiler still narrows it per status — so this is a choice: every component name is
+ * promised surface under ADR-0060, and twenty of them would do four names' work. Which of a
+ * family's reasons a given status actually carries stays in that route's own prose, which is
+ * where the three differently-worded 404s of `CART_REFUSALS` already live.
  */
-export const Refusal = z
+
+/**
+ * The two reasons written **above** every handler, and so the two no route's schema is checked
+ * against.
+ *
+ * `invalid` comes from `invalidRequestHook`, for a body that parses and does not fit its
+ * schema; `malformed-body` comes from `app.onError`, for one that will not parse at all. Both
+ * answer 400 and neither goes through `app.openapi`, so a closed set that omitted one
+ * described a narrower surface than the one being served — which `CartRefusal` and
+ * `PlaceOrderRequestRefusal` both did until #149. Every family that can be reached with a body
+ * spreads these, and `http/refusal-reasons.test.ts` is what holds the next one to it.
+ */
+const REQUEST_REASONS = {
+  invalid: "invalid",
+  "malformed-body": "malformed-body",
+} as const;
+
+type RequestReason = (typeof REQUEST_REASONS)[keyof typeof REQUEST_REASONS];
+
+/**
+ * The `reason` field of a refusal a **Step** can make: an open string, described by the words
+ * Core itself uses.
+ *
+ * The set cannot be closed — a Step of a Project's or a Plugin's own is Extension Point 2 and
+ * may refuse with anything, which is the whole point of putting one in a Workflow — and it
+ * cannot honestly be half-closed either: `anyOf: [enum, string]` generates as `"a" | string`,
+ * which *is* `string` in TypeScript, so a client would gain a schema it could not narrow on.
+ *
+ * What can be done is what this does. The words Core answers with are listed in the
+ * description, **built from the constant rather than retyped**, and that constant is held to
+ * the modules' own unions by a mapped `satisfies` — so renaming one of Core's reasons turns
+ * the constant red naming it, and a *consistent* rename still moves the description and the
+ * generated client, where a review can see it. That is the whole of what ADR-0060 can promise
+ * about a `reason` on this half of the surface, and it is deliberately less than the closed
+ * sets get.
+ */
+function stepReason(known: Readonly<Record<string, string>>) {
+  return z.string().meta({
+    description: `Machine-readable. Branch on this. Core's own are \`${Object.values(known).join("`, `")}\`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means.`,
+  });
+}
+
+/** The `reason`s an operation of Core's can refuse with, read off the operation itself. */
+type Refused<Result> = Extract<
+  Result,
+  { readonly ok: false; readonly reason: string }
+>["reason"];
+
+/**
+ * A request that could not be used — the one refusal a route with a body always declares.
+ *
+ * Its own schema rather than a share of a family's, because it is all that the routes with
+ * nothing else to refuse — signing in, minting an API key — can answer at 400.
+ */
+export const InvalidRequest = z
   .object({
     error: z.string().meta({ description: "What went wrong, in prose." }),
-    reason: z.string().meta({ description: "Machine-readable. Branch on this." }),
+    reason: z.enum(REQUEST_REASONS).meta({
+      description:
+        "`invalid` if the body does not fit this endpoint's schema; `malformed-body` if it is not JSON at all. Different fixes, so they are different words.",
+    }),
   })
-  .openapi("Refusal");
+  .openapi("InvalidRequest");
 
 /**
  * The reasons each gate's 401 can carry, keyed by the rejection the gate answers with.
@@ -337,6 +424,28 @@ export const SignInRequest = z
   .openapi("SignInRequest");
 
 /**
+ * Every way adding a colleague can be refused, as a closed set.
+ *
+ * The keys are checked against `createMerchant`'s own union, so a fourth way to refuse a
+ * Merchant has no key here and does not compile — the guarantee {@link SessionRefusal} gets
+ * from `SessionRejection`, applied to a handler's refusals instead of a gate's.
+ */
+const MERCHANT_REASONS = {
+  ...REQUEST_REASONS,
+  "unknown-role": "unknown-role",
+  "email-taken": "email-taken",
+} as const satisfies { [R in Refused<MerchantCreation> | RequestReason]: R };
+
+export const MerchantRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(MERCHANT_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("MerchantRefusal");
+
+/**
  * The one path parameter this API has, and it is a plain string on purpose.
  *
  * Declaring it as a uuid would make `/admin/products/not-an-id` a 400, and it is a 404:
@@ -407,6 +516,29 @@ export const CreateApiKeyRequest = z
     kind: ApiKeyKind,
   })
   .openapi("CreateApiKeyRequest");
+
+/**
+ * Revoking a key that is not there — a set of one, and a literal for that reason.
+ *
+ * There is no `satisfies` here and none is missing: `revokeApiKey` answers a boolean, so this
+ * reason is written in the handler, and a literal schema is what binds it — the handler's
+ * `reason: "api-key-not-found" as const` is typed against this and a rename on either side
+ * fails to build. Checked, on `metadata-in-both`, rather than assumed.
+ *
+ * Minting one refuses only {@link InvalidRequest}'s two, so this is the whole of what the API
+ * key routes add. `api-key-not-found` and not `not-found`: it is a *different* word from the
+ * `api-key-*` set the store gate answers 401 with, and it has to stay different, because one
+ * is a Merchant addressing a key that does not exist and the other is a storefront presenting
+ * a credential.
+ */
+export const ApiKeyNotFound = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.literal("api-key-not-found").meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("ApiKeyNotFound");
 
 // ---- The Store ------------------------------------------------------------------------
 
@@ -565,6 +697,52 @@ export const VariantPriceParams = IdParam.extend({
     .meta({ description: "A Price of this Variant. Anything else is not found." }),
 });
 
+/**
+ * Every way a catalog operation can be refused, as a closed set — {@link CartRefusal}'s shape
+ * on the other surface.
+ *
+ * **One set across eight routes**, because that is what the handlers can be held to: `refused`
+ * returns one body type across every status its route declares, so the schema at a route's 404
+ * and the schema at its 409 have to be the same one. Which of these a given route can actually
+ * answer is in that route's own prose, where the distinction between three different 404s
+ * already lives.
+ *
+ * The keys are checked against the unions the catalog modules already declare — the six
+ * operations below, whose reasons overlap heavily — so a rename in `catalog/write.ts` or
+ * `catalog/delete.ts` turns *this* red naming the reason, rather than regenerating a
+ * description that quietly says something else. `last-variant` and `stock-is-reserved` are the
+ * two ADR-0059 recorded as promised in prose and nowhere else; they are here now.
+ */
+const CATALOG_REASONS = {
+  ...REQUEST_REASONS,
+  "product-not-found": "product-not-found",
+  "variant-not-found": "variant-not-found",
+  "price-not-found": "price-not-found",
+  "sku-taken": "sku-taken",
+  "last-variant": "last-variant",
+  "stock-is-reserved": "stock-is-reserved",
+  "unsupported-currency": "unsupported-currency",
+  "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+} as const satisfies {
+  [R in
+    | Refused<ProductCreation>
+    | Refused<ProductDeletion>
+    | Refused<VariantDeletion>
+    | Refused<PriceCreation>
+    | Refused<PriceDeletion>
+    | Refused<InventoryUpdate>
+    | RequestReason]: R;
+};
+
+export const CatalogRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(CATALOG_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("CatalogRefusal");
+
 // ---- Price resolution -----------------------------------------------------------------
 
 /** One Step of a Workflow run: the slot it filled, and what filled it. */
@@ -606,10 +784,15 @@ export const ResolvedPrice = z
  * set. Core answers 422 for a reason it does not know: the request was well formed and the
  * Workflow declined it, which is the most that can honestly be said.
  */
+const PRICE_RESOLUTION_REASONS = {
+  "variant-not-found": "variant-not-found",
+  "price-not-set": "price-not-set",
+} as const satisfies { [R in PriceResolutionRefusal]: R };
+
 export const PriceRefusal = z
   .object({
     error: z.string(),
-    reason: z.string(),
+    reason: stepReason(PRICE_RESOLUTION_REASONS),
     workflow: z.object({
       name: z.string(),
       failed: z.string().meta({ description: "The slot that refused." }),
@@ -746,20 +929,30 @@ export const CartLineItemParams = IdParam.extend({
  * `reason` is a closed set here, unlike `PriceRefusal`'s: nothing a Project or a Plugin
  * supplies runs on this path, so every refusal it can make is Core's own and a client can
  * narrow on the lot. Each route declares only the ones it can actually make.
+ *
+ * The keys are checked against `cart/write.ts`'s own union rather than restated, which is what
+ * the list here used to be — and `malformed-body` is here because a Cart route takes a JSON
+ * body and `app.onError` answers that word for one that will not parse. It was missing for as
+ * long as this schema has existed: the description promised eight reasons at 400 and the
+ * surface answered a ninth (#149).
  */
+const CART_REASONS = {
+  ...REQUEST_REASONS,
+  "secret-key-required": "secret-key-required",
+  "cart-not-found": "cart-not-found",
+  "cart-expired": "cart-expired",
+  "cart-placed": "cart-placed",
+  "line-item-not-found": "line-item-not-found",
+  "variant-not-found": "variant-not-found",
+  "variant-not-priced": "variant-not-priced",
+} as const satisfies { [R in CartRefusalReason | RequestReason]: R };
+
 export const CartRefusal = z
   .object({
-    error: z.string(),
-    reason: z.enum([
-      "invalid",
-      "secret-key-required",
-      "cart-not-found",
-      "cart-expired",
-      "cart-placed",
-      "line-item-not-found",
-      "variant-not-found",
-      "variant-not-priced",
-    ]),
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(CART_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
   })
   .openapi("CartRefusal");
 
@@ -1008,22 +1201,23 @@ export const PlaceOrderRequest = z
   .openapi("PlaceOrderRequest");
 
 /**
- * The two ways this route turns a body back before the Workflow runs, as a **closed set**.
+ * The ways this route turns a body back before the Workflow runs, as a **closed set**.
  *
- * The shared {@link Refusal} everywhere else on this surface leaves `reason` a bare string,
- * which is right where the reasons come from a Step and Core cannot enumerate them. These two
- * are Core's own and there are two of them — the schema, and a key sent in both halves of the
- * open context — so a client can narrow on the difference, which matters because the fixes are
- * different: one is a malformed body and the other is a key in the wrong place.
+ * {@link PlaceOrderRefusal} below leaves `reason` a bare string, which is right where the
+ * reasons come from a Step and Core cannot enumerate them. These are Core's own — the two
+ * {@link InvalidRequest} carries for every route with a body, plus a key sent in both halves of
+ * the open context — so a client can narrow on the difference, which matters because the fixes
+ * are different: one body cannot be read, one reads and does not fit, and one puts a key in the
+ * wrong place.
  *
- * `invalid` is what `invalidRequestHook` answers with for every route on the surface; the enum
- * has to keep carrying it for that reason, and this route declaring the set does not make the
- * hook this route's.
+ * `invalid` and `malformed-body` are answered above this route rather than by it; the enum has
+ * to carry them for that reason, and declaring them here does not make the hook or the error
+ * handler this route's.
  */
 export const PlaceOrderRequestRefusal = z
   .object({
     error: z.string().meta({ description: "What went wrong, in prose." }),
-    reason: z.enum(["invalid", "metadata-in-both"]),
+    reason: z.enum({ ...REQUEST_REASONS, "metadata-in-both": "metadata-in-both" }),
   })
   .openapi("PlaceOrderRequestRefusal");
 
@@ -1051,10 +1245,35 @@ export const IdempotencyKeyHeader = z.object({
  * answers 422 for a reason it does not know: the request was well formed and the Workflow
  * declined it, which is the most that can honestly be said.
  */
+/**
+ * Every reason of Core's own this route can carry — three unions' worth, and it takes all three.
+ *
+ * `place-order`'s Steps refuse with the first; `resolve-price`'s travel out of `price-lines` as
+ * themselves so that a Plugin's Step can do the same; and the last two are made *before* any
+ * Workflow runs, by the idempotency key, which is why they are not in either. `store.ts`'s
+ * status maps carry the same three unions for the same reason, and go red in the same way.
+ */
+const PLACE_ORDER_REASONS = {
+  "cart-not-found": "cart-not-found",
+  "cart-expired": "cart-expired",
+  "cart-placed": "cart-placed",
+  "cart-empty": "cart-empty",
+  "insufficient-inventory": "insufficient-inventory",
+  "variant-not-found": "variant-not-found",
+  "price-not-set": "price-not-set",
+  "payment-declined": "payment-declined",
+  "no-payment-provider": "no-payment-provider",
+  "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+  "idempotency-key-reused": "idempotency-key-reused",
+  "idempotency-key-in-progress": "idempotency-key-in-progress",
+} as const satisfies {
+  [R in PlaceOrderReason | PriceResolutionRefusal | IdempotencyRefusal]: R;
+};
+
 export const PlaceOrderRefusal = z
   .object({
     error: z.string(),
-    reason: z.string(),
+    reason: stepReason(PLACE_ORDER_REASONS),
     workflow: z
       .object({
         name: z.string(),

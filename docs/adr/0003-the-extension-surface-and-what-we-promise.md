@@ -1,10 +1,15 @@
 # The extension surface, and what we promise stability on
 
-> **Amended by [ADR-0047](./0047-the-test-harness-is-promised-surface.md).** The five
-> Extension Points are still five and still closed — nothing attaches to a test harness at
-> runtime. But one thing outside them is promised anyway: `@kobai/core/testing`, which ships
-> for the Plugin author who needs the same seam Core tests through. So "anything not
-> reachable through the five surfaces above" below means anything but that.
+> **Amended by [ADR-0047](./0047-the-test-harness-is-promised-surface.md) and
+> [ADR-0060](./0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md).**
+> The five Extension Points are still five and still closed — nothing attaches to a test
+> harness or to an HTTP route at runtime. But two things outside them are promised anyway:
+> `@kobai/core/testing`, which ships for the Plugin author who needs the same seam Core tests
+> through; and kobai's **HTTP surface**, which under ADR-0002 *is* the product for a
+> storefront Developer and under ADR-0010 is the only thing the Admin may use. So "anything
+> not reachable through the five surfaces above" below means anything but those two — and
+> neither is an Extension Point, because an Extension Point is a place a Project's or a
+> Plugin's own code is *called*, and these are places kobai is *used*.
 
 ADR-0001 removed the fork and moved the hard problem here: a Project and its Plugins can
 only stay upgradeable if they attach to a surface Core promises not to break. We promise

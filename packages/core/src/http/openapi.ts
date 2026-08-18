@@ -123,7 +123,14 @@ export const REFUSALS = {
     "The API key is live and publishable, and this route requires a secret one.",
     contract.SecretKeyRequired,
   ),
-  invalid: json("The request does not fit this endpoint's schema.", contract.Refusal),
+  // Only for a route with nothing else to refuse at 400. A route whose handler can also turn a
+  // well-formed body back — a Merchant's address already taken, a SKU already carried —
+  // declares its family's schema instead, because `refused` answers with one body type across
+  // every status the route names (ADR-0060).
+  invalid: json(
+    "The request does not fit this endpoint's schema, or is not JSON at all.",
+    contract.InvalidRequest,
+  ),
   serverError: json("Something failed inside kobai.", contract.ServerError),
 } as const;
 

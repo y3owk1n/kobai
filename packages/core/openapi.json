@@ -203,7 +203,7 @@
           "permissions"
         ]
       },
-      "Refusal": {
+      "InvalidRequest": {
         "type": "object",
         "properties": {
           "error": {
@@ -212,7 +212,11 @@
           },
           "reason": {
             "type": "string",
-            "description": "Machine-readable. Branch on this."
+            "enum": [
+              "invalid",
+              "malformed-body"
+            ],
+            "description": "`invalid` if the body does not fit this endpoint's schema; `malformed-body` if it is not JSON at all. Different fixes, so they are different words."
           }
         },
         "required": [
@@ -303,6 +307,29 @@
               "role"
             ]
           }
+        ]
+      },
+      "MerchantRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "malformed-body",
+              "unknown-role",
+              "email-taken"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
         ]
       },
       "SessionRefusal": {
@@ -539,6 +566,35 @@
           "id",
           "title",
           "metadata"
+        ]
+      },
+      "CatalogRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "malformed-body",
+              "product-not-found",
+              "variant-not-found",
+              "price-not-found",
+              "sku-taken",
+              "last-variant",
+              "stock-is-reserved",
+              "unsupported-currency",
+              "unknown-fulfilment-strategy"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
         ]
       },
       "CreateProductRequest": {
@@ -1084,6 +1140,26 @@
           "revokedAt"
         ]
       },
+      "ApiKeyNotFound": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "api-key-not-found"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "ResolvedPrice": {
         "type": "object",
         "properties": {
@@ -1196,7 +1272,8 @@
             "type": "string"
           },
           "reason": {
-            "type": "string"
+            "type": "string",
+            "description": "Machine-readable. Branch on this. Core's own are `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
           },
           "workflow": {
             "type": "object",
@@ -1321,12 +1398,14 @@
         "type": "object",
         "properties": {
           "error": {
-            "type": "string"
+            "type": "string",
+            "description": "What went wrong, in prose."
           },
           "reason": {
             "type": "string",
             "enum": [
               "invalid",
+              "malformed-body",
               "secret-key-required",
               "cart-not-found",
               "cart-expired",
@@ -1334,7 +1413,8 @@
               "line-item-not-found",
               "variant-not-found",
               "variant-not-priced"
-            ]
+            ],
+            "description": "Machine-readable. Branch on this."
           }
         },
         "required": [
@@ -1482,6 +1562,7 @@
             "type": "string",
             "enum": [
               "invalid",
+              "malformed-body",
               "metadata-in-both"
             ]
           }
@@ -1498,7 +1579,8 @@
             "type": "string"
           },
           "reason": {
-            "type": "string"
+            "type": "string",
+            "description": "Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
           },
           "workflow": {
             "type": "object",
@@ -1636,11 +1718,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/InvalidRequest"
                 }
               }
             }
@@ -1814,11 +1896,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, is not JSON at all, or names a Role this deployment does not have.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/MerchantRefusal"
                 }
               }
             }
@@ -1848,7 +1930,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/MerchantRefusal"
                 }
               }
             }
@@ -1970,11 +2052,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2004,7 +2086,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2014,7 +2096,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2160,7 +2242,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2236,7 +2318,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2246,7 +2328,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2324,7 +2406,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2334,7 +2416,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2405,11 +2487,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2439,7 +2521,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2449,7 +2531,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2537,7 +2619,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2608,11 +2690,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2642,7 +2724,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2652,7 +2734,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/CatalogRefusal"
                 }
               }
             }
@@ -2859,11 +2941,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/InvalidRequest"
                 }
               }
             }
@@ -3022,7 +3104,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/ApiKeyNotFound"
                 }
               }
             }

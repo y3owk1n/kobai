@@ -126,7 +126,14 @@ export type ApiKeySummary = components["schemas"]["ApiKeySummary"];
 export type ApiKeyKind = components["schemas"]["ApiKeyKind"];
 export type ResolvedPrice = components["schemas"]["ResolvedPrice"];
 export type StepReport = components["schemas"]["StepReport"];
-export type Refusal = components["schemas"]["Refusal"];
+// There is deliberately no `Refusal`. It was the one refusal type whose `reason` was a bare
+// `string`, and ADR-0060 replaced it with the closed sets below — so a storefront narrows on
+// the word it branches on rather than on `string`. The comment above is what caught the
+// removal: a name leaving the API is a build failure here, which is the behaviour to keep.
+export type InvalidRequest = components["schemas"]["InvalidRequest"];
+export type MerchantRefusal = components["schemas"]["MerchantRefusal"];
+export type CatalogRefusal = components["schemas"]["CatalogRefusal"];
+export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];
 export type SessionRefusal = components["schemas"]["SessionRefusal"];
 export type ApiKeyRefusal = components["schemas"]["ApiKeyRefusal"];
 export type PermissionDenied = components["schemas"]["PermissionDenied"];
