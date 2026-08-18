@@ -1,6 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
+import {
+  cursorAt,
+  type Page,
+  type PageRequest,
+  pageSize,
+  rowsAfter,
+  takePage,
+} from "../db/page.ts";
 import { apiKey } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 
@@ -160,32 +168,46 @@ export async function createApiKey(
 }
 
 /**
- * Every key this deployment has issued, newest first — including the revoked ones.
+ * A page of the keys this deployment has issued, newest first — revoked ones included.
  *
  * One Store per deployment (ADR-0005), so there is nothing to scope by and no filter to
- * take. Unpaginated, like the Product list, and in an envelope for the same reason.
+ * take. Paged like every other list on this surface (ADR-0064): this is the shortest of the
+ * three and pages anyway, because a surface where some lists page and others do not is one a
+ * client has to learn twice.
  */
-export async function listApiKeys(db: Database): Promise<ApiKeySummary[]> {
-  const rows = await db
+export async function listApiKeys(
+  db: Database,
+  page: PageRequest,
+): Promise<Page<ApiKeySummary>> {
+  const fetched = await db
     .select({
       id: apiKey.id,
       name: apiKey.name,
       kind: apiKey.kind,
       createdAt: apiKey.createdAt,
       revokedAt: apiKey.revokedAt,
+      cursorAt: cursorAt(apiKey.createdAt),
     })
     .from(apiKey)
+    .where(rowsAfter(page, apiKey.createdAt, apiKey.id))
     // `id` breaks the tie, so two keys minted in the same millisecond still list in a
-    // stable order rather than whichever one Postgres reached first.
-    .orderBy(desc(apiKey.createdAt), desc(apiKey.id));
+    // stable order rather than whichever one Postgres reached first — and so that a cursor
+    // cut from the last of them names one row rather than a group of them.
+    .orderBy(desc(apiKey.createdAt), desc(apiKey.id))
+    .limit(pageSize(page));
 
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    kind: asKind(row.kind),
-    createdAt: row.createdAt.toISOString(),
-    revokedAt: row.revokedAt?.toISOString() ?? null,
-  }));
+  const { rows, nextCursor } = takePage(fetched, page);
+
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      kind: asKind(row.kind),
+      createdAt: row.createdAt.toISOString(),
+      revokedAt: row.revokedAt?.toISOString() ?? null,
+    })),
+    nextCursor,
+  };
 }
 
 /**

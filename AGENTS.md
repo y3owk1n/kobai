@@ -714,6 +714,43 @@ and it is verified rather than assumed — **`packages/client/src/schema.ts` doe
 because `openapi-typescript` emits paths, components and operations and never the `info` block,
 so a regenerated client is byte-identical across a version bump.
 
+**Every list route pages, and there is one way to do it** (ADR-0064). `?limit=` and `?after=`,
+an **opaque** `nextCursor` beside the items, no offset and no total — on the three lists that
+exist and on every one added after them, because a surface where some lists page and others do
+not is one a client has to learn twice. A new list route therefore takes
+`request: { query: contract.PageQuery }`, declares `400: PAGE_QUERY_INVALID`, answers with
+`{ …items, nextCursor: page.nextCursor }`, and reads its page through
+`packages/core/src/db/page.ts`. Five things about it are decisions rather than implementation:
+
+- **`nextCursor` is absent on the last page and that is the only end-of-list signal.** A short
+  page is not one — a filtered page can be short and not last — so a reader fetches `limit + 1`
+  rows through `pageSize`/`takePage` and reports a cursor exactly when the extra row exists. A
+  count would be a second query over the whole table to answer a question with two answers.
+- **The ordering ends in `id`, and the cursor is the same pair.** #132 already paid for a tie
+  once, where it made the upgrade gate red *sometimes*; at a page boundary a tie skips or
+  repeats a row instead of merely reordering it. `0028` indexes `(created_at, id)` on the three
+  tables — ascending though every reader wants descending, because one ordering reversed whole
+  is a backwards scan of the same index.
+- **The cursor carries the timestamp as Postgres's own text, never a `Date`.** A `Date` holds
+  milliseconds and `now()` holds microseconds, so a cursor round-tripped through one would fall
+  on the wrong side of its own comparison and hide every row sharing that millisecond. That is
+  why each paged query selects `cursorAt(column)` beside the `created_at` its response reports:
+  two readings of one column, because the wire wants an ISO string a person reads and the
+  cursor wants what the database is ordering by.
+- **A `limit` over the ceiling is refused, never clamped**, and an `after` that does not decode
+  is refused too — both as the existing `invalid` at 400, from `PageQuery` itself, because an
+  unusable parameter does not fit the endpoint's schema and needs no `reason` of its own. A
+  caller that asked for 5,000 and received a hundred would read the short page as the end.
+- **The default and the ceiling are promised** (`DEFAULT_PAGE_LIMIT`, `MAX_PAGE_LIMIT` in
+  `db/page.ts`, 20 and 100) and each route's description says so, because changing either
+  changes what an existing client receives.
+
+`packages/core/src/http/pagination.test.ts` holds all of it, and holds it **once for the three
+lists**: `LISTS` is a table of path and item key, so a new list added there inherits the whole
+contract rather than a copy of it. Its last case is the one that matters and the one nothing
+else can see — a page fetched across a concurrent insert — and it was watched failing against
+an offset implementation first, which is the discipline the two race tests already use.
+
 **A declared refusal must have the gate that makes it.** Five of the statuses a route
 declares are not the handler's to answer — they are made above it, by middleware: `503` by the
 migration gate, `401` by the session gate at `/admin` and by the API-key gate at `/store`,

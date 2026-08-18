@@ -220,6 +220,12 @@ export const apiKey = pgTable(
     // In DDL rather than only in TypeScript: a third kind would need a decision about where
     // it may safely be put, and that decision should not be reachable by an insert.
     check("core_api_key_kind_is_known", sql`${table.kind} in ('publishable', 'secret')`),
+    // The order the list route pages in, and the columns its cursor compares (ADR-0064). Both
+    // columns, in this order, because the tiebreaker is part of the ordering rather than a
+    // detail of it — an index on `created_at` alone leaves the second comparison to a sort.
+    // Ascending though every reader wants it descending: one direction reversed for the whole
+    // ordering is a backwards scan of this same index.
+    index("core_api_key_created_at_id_idx").on(table.createdAt, table.id),
   ],
 );
 
@@ -237,20 +243,27 @@ export type ApiKeyRow = typeof apiKey.$inferSelect;
  *
  * No Store reference, for the same reason as every other table here (ADR-0005).
  */
-export const product = pgTable("core_product", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  /**
-   * A column, and a Translation table is what ADR-0022 and `CONTEXT.md` say translatable
-   * text eventually wants instead. This slice has no Translation in it — the ticket names
-   * Translations among the things that must not appear — so the column stands, and moving it
-   * is the migration that ADR pays for by being written now rather than after a catalog,
-   * a cart and an order history reference it.
-   */
-  title: text("title").notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const product = pgTable(
+  "core_product",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * A column, and a Translation table is what ADR-0022 and `CONTEXT.md` say translatable
+     * text eventually wants instead. This slice has no Translation in it — the ticket names
+     * Translations among the things that must not appear — so the column stands, and moving it
+     * is the migration that ADR pays for by being written now rather than after a catalog,
+     * a cart and an order history reference it.
+     */
+    title: text("title").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // What `GET /admin/products` pages along — see `core_api_key`'s for why both columns.
+    index("core_product_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
 
 export type ProductRow = typeof product.$inferSelect;
 
@@ -529,6 +542,14 @@ export const order = pgTable(
      * distinct — so Orders outliving their Carts do not collide with each other.
      */
     uniqueIndex("core_order_cart_idx").on(table.cartId),
+    /**
+     * What `GET /admin/orders` pages along — see `core_api_key`'s for why both columns.
+     *
+     * This is the one of the three that will matter: an Order is never deleted, this table takes
+     * an insert from every placement, and a Merchant reading the books is reading the newest
+     * rows of the largest table kobai has.
+     */
+    index("core_order_created_at_id_idx").on(table.createdAt, table.id),
   ],
 );
 

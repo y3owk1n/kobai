@@ -24,9 +24,11 @@ import { messageOf } from "@/lib/refusal";
 /**
  * What this Store has sold (spec story 56).
  *
- * `GET /admin/orders` is unpaginated and newest first, and this screen shows it as it arrives —
- * the same bargain the Products list makes, and the envelope the API answers in is why
- * pagination can be added beside it later rather than by breaking this.
+ * `GET /admin/orders` answers newest first, a page at a time (ADR-0064), and this screen asks
+ * for no page and shows what arrives — **so it shows the first page and no more**, with no way
+ * to reach the second. That is a known gap rather than a bargain: following `nextCursor` wants
+ * somewhere to keep it, and this Admin has no router to keep it in. The frame that has one is
+ * what closes it, and the Products and API key lists are in the same position.
  *
  * There is no form under this one, unlike the Products screen. An Order is placed by a
  * storefront over `/store` and is immutable once it exists (ADR-0009), so there is nothing here

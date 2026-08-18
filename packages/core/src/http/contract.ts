@@ -10,6 +10,7 @@ import type {
 } from "../catalog/delete.ts";
 import type { VariantUpdate } from "../catalog/update.ts";
 import type { PriceCreation, ProductCreation } from "../catalog/write.ts";
+import { DEFAULT_PAGE_LIMIT, decodeCursor, MAX_PAGE_LIMIT } from "../db/page.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
@@ -254,6 +255,69 @@ export const InvalidCredentials = z
 
 /** A 500. Deliberately says nothing: a stack trace is not the caller's business. */
 export const ServerError = z.object({ error: z.string() }).openapi("ServerError");
+
+// ---- Paging --------------------------------------------------------------------------
+
+/**
+ * What every list route on this surface takes, and it is the same two parameters everywhere
+ * (ADR-0064).
+ *
+ * A surface where some lists page and others do not is one a client has to learn twice, so
+ * this is declared once and named by each list route rather than spelled per route. Both
+ * parameters are optional: a caller that sends neither gets the first page at the default
+ * size, which is why adding this to a list that returned everything breaks nobody.
+ *
+ * There is deliberately **no `offset` and no total**. An offset is evaluated against the
+ * table as it is when the page is fetched, so an insert between two pages skips or repeats a
+ * row without saying so; a total is a second query over the whole table, and it is wrong by
+ * the time it is rendered on exactly the tables large enough to want one.
+ *
+ * **`after` is decoded here rather than in a handler**, so an unusable cursor is answered
+ * `invalid` at 400 by the same hook that answers a body that does not fit — and so what a
+ * handler receives is a position rather than a string it would have to check again.
+ */
+export const PageQuery = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_PAGE_LIMIT)
+    .default(DEFAULT_PAGE_LIMIT)
+    .meta({
+      description: `How many to answer with. Between 1 and ${MAX_PAGE_LIMIT}; ${DEFAULT_PAGE_LIMIT} if it is not sent. More than ${MAX_PAGE_LIMIT} is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received ${MAX_PAGE_LIMIT} would read the short page as the end of the list.`,
+    }),
+  after: z
+    .string()
+    .transform((raw, ctx) => {
+      const cursor = decodeCursor(raw);
+      if (cursor === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "not a cursor this API issued",
+        });
+        return z.NEVER;
+      }
+      return cursor;
+    })
+    .optional()
+    .meta({
+      description:
+        "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page.",
+    }),
+});
+
+/**
+ * The field every list answers beside its items, and the only end-of-list signal there is.
+ *
+ * **Absent** rather than `null` when there is nothing further, because a client that has to
+ * tell "no more" from "not asked" is being told the same thing twice. And absence rather than
+ * a short page: a page can be short for other reasons — filtering, once these routes filter —
+ * so a caller that stopped on a short page would stop early the day one arrives.
+ */
+export const NextCursor = z.string().optional().meta({
+  description:
+    "Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one.",
+});
 
 // ---- Health --------------------------------------------------------------------------
 
@@ -506,7 +570,7 @@ export const ApiKeySummary = ApiKeyIdentity.extend({
 
 /** The list, in an envelope — the same shape, and the same reason, as `ProductList`. */
 export const ApiKeyList = z
-  .object({ apiKeys: z.array(ApiKeySummary).readonly() })
+  .object({ apiKeys: z.array(ApiKeySummary).readonly(), nextCursor: NextCursor })
   .openapi("ApiKeyList");
 
 export const CreateApiKeyRequest = z
@@ -642,13 +706,13 @@ export const ProductDetail = Product.extend({
 }).openapi("ProductDetail");
 
 /**
- * The list, in an envelope.
+ * The list, in an envelope — the items, and how to ask for what follows them.
  *
- * Unpaginated today. The envelope is why pagination can arrive beside the list rather
- * than by breaking this response.
+ * The envelope is why paging arrived beside this list rather than by breaking it: a client
+ * reading `products` is unaffected by {@link NextCursor} appearing next to it (ADR-0064).
  */
 export const ProductList = z
-  .object({ products: z.array(Product).readonly() })
+  .object({ products: z.array(Product).readonly(), nextCursor: NextCursor })
   .openapi("ProductList");
 
 export const CreateVariantRequest = z
@@ -1198,14 +1262,9 @@ export const Order = OrderSummary.extend({
   metadata: Metadata,
 }).openapi("Order");
 
-/**
- * The list, in an envelope — the same shape, and the same reason, as `ProductList`.
- *
- * Unpaginated today. The envelope is why pagination can arrive beside the list rather than by
- * breaking this response.
- */
+/** The list, in an envelope — the same shape, and the same reason, as `ProductList`. */
 export const OrderList = z
-  .object({ orders: z.array(OrderSummary).readonly() })
+  .object({ orders: z.array(OrderSummary).readonly(), nextCursor: NextCursor })
   .openapi("OrderList");
 
 /**
