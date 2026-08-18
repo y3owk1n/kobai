@@ -15,6 +15,9 @@ const UNIQUE_VIOLATION = "23505";
 /** And for a `check` constraint refusing a value — how Inventory refuses to go negative. */
 const CHECK_VIOLATION = "23514";
 
+/** And for a foreign key refusing a delete — how a Role held by Merchants refuses to go. */
+const FOREIGN_KEY_VIOLATION = "23503";
+
 /**
  * How far down a `cause` chain to look, so that a cycle cannot become a hung request.
  *
@@ -51,7 +54,20 @@ export function violatesCheckConstraint(cause: unknown, constraint: string): boo
 }
 
 /**
- * The walk both of them do, because the driver's error does not arrive bare: Drizzle wraps it in
+ * Whether this is Postgres refusing a delete because the named foreign key still points at the
+ * row — how `deleteRole` learns that Merchants hold the Role it was asked to remove.
+ *
+ * Read rather than asked for in advance, for the reason the unique index above is: a `select`
+ * for the referencing rows followed by a `delete` lets a request in between create one, and the
+ * key would then refuse what the read had already promised was safe. `on delete restrict` makes
+ * the key the check, and this is how its answer is read.
+ */
+export function violatesForeignKey(cause: unknown, key: string): boolean {
+  return violates(cause, FOREIGN_KEY_VIOLATION, key);
+}
+
+/**
+ * The walk all three of them do, because the driver's error does not arrive bare: Drizzle wraps it in
  * a `DrizzleQueryError` carrying the query, and a caller may wrap it again. Matching the
  * constraint by name as well as by code is what keeps each one narrow — a second constraint on
  * the same table must not be mistaken for the one being claimed against.

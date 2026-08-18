@@ -149,6 +149,58 @@ export interface paths {
   };
   "/admin/merchants": {
     /**
+     * List Merchants
+     * @description Newest first, 20 at a time — who has access to this deployment, and what each of them may do. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered (ADR-0064).
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Merchants. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["MerchantList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
      * Create a Merchant
      * @description Adds a colleague. The deployment's *first* Merchant does not come from here — it is seeded at boot from the deployment's own configuration, because a deployment with no Merchant has nobody who could hold this permission.
      */
@@ -187,6 +239,294 @@ export interface paths {
         409: {
           content: {
             "application/json": components["schemas"]["MerchantRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/roles": {
+    /**
+     * List Roles
+     * @description Newest first, 20 at a time — what this deployment may assign a colleague. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered (ADR-0064).
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Roles. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["RoleList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Create a Role
+     * @description A Role is a name and a set of Permission strings (ADR-0027). Which strings is not checked against Core's own: an unknown word is stored and answered back unchanged, so a Plugin's Permission needs no release of Core to become sayable. A Role holding none is valid — it can sign in and reach nothing.
+     */
+    post: {
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["CreateRoleRequest"];
+        };
+      };
+      responses: {
+        /** @description The Role. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Role"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description A Role already carries that name. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/roles/{id}": {
+    /**
+     * Read a Role
+     * @description One Role, and everything it may do.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Role. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Role"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Role exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Delete a Role
+     * @description A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `POST /admin/merchants` is how another Role gets a holder.
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description Deleted. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Role exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: `role-in-use`, Merchants hold this Role and deleting it would leave them signed in holding nothing at all. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Change a Role
+     * @description Changes only what is named; a field left out is left alone, a named `permissions` replaces the whole set, and a named `metadata` replaces what is stored rather than merging into it. It takes effect immediately for every Merchant holding this Role, signed in or not — a Role is read on each request. A body naming nothing this route would change is refused at 400.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateRoleRequest"];
+        };
+      };
+      responses: {
+        /** @description The Role, as a read of it reports it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Role"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Role exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description A Role already carries that name. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: `last-administrator`, every Merchant who can administer Merchants holds this Role, so this change would leave the deployment with nobody who could undo it. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["RoleRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -1920,6 +2260,56 @@ export interface components {
       password: string;
       /** @description A Role by name. Defaults to `owner`. */
       role?: string;
+    };
+    MerchantList: {
+      merchants: components["schemas"]["Merchant"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    Role: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /** @description What a Merchant holding this Role may do. Core's own are listed in `PermissionDenied.required`'s description; a word Core does not know is stored and answered back unchanged, so a Plugin's Permission is a string like any other. */
+      permissions: string[];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    RoleRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "role-not-found" | "role-name-taken" | "role-in-use" | "last-administrator";
+    };
+    CreateRoleRequest: {
+      /** @description How a Merchant is created against this Role, so no two Roles may share one. */
+      name: string;
+      /** @description Defaults to none, which is a Role that can sign in and reach nothing. Each entry must be a non-empty string and nothing more is checked — an unknown word is preserved rather than refused. */
+      permissions?: string[];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    RoleList: {
+      roles: components["schemas"]["Role"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    UpdateRoleRequest: {
+      /** @description A new name for this Role. Merchants hold a Role by identifier, so renaming one moves every Merchant with it; what it breaks is a `POST /admin/merchants` that names the old one. */
+      name?: string;
+      /** @description Replaces the whole set rather than adding to it. It takes effect on the next request every Merchant holding this Role makes — a Role is read on each one, not cached into the session. */
+      permissions?: string[];
+      /** @description Replaces what is stored rather than merging into it. */
+      metadata?: {
+        [key: string]: unknown;
+      };
     };
     Store: {
       name: string;

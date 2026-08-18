@@ -32,15 +32,18 @@ type Paged<Item> = {
 };
 
 /**
- * The three lists, each as "how to ask for a page of it" and "what its rows are called".
+ * The lists, each as "how to ask for a page of it" and "what its rows are called".
  *
- * A table rather than three copies of each assertion, so a list added later is one entry here
- * and is held to the same contract — which is what ADR-0064 means by uniformly.
+ * A table rather than a copy of each assertion per list, so a list added later is one entry
+ * here and is held to the same contract — which is what ADR-0064 means by uniformly. #173's two
+ * were exactly that: two entries, and everything below covered them.
  */
 const LISTS = [
   { path: "/admin/products", key: "products" },
   { path: "/admin/orders", key: "orders" },
   { path: "/admin/api-keys", key: "apiKeys" },
+  { path: "/admin/roles", key: "roles" },
+  { path: "/admin/merchants", key: "merchants" },
 ] as const;
 
 /** One page of one list, with the item key normalised away so the assertions can be shared. */
@@ -102,6 +105,60 @@ async function seedProducts(
     created.push(((await response.json()) as { id: string }).id);
   }
   return created;
+}
+
+/** `count` Roles, oldest first — created one at a time, so `created_at` orders them. */
+async function seedRoles(
+  kobai: TestKobai,
+  merchant: TestSession,
+  count: number,
+): Promise<string[]> {
+  const created: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const response = await kobai.request("/admin/roles", {
+      method: "POST",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: `bookkeeper-${index}` }),
+    });
+    expect(response.status, `creating bookkeeper-${index}`).toBe(201);
+    created.push(((await response.json()) as { id: string }).id);
+  }
+  return created;
+}
+
+/** `count` Merchants, oldest first — colleagues on the `owner` Role, which is what they get. */
+async function seedMerchants(
+  kobai: TestKobai,
+  merchant: TestSession,
+  count: number,
+): Promise<string[]> {
+  const created: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const response = await kobai.request("/admin/merchants", {
+      method: "POST",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        email: `colleague-${index}@example.test`,
+        password: `a colleague's very long password ${index}`,
+      }),
+    });
+    expect(response.status, `creating colleague-${index}`).toBe(201);
+    created.push(((await response.json()) as { id: string }).id);
+  }
+  return created;
+}
+
+/** The identifier of a Role this deployment already has, read back through the list itself. */
+async function roleNamed(
+  kobai: TestKobai,
+  merchant: TestSession,
+  name: string,
+): Promise<string> {
+  const response = await kobai.request("/admin/roles", { headers: merchant.headers });
+  const { roles } = (await response.json()) as { roles: { id: string; name: string }[] };
+  const found = roles.find((role) => role.name === name);
+  if (!found) throw new Error(`no Role named ${name} exists`);
+  return found.id;
 }
 
 describe("every list route pages, and pages the same way", () => {
@@ -352,6 +409,18 @@ async function seedThree(
   list: (typeof LISTS)[number],
 ): Promise<string[]> {
   if (list.key === "products") return seedProducts(kobai, merchant, 3);
+
+  // Two of these lists start with a row already in them — the `owner` Role a migration seeds
+  // and the first Merchant a boot does — so they get **two** more rather than three, and the
+  // one that was already there is the oldest and therefore the first of the three.
+  if (list.key === "roles")
+    return [
+      await roleNamed(kobai, merchant, "owner"),
+      ...(await seedRoles(kobai, merchant, 2)),
+    ];
+  if (list.key === "merchants") {
+    return [merchant.merchant.id, ...(await seedMerchants(kobai, merchant, 2))];
+  }
 
   const seeded: string[] = [];
   if (list.key === "orders") {

@@ -17,9 +17,20 @@ import type { MerchantIdentity, RoleSummary } from "../auth/identity.ts";
 import {
   authenticateMerchant,
   createMerchant,
+  listMerchants,
   type MerchantCreation,
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
+import {
+  createRole,
+  deleteRole,
+  listRoles,
+  type RoleCreation,
+  type RoleDeletion,
+  type RoleUpdate,
+  readRole,
+  updateRole,
+} from "../auth/role.ts";
 import { createSession, revokeSession, type SessionPolicy } from "../auth/session.ts";
 import {
   clearedSessionCookie,
@@ -203,6 +214,190 @@ const createMerchantRoute = createRoute({
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     409: json("A Merchant already holds that address.", contract.MerchantRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Lists the Merchants of this deployment, each with the Role they hold.
+ *
+ * Merchants were write-only until #173: one could be created and never seen again, which made
+ * *who has access* a question this API could not answer about itself.
+ *
+ * **Gated by `merchant:write`, the same Permission that creates one**, and that is a decision
+ * rather than an oversight — ADR-0066 argues it. A Merchant who may add a colleague may already
+ * grant every Permission this deployment has, by creating one against `owner`, so
+ * `merchant:write` *is* the power to administer access; a `merchant:read` beside it would name
+ * a boundary that does not exist.
+ */
+const listMerchantsRoute = createRoute({
+  method: "get",
+  path: "/merchants",
+  summary: "List Merchants",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — who has access to this deployment, and what each of them may do. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered (ADR-0064).`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: { query: contract.PageQuery },
+  responses: {
+    200: json("A page of Merchants.", contract.MerchantList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Creates a Role — a name and the set of Permissions a Merchant created against it holds.
+ *
+ * The route that makes ADR-0027's permission model reachable. Exactly one Role existed before
+ * it, seeded by `0003` and holding everything, so a deployment had one kind of Merchant and
+ * permission-gating was a mechanism nobody could use.
+ *
+ * **A Permission this build of Core has never heard of is stored, not refused** (ADR-0066).
+ * `permissions` is `array(string)` here for that reason and must stay so: closing it would
+ * contradict the `Session` schema one field away, which already promises a deployment may hold
+ * a Permission Core does not know.
+ */
+const createRoleRoute = createRoute({
+  method: "post",
+  path: "/roles",
+  summary: "Create a Role",
+  description:
+    "A Role is a name and a set of Permission strings (ADR-0027). Which strings is not checked against Core's own: an unknown word is stored and answered back unchanged, so a Plugin's Permission needs no release of Core to become sayable. A Role holding none is valid — it can sign in and reach nothing.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateRoleRequest } },
+    },
+  },
+  responses: {
+    201: json("The Role.", contract.Role),
+    400: json(
+      "The request does not fit this endpoint's schema, or is not JSON at all.",
+      contract.RoleRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    409: json("A Role already carries that name.", contract.RoleRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const listRolesRoute = createRoute({
+  method: "get",
+  path: "/roles",
+  summary: "List Roles",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — what this deployment may assign a colleague. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered (ADR-0064).`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: { query: contract.PageQuery },
+  responses: {
+    200: json("A page of Roles.", contract.RoleList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readRoleRoute = createRoute({
+  method: "get",
+  path: "/roles/{id}",
+  summary: "Read a Role",
+  description: "One Role, and everything it may do.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Role.", contract.Role),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Role exists.", contract.RoleRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Changes a Role — and refuses the one change a deployment cannot come back from.
+ *
+ * `last-administrator` is answered when taking `merchant:write` off this Role would leave no
+ * Merchant holding it anywhere. That is a lockout rather than a preference: the deployment
+ * would have nobody who could put the Permission back and nobody who could sign a colleague up
+ * to try, so the only way in would be the raw SQL this whole surface exists to remove
+ * (ADR-0066).
+ *
+ * **A change takes effect on the next request**, because the gate reads the Role on every one
+ * (`auth/session.ts`) rather than copying it into the session — so a Merchant narrowed while
+ * signed in is narrowed now, and `GET /admin/session` reports what they actually hold.
+ */
+const updateRoleRoute = createRoute({
+  method: "patch",
+  path: "/roles/{id}",
+  summary: "Change a Role",
+  description:
+    "Changes only what is named; a field left out is left alone, a named `permissions` replaces the whole set, and a named `metadata` replaces what is stored rather than merging into it. It takes effect immediately for every Merchant holding this Role, signed in or not — a Role is read on each request. A body naming nothing this route would change is refused at 400.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateRoleRequest } },
+    },
+  },
+  responses: {
+    200: json("The Role, as a read of it reports it.", contract.Role),
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+      contract.RoleRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Role exists.", contract.RoleRefusal),
+    409: json("A Role already carries that name.", contract.RoleRefusal),
+    422: json(
+      "Well formed, and still refused: `last-administrator`, every Merchant who can administer Merchants holds this Role, so this change would leave the deployment with nobody who could undo it.",
+      contract.RoleRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Deletes a Role, and **refuses while any Merchant holds it** — ADR-0059's shape, reached
+ * through the one foreign key that points at this table.
+ *
+ * Neither of the alternatives survives being written down: cascading deletes people to tidy up
+ * a label, and reassigning is Core choosing what a colleague becomes. Only refusing is
+ * reversible, and the Merchants it protects are ones a Merchant can move themselves.
+ */
+const deleteRoleRoute = createRoute({
+  method: "delete",
+  path: "/roles/{id}",
+  summary: "Delete a Role",
+  description:
+    "A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `POST /admin/merchants` is how another Role gets a holder.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Deleted." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Role exists.", contract.RoleRefusal),
+    422: json(
+      "Well formed, and still refused: `role-in-use`, Merchants hold this Role and deleting it would leave them signed in holding nothing at all.",
+      contract.RoleRefusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -863,6 +1058,49 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(created.merchant, 201);
   });
 
+  guarded.openapi(listMerchantsRoute, async (c) => {
+    const page = await listMerchants(deps.db, c.req.valid("query"));
+    return c.json({ merchants: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(createRoleRoute, async (c) => {
+    const created = await createRole(deps.db, c.req.valid("json"));
+    if (!created.ok) return refused(c, created, ROLE_STATUS);
+    return c.json(created.role, 201);
+  });
+
+  guarded.openapi(listRolesRoute, async (c) => {
+    const page = await listRoles(deps.db, c.req.valid("query"));
+    return c.json({ roles: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(readRoleRoute, async (c) => {
+    const found = await readRole(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        { error: "No such Role exists.", reason: "role-not-found" as const },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  guarded.openapi(updateRoleRoute, async (c) => {
+    const changed = await updateRole(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!changed.ok) return refused(c, changed, ROLE_UPDATE_STATUS);
+    return c.json(changed.role, 200);
+  });
+
+  guarded.openapi(deleteRoleRoute, async (c) => {
+    const deleted = await deleteRole(deps.db, c.req.valid("param").id);
+    if (!deleted.ok) return refused(c, deleted, ROLE_DELETION_STATUS);
+    return c.body(null, 204);
+  });
+
   guarded.openapi(readSessionRoute(Session), (c) => {
     const auth = authenticated(c);
     return c.json(sessionBody(auth.merchant, auth.role, auth.expiresAt), 200);
@@ -1181,6 +1419,35 @@ const CREATION_STATUS = {
   "unknown-role": 400,
   "email-taken": 409,
 } as const satisfies Record<Exclude<MerchantCreation, { ok: true }>["reason"], 400 | 409>;
+
+/** 400 for a request that is wrong, 409 for a name another Role answered first. */
+const ROLE_STATUS = {
+  invalid: 400,
+  "role-name-taken": 409,
+} as const satisfies Record<Exclude<RoleCreation, { ok: true }>["reason"], 400 | 409>;
+
+/**
+ * 422 for the lockout, on `default-currency-is-fixed`'s distinction rather than `sku-taken`'s.
+ *
+ * A 409 says somebody got there first and invites a retry; this refusal never becomes possible
+ * by itself, because what lifts it is a deliberate act somewhere else — another Role given
+ * `merchant:write`, and a Merchant given that Role.
+ */
+const ROLE_UPDATE_STATUS = {
+  invalid: 400,
+  "role-not-found": 404,
+  "role-name-taken": 409,
+  "last-administrator": 422,
+} as const satisfies Record<
+  Exclude<RoleUpdate, { ok: true }>["reason"],
+  400 | 404 | 409 | 422
+>;
+
+/** 422 for the same reason: the rows that refuse this are a Merchant's to move, not a retry's. */
+const ROLE_DELETION_STATUS = {
+  "role-not-found": 404,
+  "role-in-use": 422,
+} as const satisfies Record<Exclude<RoleDeletion, { ok: true }>["reason"], 404 | 422>;
 
 /**
  * One shape for every refusal this surface makes: `{ error, reason }`, at the status its

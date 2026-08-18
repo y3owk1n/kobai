@@ -6,6 +6,7 @@ import {
   TEST_MERCHANT,
   type TestKobai,
 } from "../testing/index.ts";
+import { PERMISSIONS } from "./permissions.ts";
 
 /**
  * API keys — the credential the store surface is gated by (ADR-0020).
@@ -35,6 +36,24 @@ async function created(
   });
   expect(response.status).toBe(201);
   return (await response.json()) as Record<string, string>;
+}
+
+/**
+ * A Role narrow enough to be refused both routes below — `store:read` and nothing else.
+ *
+ * Made through `POST /admin/roles` since #173, rather than with `insert into core_role`: a Role
+ * only SQL could make was a Role no Merchant had, which is what that ticket removed.
+ */
+async function seedReaderRole(
+  instance: TestKobai,
+  merchant: { headers: { cookie: string } },
+): Promise<void> {
+  const response = await instance.request("/admin/roles", {
+    method: "POST",
+    headers: { ...merchant.headers, "content-type": "application/json" },
+    body: JSON.stringify({ name: "reader", permissions: [PERMISSIONS.storeRead] }),
+  });
+  expect(response.status, "creating the reader Role").toBe(201);
 }
 
 describe("creating an API key", () => {
@@ -122,11 +141,10 @@ describe("creating an API key", () => {
     kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
 
-    // A Role narrow enough to be the subject of the test rather than a detail of it.
+    // A Role narrow enough to be the subject of the test rather than a detail of it, made the
+    // way a Merchant makes one since #173.
     const password = "a reader's very long password";
-    await kobai.database.query(
-      "insert into core_role (name, permissions) values ('reader', array['store:read'])",
-    );
+    await seedReaderRole(kobai, merchant);
     await kobai.request("/admin/merchants", {
       method: "POST",
       headers: { ...merchant.headers, "content-type": "application/json" },
@@ -281,9 +299,7 @@ describe("listing API keys", () => {
     const merchant = await signInTestMerchant(kobai);
 
     const password = "a reader's very long password";
-    await kobai.database.query(
-      "insert into core_role (name, permissions) values ('reader', array['store:read'])",
-    );
+    await seedReaderRole(kobai, merchant);
     await kobai.request("/admin/merchants", {
       method: "POST",
       headers: { ...merchant.headers, "content-type": "application/json" },

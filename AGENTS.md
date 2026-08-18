@@ -772,6 +772,34 @@ already says where multi-currency arrives: as more rows. **Do not add a currency
 and do not narrow the refusal to "when Prices exist"** — relaxing it later is cheap, tightening
 it is a break (ADR-0060), and the narrow version is a read of `core_price` followed by a write.
 
+**A Role is a row a Merchant can make, and one Permission administers all of it** (ADR-0066).
+`POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are #173's six, and every
+one of them sits behind **`merchant:write`** — the reads included, which departs from the
+read/write split below and is argued in the record rather than inherited: a Merchant who may add
+a colleague may add one against `owner`, so that Permission is already the power to administer
+access entire, and a `role:write` beside it would name a boundary that does not exist. Three
+things about that surface are decisions and not implementation:
+
+- **A Permission Core has never heard of is stored, not refused.** `permissions` is an array of
+  non-empty strings and nothing checks *which* strings — a shape, not a vocabulary. `Session`'s
+  own description already promises this ("a deployment may hold a permission this build of Core
+  has never heard of"), and closing the set would foreclose a Plugin-supplied Permission before
+  anybody has designed one. **Do not validate against `PERMISSIONS`**; the Admin's picker is
+  where a typo is caught, as an affordance (ADR-0063).
+- **The last Merchant able to administer Merchants cannot be stripped.**
+  `PATCH /admin/roles/{id}` refuses at **422 `last-administrator`** when the change would leave
+  no Merchant holding `merchant:write`, because the first Merchant is seeded only while there is
+  none (ADR-0041) and the way back would be raw SQL. **The guard is a `pg_advisory_xact_lock`
+  taken before the read, not a conditional update** — the condition is about *other* rows, which
+  a subquery does not lock, so ADR-0018's one-statement answer does not reach it and two requests
+  each stripping a different last administrator would both commit.
+  `packages/core/src/auth/the-last-administrator.test.ts` is the concurrent test, and it has been
+  watched failing with that line removed.
+- **A Role Merchants hold is refused rather than cascaded or reassigned** — **422 `role-in-use`**,
+  ADR-0059's shape reached through `core_merchant.role_id`'s `on delete restrict`. The delete is
+  one statement and the violation is *read* (`violatesForeignKey`), not asked for first: a
+  `select` then a `delete` lets a concurrent `POST /admin/merchants` slip a holder in between.
+
 **A route needing a Permission Core does not define yet brings one with it**, which is one edit
 and one migration. The new string goes **last** in `PERMISSIONS` (`auth/permissions.ts`), because
 `ALL_PERMISSIONS` is that literal's declaration order and `auth.test.ts` holds the seeded `owner`
@@ -1039,9 +1067,11 @@ Merchant, exactly as a boot does (`seedTestMerchant` is the same call without th
 and then signs them in through the public API. There is no HTTP way to create the first one
 and a test that reaches for `POST /admin/merchants` anonymously is asserting against a 401. A
 test about *not* holding a permission should create a narrower Role itself — that is the
-subject, and a helper would hide it; that second Merchant goes through `POST /admin/merchants`
-with the seeded one's session, which is the only way there is, and `sessionOf(response)` reads
-the session cookie off their sign-in response the way a browser would.
+subject, and a helper would hide it; **that Role goes through `POST /admin/roles`** since #173,
+never through `insert into core_role`, and that second Merchant goes through
+`POST /admin/merchants` with the seeded one's session, which is the only way there is, and
+`sessionOf(response)` reads the session cookie off their sign-in response the way a browser
+would.
 
 **`auth.test.ts` sweeps the whole admin surface** — every operation the generated description
 carries, called with no cookie, asserted 401 — so a route registered on the wrong half of

@@ -79,9 +79,9 @@ export async function seedTestMerchant(
  *
  * The Merchant holds the seeded `owner` Role, so they hold every permission Core defines. A
  * test about *not* holding one should create a narrower Role and a second Merchant itself —
- * that is the thing under test, and hiding it in a helper would hide the point. The second
- * Merchant goes through `POST /admin/merchants` with this one's session, which is the only
- * way there is.
+ * that is the thing under test, and hiding it in a helper would hide the point. Both go
+ * through the public API with this one's session, `POST /admin/roles` and then
+ * `POST /admin/merchants`, which is the only way there is.
  */
 export async function signInTestMerchant(
   kobai: Kobai,
