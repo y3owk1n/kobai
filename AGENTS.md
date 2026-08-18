@@ -302,6 +302,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/core/src/upgrade` | `kobai-upgrade` — the command that moves a Project across a kobai version, and the codemod set it consults (ADR-0035). |
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
+| `packages/plugin-made-to-order` | `@kobai/plugin-made-to-order` — the proof ADR-0014 asked for, at its thinnest. One Fulfilment Strategy, one offered Step that charges for a Lead Time, one table. |
 | `packages/create-kobai` | `create-kobai` — the scaffolder. Generates a Project a Developer owns (ADR-0001, ADR-0034). |
 | `packages/create-kobai/template/` | What it generates. **Generated** from `reference/`, checked in, never hand-edited. |
 | `packages/create-kobai/standalone/` | The few files a generated Project has and `reference/` does not. **Authored here**, not generated. |
@@ -467,6 +468,21 @@ independent timelines and a status column would force one lifecycle onto all of 
 answers are **copied onto the row** at Capture (ADR-0009): rewiring a Strategy, or removing the
 Plugin that offered one, must not rewrite an Order. Fulfilling anything is a later spec; what
 exists is the shape.
+
+**The Strategy from outside Core is `@kobai/plugin-made-to-order`**, and it is the proof
+ADR-0014 asked for rather than a feature — *if made-to-order cannot be expressed as a strategy
+Plugin, the strategy interface is wrong.* It offers three things and the reference Project wires
+all three: a migration set, the Strategy (`requiresShipping`, no Inventory, a Lead Time), and a
+Step that fills `place-order`'s `apply-adjustments` slot and turns a requested lead time into an
+**Adjustment** on the Order (ADR-0022). That Step reads the lead time out of the **open**
+Workflow context — a number Core has never modelled — which closes ADR-0013's scenario end to
+end for the first time. Two things about it are worth knowing before extending it: it decides
+which lines to surcharge from `line.fulfilment.hasLeadTime` and **never from the Strategy's
+name**, because a Strategy is named by the key a Project wired it under and so does not know its
+own name; and the open context is reachable only through the **query string** today
+(`openMetadata` is `Object.fromEntries(url.searchParams)`, #121), which is why its tests place
+Orders at `POST /store/orders?leadTimeDays=3`. **Capacity is still out of scope** — the Strategy
+says only *that* there is a Lead Time, never that a date can be met (ADR-0012).
 
 ### The API contract
 

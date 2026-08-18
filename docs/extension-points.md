@@ -337,8 +337,10 @@ it consume stock, does it have a Lead Time — and that reads like a registry. I
 [ADR-0052](./adr/0052-a-fulfilment-strategy-is-dependency-substitution.md) settles it as this
 mechanism, reached through the one above it. Core ships `physical` and `digital`; anything else
 — a rental, a subscription, made-to-order — is a Strategy a Plugin *offers* or you write
-yourself, and your Project *wires* it under the name your Variants point at. (No Plugin in this
-repository offers one yet; the made-to-order Plugin ADR-0014 names is the one that will.)
+yourself, and your Project *wires* it under the name your Variants point at.
+`@kobai/plugin-made-to-order` is the worked example — the Plugin ADR-0014 names, offering the
+Strategy below and the Step that charges for a short Lead Time, wired by the reference
+Project.
 
 ```ts
 import { defineKobaiConfig, type FulfilmentStrategy } from "@kobai/core";

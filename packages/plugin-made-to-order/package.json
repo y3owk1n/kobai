@@ -1,0 +1,34 @@
+{
+  "name": "@kobai/plugin-made-to-order",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Made-to-order as a Plugin: one Fulfilment Strategy, one Step that surcharges for a Lead Time.",
+  "license": "MIT",
+  "// publishConfig": "Published for the same reason as @kobai/core, and guarded the same way — a generated Project installs this Plugin as an ordinary dependency, so it has to exist in a registry (ADR-0034). `registry` pins publishing at a loopback address so reaching npmjs.com has to be deliberate rather than accidental. tests/publish-guard.test.ts fails the build if this pin goes missing.",
+  "publishConfig": {
+    "registry": "http://localhost:4873"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "// db:push": "There is deliberately no db:push script here either — the rule is the same for every Plugin, and a Plugin is where it bites hardest. `drizzle-kit push` diffs a schema against the LIVE database, so pushing this Plugin's schema at a Project's database reports success while silently dropping Core's tables and every other Plugin's, leaving their tracking rows behind so the migration runner believes the work is done and cannot repair it. Observed, not theorised: FINDINGS.md section E on branch prototype/drizzle-multi-migration, and docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md. `tablesFilter` mitigates it and is set in drizzle.config.ts anyway, but the primary control is that the dangerous command is never available."
+  },
+  "dependencies": {
+    "@kobai/core": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.5"
+  }
+}

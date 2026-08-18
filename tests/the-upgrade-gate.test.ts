@@ -84,7 +84,12 @@ let SYNTHETIC_MAJOR: string;
 const GATE_TIMEOUT = 1_800_000;
 
 /** Every kobai package a generated Project resolves from a registry. */
-const PUBLISHED = ["packages/core", "packages/client", "packages/plugin-price-log"];
+const PUBLISHED = [
+  "packages/core",
+  "packages/client",
+  "packages/plugin-price-log",
+  "packages/plugin-made-to-order",
+];
 
 let registry: LocalRegistry;
 let workspace: string;

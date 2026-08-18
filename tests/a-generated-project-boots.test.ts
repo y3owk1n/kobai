@@ -46,6 +46,7 @@ beforeAll(async () => {
     "packages/core",
     "packages/client",
     "packages/plugin-price-log",
+    "packages/plugin-made-to-order",
   ]);
 
   workspace = await mkdtemp(join(tmpdir(), "kobai-generated-"));
