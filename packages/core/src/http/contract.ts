@@ -666,6 +666,33 @@ export const CartRefusal = z
 // ---- Orders ----------------------------------------------------------------------------
 
 /**
+ * An **Adjustment** — a discount or a surcharge, held as its own line (ADR-0022).
+ *
+ * A line rather than a number folded into an amount, which is the whole of what the shape
+ * promises: a `unitAmount` beside one still says what a Variant cost, and every figure derived
+ * from the Order — the tax base, a refund, revenue — is derived from what was actually charged.
+ *
+ * `code` is deliberately an open string. Core defines no Adjustment of its own and validates
+ * none, because an Adjustment kobai understood would be a discount engine and that is not what
+ * ADR-0022 asked for — the Step that added it is what names it.
+ */
+export const OrderAdjustment = z
+  .object({
+    id: z.uuid(),
+    code: z.string().meta({
+      description:
+        "Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set.",
+    }),
+    description: z.string().meta({ description: "For a person to read." }),
+    amount: z.int().meta({
+      description:
+        "**Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("OrderAdjustment");
+
+/**
  * One line of an Order — a **snapshot**, and the reason it looks nothing like a Cart's.
  *
  * `title`, `sku` and `unitAmount` were copied at Capture, so renaming a Product or repricing a
@@ -690,7 +717,14 @@ export const OrderLineItem = z
       description:
         "Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means.",
     }),
-    total: z.int(),
+    adjustments: z.array(OrderAdjustment).readonly().meta({
+      description:
+        "The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them.",
+    }),
+    total: z.int().meta({
+      description:
+        "What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`.",
+    }),
     metadata: Metadata,
   })
   .openapi("OrderLineItem");
@@ -713,10 +747,17 @@ export const Order = z
       description: "As at Capture. `null` for a guest, which is the ordinary path.",
     }),
     currency: z.string().meta({ description: "ISO 4217. Every amount here is in it." }),
-    total: z.int().meta({ description: "What was charged, in minor units." }),
+    total: z.int().meta({
+      description:
+        "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments.",
+    }),
     lineItems: z.array(OrderLineItem).readonly().meta({
       description:
         "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position.",
+    }),
+    adjustments: z.array(OrderAdjustment).readonly().meta({
+      description:
+        "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line.",
     }),
     metadata: Metadata,
     createdAt: z.iso.datetime().meta({

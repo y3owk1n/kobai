@@ -62,10 +62,14 @@ describe("a Cart becomes an Order", () => {
           // Zero until the tax spec replaces `calculate-tax`. The field is here now so that
           // adding tax later is not a change to what an Order means.
           tax: 0,
+          // Core attaches no Adjustment of its own, and says so with an empty list rather than
+          // an absent field — a discount or a surcharge is a line here (ADR-0022).
+          adjustments: [],
           total: 2500,
           metadata: {},
         },
       ],
+      adjustments: [],
       metadata: {},
       createdAt: expect.any(String),
       // Not a debugging nicety: this is what lets a Developer who replaced a Step see that
@@ -75,6 +79,8 @@ describe("a Cart becomes an Order", () => {
         steps: [
           { step: "load-cart", implementation: "load-cart" },
           { step: "price-lines", implementation: "price-lines" },
+          { step: "apply-adjustments", implementation: "apply-adjustments" },
+          { step: "calculate-tax", implementation: "calculate-tax" },
           { step: "capture-order", implementation: "capture-order" },
         ],
       },

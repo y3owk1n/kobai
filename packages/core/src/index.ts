@@ -60,6 +60,9 @@ export type {
  * needs the declaration to measure the replacement against and the types the slot moves.
  */
 export type {
+  AdjustedLine,
+  AdjustedLines,
+  Adjustment,
   CartLineToPlace,
   CartToPlace,
   LoadedCart,
@@ -68,14 +71,23 @@ export type {
   PlaceOrderWorkflow,
   PricedLine,
   PricedLines,
+  TaxedLine,
+  TaxedLines,
 } from "./order/place-order.ts";
 export {
+  applyAdjustments,
+  calculateTax,
   captureOrder,
   loadCart,
   placeOrderWorkflow,
   priceLines,
 } from "./order/place-order.ts";
-export type { Order, OrderLineItem, OrderShopper } from "./order/read.ts";
+export type {
+  Order,
+  OrderAdjustment,
+  OrderLineItem,
+  OrderShopper,
+} from "./order/read.ts";
 export type {
   LoadedPrices,
   PriceCandidate,

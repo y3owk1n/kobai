@@ -546,3 +546,67 @@ export const orderLineItem = pgTable(
 );
 
 export type OrderLineItemRow = typeof orderLineItem.$inferSelect;
+
+/**
+ * An **Adjustment** — a discount or a surcharge, held as its own row (ADR-0022).
+ *
+ * A row rather than a column on the thing it adjusts, and that is the entire decision. An
+ * Adjustment folded into a `unit_amount` leaves an Order recording a price that was never the
+ * price, with no record of what moved it or why, and every figure derived from it — the tax
+ * base, a refund, revenue — computed from a number nobody was charged. ADR-0022 calls that a
+ * retrofit that touches everything, which is why the shape is here before the feature is.
+ *
+ * **It hangs off the Order, and optionally off one of its Line Items.** `order_line_item_id` is
+ * null for an Adjustment on the Order as a whole — a basket-wide voucher, a delivery surcharge —
+ * and set for one that belongs to a single line, which is what makes it part of what that line
+ * came to and so part of what a Return for that line refunds. `order_id` is on both, because
+ * every Adjustment belongs to exactly one Order and reading one should not need a join to find
+ * that out.
+ *
+ * Immutable like everything else about an Order, and carrying `updated_at` for the same reason
+ * `core_order` does: a column nothing should ever move is a tamper detector.
+ */
+export const orderAdjustment = pgTable(
+  "core_order_adjustment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      // An Order's Adjustments are the Order, exactly as its Line Items are.
+      .references(() => order.id, { onDelete: "cascade" }),
+    /** The line this adjusts, or null for an Adjustment on the Order as a whole. */
+    orderLineItemId: uuid("order_line_item_id").references(() => orderLineItem.id, {
+      onDelete: "cascade",
+    }),
+    /**
+     * Where this one sits in the list its Step produced, within its Order or its Line Item.
+     *
+     * Stored because there is nothing else to order by. Capture writes every Adjustment in one
+     * transaction, so `created_at` is identical across all of them and the tie would fall to a
+     * random uuid — an Order would report its Adjustments in a different order every time it
+     * was read, and in a different order from the one they were applied in. Two Steps that each
+     * add a surcharge compose in a definite order, and this is that order, kept.
+     */
+    position: bigint("position", { mode: "number" }).notNull(),
+    /** Machine-readable and the Step's own. Core defines none and validates none. */
+    code: text("code").notNull(),
+    /** For a person — what a Shopper reads on a confirmation and a Merchant in the Admin. */
+    description: text("description").notNull(),
+    /**
+     * **Signed** minor units of the Order's currency: negative discounts, positive surcharges.
+     *
+     * One signed column rather than a kind and a magnitude, so that a total is a sum in both
+     * directions rather than a branch that eventually gets the sign wrong somewhere.
+     */
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Reading an Order reads its Adjustments by `order_id`, which is every view of one.
+    index("core_order_adjustment_order_idx").on(table.orderId),
+  ],
+);
+
+export type OrderAdjustmentRow = typeof orderAdjustment.$inferSelect;
