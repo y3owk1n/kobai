@@ -210,6 +210,60 @@ describe("a Payment against an Order", () => {
   });
 });
 
+/**
+ * A provider that arranges the money instead of taking it — an invoice, a bank transfer, cash at
+ * the counter. It is what the reference Project's `manual` one is, and the reason the Payment
+ * record has to say which of the two happened.
+ */
+const invoiced: PaymentProvider = {
+  name: "invoiced",
+  charge: async () => ({ ok: true, reference: "INV-1", received: false }),
+  refund: async () => {},
+};
+
+describe("a Payment says whether the money actually arrived", () => {
+  it("records money taken as received, for a provider that says nothing about it", async () => {
+    // `ok: true` has meant *the money moved* since the interface shipped, so a provider written
+    // before this field existed keeps meaning that and needs no edit (ADR-0019).
+    const books = ledger();
+    await using kobai = await createTestKobai({ payments: { provider: books.provider } });
+    const cart = await seedTestCart(kobai);
+
+    const response = await place(kobai, cart.apiKey.headers, cart.id);
+
+    await expect(response.json()).resolves.toMatchObject({
+      payment: { provider: "ledger", received: true },
+    });
+  });
+
+  it("records an arrangement as not received, so it is not read as a completed sale", async () => {
+    await using kobai = await createTestKobai({ payments: { provider: invoiced } });
+    const cart = await seedTestCart(kobai, { quantity: 2 });
+
+    const placed = (await (await place(kobai, cart.apiKey.headers, cart.id)).json()) as {
+      id: string;
+    };
+    const read = await kobai.request(`/store/orders/${placed.id}`, {
+      headers: cart.apiKey.headers,
+    });
+
+    // The Order exists and is whole — the arrangement was made, and this is a sale. What it is
+    // not is money in hand, and that is the one thing the record has to keep saying.
+    await expect(read.json()).resolves.toMatchObject({
+      total: 2500,
+      payment: {
+        provider: "invoiced",
+        reference: "INV-1",
+        amount: 2500,
+        received: false,
+      },
+    });
+    await expect(
+      kobai.database.query("select received from core_payment"),
+    ).resolves.toEqual([{ received: false }]);
+  });
+});
+
 describe("what is never charged", () => {
   it("refuses a fraction of a penny before the money moves, not after", async () => {
     // Money is an integer count of the currency's minor unit, and a Step that produced a fraction

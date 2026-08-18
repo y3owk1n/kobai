@@ -35,6 +35,7 @@ import {
   setPrice,
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
+import { listOrders, readOrder } from "../order/read.ts";
 import { readStore } from "../store/read.ts";
 import * as contract from "./contract.ts";
 import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.ts";
@@ -377,6 +378,60 @@ const revokeApiKeyRoute = createRoute({
   },
 });
 
+/**
+ * The Orders this Store has taken — what a Merchant opens the Admin to see (spec story 56).
+ *
+ * `order:read`, and not `catalog:read`: the books and the catalog are different powers, and a
+ * colleague who maintains Products has no business reading what every Shopper paid. ADR-0027
+ * settled that this is one permission string on a Role rather than a rule about *which* Orders,
+ * so the gate answers once, before the handler, and never walks the rows it is about to return.
+ *
+ * There is no route beside these two that writes one. An Order is immutable (ADR-0009), and the
+ * one that places it is on the store surface where a storefront can reach it.
+ */
+const listOrdersRoute = createRoute({
+  method: "get",
+  path: "/orders",
+  summary: "List Orders",
+  description:
+    "Newest first, unpaginated, and without Line Items — open one for those. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.orderRead)] as const,
+  responses: {
+    200: json("Every Order this Store has taken.", contract.OrderList),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * One Order, opened — the same record the storefront that placed it can read.
+ *
+ * Byte for byte the same shape `GET /store/orders/{id}` answers with, deliberately: an Order is
+ * one record and a Merchant reading it over the phone to a Shopper should be looking at what
+ * the Shopper is looking at. What differs is the credential, not the answer.
+ */
+const readOrderRoute = createRoute({
+  method: "get",
+  path: "/orders/{id}",
+  summary: "Read an Order",
+  description:
+    "Its Line Items as they were snapshotted at Capture, its Adjustments, its totals, its Order number and the Payment recorded against it. Nothing here is joined to the catalog, so renaming a Product does not rewrite it (ADR-0009).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.orderRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Order.", contract.Order),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Order exists.", contract.OrderRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv> {
   const admin = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
 
@@ -466,6 +521,25 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     const created = await setPrice(deps.db, c.req.valid("param").id, c.req.valid("json"));
     if (!created.ok) return refused(c, created, PRICE_STATUS);
     return c.json(created.price, 201);
+  });
+
+  guarded.openapi(listOrdersRoute, async (c) => {
+    return c.json({ orders: await listOrders(deps.db) }, 200);
+  });
+
+  guarded.openapi(readOrderRoute, async (c) => {
+    const found = await readOrder(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Order exists. An Order is addressed by the identifier Capture reported, which is not its Order number.",
+          reason: "order-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
   });
 
   guarded.openapi(createApiKeyRoute, async (c) => {

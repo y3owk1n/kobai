@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import type { Queryable } from "../db/client.ts";
 import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -84,11 +84,29 @@ export type Payment = {
   /** What was taken, in minor units of the Order's currency. */
   readonly amount: number;
   readonly currency: string;
+  /**
+   * Whether the money **arrived**, or was only arranged for.
+   *
+   * `true` is a card charged; `false` is a provider that arranges out of band — an invoice, a
+   * bank transfer, cash at the counter — so this Order is real and nobody has been paid. It is
+   * the provider's answer at Capture and is never updated: an Order is immutable (ADR-0009),
+   * and collecting an arranged payment happens where it always did, outside kobai.
+   */
+  readonly received: boolean;
   /** When the money moved, which is within the same request that captured the Order. */
   readonly createdAt: string;
 };
 
-export type Order = {
+/**
+ * An Order as a **list** reports it — everything but its lines.
+ *
+ * The split a Product and a `ProductDetail` make, and for the same reason: a list is not a
+ * detail view, and a Merchant scanning what has sold is looking for the number, the money and
+ * the day rather than for every line of every Order at once. `payment` is here and not in the
+ * detail alone, deliberately — whether the money actually arrived is exactly what somebody
+ * reading a list of Orders is looking down the column for.
+ */
+export type OrderSummary = {
   readonly id: string;
   /**
    * The **Order number** — what a Shopper reads over the phone, and not the identifier.
@@ -102,6 +120,31 @@ export type Order = {
   readonly currency: string;
   /** What was charged, in minor units of `currency`. */
   readonly total: number;
+  /**
+   * The money taken for this Order, or `null` if none is recorded against it.
+   *
+   * `place-order` takes payment before it captures and writes both in one transaction, so an
+   * Order **this** version placed always has one — a declined payment leaves no Order at all.
+   * `null` is what an Order placed before the Payment record existed reads as, which is every
+   * Order already in a database kobai has just been upgraded in.
+   *
+   * Whether the money actually arrived is {@link Payment.received}, and that is the different
+   * question: a Payment is present and unreceived when a provider arranged the money rather than
+   * taking it, which is a real sale nobody has been paid for.
+   */
+  readonly payment: Payment | null;
+  /**
+   * The moment of **Capture**, when this Order came into existence and became immutable.
+   *
+   * There is deliberately no `updatedAt` beside it. An Order is never edited (ADR-0009), so a
+   * second timestamp on this shape would be a field whose only honest value is the first one,
+   * and the first thing anybody would take as permission to write to the row.
+   */
+  readonly createdAt: string;
+};
+
+/** An Order opened: everything a list carries, and what was actually bought. */
+export type Order = OrderSummary & {
   /**
    * **In SKU order**, the way a Product reports its Variants — never in the order they were
    * added to the Cart.
@@ -121,25 +164,59 @@ export type Order = {
    */
   readonly adjustments: readonly OrderAdjustment[];
   readonly metadata: Record<string, unknown>;
-  /**
-   * The money taken for this Order, or `null` if none is recorded against it.
-   *
-   * `place-order` takes payment before it captures and writes both in one transaction, so an
-   * Order **this** version placed always has one — a declined payment leaves no Order at all.
-   * `null` is what an Order placed before the Payment record existed reads as, which is every
-   * Order already in a database kobai has just been upgraded in, and it is the difference a
-   * Merchant needs to see between an Order somebody has settled and one nobody has.
-   */
-  readonly payment: Payment | null;
-  /**
-   * The moment of **Capture**, when this Order came into existence and became immutable.
-   *
-   * There is deliberately no `updatedAt` beside it. An Order is never edited (ADR-0009), so a
-   * second timestamp on this shape would be a field whose only honest value is the first one,
-   * and the first thing anybody would take as permission to write to the row.
-   */
-  readonly createdAt: string;
 };
+
+/**
+ * Every Order, newest first — what the Admin lists (spec story 56).
+ *
+ * Unpaginated, exactly as `listProducts` is and for the same reason: a page parameter is an
+ * interface promise, and inventing one before there is a Store with enough Orders to need it
+ * would fix its shape by guesswork. The envelope the route answers in (`{ orders }`) is what
+ * lets pagination arrive beside the list rather than by breaking the response.
+ *
+ * The Payments come back in a second query rather than a join, so that an Order with none is
+ * an absence from a map rather than a row of nulls to interpret — and so that this reads the
+ * same way {@link readOrder} does.
+ */
+export async function listOrders(db: Queryable): Promise<OrderSummary[]> {
+  const rows = await db
+    .select({
+      id: order.id,
+      number: order.number,
+      shopperEmail: order.shopperEmail,
+      shopperExternalId: order.shopperExternalId,
+      currency: order.currency,
+      total: order.total,
+      createdAt: order.createdAt,
+    })
+    .from(order)
+    // `id` breaks the tie, so two Orders captured in the same instant still come back in one
+    // stable order rather than in whichever order Postgres happened to read them.
+    .orderBy(desc(order.createdAt), desc(order.id));
+
+  if (rows.length === 0) return [];
+
+  const payments = await db
+    .select(paymentColumns)
+    .from(payment)
+    .where(
+      inArray(
+        payment.orderId,
+        rows.map((row) => row.id),
+      ),
+    );
+  const taken = new Map(payments.map((row) => [row.orderId, paymentOf(row)]));
+
+  return rows.map((row) => ({
+    id: row.id,
+    number: row.number,
+    shopper: shopperOf(row),
+    currency: row.currency,
+    total: row.total,
+    payment: taken.get(row.id) ?? null,
+    createdAt: row.createdAt.toISOString(),
+  }));
+}
 
 /**
  * One Order with its Line Items, or `undefined` when there is no such Order — including when
@@ -232,14 +309,7 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
 
   // At most one, in DDL — see `core_payment`'s unique index on `order_id`.
   const [paid] = await db
-    .select({
-      id: payment.id,
-      provider: payment.provider,
-      reference: payment.reference,
-      amount: payment.amount,
-      currency: payment.currency,
-      createdAt: payment.createdAt,
-    })
+    .select(paymentColumns)
     .from(payment)
     .where(eq(payment.orderId, row.id))
     .limit(1);
@@ -252,17 +322,62 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
   return {
     id: row.id,
     number: row.number,
-    shopper:
-      row.shopperEmail === null
-        ? null
-        : { email: row.shopperEmail, externalId: row.shopperExternalId },
+    shopper: shopperOf(row),
     currency: row.currency,
     total: row.total,
     lineItems: lines.map((line) => ({ ...line, adjustments: adjustmentsOf(line.id) })),
     // The Order's own: the ones attached to no line at all.
     adjustments: adjustmentsOf(null),
     metadata: row.metadata,
-    payment: paid ? { ...paid, createdAt: paid.createdAt.toISOString() } : null,
+    payment: paid ? paymentOf(paid) : null,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/**
+ * What a Payment is read as, in one place, because two readers answer with the same shape.
+ *
+ * `orderId` is selected and not reported: the list needs it to say which Order each Payment
+ * belongs to, and a caller already holding the Order has no use for it.
+ */
+const paymentColumns = {
+  orderId: payment.orderId,
+  id: payment.id,
+  provider: payment.provider,
+  reference: payment.reference,
+  amount: payment.amount,
+  currency: payment.currency,
+  received: payment.received,
+  createdAt: payment.createdAt,
+} as const;
+
+/**
+ * One row as a caller reads it: the timestamp as an ISO string, and `orderId` left behind.
+ *
+ * Field by field rather than by spread, because a spread would carry `orderId` into a shape that
+ * does not have one — the row is what the database holds and the {@link Payment} is what is
+ * promised, and they are deliberately not the same object.
+ */
+function paymentOf(
+  row: Omit<Payment, "createdAt"> & { readonly createdAt: Date },
+): Payment {
+  return {
+    id: row.id,
+    provider: row.provider,
+    reference: row.reference,
+    amount: row.amount,
+    currency: row.currency,
+    received: row.received,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** `null` for a guest, which is the ordinary case — Core assumes a Shopper nowhere. */
+function shopperOf(row: {
+  readonly shopperEmail: string | null;
+  readonly shopperExternalId: string | null;
+}): OrderShopper | null {
+  return row.shopperEmail === null
+    ? null
+    : { email: row.shopperEmail, externalId: row.shopperExternalId };
 }

@@ -756,18 +756,22 @@ export const Payment = z
       description: "What was taken, in minor units of `currency` — the Order's total.",
     }),
     currency: z.string().meta({ description: "ISO 4217." }),
+    received: z.boolean().meta({
+      description:
+        "Whether the money **arrived**, or was only arranged for. `true` is a card charged or a transfer taken; `false` is a provider that arranges payment out of band — an invoice, a bank transfer, cash at the counter — so the Order is real and nobody has been paid yet. It is what the provider said at Capture and is never updated afterwards: an Order is immutable, and collecting an arranged payment happens outside kobai.",
+    }),
     createdAt: z.iso.datetime(),
   })
   .openapi("Payment");
 
 /**
- * An Order — the immutable financial record of a completed purchase.
+ * An Order as a **list** reports it — everything but what was bought.
  *
- * There is no `updatedAt`, deliberately: an Order is never edited (ADR-0009), so a second
- * timestamp would be a field whose only honest value is `createdAt` and the first thing
- * anybody would read as permission to write to the record.
+ * The split `Product` and `ProductDetail` make, for the same reason: a list is not a detail
+ * view. `payment` is here rather than in the detail alone, because whether the money actually
+ * arrived is what somebody reading a list of Orders is looking down the column for.
  */
-export const Order = z
+export const OrderSummary = z
   .object({
     id: z.uuid(),
     number: z.int().meta({
@@ -782,24 +786,44 @@ export const Order = z
       description:
         "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments.",
     }),
-    lineItems: z.array(OrderLineItem).readonly().meta({
-      description:
-        "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position.",
-    }),
-    adjustments: z.array(OrderAdjustment).readonly().meta({
-      description:
-        "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line.",
-    }),
-    metadata: Metadata,
     payment: Payment.nullable().meta({
       description:
-        "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as, and it is the difference between an Order somebody has settled and one nobody has.",
+        "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks.",
     }),
     createdAt: z.iso.datetime().meta({
       description: "The moment of Capture, when this Order became immutable.",
     }),
   })
-  .openapi("Order");
+  .openapi("OrderSummary");
+
+/**
+ * An Order — the immutable financial record of a completed purchase.
+ *
+ * There is no `updatedAt`, deliberately: an Order is never edited (ADR-0009), so a second
+ * timestamp would be a field whose only honest value is `createdAt` and the first thing
+ * anybody would read as permission to write to the record.
+ */
+export const Order = OrderSummary.extend({
+  lineItems: z.array(OrderLineItem).readonly().meta({
+    description:
+      "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position.",
+  }),
+  adjustments: z.array(OrderAdjustment).readonly().meta({
+    description:
+      "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line.",
+  }),
+  metadata: Metadata,
+}).openapi("Order");
+
+/**
+ * The list, in an envelope — the same shape, and the same reason, as `ProductList`.
+ *
+ * Unpaginated today. The envelope is why pagination can arrive beside the list rather than by
+ * breaking this response.
+ */
+export const OrderList = z
+  .object({ orders: z.array(OrderSummary).readonly() })
+  .openapi("OrderList");
 
 /**
  * The Order, and the Steps that produced it.

@@ -460,6 +460,98 @@ export interface paths {
       };
     };
   };
+  "/admin/orders": {
+    /**
+     * List Orders
+     * @description Newest first, unpaginated, and without Line Items — open one for those. The envelope is why pagination can arrive beside the list rather than by breaking this response.
+     */
+    get: {
+      responses: {
+        /** @description Every Order this Store has taken. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["OrderList"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/orders/{id}": {
+    /**
+     * Read an Order
+     * @description Its Line Items as they were snapshotted at Capture, its Adjustments, its totals, its Order number and the Payment recorded against it. Nothing here is joined to the catalog, so renaming a Product does not rewrite it (ADR-0009).
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Order. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Order"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Order exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["OrderRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/api-keys": {
     /**
      * List API keys
@@ -1345,6 +1437,105 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    OrderList: {
+      orders: components["schemas"]["OrderSummary"][];
+    };
+    OrderSummary: {
+      /** Format: uuid */
+      id: string;
+      /** @description The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's. */
+      number: number;
+      shopper: components["schemas"]["CartShopper"];
+      /** @description ISO 4217. Every amount here is in it. */
+      currency: string;
+      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments. */
+      total: number;
+      payment: components["schemas"]["Payment"];
+      /**
+       * Format: date-time
+       * @description The moment of Capture, when this Order became immutable.
+       */
+      createdAt: string;
+    };
+    /** @description As at Capture. `null` for a guest, which is the ordinary path. */
+    CartShopper: ({
+      /** @description The reference's key, as the storefront wrote it. */
+      email: string;
+      /** @description This Shopper in whatever system the storefront authenticates against. */
+      externalId: string | null;
+    }) | null;
+    /** @description The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks. */
+    Payment: {
+      /** Format: uuid */
+      id: string;
+      /** @description What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money. */
+      provider: string;
+      /** @description The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against. */
+      reference: string;
+      /** @description What was taken, in minor units of `currency` — the Order's total. */
+      amount: number;
+      /** @description ISO 4217. */
+      currency: string;
+      /** @description Whether the money **arrived**, or was only arranged for. `true` is a card charged or a transfer taken; `false` is a provider that arranges payment out of band — an invoice, a bank transfer, cash at the counter — so the Order is real and nobody has been paid yet. It is what the provider said at Capture and is never updated afterwards: an Order is immutable, and collecting an arranged payment happens outside kobai. */
+      received: boolean;
+      /** Format: date-time */
+      createdAt: string;
+    } | null;
+    Order: components["schemas"]["OrderSummary"] & {
+      /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
+      lineItems: components["schemas"]["OrderLineItem"][];
+      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
+      adjustments: components["schemas"]["OrderAdjustment"][];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    OrderLineItem: {
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: uuid
+       * @description The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it.
+       */
+      variantId: string | null;
+      /** @description The Product's title as at Capture. */
+      title: string;
+      /** @description The Variant's SKU as at Capture. */
+      sku: string;
+      /** @description What one of it cost, in minor units — 1250 is USD 12.50. */
+      unitAmount: number;
+      quantity: number;
+      /** @description Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means. */
+      tax: number;
+      /** @description The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them. */
+      adjustments: components["schemas"]["OrderAdjustment"][];
+      /** @description What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`. */
+      total: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    OrderAdjustment: {
+      /** Format: uuid */
+      id: string;
+      /** @description Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set. */
+      code: string;
+      /** @description For a person to read. */
+      description: string;
+      /** @description **Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way. */
+      amount: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    OrderRefusal: {
+      error: string;
+      /** @enum {string} */
+      reason: "order-not-found";
+    };
     IssuedApiKey: {
       /** Format: uuid */
       id: string;
@@ -1443,13 +1634,6 @@ export interface components {
       /** Format: date-time */
       updatedAt: string;
     };
-    /** @description `null` for a guest, which is the ordinary path. */
-    CartShopper: ({
-      /** @description The reference's key, as the storefront wrote it. */
-      email: string;
-      /** @description This Shopper in whatever system the storefront authenticates against. */
-      externalId: string | null;
-    }) | null;
     CartLineItem: {
       /** Format: uuid */
       id: string;
@@ -1504,86 +1688,6 @@ export interface components {
         [key: string]: unknown;
       };
     };
-    Order: {
-      /** Format: uuid */
-      id: string;
-      /** @description The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's. */
-      number: number;
-      shopper: components["schemas"]["CartShopper"];
-      /** @description ISO 4217. Every amount here is in it. */
-      currency: string;
-      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments. */
-      total: number;
-      /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
-      lineItems: components["schemas"]["OrderLineItem"][];
-      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
-      adjustments: components["schemas"]["OrderAdjustment"][];
-      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
-      metadata: {
-        [key: string]: unknown;
-      };
-      payment: components["schemas"]["Payment"];
-      /**
-       * Format: date-time
-       * @description The moment of Capture, when this Order became immutable.
-       */
-      createdAt: string;
-    };
-    OrderLineItem: {
-      /** Format: uuid */
-      id: string;
-      /**
-       * Format: uuid
-       * @description The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it.
-       */
-      variantId: string | null;
-      /** @description The Product's title as at Capture. */
-      title: string;
-      /** @description The Variant's SKU as at Capture. */
-      sku: string;
-      /** @description What one of it cost, in minor units — 1250 is USD 12.50. */
-      unitAmount: number;
-      quantity: number;
-      /** @description Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means. */
-      tax: number;
-      /** @description The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them. */
-      adjustments: components["schemas"]["OrderAdjustment"][];
-      /** @description What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`. */
-      total: number;
-      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
-      metadata: {
-        [key: string]: unknown;
-      };
-    };
-    OrderAdjustment: {
-      /** Format: uuid */
-      id: string;
-      /** @description Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set. */
-      code: string;
-      /** @description For a person to read. */
-      description: string;
-      /** @description **Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way. */
-      amount: number;
-      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
-      metadata: {
-        [key: string]: unknown;
-      };
-    };
-    /** @description The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as, and it is the difference between an Order somebody has settled and one nobody has. */
-    Payment: {
-      /** Format: uuid */
-      id: string;
-      /** @description What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money. */
-      provider: string;
-      /** @description The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against. */
-      reference: string;
-      /** @description What was taken, in minor units of `currency` — the Order's total. */
-      amount: number;
-      /** @description ISO 4217. */
-      currency: string;
-      /** Format: date-time */
-      createdAt: string;
-    } | null;
     PlacedOrder: components["schemas"]["Order"] & {
       workflow: {
         name: string;
@@ -1609,11 +1713,6 @@ export interface components {
     PlaceOrderRequest: {
       /** @description The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020). */
       cartId: string;
-    };
-    OrderRefusal: {
-      error: string;
-      /** @enum {string} */
-      reason: "order-not-found";
     };
   };
   responses: never;

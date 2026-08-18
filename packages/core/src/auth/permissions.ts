@@ -30,6 +30,16 @@ export const PERMISSIONS = {
    * and a new permission goes at the end wherever it would read best.
    */
   apiKeyRead: "api-key:read",
+  /**
+   * Read the Orders this Store has taken — the list, and one opened.
+   *
+   * Its own permission rather than a second use of `catalog:read`, because the books and the
+   * catalog are different powers: a colleague who maintains Products has no business reading
+   * what every Shopper paid and who they are. There is no `order:write` beside it and there
+   * never will be from here — an Order is immutable (ADR-0009), so there is nothing on this
+   * surface for one to gate.
+   */
+  orderRead: "order:read",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
