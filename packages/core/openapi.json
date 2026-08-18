@@ -565,6 +565,282 @@
           "amount"
         ]
       },
+      "OrderList": {
+        "type": "object",
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderSummary"
+            }
+          }
+        },
+        "required": [
+          "orders"
+        ]
+      },
+      "OrderSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "description": "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's."
+          },
+          "shopper": {
+            "$ref": "#/components/schemas/CartShopper"
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217. Every amount here is in it."
+          },
+          "total": {
+            "type": "integer",
+            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments."
+          },
+          "payment": {
+            "$ref": "#/components/schemas/Payment"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The moment of Capture, when this Order became immutable."
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "shopper",
+          "currency",
+          "total",
+          "payment",
+          "createdAt"
+        ]
+      },
+      "CartShopper": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The reference's key, as the storefront wrote it."
+          },
+          "externalId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This Shopper in whatever system the storefront authenticates against."
+          }
+        },
+        "required": [
+          "email",
+          "externalId"
+        ],
+        "description": "As at Capture. `null` for a guest, which is the ordinary path."
+      },
+      "Payment": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string",
+            "description": "What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money."
+          },
+          "reference": {
+            "type": "string",
+            "description": "The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "What was taken, in minor units of `currency` — the Order's total."
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217."
+          },
+          "received": {
+            "type": "boolean",
+            "description": "Whether the money **arrived**, or was only arranged for. `true` is a card charged or a transfer taken; `false` is a provider that arranges payment out of band — an invoice, a bank transfer, cash at the counter — so the Order is real and nobody has been paid yet. It is what the provider said at Capture and is never updated afterwards: an Order is immutable, and collecting an arranged payment happens outside kobai."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "reference",
+          "amount",
+          "currency",
+          "received",
+          "createdAt"
+        ],
+        "description": "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks."
+      },
+      "Order": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OrderSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "lineItems": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OrderLineItem"
+                },
+                "description": "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position."
+              },
+              "adjustments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OrderAdjustment"
+                },
+                "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {},
+                "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+              }
+            },
+            "required": [
+              "lineItems",
+              "adjustments",
+              "metadata"
+            ]
+          }
+        ]
+      },
+      "OrderLineItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "variantId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it."
+          },
+          "title": {
+            "type": "string",
+            "description": "The Product's title as at Capture."
+          },
+          "sku": {
+            "type": "string",
+            "description": "The Variant's SKU as at Capture."
+          },
+          "unitAmount": {
+            "type": "integer",
+            "description": "What one of it cost, in minor units — 1250 is USD 12.50."
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "tax": {
+            "type": "integer",
+            "description": "Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means."
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderAdjustment"
+            },
+            "description": "The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them."
+          },
+          "total": {
+            "type": "integer",
+            "description": "What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "variantId",
+          "title",
+          "sku",
+          "unitAmount",
+          "quantity",
+          "tax",
+          "adjustments",
+          "total",
+          "metadata"
+        ]
+      },
+      "OrderAdjustment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set."
+          },
+          "description": {
+            "type": "string",
+            "description": "For a person to read."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "**Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "description",
+          "amount",
+          "metadata"
+        ]
+      },
+      "OrderRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "order-not-found"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "IssuedApiKey": {
         "type": "object",
         "properties": {
@@ -819,7 +1095,14 @@
             "description": "The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart."
           },
           "shopper": {
-            "$ref": "#/components/schemas/CartShopper"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CartShopper"
+              },
+              {
+                "description": "`null` for a guest, which is the ordinary path."
+              }
+            ]
           },
           "lineItems": {
             "type": "array",
@@ -865,30 +1148,6 @@
           "createdAt",
           "updatedAt"
         ]
-      },
-      "CartShopper": {
-        "type": [
-          "object",
-          "null"
-        ],
-        "properties": {
-          "email": {
-            "type": "string",
-            "description": "The reference's key, as the storefront wrote it."
-          },
-          "externalId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "This Shopper in whatever system the storefront authenticates against."
-          }
-        },
-        "required": [
-          "email",
-          "externalId"
-        ],
-        "description": "`null` for a guest, which is the ordinary path."
       },
       "CartLineItem": {
         "type": "object",
@@ -1037,214 +1296,6 @@
           }
         }
       },
-      "Order": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "number": {
-            "type": "integer",
-            "description": "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's."
-          },
-          "shopper": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CartShopper"
-              },
-              {
-                "description": "As at Capture. `null` for a guest, which is the ordinary path."
-              }
-            ]
-          },
-          "currency": {
-            "type": "string",
-            "description": "ISO 4217. Every amount here is in it."
-          },
-          "total": {
-            "type": "integer",
-            "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments."
-          },
-          "lineItems": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OrderLineItem"
-            },
-            "description": "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position."
-          },
-          "adjustments": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OrderAdjustment"
-            },
-            "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": {},
-            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
-          },
-          "payment": {
-            "$ref": "#/components/schemas/Payment"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "description": "The moment of Capture, when this Order became immutable."
-          }
-        },
-        "required": [
-          "id",
-          "number",
-          "shopper",
-          "currency",
-          "total",
-          "lineItems",
-          "adjustments",
-          "metadata",
-          "payment",
-          "createdAt"
-        ]
-      },
-      "OrderLineItem": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "variantId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "The Variant this line was for, for navigation only. `null` once it has been deleted — everything a person reads is beside it."
-          },
-          "title": {
-            "type": "string",
-            "description": "The Product's title as at Capture."
-          },
-          "sku": {
-            "type": "string",
-            "description": "The Variant's SKU as at Capture."
-          },
-          "unitAmount": {
-            "type": "integer",
-            "description": "What one of it cost, in minor units — 1250 is USD 12.50."
-          },
-          "quantity": {
-            "type": "integer"
-          },
-          "tax": {
-            "type": "integer",
-            "description": "Tax on this line, in minor units. Zero until a tax Step is wired; present so that adding tax later is not a change to what an Order means."
-          },
-          "adjustments": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OrderAdjustment"
-            },
-            "description": "The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them."
-          },
-          "total": {
-            "type": "integer",
-            "description": "What this line came to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`."
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": {},
-            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
-          }
-        },
-        "required": [
-          "id",
-          "variantId",
-          "title",
-          "sku",
-          "unitAmount",
-          "quantity",
-          "tax",
-          "adjustments",
-          "total",
-          "metadata"
-        ]
-      },
-      "OrderAdjustment": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "code": {
-            "type": "string",
-            "description": "Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set."
-          },
-          "description": {
-            "type": "string",
-            "description": "For a person to read."
-          },
-          "amount": {
-            "type": "integer",
-            "description": "**Signed** minor units: negative discounts, positive surcharges. The total accounts for it either way."
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": {},
-            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
-          }
-        },
-        "required": [
-          "id",
-          "code",
-          "description",
-          "amount",
-          "metadata"
-        ]
-      },
-      "Payment": {
-        "type": [
-          "object",
-          "null"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "provider": {
-            "type": "string",
-            "description": "What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money."
-          },
-          "reference": {
-            "type": "string",
-            "description": "The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against."
-          },
-          "amount": {
-            "type": "integer",
-            "description": "What was taken, in minor units of `currency` — the Order's total."
-          },
-          "currency": {
-            "type": "string",
-            "description": "ISO 4217."
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "provider",
-          "reference",
-          "amount",
-          "currency",
-          "createdAt"
-        ],
-        "description": "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as, and it is the difference between an Order somebody has settled and one nobody has."
-      },
       "PlacedOrder": {
         "allOf": [
           {
@@ -1345,24 +1396,6 @@
         },
         "required": [
           "cartId"
-        ]
-      },
-      "OrderRefusal": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "order-not-found"
-            ]
-          }
-        },
-        "required": [
-          "error",
-          "reason"
         ]
       }
     },
@@ -2063,6 +2096,154 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/orders": {
+      "get": {
+        "summary": "List Orders",
+        "description": "Newest first, unpaginated, and without Line Items — open one for those. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every Order this Store has taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/orders/{id}": {
+      "get": {
+        "summary": "Read an Order",
+        "description": "Its Line Items as they were snapshotted at Capture, its Adjustments, its totals, its Order number and the Payment recorded against it. Nothing here is joined to the catalog, so renaming a Product does not rewrite it (ADR-0009).",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Order exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderRefusal"
                 }
               }
             }

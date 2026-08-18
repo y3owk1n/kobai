@@ -1,0 +1,1 @@
+ALTER TABLE "core_payment" ADD COLUMN "received" boolean DEFAULT true NOT NULL;

@@ -77,11 +77,18 @@ import type { OrderShopper } from "../order/read.ts";
  * the query string is a finding about the route rather than something to work around here.
  *
  * **What kobai does not do is send the Shopper anywhere itself.** An Order that existed while a
- * Shopper was still at their bank would be an unpaid Order, and ADR-0009's immutable record has
- * nowhere to put "not paid yet" — settling it later needs a payment status, a route to resume on,
- * and a webhook to hear the bank on, which is events (#70) and is out of scope by decision. So
- * the rule this interface keeps is the simple one: **a placed Order is a paid Order**, and a
- * payment that has not happened yet is a request that has not been made yet.
+ * Shopper was still at their bank would be an Order waiting on an answer nobody has, and settling
+ * it later needs a route to resume on and a webhook to hear the bank on, which is events (#70)
+ * and is out of scope by decision. So the rule this interface keeps is the simple one: **a placed
+ * Order is one whose payment has been asked for and answered**, and a payment that has not
+ * happened yet is a request that has not been made yet.
+ *
+ * The answer is not always *the money moved*, and {@link PaymentOutcome.received} is where the
+ * difference is kept. A provider that arranges payment out of band has answered — the
+ * arrangement is made, the Order is real — and the money has not arrived, which is a fact about
+ * this purchase and not a state it will be moved through. Nothing updates it: an Order is
+ * immutable (ADR-0009), so an unreceived Payment stays one and collecting is a Merchant's job,
+ * out of band, exactly where it was before kobai wrote the fact down.
  *
  * That is a decision this shape can revisit without breaking anybody, which is why it is safe to
  * take now. {@link PaymentOutcome} is *produced* by a provider and read by Core, so Core may grow
@@ -102,7 +109,7 @@ export type PaymentProvider = {
    */
   readonly name: string;
   /**
-   * Takes the money, or declines.
+   * Takes the money, or declines — or says it has arranged for it rather than taken it.
    *
    * **Declining is a value, not a throw.** A card refused is an ordinary answer that a storefront
    * acts on — Core turns it into `payment-declined` at 402 and no Order is written — while a
@@ -163,6 +170,27 @@ export type PaymentOutcome =
        * Merchant quotes to reconcile an Order against the provider's own books.
        */
       readonly reference: string;
+      /**
+       * Whether the money **has actually arrived**, or was only arranged for.
+       *
+       * Defaults to `true`, which is what `ok: true` has meant since this interface shipped —
+       * *takes the money*. A provider written before this field existed keeps meaning exactly
+       * that and needs no edit, and a card processor that charged a card has nothing to say
+       * here.
+       *
+       * `false` is for a provider that arranges the money instead of taking it: an invoice, a
+       * bank transfer, cash at the counter. The reference Project's `manual` provider is
+       * precisely that one — it moves nothing and records that somebody will be asked — and
+       * without this the Order it produces is indistinguishable from a completed sale in the
+       * Admin, which is the mistake it exists to prevent.
+       *
+       * **It is a record of what happened, not a state to be moved through.** Core writes it at
+       * Capture and never updates it: an Order is immutable (ADR-0009), and a payment lifecycle
+       * — settling later, hearing a bank on a webhook, resuming a redirect — needs events (#70)
+       * and belongs to the specs that own it. What a Merchant does with an unreceived Payment is
+       * collect it, out of band, exactly as they did before kobai recorded the fact.
+       */
+      readonly received?: boolean;
     }
   | {
       readonly ok: false;

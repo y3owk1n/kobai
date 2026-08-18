@@ -79,6 +79,9 @@ describe("a Cart becomes an Order", () => {
         reference: expect.any(String),
         amount: 2500,
         currency: "USD",
+        // The money arrived, because this provider took it. A provider that arranges payment
+        // out of band says so and this reads `false` — see `payment/payment.test.ts`.
+        received: true,
         createdAt: expect.any(String),
       },
       createdAt: expect.any(String),

@@ -666,6 +666,20 @@ export const payment = pgTable(
     /** What was taken, in the minor units of `currency`. The Order's total, as at Capture. */
     amount: bigint("amount", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
+    /**
+     * Whether the money **arrived**, or was only arranged for — what the provider said when it
+     * answered, and never touched again.
+     *
+     * `true` by default because that is what `ok: true` has always meant on `PaymentOutcome`:
+     * *takes the money*. A provider that arranges instead of taking — an invoice, a bank
+     * transfer, the reference Project's `manual` one — answers `received: false`, and this is
+     * where that stops being lost. Without it every Order in the Admin looks settled, and a
+     * Merchant cannot tell a completed sale from one still owed for.
+     *
+     * A record and not a status: an Order is immutable (ADR-0009), so nothing in Core moves this
+     * afterwards, and collecting the money is still something a Merchant does out of band.
+     */
+    received: boolean("received").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

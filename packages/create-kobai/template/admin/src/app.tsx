@@ -5,6 +5,8 @@ import { Separator } from "@/components/ui/separator";
 import { createAdminClient } from "@/lib/kobai";
 import { clearPreviewKey } from "@/lib/preview-key";
 import { ApiKeys } from "@/screens/api-keys";
+import { OrderScreen } from "@/screens/order";
+import { Orders } from "@/screens/orders";
 import { ProductScreen } from "@/screens/product";
 import { Products } from "@/screens/products";
 import { SignIn } from "@/screens/sign-in";
@@ -29,7 +31,31 @@ import { SignIn } from "@/screens/sign-in";
 type Screen =
   | { readonly name: "products" }
   | { readonly name: "product"; readonly id: string }
+  | { readonly name: "orders" }
+  | { readonly name: "order"; readonly id: string }
   | { readonly name: "api-keys" };
+
+/** The three a Merchant switches between. A detail screen is reached from its list. */
+const SECTIONS = [
+  { screen: { name: "products" }, label: "Products" },
+  { screen: { name: "orders" }, label: "Orders" },
+  { screen: { name: "api-keys" }, label: "API keys" },
+] as const satisfies readonly { screen: Screen; label: string }[];
+
+type Section = (typeof SECTIONS)[number]["screen"]["name"];
+
+/**
+ * Which section a screen belongs to, so a detail view keeps its list highlighted.
+ *
+ * Said in full rather than by matching a prefix on the name: `product` is not a prefix of
+ * `products` in the direction that would work, and a comparison that happened to be true today
+ * is not the kind of thing to leave holding up navigation.
+ */
+function sectionOf(screen: Screen): Section {
+  if (screen.name === "product") return "products";
+  if (screen.name === "order") return "orders";
+  return screen.name;
+}
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -95,20 +121,16 @@ export function App() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="font-medium">kobai Admin</span>
-          <Button
-            size="sm"
-            variant={screen.name === "api-keys" ? "ghost" : "secondary"}
-            onClick={() => setScreen({ name: "products" })}
-          >
-            Products
-          </Button>
-          <Button
-            size="sm"
-            variant={screen.name === "api-keys" ? "secondary" : "ghost"}
-            onClick={() => setScreen({ name: "api-keys" })}
-          >
-            API keys
-          </Button>
+          {SECTIONS.map((section) => (
+            <Button
+              key={section.screen.name}
+              size="sm"
+              variant={sectionOf(screen) === section.screen.name ? "secondary" : "ghost"}
+              onClick={() => setScreen(section.screen)}
+            >
+              {section.label}
+            </Button>
+          ))}
         </div>
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground text-sm">{session.merchant.email}</span>
@@ -128,6 +150,16 @@ export function App() {
           client={client}
           id={screen.id}
           onBack={() => setScreen({ name: "products" })}
+        />
+      ) : null}
+      {screen.name === "orders" ? (
+        <Orders client={client} onOpen={(id) => setScreen({ name: "order", id })} />
+      ) : null}
+      {screen.name === "order" ? (
+        <OrderScreen
+          client={client}
+          id={screen.id}
+          onBack={() => setScreen({ name: "orders" })}
         />
       ) : null}
       {screen.name === "api-keys" ? <ApiKeys client={client} /> : null}

@@ -221,6 +221,15 @@ export type TakenPayment = {
   /** Minor units of `currency` — what was actually charged, which is the Order's total. */
   readonly amount: number;
   readonly currency: string;
+  /**
+   * Whether the money arrived, or was only arranged for — the provider's own answer.
+   *
+   * `true` unless a provider said otherwise, because `ok: true` has meant *takes the money*
+   * since {@link PaymentProvider} shipped. A provider that arranges instead — an invoice, a bank
+   * transfer, the reference Project's `manual` one — answers `received: false`, and this is what
+   * carries that as far as the record.
+   */
+  readonly received: boolean;
 };
 
 /** What `take-payment` produces and `capture-order` writes: the Order, and the money for it. */
@@ -496,6 +505,9 @@ export const takePayment = defineStep(
       reference: outcome.reference,
       amount: request.amount,
       currency: request.currency,
+      // Silence means the money moved, which is what `ok: true` has meant all along — so a
+      // provider written before the field existed keeps meaning it and needs no edit (ADR-0019).
+      received: outcome.received ?? true,
     };
     // Recorded before the Step returns, so the compensation can find it however the run ends
     // after this line — including a Capture that never got as far as writing anything down.
@@ -615,6 +627,7 @@ export const captureOrder = defineStep(
           reference: input.payment.reference,
           amount: input.payment.amount,
           currency: input.payment.currency,
+          received: input.payment.received,
         });
 
         const captured = await readOrder(tx, written.id);

@@ -40,7 +40,13 @@ export const manualPaymentProvider: PaymentProvider = {
     // Never a decline. This provider has nothing to decline *with*: it is not asking a bank
     // anything, it is recording that somebody will be asked for the money. A Store that wants a
     // purchase refused before it becomes an Order puts that rule in a Step, where it can say why.
-    return { ok: true, reference };
+    //
+    // And **not received**, which is the whole of what makes this provider honest. `ok: true`
+    // means the arrangement was made and the Order is real; the money has not arrived and will
+    // not until somebody collects it. Saying nothing here would default to `true` — the meaning
+    // a card processor has — and every Order this Store took would read in the Admin as a
+    // completed sale, which is exactly the mistake a manually settled Order invites.
+    return { ok: true, reference, received: false };
   },
 
   refund: async ({ reference, amount, currency }) => {

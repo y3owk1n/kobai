@@ -79,6 +79,7 @@ New to the project? These five carry the shape of everything else:
 | [0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) | Core owns the Payment record and ships no provider | Accepted |
 | [0054](./0054-a-step-may-invoke-another-workflow.md) | A Step may invoke another Workflow, and the deployment's declaration is the one that runs | Accepted — extends 0017 |
 | [0055](./0055-placing-an-order-requires-a-secret-key.md) | Placing an Order requires a secret key, and that is a gate rather than a check | Accepted — extends 0020 |
+| [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053 |
 
 ## Prototypes
 

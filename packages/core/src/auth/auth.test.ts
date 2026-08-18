@@ -412,10 +412,10 @@ describe("the admin surface has no unauthenticated write path", () => {
       });
     }
 
-    // A sweep that found nothing would pass every assertion made over it. Eleven is every
+    // A sweep that found nothing would pass every assertion made over it. Thirteen is every
     // admin operation but `POST /admin/session`; the number moving is a route being added or
     // removed, which is exactly when somebody should look at this file.
-    expect(operations).toHaveLength(11);
+    expect(operations).toHaveLength(13);
     // …and every one of them is refused on a deployment that has no Merchant at all, which
     // is the state the old anonymous path existed for.
     const [row] = await kobai.database.query<{ count: string }>(

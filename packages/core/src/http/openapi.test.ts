@@ -96,7 +96,7 @@ const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "tr
  * it. Each check below asserts it, so a loop that stopped finding the operations fails rather
  * than quietly stops checking them.
  */
-const OPERATIONS = 22;
+const OPERATIONS = 24;
 
 /**
  * Every operation the description carries, paired with what the description says about it.
@@ -417,9 +417,9 @@ describe("a declared refusal is one a gate actually makes", () => {
       expect(refusals, operation).toContain(labelled(GATE_REFUSALS.noSession));
     }
 
-    // The nine routes that name a permission — every admin route but `POST /admin/session`,
-    // which mints the session the other nine are read through, and `GET`/`DELETE
+    // The eleven routes that name a permission — every admin route but `POST /admin/session`,
+    // which mints the session the other eleven are read through, and `GET`/`DELETE
     // /admin/session`, which need only a live one.
-    expect(gated).toHaveLength(9);
+    expect(gated).toHaveLength(11);
   });
 });

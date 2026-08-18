@@ -179,9 +179,13 @@ identifier is the authority (ADR-0020).
 _Avoid_: request ID, transaction ID, nonce, deduplication key
 
 **Payment**:
-The record that money was received against an Order. Core's, because without it an Order
-holds no record of the money and a Return has nothing to refund against.
-_Avoid_: transaction, charge, transfer, settlement
+The record of what happened to the money for an Order. Core's, because without it an Order
+holds no record of the money and a Return has nothing to refund against. It says whether the
+money was **received** or only **arranged** — a provider that invoices, transfers or takes cash
+at the counter has answered without anybody being paid — and that answer is fixed at capture and
+never moved, because an Order is immutable and a payment lifecycle is not Core's (ADR-0056).
+_Avoid_: transaction, charge, transfer, settlement, payment status (there is none — `received`
+is a fact, not a state)
 
 **Payment Provider**:
 The named interface Core calls to take a Payment, substituted by the Project. Core defines it
