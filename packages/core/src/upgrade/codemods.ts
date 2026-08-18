@@ -53,6 +53,26 @@ export type ProjectUnderUpgrade = {
   readonly directory: string;
 };
 
+/**
+ * One codemod: what it is called, which version's break it migrates, and the rewrite itself.
+ *
+ * **`apply` is a property holding a function rather than a method** (#127), which is the spelling
+ * every interface kobai asks somebody else to implement uses — `Logger`, `PaymentProvider`,
+ * `ReservationProvider`, `FulfilmentStrategy`, `Step.run` — and for the identical reason:
+ * TypeScript checks method parameters *bivariantly* and function-property parameters
+ * *contravariantly*, so only this spelling makes a codemod that demands **more** than the runner
+ * hands it a compile error rather than a runtime surprise. The mistake it catches is a plausible
+ * one here — `apply: (project: ProjectUnderUpgrade & { kobaiVersion: string }) => …`, from a
+ * codemod that wants to branch on where the Project is coming *from* — and the honest answer to
+ * it is that a codemod may not ask: {@link Codemod.introducedIn} is the whole of the resolution
+ * mechanism, and a codemod that read the origin version would be the `from → to` map this module
+ * exists to avoid.
+ *
+ * Nothing outside Core declares a `Codemod` today — `@kobai/core` is the only package that ships
+ * a set, and the set is empty — so the change is invisible in the way `ReservationProvider`'s was
+ * rather than a break needing ADR-0058's licence. It is taken now for the same reason: the day a
+ * codemod is written by somebody else, the shape is already the safe one.
+ */
 export type Codemod = {
   /**
    * Stable, unique, and never reused — a report names it and a Developer greps for it.
@@ -65,7 +85,7 @@ export type Codemod = {
   /** The version whose breaking change this migrates a Project across. */
   readonly introducedIn: string;
   /** Rewrites the Project in place, and answers with the paths it changed. */
-  apply(project: ProjectUnderUpgrade): Promise<readonly string[]>;
+  readonly apply: (project: ProjectUnderUpgrade) => Promise<readonly string[]>;
 };
 
 /**

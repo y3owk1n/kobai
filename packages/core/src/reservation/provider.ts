@@ -90,6 +90,26 @@ export type HoldOutcome =
  * a consumption joins the transaction the Order is written in, and a release and the row that
  * authorises it move together. A provider handed a pool could not have been part of any of
  * them.
+ *
+ * **Every operation is a property holding a function rather than a method** (#127), which is the
+ * spelling every interface kobai asks somebody else to implement uses — `Logger`,
+ * `PaymentProvider`, `FulfilmentStrategy`, `Step.run`, `Codemod.apply` — and for the identical
+ * reason: TypeScript checks method parameters *bivariantly* and function-property
+ * parameters *contravariantly*, so only this spelling makes a provider that demands **more** than
+ * Core sends a compile error rather than a runtime surprise. The mistake it catches is a
+ * plausible one here — `claimsFor: (db, lines: readonly (ReservableLine & { period: string })[])
+ * => …`, from the Capacity provider that does not exist yet — and the honest answer to it is
+ * {@link ReservableLine.metadata}, which is ADR-0013's open data and is on this interface for
+ * exactly that provider.
+ *
+ * **This one was free to change and `Logger` was not.** Nothing on the promised surface hands a
+ * Project a way to supply a Reservation provider: this type is not exported from `@kobai/core`,
+ * {@link RESERVATION_PROVIDERS} is Core's own list, and there is no config key and no ADR for
+ * supplying one. So the tightening is invisible outside this package — it is `Logger`'s, taken
+ * under ADR-0058's licence to break a promised surface before the first release, that needed an
+ * argument. Changing it here anyway is what keeps the set reading alike, so the next interface is
+ * copied from one that agrees rather than from whichever file was opened first; the day a Project
+ * may supply one, the shape is already the safe one.
  */
 export type ReservationProvider = {
   /** What a Reservation of this provider's records as its `provider`. */
@@ -103,10 +123,10 @@ export type ReservationProvider = {
    * or to leave apart — Inventory combines, because two claims on one row would take two
    * conditional updates where one will do.
    */
-  claimsFor(
+  readonly claimsFor: (
     db: Queryable,
     lines: readonly ReservableLine[],
-  ): Promise<readonly ReservationClaim[]>;
+  ) => Promise<readonly ReservationClaim[]>;
   /**
    * Claims them, **atomically**, or says which one it could not (ADR-0018).
    *
@@ -115,7 +135,10 @@ export type ReservationProvider = {
    * a Store that answered both has implemented the appearance of safety, which is worse than
    * none.
    */
-  hold(tx: Transaction, claims: readonly ReservationClaim[]): Promise<HoldOutcome>;
+  readonly hold: (
+    tx: Transaction,
+    claims: readonly ReservationClaim[],
+  ) => Promise<HoldOutcome>;
   /**
    * Takes them for good, inside the transaction the Order is written in.
    *
@@ -124,7 +147,13 @@ export type ReservationProvider = {
    * longer there because the sweeper released it is a failure, not a licence to sell what the
    * Store does not have.
    */
-  consume(tx: Transaction, claims: readonly ReservationClaim[]): Promise<void>;
+  readonly consume: (
+    tx: Transaction,
+    claims: readonly ReservationClaim[],
+  ) => Promise<void>;
   /** Gives them back — from a compensation, or from the sweeper, which cannot tell them apart. */
-  release(tx: Transaction, claims: readonly ReservationClaim[]): Promise<void>;
+  readonly release: (
+    tx: Transaction,
+    claims: readonly ReservationClaim[],
+  ) => Promise<void>;
 };

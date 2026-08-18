@@ -119,10 +119,62 @@ export function defineKobaiConfig(config: KobaiProjectConfig): KobaiProjectConfi
   return config;
 }
 
-/** The minimum a logger must do for Core. A Project may pass anything that does it. */
+/**
+ * The minimum a logger must do for Core. A Project may pass anything that does it.
+ *
+ * It goes to `createKobai` beside `databaseUrl` rather than into `kobai.config.ts`, because it
+ * is about the running process rather than about what this deployment customised — the one
+ * named interface on the promised surface that is not a subject in that file.
+ *
+ * **Each operation is a property holding a function rather than a method** (#127), which is the
+ * spelling every interface kobai asks somebody else to implement uses — `Step.run`,
+ * `PaymentProvider.charge`, `FulfilmentStrategy.answersFor`, `ReservationProvider`,
+ * `Codemod.apply` — and for the identical reason: TypeScript checks method parameters
+ * *bivariantly* and
+ * function-property parameters *contravariantly*, so only this spelling makes a logger that
+ * demands **more** than Core sends a compile error rather than a runtime surprise. Under the
+ * method spelling this compiled:
+ *
+ * ```ts
+ * const logger: Logger = {
+ *   info: (message: string, fields: { requestId: string }) => console.log(fields.requestId),
+ *   error: () => {},
+ * };
+ * ```
+ *
+ * and then Core called `logger.info("listening")` with no second argument, and the Project read
+ * `.requestId` off `undefined`. `fields` is optional **and stays optional**: Core sends it when
+ * it has something to say and omits it when it does not, so a logger that insists on receiving
+ * one is insisting on a thing that was never promised.
+ *
+ * ## Why the change was takeable at all
+ *
+ * An interface's shape is under semver forever from the moment it ships (ADR-0019), and this is
+ * the oldest of Core's — exported from `@kobai/core` since before there was a spec. What made
+ * tightening it a decision rather than a refactor is **ADR-0058**: before the first published
+ * release a promised surface may be broken outright, provided the argument is written where the
+ * type is — this comment — and a break the Project's own compiler catches is announced by the
+ * compiler rather than by a codemod. Nothing has been released, so there is no Project this
+ * could have broken; the licence closes at the first publish, and ADR-0058 records this break
+ * beside #117's.
+ *
+ * **Almost nothing was broken even so, and the exceptions are worth naming.** Every logger that
+ * accepted what Core actually sends still compiles — a wider `fields`, a narrower parameter
+ * list, `console` itself. Two shapes stop compiling, and both were already wrong:
+ *
+ * - one declaring `fields` **required** rather than optional, which was being handed `undefined`
+ *   whenever Core had nothing to add. The fix is one character: `fields?`.
+ * - one demanding a **narrower** `fields` than `Record<string, unknown>`, which was reading a key
+ *   off `undefined` on every call that sent no fields. That one is a finding about the logger:
+ *   Core promises open data and promises nothing about what is in it.
+ *
+ * The `readonly` on each is not part of that argument and breaks nobody — a method was never
+ * reassignable either — but it matches `PaymentProvider` and `FulfilmentStrategy`, and there is
+ * no reason for a running deployment to swap out its own logger's `info`.
+ */
 export type Logger = {
-  info(message: string, fields?: Record<string, unknown>): void;
-  error(message: string, fields?: Record<string, unknown>): void;
+  readonly info: (message: string, fields?: Record<string, unknown>) => void;
+  readonly error: (message: string, fields?: Record<string, unknown>) => void;
 };
 
 export const consoleLogger: Logger = {

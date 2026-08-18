@@ -9,6 +9,11 @@ import {
   type TestKobai,
 } from "../testing/index.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
+import type {
+  ReservableLine,
+  ReservationClaim,
+  ReservationProvider,
+} from "./provider.ts";
 
 /**
  * A **Reservation** through the Workflow that makes one: held while an Order is being placed,
@@ -205,6 +210,58 @@ describe("stock, while an Order is being placed", () => {
 
     pause.release();
     expect((await placing).status).toBe(201);
+  });
+});
+
+/**
+ * **What the compiler refuses to accept as a Reservation provider** (#127).
+ *
+ * `ReservationProvider` is not exported from `@kobai/core` and no config key takes one, so
+ * nothing outside this package can hit either of these today — which is exactly why the
+ * spelling was settled now rather than on the day the second provider is written. The
+ * assertion is the `@ts-expect-error`, run by the `typecheck` step of the gate rather than by
+ * vitest; the `expect` only keeps the block a test.
+ */
+describe("what could not have been a Reservation provider", () => {
+  it("rejects one that demands more of a line than Core sends", () => {
+    // Contravariance, and the reason all four operations are function-valued properties rather
+    // than methods. The Capacity provider this interface exists to admit wants a period, and
+    // under the method spelling it could have said so and been handed `undefined` — the honest
+    // place for it is `line.metadata`, which is ADR-0013's open data.
+    const capacity: ReservationProvider = {
+      name: "capacity",
+      // @ts-expect-error Core sends a `ReservableLine`, and a period is not on one.
+      claimsFor: (_db, lines: readonly (ReservableLine & { period: string })[]) =>
+        Promise.resolve(
+          lines.map((line) => ({
+            provider: "capacity",
+            subject: line.period,
+            quantity: line.quantity,
+          })),
+        ),
+      hold: () => Promise.resolve({ ok: true }),
+      consume: () => Promise.resolve(),
+      release: () => Promise.resolve(),
+    };
+
+    expect(capacity).toBeDefined();
+  });
+
+  it("rejects one that demands more of a claim than Core hands back", () => {
+    // The same mistake on the other three operations, which take what `claimsFor` produced: a
+    // provider may not narrow what it is given back, because Core hands it the claims it
+    // stored rather than the ones it was told about.
+    const fussy: ReservationProvider = {
+      name: "fussy",
+      claimsFor: () => Promise.resolve([]),
+      hold: () => Promise.resolve({ ok: true }),
+      // @ts-expect-error Core stores a `ReservationClaim`; an expiry is not on one.
+      consume: (_tx, _claims: readonly (ReservationClaim & { expiresAt: Date })[]) =>
+        Promise.resolve(),
+      release: () => Promise.resolve(),
+    };
+
+    expect(fussy).toBeDefined();
   });
 });
 
