@@ -81,6 +81,7 @@ New to the project? These five carry the shape of everything else:
 | [0055](./0055-placing-an-order-requires-a-secret-key.md) | Placing an Order requires a secret key, and that is a gate rather than a check | Accepted — extends 0020 |
 | [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053 |
 | [0057](./0057-the-reservation-sweeper-is-an-interval-not-a-job.md) | The Reservation sweeper is an interval, not a job | Accepted — amends part of 0026 |
+| [0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md) | A promised surface may be broken until the first release, and a compile error is the notice | Accepted — its first rule expires at the first publish |
 
 ## Prototypes
 
@@ -97,8 +98,11 @@ Throwaway code kept as a primary source, on branches out of main.
   architecture ships without production validation. ADR-0029 is the deliberate substitute
   and only works if the reference Project is built early and upgraded honestly. The gate
   now exists (`tests/the-upgrade-gate.test.ts`, ADR-0035) and runs on every commit; what it
-  cannot yet prove is that a codemod transforms anything, because kobai has broken nothing
-  and so ships none.
+  cannot yet prove is that a codemod transforms anything, because kobai still ships none. It
+  has broken a promised surface once —
+  [ADR-0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md) — and that
+  break deliberately carries no codemod, because the Project's own compiler is the notice.
+  The first break a codemod *can* migrate is what will close this.
 
 - **[ADR-0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md)** — the spine
   spec is justified over content only if it actually runs one of the three named proofs, and

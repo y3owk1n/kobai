@@ -204,7 +204,7 @@ it declares seven slots, in this order:
 | `load-cart` | Reads the Cart, its Line Items, and what each one's Fulfilment Strategy answers | — |
 | `price-lines` | Invokes `resolve-price` for each line | — |
 | `apply-adjustments` | Attaches discounts and surcharges as their own lines — **Core attaches none** | — |
-| `calculate-tax` | Works out the tax per line. Core's returns zero; tax is its own spec | — |
+| `calculate-tax` | Works out the tax per line, and on each Adjustment the Order itself carries. Core's returns zero; tax is its own spec | — |
 | `hold-reservations` | Claims everything scarce, atomically | Release |
 | `take-payment` | Asks your Payment Provider for what the Order comes to | Refund |
 | `capture-order` | Consumes those Reservations and writes the immutable Order, in one transaction | none — the point of no return |
@@ -252,6 +252,18 @@ that shape and each is load-bearing:
 - **Naming a slot the Workflow does not declare fails loudly**, when the config is applied
   rather than at the request that would have been priced differently. A typo in a slot name
   is not an override that silently does nothing.
+
+**A Step's signature is a promise Core can move, and it has moved once.** #117 widened
+`TaxedLines.adjustments` — the type a replaced `calculate-tax` returns — so that a tax Step
+has to state a figure for every Adjustment the Order itself carries, a delivery surcharge
+being the case it exists for. A Project that had replaced that Step stopped compiling, and no
+codemod shipped.
+[ADR-0058](./adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md) is the
+record: what the argument was, what such a Project does about it in one edit, the rule for
+breaking one of the five before kobai's first release, and why a break your own compiler
+catches is announced by the compiler rather than migrated by `kobai-upgrade`. Read it before
+you conclude a break in this surface was an accident — and if one ever *is*, the rule above
+applies unchanged: **a minor release that breaks you inside the five is a bug in kobai**.
 
 A Step is a name and a typed function. `defineStep` is the whole of it:
 
@@ -614,6 +626,8 @@ about the API rather than a reason to reach around it — the same rule kobai ho
   — Plugins are npm packages, and what semver does and does not cover.
 - [ADR-0017](./adr/0017-plugins-offer-steps-and-the-project-wires-them.md) — why a Plugin
   offers and a Project wires, and why a replacement is type-checked.
+- [ADR-0058](./adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md) — the
+  one break taken in this surface so far, and the rules it was taken under.
 - [ADR-0013](./adr/0013-core-owns-no-lead-time-pricing-and-workflow-context-is-open.md) — the
   open context, and the standing rule that a surface which cannot do the job is the thing to
   fix.

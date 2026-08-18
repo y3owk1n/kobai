@@ -1,0 +1,210 @@
+# A promised surface may be broken until the first release, and a compile error is the notice
+
+#117 (PR #136) widened `TaxedLines.adjustments` from `readonly Adjustment[]` to `readonly
+TaxedAdjustment[]`, so that a replaced `calculate-tax` is compelled to state a tax for every
+Adjustment on the Order. `TaxedLines` is what a Step filling that slot returns, and Workflow
+Step override is Extension Point 2 — the flagship of
+[ADR-0003](./0003-the-extension-surface-and-what-we-promise.md), the one
+[ADR-0019](./0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md)
+puts under semver and [`docs/extension-points.md`](../extension-points.md) tells a Developer
+to lean their whole weight on. **A Project that had replaced `calculate-tax` no longer
+compiles, and no codemod ships.**
+
+The change itself is settled and this is not a re-litigation. What was missing is the record:
+two rules were relied on without ever being stated, and this ADR states both.
+
+- **Before the first published release, a promised surface may be broken outright** — no
+  deprecation window, no compatibility shim, no codemod — provided the break is argued where
+  the type is and recorded here. The licence is that nothing is released, and it closes at the
+  first publish.
+- **A break the Project's own compiler catches is not codemod territory.** The compile error
+  is the migration notice; what it cannot carry is the argument, and leaving that in writing is
+  the obligation the rule comes with.
+
+## What actually broke, and how far
+
+One thing: a Step that **builds** the `adjustments` field of a `TaxedLines`. That is a replaced
+`calculate-tax`, which is the slot the type is produced at. The Step that was correct the day
+before #136 merged now fails to build:
+
+```
+error TS2322: Type 'readonly Adjustment[]' is not assignable to type 'readonly TaxedAdjustment[]'.
+  Property 'tax' is missing in type 'Adjustment' but required in type '{ readonly tax: number; }'.
+```
+
+Everything else held, and each is worth naming so the blast radius is legible rather than
+assumed:
+
+- **The Steps downstream carry the field rather than build it.** `hold-reservations` returns a
+  `ReservedLines`, which *is* a `TaxedLines` with the claims added, and `take-payment` a
+  `PaidOrder` on top of that — so a replacement of either spreads its input and is untouched. One
+  that rebuilt `adjustments` from an untaxed `Adjustment[]` breaks for the same reason and takes
+  the same fix — as does an inserted `before` or `after` Step that rebuilds rather than passes
+  the value through.
+- **The HTTP contract did not break.** `OrderAdjustment` still exists; `OrderLevelAdjustment`
+  extends it and is what `Order.adjustments` now refers to. A generated client gains a field
+  and loses none, which is additive in the direction that matters —
+  [ADR-0056](./0056-a-payment-records-whether-the-money-arrived.md)'s `received` is the same
+  shape of growth.
+- **No deployment has data to repair.** `core_order_adjustment.tax` arrives `not null default
+  0`, which is [ADR-0038](./0038-widening-a-populated-table-takes-three-migrations.md)'s own
+  first case rather than its three-step dance: zero is right for future rows as well as past
+  ones, because no Step could have taxed an Order-level Adjustment before there was a column
+  to put the figure in.
+- **Nothing in this repository broke.** The reference Project replaces `select-price` and hands
+  `apply-adjustments` to `@kobai/plugin-made-to-order`'s Step — which attaches a Lead Time
+  surcharge to the **Order**, so it is exactly the case this column exists for — but it leaves
+  `calculate-tax` to Core, and Core's answers zero. So the gate of
+  [ADR-0029](./0029-the-reference-project-is-the-release-gate-and-content-is-built-first.md)
+  stayed green throughout, which is precisely why the break needed writing down instead of being
+  obvious.
+
+## Why the tax goes on each Adjustment
+
+The argument in full is the doc comment on `core_order_adjustment.tax` in
+`packages/core/src/db/schema.ts`, where somebody about to add a figure will read it. What
+belongs here is why the break could not have been a smaller change.
+
+A delivery surcharge is [ADR-0022](./0022-shapes-modelled-now-features-built-later.md)'s own
+example of an Adjustment belonging to no line, and it is taxable in most jurisdictions. Nothing
+in the shape could hold that number — `core_order_line_item.tax` is on a line, and this
+Adjustment is on none — so a Project wiring a real tax engine would have charged the goods' tax
+and none of the carriage's, silently. The rival was one tax figure beside the Order's total,
+and it loses twice: a real engine — Avalara, TaxJar, Stripe Tax — answers per taxable item with
+carriage among them, so per-Adjustment tax is what it *already has in hand*; and a receipt shows
+tax against the thing that bore it, as does a Return refunding one surcharge, neither of which a
+lump sum can answer. **The parts are not recoverable from a total; a total always is from the
+parts.**
+
+**And it could not wait.** [ADR-0009](./0009-cart-and-order-are-separate-and-orders-snapshot.md)
+makes an Order a snapshot, on the argument that a snapshot gaining a field later changes what
+every Order written before it means. An Order placed without this figure is not an Order whose
+carriage was untaxed; it is one that has no answer. Settling the shape before real Orders exist
+is the only moment it costs a compile error rather than a hole in the books.
+
+## The rule before the first release
+
+Nothing kobai builds has been published.
+[ADR-0034](./0034-kobai-is-published-and-the-reference-project-is-what-create-kobai-generates.md)
+separates *publishable* from *published*, and every publishable manifest pins
+`publishConfig.registry` at a loopback address, which npm resolves before it opens a connection
+and which beats both `--registry` and `npm_config_registry`. So the only registry any of this
+has reached is the verdaccio a test starts and kills.
+
+**That is the licence, and it is the whole of it.** While it holds, a break to one of the five
+Extension Points costs a Developer nothing, because there is no Developer: there is no version
+of kobai anybody could have installed and therefore no Project that could have been broken. A
+deprecation window would be a window over an empty room, and a compatibility shim would be a
+second shape of `TaxedLines` kept alive for nobody, which Core would then have to carry past
+1.0 or break twice.
+
+**It is not permission to be careless.** Any break taken under the licence is one kobai will
+not be able to take afterwards, so taking it now is the cheap version of a decision that only
+gets more expensive — and two things are still owed each time: the argument written where the
+type is, and the break recorded here.
+
+**After the first release, the rule is ADR-0019's, with nothing subtracted.** A break to one of
+the five is a major version bump — and under
+[ADR-0035](./0035-upgrading-is-a-command-kobai-ships.md) a `0.x` minor counts as one, since
+`^0.1.0` means `>=0.1.0 <0.2.0` — and it carries either a codemod keyed to the version that
+broke it, or a written statement of why no codemod is possible, which the next section is the
+first instance of.
+
+**A licence that expired silently would be worse than no licence, and this one cannot.**
+"Nothing is released" will stop being true exactly once, and the question is whether anybody
+notices. Publishing to a public registry requires defeating the loopback pin deliberately — CI
+packs a tarball and passes `--registry`, which is the one form that honours the flag — and
+`tests/publish-guard.test.ts` fails the build if the pin goes missing. So the licence closes at
+an act somebody has to take on purpose, and **the release that takes it closes this record's
+first rule with it**. That is the one thing a reader hitting a compile error needs to be able to
+date: whether they are before that act or after it.
+
+## Whether this should have carried a codemod
+
+**No.** ADR-0035 keys a codemod to the version that broke something, and this broke something,
+so the question is real. There are two answers and only the second decides it — because the
+first stops being a reason the day kobai adopts an AST tool, and the rule has to survive that.
+
+- **A codemod could not have written this.** ADR-0035 hands a codemod the Project's directory
+  and `node:fs`, deliberately, because TypeScript 7 ships no programmatic API and #28 rejected
+  pinning a second compiler beside it. Rewriting a Project's tax Step is a TypeScript edit and
+  kobai cannot make one at any price it currently wants to pay.
+- **Even with an AST tool it should not.** The only edit a machine could make here is
+  `input.adjustments.map((a) => ({ ...a, tax: 0 }))`. That compiles, and it is wrong in exactly
+  the way this change exists to prevent: a delivery surcharge silently untaxed, in a Project
+  that had gone to the trouble of wiring a tax engine. A codemod that turned the build green by
+  charging no tax on the carriage would have undone the change under the Developer, without
+  them ever reading the argument for it. **What tax the carriage bears is a question only the
+  Project can answer**, and a compile error is the correct way to ask an unanswerable one.
+
+So the line, stated as a rule: **a break the Project's own compiler catches is announced by the
+compiler; a break it cannot see is codemod territory.** The second class is what ADR-0035's
+`node:fs` contract already covers and is good at — a renamed configuration key, a moved file, a
+manifest range — because nothing types those and a Project's build stays green while meaning
+something else. The first class needs no runner: the error fires at the Project's own build,
+before anything deploys, names the file and the line and the property, and cannot be skipped,
+suppressed by a flag, or run against the wrong version. `kobai-upgrade` moves the ranges and
+installs; the compiler speaks immediately afterwards, where the Developer already is.
+
+**The obligation that comes with the rule is the part that is easy to drop.** A compile error
+says a property is missing. It does not say the property was never there before, when it
+arrived, or on what argument — which is the whole of what a reader needs. So a type-level break taken
+under this rule owes a written trail the error can be searched against: the doc comment on the
+type, carrying the ticket number, and this record, linked from the section of
+`docs/extension-points.md` that told the Developer the signature could be leaned on. #117 has
+all three, and that is what makes "the compiler is the notice" an answer rather than an excuse.
+
+**This does not change if kobai ever adopts an AST codemod tool.** ADR-0035 leaves that decision
+open for the first codemod that needs one; the argument above is about what a codemod is *for*,
+not about what it can reach.
+
+## What a Project that replaced `calculate-tax` must do
+
+The compiler names the file and the property. The Step returns a `TaxedLines`, and its
+`adjustments` field is now `readonly TaxedAdjustment[]` — an `Adjustment` with a `tax` in signed
+minor units, signed with the Adjustment, so a taxed discount reduces the tax it is on.
+
+```ts
+export const myTax = defineStep(
+  "my-tax",
+  (input: AdjustedLines): TaxedLines => ({
+    cart: input.cart,
+    lines: input.lines.map((line) => ({ ...line, tax: taxOnLine(line) })),
+    // Was `adjustments: input.adjustments`, which is the line the compiler is refusing.
+    adjustments: input.adjustments.map((one) => ({ ...one, tax: taxOnAdjustment(one) })),
+  }),
+);
+```
+
+Four things about that edit:
+
+1. **`tax: 0` compiles, and it is a decision rather than a formality.** It is what Core's own
+   Step answers and it is right for a deployment that genuinely taxes nothing at the Order
+   level. It is wrong for a delivery surcharge in most jurisdictions, which is the case the
+   field exists for. Write the figure the Project means.
+2. **A line's Adjustments are untouched, and must stay untouched.** `calculate-tax` taxes the
+   *adjusted* line, so their tax is already inside that line's own `tax`; a second figure would
+   be charged twice or dropped. `AdjustedLine.adjustments` therefore has no `tax` to set, and
+   the `core_order_adjustment_line_level_is_untaxed` check constraint refuses one on the row.
+3. **Nothing else in the Project moves.** No migration to write, no rows to repair, no client
+   change — regenerate `@kobai/client` to see the new field, or do not, and nothing breaks.
+4. **The Order's total accounts for it.** `total` is every Line Item's total plus each of the
+   Order's own Adjustments *and the tax on each of them*, computed by one expression read by
+   both the Step that charges and the Step that writes. A tax stated here is money the Shopper
+   is charged.
+
+## Consequences
+
+- **The codemod set is still empty and now honestly so.** ADR-0035's zero has meant "nothing
+  has been broken" since it shipped; it now means "nothing has been broken that a codemod could
+  migrate", which is a different claim and needed stating.
+- **ADR-0024's open risk stays open, and the index now says why.** The upgrade gate still cannot
+  prove a codemod transforms anything, because the one break kobai has taken is not the kind a
+  codemod migrates. The first break that *is* — a renamed config key, a moved file — will close
+  it.
+- **The first release has a task in it, and nothing in the gate can assert that task is done.**
+  `tests/publish-guard.test.ts` guards the loopback pin; removing that pin on purpose is the act
+  that ends this record's first rule, and whoever takes it should say so here.
+- **`docs/extension-points.md` §2 points at this record**, because that is where a Developer is
+  told the Step signature is the flagship promise, and it is the page they will re-read the
+  moment the promise moves.
