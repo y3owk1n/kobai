@@ -56,6 +56,41 @@ export type InventoryUpdate =
  * The first call is what makes the Variant **tracked**; later ones correct it. `reserved` is
  * never touched here — it belongs to the Reservations in flight, and a Merchant counting a
  * shelf is not making a statement about those.
+ *
+ * **The Variant is locked, and the answer about it is therefore still true when the row is
+ * written** (ADR-0018, #145). "This Variant exists" and "count it at seven" are two statements,
+ * and until they were one transaction holding the `core_variant` row, a `DELETE
+ * /admin/variants/{id}` landing between them left the write referencing a Variant that had
+ * gone: a foreign-key violation, and a **500** where this route declares a 404.
+ *
+ * That is ADR-0018's rule applied to a different fact, not an exception to it.
+ * `inventoryProvider.hold` makes the check and the write **one statement** because the fact it
+ * checks — how many units are free — is a column it is also writing. Existence is not: no single
+ * statement can both check that a Variant is there and depend on it still being there, so the
+ * ADR's *other* answer is the one available here, and a **row lock** is what makes the two
+ * statements one operation. What stays forbidden either way is the plain read the delete routes
+ * made a lie of. `for share` rather than `for update` because two Merchants counting the same
+ * shelf have no quarrel with each other — only with a delete, which this blocks — and it is the
+ * same lock `setPrice`, `addCartLine` and `capture-order` take before writing a row that
+ * references a Variant.
+ *
+ * **The order is `core_variant` then `core_inventory`**, which is the tail of the
+ * `core_product` → `core_variant` → `core_inventory` order `capture-order` and both delete
+ * routes take those rows in (ADR-0059) — this takes no Product lock at all, and a prefix nobody
+ * holds cannot make a cycle. The opposite order is a deadlock, and Postgres resolves one of
+ * those by killing a request that was merely simultaneous.
+ *
+ * **Reading the violation instead was rejected, and not on cost.** A `violatesForeignKey` beside
+ * `violatesCheckConstraint`, mapped to this same `variant-not-found`, would answer correctly and
+ * add no lock to a write that is otherwise contention-free — it is the cheaper of the two. What
+ * it does is answer *after* the state rather than keep the state from arising, which leaves the
+ * loose read in place and makes the declared refusal a rescue rather than a decision; and it
+ * would give this one hazard a second mechanism, where `setPrice`, `addCartLine` and
+ * `capture-order` all already have the first. The `stock-is-reserved` refusal below **is** read
+ * out of a violation, and that is the distinction rather than an inconsistency: a Reservation may
+ * claim a unit between any read of `reserved` and this write, so nothing this transaction can
+ * hold makes such a read stay true, and the `check` is what makes it one operation at all — the
+ * other of the two mechanisms ADR-0018 names.
  */
 export async function setInventory(
   db: Database,
@@ -64,30 +99,40 @@ export async function setInventory(
 ): Promise<InventoryUpdate> {
   if (!isUuid(variantId)) return noSuchVariant(variantId);
 
-  const [exists] = await db
-    .select({ id: variant.id })
-    .from(variant)
-    .where(eq(variant.id, variantId))
-    .limit(1);
-  if (!exists) return noSuchVariant(variantId);
-
   try {
-    const [row] = await db
-      .insert(inventory)
-      .values({ variantId, onHand: input.onHand })
-      // The upsert is what makes "tracked" arrive with the first count rather than needing a
-      // route of its own — and it is one statement, so two Merchants counting the same shelf
-      // at the same instant produce one row rather than a unique-violation for the loser.
-      .onConflictDoUpdate({ target: inventory.variantId, set: { onHand: input.onHand } })
-      .returning({ onHand: inventory.onHand, reserved: inventory.reserved });
-    if (!row) throw new Error("Setting Inventory returned no row.");
+    return await db.transaction(async (tx) => {
+      const [exists] = await tx
+        .select({ id: variant.id })
+        .from(variant)
+        .where(eq(variant.id, variantId))
+        .for("share")
+        .limit(1);
+      if (!exists) return noSuchVariant(variantId);
 
-    return { ok: true, inventory: reported(variantId, row) };
+      const [row] = await tx
+        .insert(inventory)
+        .values({ variantId, onHand: input.onHand })
+        // The upsert is what makes "tracked" arrive with the first count rather than needing a
+        // route of its own — and it is one statement, so two Merchants counting the same shelf
+        // at the same instant produce one row rather than a unique-violation for the loser.
+        .onConflictDoUpdate({
+          target: inventory.variantId,
+          set: { onHand: input.onHand },
+        })
+        .returning({ onHand: inventory.onHand, reserved: inventory.reserved });
+      if (!row) throw new Error("Setting Inventory returned no row.");
+
+      return { ok: true, inventory: reported(variantId, row) } as const;
+    });
   } catch (cause) {
     // The database refuses a count below what is already claimed, because `reserved <= on_hand`
     // is a constraint rather than a convention (see `db/schema.ts`). It is a real conflict with
     // the state of the Store rather than a malformed request: some of this stock is spoken for,
     // and it either becomes an Order or the sweeper gives it back.
+    //
+    // Read out here rather than inside the transaction: a statement Postgres refused has already
+    // aborted it, so a refusal decided in there would be returned from a transaction that can no
+    // longer run anything, and the `commit` closing it would silently be a rollback.
     if (violatesCheckConstraint(cause, RESERVED_WITHIN_STOCK)) {
       return {
         ok: false,
