@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -212,10 +212,11 @@ function tablesCreatedBy(sql: string): Set<string> {
 /**
  * One finding: the file it was read out of, and the statement on a single line, so a failure
  * reads as a list of places rather than as a diff of two blobs of SQL. Every reader below
- * labels through this one, so the next hazard reads the same way without copying it.
+ * labels through this one, so the next hazard reads the same way without copying it — and so
+ * does `ACKNOWLEDGED`, which has to produce the identical string or the equality means nothing.
  */
-function labelled(migration: Migration, statement: string): string {
-  return `${migration.path}: ${statement.replaceAll(/\s+/g, " ").trim()}`;
+function labelled(path: string, statement: string): string {
+  return `${path}: ${statement.replaceAll(/\s+/g, " ").trim()}`;
 }
 
 /** The required columns one migration adds to a table with nothing to give them. */
@@ -223,7 +224,7 @@ function addsRequiredColumnsWithNoDefault(migration: Migration): string[] {
   return [...withoutComments(migration.sql).matchAll(ADDS_A_REQUIRED_COLUMN)]
     .map(([statement]) => statement)
     .filter((statement) => !/\bdefault\b/i.test(statement))
-    .map((statement) => labelled(migration, statement));
+    .map((statement) => labelled(migration.path, statement));
 }
 
 /**
@@ -287,7 +288,7 @@ function claimsUniquenessOfATableItDidNotCreate(
 
   return [...sql.matchAll(pattern)]
     .filter(([, table]) => !created.has(tableName(table)))
-    .map(([statement]) => labelled(migration, statement));
+    .map(([statement]) => labelled(migration.path, statement));
 }
 
 /** Everything in one migration that a table with rows already in it could refuse. */
@@ -300,47 +301,262 @@ function unsafeStatements(migration: Migration): string[] {
 }
 
 /**
- * The statements the check names that this repository nevertheless ships, each with the
- * reason it was allowed to — and there is exactly one.
+ * A finding this repository ships anyway, and the judgement that let it — which is a **kind**
+ * rather than a sentence, because two unlike judgements produce the identical finding.
  *
- * It is not an ignore list. The assertion below is an equality, so an entry that stops being
- * produced fails just as loudly as one that appears: the acknowledgement cannot outlive the
- * statement it excuses, and it cannot be widened without being edited. Answering a finding
- * here is a decision written down, which is what the check exists to force.
+ * The reading above takes one migration file at a time and cannot do otherwise (#153): ADR-0038
+ * puts the deduplication that makes a uniqueness claim survivable in a `--custom` migration of
+ * its own, so the generated migration that adds the index holds the index and nothing else. The
+ * correct shape therefore reads exactly like the dangerous one, and both arrive here. One is
+ * permanent and needs no revisiting; the other is a debt that falls due at an act somebody takes
+ * on purpose. Told apart only by their prose they would be one list of two meanings, and a reader
+ * would be reading both arguments looking for the one that is theirs (#161).
  *
- * `0016` is the hazard #119 was filed about, in the repository rather than in a fixture.
- * `core_order` is created by `0012`, and until `0016` shipped with #118 a Cart could become
- * two Orders — so a deployment left anywhere from `0012` to `0015` can be holding exactly the
- * duplicate `cart_id` values the index refuses, and would get no service at its next boot
- * (ADR-0030).
- * It is survivable only because nothing has been released and no such deployment exists.
+ * So the kind is data, and each kind names the one thing that would show it false —
+ * `reasonsThatDoNotHold` below is what asks for it:
  *
- * **That is a release decision rather than a fact about SQL, so it is written where a release
- * decision is found**: `docs/adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md`,
- * under "What else the licence is holding up" (#152). It carries the argument in full, the one
- * question to ask before the first publish, and both answers to it — read it before editing
- * anything here.
+ * - `deduplicated-ahead-of-it` names the migration that removed the duplicates, which has to run
+ *   before this one in the same set. That is a claim about the journal rather than about the SQL,
+ *   so it is checkable. What is not, and stays the author's to argue beside the entry, is whether
+ *   that migration deduplicated the right rows — ADR-0038 says keeping the newest of a set of
+ *   duplicates is a finding about the constraint whenever they are not the same fact.
+ * - `unreachable-until-release` names the record that argues it, because its reader is a
+ *   **publisher** rather than a Developer and the argument is a release decision. The check holds
+ *   that record to naming the migration, so the list a publisher reads cannot be shorter than
+ *   this one.
  *
- * The one part of it to have in hand before editing this line: **an entry here is a place for a
- * reason rather than a suppression**, so expiring one means rewriting its reason and not deleting
- * it. The reading above is per-file, so this statement is named whatever else becomes true, and
- * deleting the entry while `0016` stands turns the gate red.
+ * The prose stays either way: the kind says which argument is being made, and the comment above
+ * each entry says why it holds here.
  */
-const ACKNOWLEDGED = [
-  `${join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql")}: CREATE UNIQUE INDEX "core_order_cart_idx" ON "core_order" USING btree ("cart_id")`,
+type Acknowledgement = {
+  /** Repository-relative, and the path half of the finding this excuses. */
+  readonly migration: string;
+  /** The statement, exactly as `labelled` renders it — one line, single spaces. */
+  readonly statement: string;
+} & (
+  | {
+      readonly because: "deduplicated-ahead-of-it";
+      /** Repository-relative, in the same set, and ahead of it in the journal. */
+      readonly deduplicatedBy: string;
+    }
+  | {
+      readonly because: "unreachable-until-release";
+      /** Repository-relative path to the record carrying the argument and its trigger. */
+      readonly recordedIn: string;
+      /** The heading in it, verbatim, under which that record lists what falls due. */
+      readonly under: string;
+    }
+);
+
+/**
+ * The finding an acknowledgement excuses, rendered by the same function the walk renders one
+ * with — so the equality below cannot be satisfied by a string that merely looks like a finding.
+ */
+function finding(acknowledgement: Acknowledgement): string {
+  return labelled(acknowledgement.migration, acknowledgement.statement);
+}
+
+/** One kind of acknowledgement, so a helper's parameters cannot drift from the union's fields. */
+type OfKind<Because extends Acknowledgement["because"]> = Extract<
+  Acknowledgement,
+  { because: Because }
+>;
+
+/**
+ * Why the deduplication an entry rests on is not one — or `null` if it is.
+ *
+ * A set's migrations arrive in journal order, so "ahead of it" is a position in that set and
+ * nothing more. The comparison is deliberately inside one set: a `--custom` migration in another
+ * package would run in its own tracking table, in an order ADR-0030 makes nobody's to assume.
+ */
+function whyTheDeduplicationDoesNotHold(
+  acknowledgement: OfKind<"deduplicated-ahead-of-it">,
+  migrations: readonly Migration[],
+): string | null {
+  const set = migrations
+    .map(({ path }) => path)
+    .filter((path) => dirname(path) === dirname(acknowledgement.migration));
+
+  const deduplicated = set.indexOf(acknowledgement.deduplicatedBy);
+  if (deduplicated === -1) {
+    return `${acknowledgement.deduplicatedBy} is no migration of that set`;
+  }
+
+  const at = set.indexOf(acknowledgement.migration);
+  if (at === -1) return "no set here applies it";
+
+  return deduplicated < at
+    ? null
+    : `${acknowledgement.deduplicatedBy} does not run ahead of it`;
+}
+
+/**
+ * One section of a Markdown record, from its heading to the next one at the same level or above
+ * — or `null` if the record has no such heading. Nested subsections are part of it, which is
+ * what makes a section the unit rather than a paragraph.
+ */
+function sectionOf(record: string, heading: string): string | null {
+  const lines = record.split("\n");
+  const depth = (line: string) =>
+    /^#{1,6} /.test(line) ? (line.match(/^#+/)?.[0].length ?? 0) : 0;
+
+  const opens = lines.findIndex(
+    (line) => depth(line) > 0 && line.replace(/^#+\s*/, "").trim() === heading,
+  );
+  if (opens === -1) return null;
+
+  const body = lines.slice(opens + 1);
+  const closes = body.findIndex((line) => {
+    const level = depth(line);
+    return level > 0 && level <= depth(lines[opens] ?? "");
+  });
+
+  return (closes === -1 ? body : body.slice(0, closes)).join("\n");
+}
+
+/**
+ * Why the record an entry points at does not carry it — or `null` if it does.
+ *
+ * The reader of this kind is somebody about to publish, and they arrive at the record rather than
+ * at this file: `docs/adr/README.md` dates ADR-0058 as expiring at the first publish, and
+ * AGENTS.md says a first publish starts by reading it. So the obligation runs that way round —
+ * the record is where the list has to be complete, and a debt this constant carries and that
+ * record does not is one nothing else in the repository would ever say a word about.
+ *
+ * **The section is named, not just the file**, because that is the whole of what makes the list
+ * complete: a record may mention a migration in passing anywhere, and the list a publisher reads
+ * is one section of it. So deleting that section, or renaming it, fails here rather than quietly
+ * emptying the list a promise elsewhere says cannot be empty.
+ *
+ * It asks whether the section names the migration and deliberately not what it says about it: the
+ * argument is prose, and a check that read it would be checking wording. Paths are compared in
+ * posix form because a record is written with `/` whatever `join` produced here.
+ */
+async function whyTheRecordDoesNotHold(
+  acknowledgement: OfKind<"unreachable-until-release">,
+): Promise<string | null> {
+  const record = await readFile(join(repoRoot, acknowledgement.recordedIn), "utf8").catch(
+    () => null,
+  );
+  if (record === null) return `${acknowledgement.recordedIn} is not there to read`;
+
+  const section = sectionOf(record, acknowledgement.under);
+  if (section === null) {
+    return `${acknowledgement.recordedIn} has no section "${acknowledgement.under}"`;
+  }
+
+  return section.includes(acknowledgement.migration.split(sep).join("/"))
+    ? null
+    : `"${acknowledgement.under}" in ${acknowledgement.recordedIn} does not name it`;
+}
+
+/**
+ * Every acknowledgement whose kind claims something that is not true, named with what it claimed.
+ *
+ * A kind is only worth having if being the wrong kind can fail, so each one is asked for its own
+ * warrant here and the switch is exhaustive: a kind added without one does not compile, which is
+ * the point at which somebody has to say what would show it false.
+ */
+async function reasonsThatDoNotHold(
+  acknowledgements: readonly Acknowledgement[],
+  migrations: readonly Migration[],
+): Promise<string[]> {
+  const problems = await Promise.all(
+    acknowledgements.map(async (acknowledgement) => {
+      const unless = (why: string | null) =>
+        why === null
+          ? []
+          : [`${acknowledgement.migration}: ${acknowledgement.because}, but ${why}`];
+
+      switch (acknowledgement.because) {
+        case "deduplicated-ahead-of-it":
+          return unless(whyTheDeduplicationDoesNotHold(acknowledgement, migrations));
+        case "unreachable-until-release":
+          return unless(await whyTheRecordDoesNotHold(acknowledgement));
+        default: {
+          const unhandled: never = acknowledgement;
+          return unhandled;
+        }
+      }
+    }),
+  );
+
+  return problems.flat();
+}
+
+/**
+ * The statements the check names that this repository nevertheless ships, each with the
+ * judgement that let it.
+ *
+ * It is not an ignore list. The first assertion below is an equality, so an entry that stops
+ * being produced fails just as loudly as one that appears: an acknowledgement cannot outlive the
+ * statement it excuses, and it cannot be widened without being edited. The second holds every
+ * entry to the warrant its kind comes with. Answering a finding here is a decision written down,
+ * which is what the check exists to force.
+ */
+const ACKNOWLEDGED: readonly Acknowledgement[] = [
+  /**
+   * `0016` is the hazard #119 was filed about, in the repository rather than in a fixture.
+   * `core_order` is created by `0012`, and until `0016` shipped with #118 a Cart could become
+   * two Orders — so a deployment left anywhere from `0012` to `0015` can be holding exactly the
+   * duplicate `cart_id` values the index refuses, and would get no service at its next boot
+   * (ADR-0030). It is survivable only because nothing has been released and no such deployment
+   * exists.
+   *
+   * **That is a release decision rather than a fact about SQL, so it is written where a release
+   * decision is found**, which is what `recordedIn` and `under` name between them (#152).
+   * ADR-0058's "What else the licence is holding up" carries the argument in full, the one
+   * question to ask before the first publish, and both answers to it — read it before editing
+   * anything here. That heading is load-bearing: renaming the section fails the gate, which is
+   * what stops the publisher's list going empty without anybody deciding that it should.
+   *
+   * Two parts of it to have in hand before editing this entry. **An entry here is a place for a
+   * reason rather than a suppression**, so expiring one means rewriting its reason and not
+   * deleting it: the reading above is per-file, so this statement is named whatever else becomes
+   * true, and deleting the entry while `0016` stands turns the gate red. And the expected answer
+   * to that question retires the debt **without deduplicating anything** — every database that
+   * can exist after the first publish applies `0012` and `0016` in one pass — so it retires this
+   * *kind* along with the reason. What replaces it is neither of the two kinds above, and the
+   * union is what makes that a decision somebody states rather than a comment somebody rewords.
+   */
+  {
+    migration: join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql"),
+    statement:
+      'CREATE UNIQUE INDEX "core_order_cart_idx" ON "core_order" USING btree ("cart_id")',
+    because: "unreachable-until-release",
+    recordedIn: join(
+      "docs",
+      "adr",
+      "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
+    ),
+    under: "What else the licence is holding up",
+  },
 ];
+
+/** Every migration this repository would apply, in journal order within each set. */
+async function everyMigration(): Promise<Migration[]> {
+  const folders = await migrationFolders(repoRoot);
+  return (await Promise.all(folders.map(migrationsOf))).flat();
+}
 
 describe("a migration can be applied to a database that is already in use", () => {
   it("asks nothing of rows already there but what is acknowledged, in any set", async () => {
-    const folders = await migrationFolders(repoRoot);
-    const migrations = (await Promise.all(folders.map(migrationsOf))).flat();
+    const migrations = await everyMigration();
 
     // Failing open would be worse than failing: nothing found makes this pass by reading
-    // nothing, which is indistinguishable from reading everything.
-    expect(folders.length).toBeGreaterThan(0);
+    // nothing, which is indistinguishable from reading everything. A walk that found no set at
+    // all reads as none of these, and the third test below is what names which set went missing.
     expect(migrations.length).toBeGreaterThan(0);
 
-    expect(migrations.flatMap(unsafeStatements)).toEqual(ACKNOWLEDGED);
+    // The equality is against the findings the entries claim and nothing else, so an entry that
+    // stops being produced still fails — a kind cannot excuse a statement into existence.
+    expect(migrations.flatMap(unsafeStatements)).toEqual(ACKNOWLEDGED.map(finding));
+  });
+
+  it("acknowledges nothing on a reason that does not hold, in any set", async () => {
+    await expect(
+      reasonsThatDoNotHold(ACKNOWLEDGED, await everyMigration()),
+    ).resolves.toEqual([]);
   });
 
   it("finds the migration sets that exist today", async () => {
@@ -537,5 +753,147 @@ describe("reading a migration for the fault", () => {
         `-- Never ALTER TABLE x ADD COLUMN y text NOT NULL against a populated table.\nUPDATE "t" SET "a" = 0 WHERE "a" IS NULL;`,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("an acknowledgement whose reason does not hold", () => {
+  const set = (...tags: string[]) =>
+    tags.map((tag) => ({ path: join("pkg", "migrations", `${tag}.sql`), sql: "" }));
+
+  it("names a deduplication that is no migration of the same set", async () => {
+    await expect(
+      reasonsThatDoNotHold(
+        [
+          {
+            migration: join("pkg", "migrations", "0001_index.sql"),
+            statement: 'CREATE UNIQUE INDEX "i" ON "t" USING btree ("c")',
+            because: "deduplicated-ahead-of-it",
+            deduplicatedBy: join("other", "migrations", "0000_dedupe.sql"),
+          },
+        ],
+        set("0000_dedupe", "0001_index"),
+      ),
+    ).resolves.toEqual([
+      `${join("pkg", "migrations", "0001_index.sql")}: deduplicated-ahead-of-it, but ${join("other", "migrations", "0000_dedupe.sql")} is no migration of that set`,
+    ]);
+  });
+
+  it("names a deduplication that does not run ahead of the statement", async () => {
+    await expect(
+      reasonsThatDoNotHold(
+        [
+          {
+            migration: join("pkg", "migrations", "0001_index.sql"),
+            statement: 'CREATE UNIQUE INDEX "i" ON "t" USING btree ("c")',
+            because: "deduplicated-ahead-of-it",
+            deduplicatedBy: join("pkg", "migrations", "0002_dedupe.sql"),
+          },
+        ],
+        set("0001_index", "0002_dedupe"),
+      ),
+    ).resolves.toEqual([
+      `${join("pkg", "migrations", "0001_index.sql")}: deduplicated-ahead-of-it, but ${join("pkg", "migrations", "0002_dedupe.sql")} does not run ahead of it`,
+    ]);
+  });
+
+  it("names an acknowledgement of a migration no set here applies", async () => {
+    // The equality would fail too, as a diff of statements. This says which half is wrong.
+    await expect(
+      reasonsThatDoNotHold(
+        [
+          {
+            migration: join("pkg", "migrations", "0009_typo.sql"),
+            statement: 'CREATE UNIQUE INDEX "i" ON "t" USING btree ("c")',
+            because: "deduplicated-ahead-of-it",
+            deduplicatedBy: join("pkg", "migrations", "0000_dedupe.sql"),
+          },
+        ],
+        set("0000_dedupe", "0001_index"),
+      ),
+    ).resolves.toEqual([
+      `${join("pkg", "migrations", "0009_typo.sql")}: deduplicated-ahead-of-it, but no set here applies it`,
+    ]);
+  });
+
+  it("holds a deduplication that runs ahead of it in the same set", async () => {
+    await expect(
+      reasonsThatDoNotHold(
+        [
+          {
+            migration: join("pkg", "migrations", "0001_index.sql"),
+            statement: 'CREATE UNIQUE INDEX "i" ON "t" USING btree ("c")',
+            because: "deduplicated-ahead-of-it",
+            deduplicatedBy: join("pkg", "migrations", "0000_dedupe.sql"),
+          },
+        ],
+        set("0000_dedupe", "0001_index"),
+      ),
+    ).resolves.toEqual([]);
+  });
+
+  it("names a debt whose record lists it nowhere but in passing", async () => {
+    // The same record and the wrong section. A check that read the whole file would pass this
+    // and go on passing if the section a publisher reads were emptied or renamed, which is the
+    // one thing this obligation exists to guarantee against — the register of breaks is a real
+    // neighbouring section of the same record, and it is not that list.
+    const debt = {
+      migration: join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql"),
+      statement: 'CREATE UNIQUE INDEX "i" ON "core_order" USING btree ("cart_id")',
+      because: "unreachable-until-release",
+      recordedIn: join(
+        "docs",
+        "adr",
+        "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
+      ),
+      under: "The register of breaks taken under this licence",
+    } as const;
+
+    await expect(reasonsThatDoNotHold([debt], [])).resolves.toEqual([
+      `${debt.migration}: unreachable-until-release, but "${debt.under}" in ${debt.recordedIn} does not name it`,
+    ]);
+  });
+
+  it("names a debt whose record has no such section", async () => {
+    const debt = {
+      migration: join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql"),
+      statement: 'CREATE UNIQUE INDEX "i" ON "core_order" USING btree ("cart_id")',
+      because: "unreachable-until-release",
+      recordedIn: join(
+        "docs",
+        "adr",
+        "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
+      ),
+      under: "What the licence is holding up",
+    } as const;
+
+    await expect(reasonsThatDoNotHold([debt], [])).resolves.toEqual([
+      `${debt.migration}: unreachable-until-release, but ${debt.recordedIn} has no section "${debt.under}"`,
+    ]);
+  });
+
+  it("names a debt whose record is not there to read", async () => {
+    const recordedIn = join("docs", "adr", "0999-no-such-record.md");
+
+    await expect(
+      reasonsThatDoNotHold(
+        [
+          {
+            migration: join(
+              "packages",
+              "core",
+              "migrations",
+              "0016_fresh_gwen_stacy.sql",
+            ),
+            statement: 'CREATE UNIQUE INDEX "i" ON "core_order" USING btree ("cart_id")',
+            because: "unreachable-until-release",
+            recordedIn,
+            under: "What else the licence is holding up",
+          },
+        ],
+        [],
+      ),
+    ).resolves.toEqual([
+      `${join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql")}: unreachable-until-release, but ${recordedIn} is not there to read`,
+    ]);
   });
 });
