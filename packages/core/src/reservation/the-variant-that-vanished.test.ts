@@ -21,10 +21,11 @@ import {
  * are one operation, or they are two facts that can disagree. `inventoryProvider.hold` says so
  * in as many words about the shelf; the count path is the same argument about the Variant's
  * existence, and it now holds `for share` on the `core_variant` row for the length of the
- * transaction it writes in — the same lock `setPrice`, `addCartLine` and `capture-order` take
- * before writing a row that references a Variant, and taking it before `core_inventory`, which
- * is the tail of the `core_product` → `core_variant` → `core_inventory` order every site holding
- * more than one of those rows takes them in (ADR-0059). A count holds no Product row at all.
+ * transaction it writes in — the same lock `setPrice`, `addLineItem` and `capture-order` take
+ * before writing a row that references a Variant, and since #160 the same *function*:
+ * `catalog/lock.ts`, which is also where the `core_product` → `core_variant` → `core_inventory`
+ * order every site takes those rows in is written down (ADR-0059). A count takes the tail of it
+ * — `core_variant` before `core_inventory` — and no Product row at all.
  *
  * **It was watched failing before it was made to pass.** Against the two loose statements, the
  * counts that arrived while a delete was open answered

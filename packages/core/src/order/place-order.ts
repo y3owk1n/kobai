@@ -1,5 +1,6 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
+import { lockVariants } from "../catalog/lock.ts";
 import type { Transaction } from "../db/client.ts";
 import { violatesUniqueIndex } from "../db/errors.ts";
 import {
@@ -770,8 +771,12 @@ export const captureOrder = defineStep(
         // nothing left to navigate to.
         //
         // Taken first, and it is the same order `catalog/delete.ts` takes its locks in; the
-        // opposite order is a deadlock between a Capture and a delete over one Variant.
-        const stillThere = await variantsStillThere(tx, lines);
+        // opposite order is a deadlock between a Capture and a delete over one Variant, and
+        // `catalog/lock.ts` is where that order is written down.
+        const stillThere = await lockVariants(
+          tx,
+          lines.map((line) => line.variantId),
+        );
 
         const [written] = await tx
           .insert(order)
@@ -943,32 +948,6 @@ function inWholeMinorUnits(input: TaxedLines): void {
  * `price-lines` can. That is a bug in the Step that produced it rather than a decision the
  * Workflow made, so it travels as one and the transaction takes the Order with it.
  */
-/**
- * Which of these lines' Variants are still there — **locked**, so the answer holds for the
- * length of the transaction the caller is in.
- *
- * `for share` rather than a plain read, because a plain read answers about the past: a Variant
- * deleted a moment later would still be in the set, and the insert that trusted it would meet
- * a foreign key pointing at nothing. Shared rather than exclusive because two Captures for one
- * Variant have no quarrel with each other — only with a `DELETE`, which this blocks. It is the
- * same lock `setPrice` takes, for the same reason, before writing a row that references a
- * Variant.
- */
-async function variantsStillThere(
-  tx: Transaction,
-  lines: readonly { readonly variantId: string }[],
-): Promise<Set<string>> {
-  const variantIds = [...new Set(lines.map((line) => line.variantId))];
-  if (variantIds.length === 0) return new Set();
-
-  const rows = await tx
-    .select({ id: variant.id })
-    .from(variant)
-    .where(inArray(variant.id, variantIds))
-    .for("share");
-  return new Set(rows.map((row) => row.id));
-}
-
 function lineIdsBySku(rows: readonly { id: string; sku: string }[]): Map<string, string> {
   const bySku = new Map(rows.map((row) => [row.sku, row.id]));
   if (bySku.size !== rows.length) {

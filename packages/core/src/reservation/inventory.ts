@@ -1,7 +1,8 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { lockVariant } from "../catalog/lock.ts";
 import type { Database, Queryable, Transaction } from "../db/client.ts";
 import { violatesCheckConstraint } from "../db/errors.ts";
-import { inventory, variant } from "../db/schema.ts";
+import { inventory } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import type {
   HoldOutcome,
@@ -65,28 +66,25 @@ export type InventoryUpdate =
  *
  * That is ADR-0018's rule applied to a different fact, not an exception to it.
  * `inventoryProvider.hold` makes the check and the write **one statement** because the fact it
- * checks — how many units are free — is a column it is also writing. Existence is not: no single
- * statement can both check that a Variant is there and depend on it still being there, so the
- * ADR's *other* answer is the one available here, and a **row lock** is what makes the two
- * statements one operation. What stays forbidden either way is the plain read the delete routes
- * made a lie of. `for share` rather than `for update` because two Merchants counting the same
- * shelf have no quarrel with each other — only with a delete, which this blocks — and it is the
- * same lock `setPrice`, `addCartLine` and `capture-order` take before writing a row that
- * references a Variant.
+ * checks — how many units are free — is a column it is also writing. Existence is not, so the
+ * ADR's *other* answer is the one available here: the lock `catalog/lock.ts` takes, which is
+ * where the argument for it and the order these rows go in are written down. What stays
+ * forbidden either way is the plain read the delete routes made a lie of.
  *
- * **The order is `core_variant` then `core_inventory`**, which is the tail of the
- * `core_product` → `core_variant` → `core_inventory` order `capture-order` and both delete
- * routes take those rows in (ADR-0059) — this takes no Product lock at all, and a prefix nobody
- * holds cannot make a cycle. The opposite order is a deadlock, and Postgres resolves one of
- * those by killing a request that was merely simultaneous.
+ * **What this site adds to that order is where it stops.** It takes `core_variant` and then
+ * `core_inventory`, which is the tail of `core_product` → `core_variant` → `core_inventory`, and
+ * it takes no Product lock at all — a count is about one Variant's shelf and has no business
+ * with its siblings. A prefix nobody holds cannot make a cycle, so the tail on its own is
+ * enough. Written the other way round it would deadlock against both delete routes, and
+ * Postgres resolves a deadlock by killing a request that was merely simultaneous.
  *
  * **Reading the violation instead was rejected, and not on cost.** A `violatesForeignKey` beside
  * `violatesCheckConstraint`, mapped to this same `variant-not-found`, would answer correctly and
  * add no lock to a write that is otherwise contention-free — it is the cheaper of the two. What
  * it does is answer *after* the state rather than keep the state from arising, which leaves the
  * loose read in place and makes the declared refusal a rescue rather than a decision; and it
- * would give this one hazard a second mechanism, where `setPrice`, `addCartLine` and
- * `capture-order` all already have the first. The `stock-is-reserved` refusal below **is** read
+ * would give this one hazard a second mechanism, where every other write referencing a Variant
+ * already has the first. The `stock-is-reserved` refusal below **is** read
  * out of a violation, and that is the distinction rather than an inconsistency: a Reservation may
  * claim a unit between any read of `reserved` and this write, so nothing this transaction can
  * hold makes such a read stay true, and the `check` is what makes it one operation at all — the
@@ -101,13 +99,7 @@ export async function setInventory(
 
   try {
     return await db.transaction(async (tx) => {
-      const [exists] = await tx
-        .select({ id: variant.id })
-        .from(variant)
-        .where(eq(variant.id, variantId))
-        .for("share")
-        .limit(1);
-      if (!exists) return noSuchVariant(variantId);
+      if (!(await lockVariant(tx, variantId))) return noSuchVariant(variantId);
 
       const [row] = await tx
         .insert(inventory)
@@ -186,8 +178,9 @@ export async function readInventoryOf(
  * (`sweep.ts`), and then the delete goes through.
  *
  * `for update` rather than a plain read, because a hold placed a moment after the answer would
- * make it a lie. It is taken **after** the caller has locked the `core_variant` rows, which is
- * the order `capture-order` takes them in too — the opposite order is a deadlock.
+ * make it a lie. It is the last of the three locks a delete takes, and it is taken **after** the
+ * caller has locked the `core_variant` rows — `catalog/lock.ts` is where that order is written
+ * down and why the opposite one is a deadlock.
  *
  * **It answers for Inventory alone, and it lives here for that reason.** Only this module knows
  * a Reservation's `subject` is a Variant's identifier, and only this provider's arithmetic is
