@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { HTTPException } from "hono/http-exception";
 import type { SessionPolicy } from "../auth/session.ts";
@@ -57,22 +58,97 @@ export type HttpDependencies = {
   readonly sessionPolicy: SessionPolicy;
 };
 
+/** Where `coreVersion` reads from — `@kobai/core`'s own manifest, beside its `dist`. */
+const CORE_MANIFEST_PATH = new URL("../../package.json", import.meta.url);
+
+/**
+ * The release this surface belongs to, read from `@kobai/core`'s own manifest.
+ *
+ * ADR-0060 puts the HTTP surface under Core's semver promise, so the surface's version *is*
+ * the package's — one fact, and this reads it rather than restating it. A second copy kept
+ * by hand would be the thing ADR-0049 refuses for a migration count: a number written down
+ * where it is already recorded, agreeing right up until somebody forgets.
+ *
+ * The manifest is found relative to this module's *built* output, exactly as
+ * `OPENAPI_DOCUMENT_PATH` finds the description: `rootDir` is `src` and `outDir` is `dist`,
+ * so `../../` is the package root in the source tree, in `dist`, and in the tarball a
+ * Project installs. npm puts a `package.json` in every tarball whatever `files` says, and
+ * `exports` already names `./package.json` for the upgrade command, so nothing further has
+ * to be arranged for this to resolve.
+ *
+ * **It is read when a description is asked for, and never at import.** A Project boots this
+ * module and asks for no description at all — `kobai.openapi()` is already lazy, and ADR-0040
+ * keeps the description off the served surface entirely — so a manifest read at module scope
+ * would put a synchronous file read, and an import-time throw, in front of every boot for a
+ * value only the generator and the tests want. Every other package-relative path in this
+ * repository resolves eagerly and reads late for the same reason: `OPENAPI_DOCUMENT_PATH`
+ * and each migration set's folder are URLs, opened at use.
+ *
+ * A manifest with no `version` throws rather than returning `undefined`, because
+ * `JSON.stringify` drops an undefined value and the result would be a description missing a
+ * field OpenAPI requires — an invalid document produced silently, which is worse than no
+ * document.
+ */
+export function coreVersion(): string {
+  const manifest = JSON.parse(readFileSync(CORE_MANIFEST_PATH, "utf8")) as {
+    version?: string;
+  };
+  if (manifest.version === undefined) {
+    throw new Error(`${CORE_MANIFEST_PATH.pathname} declares no version`);
+  }
+  return manifest.version;
+}
+
 /**
  * The document's own metadata — the only part of the description not derived from a route.
  *
- * `version` is the API's, and it moves with `@kobai/core`'s. Everything else about the
- * description comes from the routes themselves.
+ * It is a function rather than a constant for one reason: `version` is the API's, and it is
+ * `@kobai/core`'s, read rather than written here — so a description and the build that
+ * produced it can never disagree about which kobai this is.
+ *
+ * What *can* disagree is the artifact checked into `packages/core/openapi.json`, because that
+ * only moves when somebody regenerates it. **A version bump is therefore one
+ * `devbox run openapi:generate` away from green**, and until it is run both checks in
+ * `openapi.test.ts` fail: the byte comparison as a diff, and the version assertion by name.
+ * `packages/client/src/schema.test.ts` is *not* one of them — `openapi-typescript` emits the
+ * paths, components and operations and never the `info` block, so a regenerated client is
+ * byte-identical across a version bump. That churn is accepted rather than overlooked: every
+ * answer that puts a release in the artifact has it, and the only answer that does not is
+ * leaving the description naming no release at all.
+ *
+ * Which was the previous answer, and `0.0.0` is not a silence. OpenAPI requires
+ * `info.version`, so omitting it was never on the table; and this file ships *inside* a
+ * package that `tests/publish-guard.test.ts` fails the build for carrying that exact
+ * version, on the grounds that it "is not a starting point, it is an absence" (ADR-0034).
+ *
+ * It matters because the description is how a Developer who does not write TypeScript
+ * consumes this surface — ADR-0006 rejected tRPC precisely so they need not share kobai's
+ * language — and the file on their disk carries no manifest beside it. ADR-0060 leaves the
+ * `info` block's *serialisation* unpromised; the surface it describes is promised, and the
+ * description now says which release of that promise it is describing.
+ *
+ * **So whatever moves the manifest's version has to regenerate the artifact beside it**, and
+ * nothing outside this repository enforces that. `tests/support/local-registry.ts` already
+ * rewrites the version while repacking a tarball, so the upgrade gate's synthetic major
+ * serves one version and carries a checked-in description naming another; nothing asks it
+ * the question, so nothing is wrong today. A release process that bumps at publish time
+ * rather than in a commit would ship that mismatch to a Developer, which is a thing to
+ * decide when the first publish is arranged (ADR-0058).
+ *
+ * Everything else about the description comes from the routes themselves.
  */
-const DOCUMENT = {
-  openapi: "3.1.0",
-  info: {
-    title: "kobai",
-    version: "0.0.0",
-    description:
-      "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session in an httpOnly cookie, and `/store`, behind a bearer API key (ADR-0020, ADR-0032). `/health` is open, and is the only route that answers before migrations have applied.",
-    license: { name: "MIT", identifier: "MIT" },
-  },
-} as const;
+function documentMetadata() {
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "kobai",
+      version: coreVersion(),
+      description:
+        "kobai's HTTP surface. Two authenticated surfaces: `/admin`, behind a Merchant session in an httpOnly cookie, and `/store`, behind a bearer API key (ADR-0020, ADR-0032). `/health` is open, and is the only route that answers before migrations have applied.",
+      license: { name: "MIT", identifier: "MIT" },
+    },
+  } as const;
+}
 
 const healthRoute = createRoute({
   method: "get",
@@ -239,5 +315,5 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
  * `openapi.test.ts` fails the build when the two disagree.
  */
 export function describeHttpApp(app: OpenAPIHono): OpenApiDocument {
-  return app.getOpenAPI31Document(DOCUMENT);
+  return app.getOpenAPI31Document(documentMetadata());
 }

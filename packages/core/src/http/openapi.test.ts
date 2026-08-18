@@ -6,7 +6,7 @@ import { createMigrationStateHolder } from "../migrations/state.ts";
 import { placeOrderWorkflow } from "../order/place-order.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { silentLogger } from "../testing/kobai.ts";
-import { createHttpApp, describeHttpApp } from "./app.ts";
+import { coreVersion, createHttpApp, describeHttpApp } from "./app.ts";
 import { GATE_REFUSALS, type GateRefusal, refusalAnsweredBy } from "./gate-refusals.ts";
 import { OPENAPI_DOCUMENT_PATH, openApiJson, SECURITY_SCHEMES } from "./openapi.ts";
 
@@ -140,6 +140,40 @@ describe("the description is generated from the routes", () => {
     // client generated from it. A failure here is drift, which is the whole reason the
     // description is generated rather than written.
     expect(openApiJson(document)).toBe(checkedIn);
+  });
+});
+
+/**
+ * Which release the description says it is describing.
+ *
+ * Its own block rather than one more case above, because the version is the one thing in the
+ * document that is *not* derived from a route: it is `@kobai/core`'s, read out of the manifest
+ * (ADR-0060 puts the HTTP surface under Core's semver promise, so the surface's version is the
+ * package's).
+ */
+describe("the description names the release it describes", () => {
+  it("carries @kobai/core's version, in the artifact that is checked in", async () => {
+    const checkedIn = JSON.parse(await readFile(OPENAPI_DOCUMENT_PATH, "utf8")) as {
+      info: { version?: string };
+    };
+
+    // Deliberately the file on disk rather than `describeCore().document`, which reads the
+    // same manifest and so could only ever agree with it. The artifact is the second source:
+    // it moves when somebody regenerates it and at no other time, so this is the assertion
+    // that a version bump was followed by `devbox run openapi:generate` — and it names the
+    // two versions, where the byte comparison above reports an unreadable diff.
+    //
+    // `packages/client/src/schema.test.ts` is not a third check on this: openapi-typescript
+    // emits paths, components and operations and never the `info` block, so a regenerated
+    // client is byte-identical across a version bump.
+    expect(checkedIn.info.version).toBe(coreVersion());
+
+    // A version missing from both sides would make the line above pass by finding nothing —
+    // ADR-0049's "two empty lists are equal" in a new place. `coreVersion` refuses such a
+    // manifest rather than returning `undefined`, and this says so at the seam that would
+    // otherwise absorb it. Whether the version is a *real* one rather than `0.0.0` is
+    // `tests/publish-guard.test.ts`'s question, and it already asks it.
+    expect(checkedIn.info.version).toEqual(expect.any(String));
   });
 });
 
