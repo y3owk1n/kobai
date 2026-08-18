@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import type { Database, Queryable } from "../db/client.ts";
+import type { Database, Queryable, Transaction } from "../db/client.ts";
 import { violatesCheckConstraint } from "../db/errors.ts";
 import { inventory, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -122,6 +122,48 @@ export async function readInventoryOf(
     .where(inArray(inventory.variantId, [...variantIds]));
 
   return new Map(rows.map((row) => [row.variantId, reported(row.variantId, row)]));
+}
+
+/**
+ * Which of these Variants have units claimed right now — and the rows locked while the caller
+ * decides what to do about it.
+ *
+ * Asked by the delete routes, which must not take a Variant away from an Order that is being
+ * placed for it: the hold has already been made and the Shopper is about to be charged, and
+ * that is the one thing about a deletion nothing could undo afterwards.
+ *
+ * **`reserved` is the question, not the `core_reservation` rows.** What makes a unit
+ * unavailable is this provider's own arithmetic — the record says who claimed what and Core
+ * owns it — so asking the column keeps one answer to "is this spoken for" rather than two that
+ * can disagree, and it is exactly the fact the `reserved <= on_hand` constraint already refuses
+ * a recount against. A hold that has lapsed but not yet been swept still counts here, for the
+ * same reason and with the same fix: the sweeper gives the units back within the minute
+ * (`sweep.ts`), and then the delete goes through.
+ *
+ * `for update` rather than a plain read, because a hold placed a moment after the answer would
+ * make it a lie. It is taken **after** the caller has locked the `core_variant` rows, which is
+ * the order `capture-order` takes them in too — the opposite order is a deadlock.
+ *
+ * **It answers for Inventory alone, and it lives here for that reason.** Only this module knows
+ * a Reservation's `subject` is a Variant's identifier, and only this provider's arithmetic is
+ * being read. The day a second provider can claim something *about a Variant* — a Capacity
+ * claim on a period, say (ADR-0018) — a caller asking "may this Variant go" has to ask the
+ * providers rather than this column, and a delete route leaning on this one would be quietly
+ * answering half the question.
+ */
+export async function variantsWithClaimedStock(
+  tx: Transaction,
+  variantIds: readonly string[],
+): Promise<readonly string[]> {
+  if (variantIds.length === 0) return [];
+
+  const rows = await tx
+    .select({ variantId: inventory.variantId, reserved: inventory.reserved })
+    .from(inventory)
+    .where(inArray(inventory.variantId, [...variantIds]))
+    .for("update");
+
+  return rows.filter((row) => row.reserved > 0).map((row) => row.variantId);
 }
 
 /**

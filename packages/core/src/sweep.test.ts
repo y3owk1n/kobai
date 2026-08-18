@@ -109,9 +109,12 @@ describe("a lapsed hold", () => {
     await abandonAHold(kobai, catalog);
     await windHoldsBack(kobai);
 
-    // A Merchant deleted the Variant while the hold stood, and its Inventory row went with it.
-    // There is nothing to give back — and the sweep must say so by finishing, because a failure
-    // here rolls `released_at` back and the same row returns every minute forever.
+    // The Variant is gone while the hold stands, and its Inventory row went with it. Since #115
+    // `DELETE /admin/variants/{id}` refuses exactly this — units claimed by a Reservation being
+    // placed are what stop a Variant being deleted — so the writer here is one Core does not
+    // mediate (ADR-0004), which is what this SQL is. There is nothing to give back either way,
+    // and the sweep must say so by finishing: a failure rolls `released_at` back and the same
+    // row returns every minute forever.
     await kobai.db.execute(sql`delete from core_variant`);
 
     await expect(kobai.sweep()).resolves.toMatchObject({ reservationsReleased: 1 });
