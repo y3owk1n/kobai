@@ -15,6 +15,13 @@ import {
 import { isUuid } from "../db/uuid.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
+import type { ReservationRefusal } from "../reservation/provider.ts";
+import {
+  consumeReservations,
+  type HeldReservation,
+  holdReservations as holdReservationsFor,
+  releaseReservations,
+} from "../reservation/reservation.ts";
 import { runWorkflow } from "../workflow/run.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
 import { defineWorkflow } from "../workflow/workflow.ts";
@@ -33,12 +40,12 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  * be the *last thing that can fail*. Everything that can fail happens before it, and
  * `capture-order` declares no compensation because there is nothing it could honestly do. That
  * is why `take-payment` sits immediately in front of it — money is the one thing here that moves
- * outside the database, so it is the one thing a compensation has to undo — and why the slot this
- * Workflow grows later, holding Reservations, arrives earlier still, with consuming them joining
- * the same transaction the Order is written in rather than becoming another thing that can fail
- * afterwards (ADR-0018).
+ * outside the database, so it is the one thing a compensation has to undo — and why
+ * `hold-reservations` sits in front of *that*: stock is claimed before a Shopper is charged for
+ * it, and consuming the claims joins the transaction the Order is written in rather than becoming
+ * another thing that can fail afterwards (ADR-0018).
  *
- * Six slots today:
+ * Seven slots today:
  *
  * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired,
  *   already placed or empty. It applies no pricing rule; it hands over what was selected.
@@ -50,11 +57,14 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  *   goes.
  * - **`calculate-tax`** works out the tax on each line, and Core's own implementation returns
  *   **zero** — see {@link calculateTax}.
+ * - **`hold-reservations`** claims everything scarce in the Cart, atomically, and **its
+ *   compensation releases** — see {@link holdReservations}. A Cart of untracked Variants claims
+ *   nothing.
  * - **`take-payment`** asks the deployment's Payment Provider for what the Order comes to, and
  *   **its compensation refunds** — see {@link takePayment}. Core implements no provider
  *   (ADR-0053), so a deployment wired with none refuses here and nowhere else.
- * - **`capture-order`** writes the Order, its snapshot Line Items, its Adjustments and the
- *   Payment in one transaction.
+ * - **`capture-order`** consumes those Reservations and writes the Order, its snapshot Line
+ *   Items, its Adjustments and the Payment — in one transaction.
  *
  * **`apply-adjustments` runs before `calculate-tax`, and that is arithmetic rather than
  * ordering taste.** ADR-0022 says an Adjustment changes what a line total means in every Order
@@ -86,7 +96,11 @@ export type PlaceOrderRefusal =
   | "cart-placed"
   | "cart-empty"
   | "no-payment-provider"
-  | "payment-declined";
+  | "payment-declined"
+  // Every way a Reservation provider can say the Store has not got it, folded in rather than
+  // spelled out: a second provider adds a member to that union and this one grows with it, so
+  // the store surface's status map goes red naming the new reason instead of answering it 422.
+  | ReservationRefusal;
 
 /** One line of the Cart being placed, with everything the snapshot will need. */
 export type CartLineToPlace = {
@@ -201,11 +215,26 @@ export type TaxedLine = AdjustedLine & {
   readonly tax: number;
 };
 
-/** What `calculate-tax` produces and `take-payment` charges for. */
+/** What `calculate-tax` produces and `hold-reservations` claims against. */
 export type TaxedLines = {
   readonly cart: CartToPlace;
   readonly lines: readonly TaxedLine[];
   readonly adjustments: readonly Adjustment[];
+};
+
+/**
+ * What `hold-reservations` produces and `take-payment` charges for: the same Order, with the
+ * claims it is holding on everything scarce in it.
+ *
+ * The Reservations travel on the value rather than in bookkeeping beside it because
+ * `capture-order` is what consumes them, and it consumes them *inside the transaction it writes
+ * the Order in* (ADR-0018). A Step in between that rebuilt this object without them would
+ * therefore write an Order whose stock was never taken — which is why they are part of the
+ * contract each slot is checked against rather than a detail Core remembers privately.
+ */
+export type ReservedLines = TaxedLines & {
+  /** Empty when nothing in this Cart is scarce — a Cart of digital Variants holds nothing. */
+  readonly reservations: readonly HeldReservation[];
 };
 
 /**
@@ -233,7 +262,7 @@ export type TakenPayment = {
 };
 
 /** What `take-payment` produces and `capture-order` writes: the Order, and the money for it. */
-export type PaidOrder = TaxedLines & {
+export type PaidOrder = ReservedLines & {
   readonly payment: TakenPayment;
 };
 
@@ -419,20 +448,100 @@ export const calculateTax = defineStep(
 );
 
 /**
- * What this run charged, for the run that charged it.
+ * What a Step did, remembered for the compensation that has to undo it.
  *
- * Core hands a compensation **the very value** its `run` was given (ADR-0036), so the taxed lines
- * are the key that ties the charge to the refund — no bookkeeping crosses between runs, and a
- * failure now can only ever give back what this run took. Weak, so a run that succeeds leaves
- * nothing behind to collect; and outside the Step rather than on the value it passes along,
- * because that value belongs to the Workflow.
+ * Core hands a compensation **the very value** its `run` was given (ADR-0036), so that value is
+ * the key: no bookkeeping crosses between runs, and a failure now can only ever undo what this
+ * run did. Weak, so a run that succeeds leaves nothing behind to collect; and outside the Step
+ * rather than on the value it passes along, because that value belongs to the Workflow.
  *
- * A stack rather than one entry, for the same reason `@kobai/plugin-price-log` keeps one: nothing
- * stops a Project wiring an extra charging Step into the same Workflow, both keyed on the same
- * input, and Core unwinds in reverse — so each compensation gives back the payment its own `run`
- * put on top.
+ * A **stack** rather than one entry per input, for the reason `@kobai/plugin-price-log` keeps
+ * one: nothing stops a Project wiring a second Step doing the same kind of thing into the same
+ * Workflow, both keyed on the same input, and Core unwinds in reverse — so each compensation
+ * undoes what its own `run` put on top.
+ *
+ * Two Steps here keep one: `hold-reservations` and `take-payment`, the two that do something
+ * outside their own transaction. Everything before them decides rather than does, and Capture's
+ * work is undone by the database.
  */
-const charged = new WeakMap<TaxedLines, ChargedTo[]>();
+function unwoundBy<Input extends object, Done>() {
+  const stacks = new WeakMap<Input, Done[]>();
+  return {
+    /** Called before the Step returns, so a compensation can find it however the run ends. */
+    push(input: Input, done: Done): void {
+      stacks.set(input, [...(stacks.get(input) ?? []), done]);
+    },
+    /**
+     * The newest thing this input had done to it, or nothing. Core would not call a compensation
+     * unless the Step completed, but a compensation should not assume it is being called for the
+     * reason it expects.
+     */
+    pop(input: Input): Done | undefined {
+      return stacks.get(input)?.pop();
+    },
+  };
+}
+
+/** What each run is holding, for the run that holds it. */
+const holding = unwoundBy<TaxedLines, readonly HeldReservation[]>();
+
+/**
+ * **`hold-reservations`** — the Store stops overselling (ADR-0018, ADR-0027).
+ *
+ * Everything scarce in this Cart is claimed here, atomically, through the one Reservation
+ * interface: Inventory today, and Capacity as a second provider without a second mechanism.
+ * What "atomically" means is not this Step's business and is the whole point of the interface —
+ * a provider claims with a row lock or a conditional write, never a read followed by a write,
+ * because two requests that both read the same last unit and then both write have implemented
+ * the appearance of safety, which is worse than none.
+ *
+ * **Its position is the decision, and its compensation follows from it.** It sits *before*
+ * `take-payment` so that a Shopper whose card is charged is a Shopper the stock was already
+ * held for, and the compensation releases — a hold that outlived a failed placement would make
+ * stock unsellable for no purchase. Consuming happens later and elsewhere: `capture-order` takes
+ * these claims for good inside the transaction that writes the Order, so **nothing there needs
+ * a compensation**, because the database unwinds a claim and an Order together or not at all.
+ *
+ * A Cart holding nothing scarce holds nothing: an untracked Variant produces no claim, so this
+ * Step is free for a Store selling downloads and is not something such a Store has to switch
+ * off.
+ */
+export const holdReservations = defineStep(
+  "hold-reservations",
+
+  async (input: TaxedLines, context): Promise<ReservedLines> => {
+    const held = await holdReservationsFor(
+      context.db,
+      // The three things a provider may see, and no more: what was selected, how much of it,
+      // and the Line Item's own open data — which is where a Capacity provider will find the
+      // date a Shopper asked for (ADR-0013).
+      input.lines.map((line) => ({
+        variantId: line.variantId,
+        quantity: line.quantity,
+        metadata: line.metadata,
+      })),
+    );
+    // A provider's refusal is a refusal of the Order, with the provider's own reason — so a
+    // Store that is out of stock says so, and Capacity will say its own thing here without this
+    // Step learning a second word.
+    if (!held.ok) throw new StepFailure(held.reason, held.detail);
+
+    holding.push(input, held.reservations);
+
+    return { ...input, reservations: held.reservations };
+  },
+
+  async (input, context) => {
+    // Nothing held, nothing to give back.
+    const reservations = holding.pop(input);
+    if (reservations === undefined) return;
+
+    await releaseReservations(context.db, reservations);
+  },
+);
+
+/** What each run charged, for the run that charged it — see {@link unwoundBy}. */
+const charged = unwoundBy<ReservedLines, ChargedTo>();
 
 /** A payment, and the provider that took it — because that is the one that can give it back. */
 type ChargedTo = {
@@ -472,7 +581,7 @@ type ChargedTo = {
 export const takePayment = defineStep(
   "take-payment",
 
-  async (input: TaxedLines, context): Promise<PaidOrder> => {
+  async (input: ReservedLines, context): Promise<PaidOrder> => {
     const provider = context.paymentProvider;
     if (!provider) {
       throw refuse(
@@ -509,17 +618,14 @@ export const takePayment = defineStep(
       // provider written before the field existed keeps meaning it and needs no edit (ADR-0019).
       received: outcome.received ?? true,
     };
-    // Recorded before the Step returns, so the compensation can find it however the run ends
-    // after this line — including a Capture that never got as far as writing anything down.
-    charged.set(input, [...(charged.get(input) ?? []), { provider, payment }]);
+    charged.push(input, { provider, payment });
 
     return { ...input, payment };
   },
 
   async (input) => {
-    const taken = charged.get(input)?.pop();
-    // Nothing taken, nothing to give back. Core would not call this unless the Step completed,
-    // but a compensation should not assume it is being called for the reason it expects.
+    // Nothing taken, nothing to give back.
+    const taken = charged.pop(input);
     if (taken === undefined) return;
 
     // Back to the provider that took it, rather than to whatever the context holds now: the money
@@ -629,6 +735,13 @@ export const captureOrder = defineStep(
           currency: input.payment.currency,
           received: input.payment.received,
         });
+
+        // The Reservations this run has been holding since `hold-reservations`, taken for good
+        // — **in this transaction**, which is the whole of ADR-0018's second half. Stock and
+        // Orders cannot disagree if neither can be written without the other, so there is
+        // nothing here for a compensation to undo: a failure after this line takes the Order
+        // and the stock movement with it.
+        await consumeReservations(tx, input.reservations, written.id);
 
         const captured = await readOrder(tx, written.id);
         if (!captured)
@@ -804,6 +917,7 @@ export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order
   .step(priceLines)
   .step(applyAdjustments)
   .step(calculateTax)
+  .step(holdReservations)
   .step(takePayment)
   .step(captureOrder)
   .build();

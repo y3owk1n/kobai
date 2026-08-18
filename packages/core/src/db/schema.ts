@@ -768,3 +768,139 @@ export const idempotencyKey = pgTable(
 );
 
 export type IdempotencyKeyRow = typeof idempotencyKey.$inferSelect;
+
+/**
+ * **Inventory** — the countable stock of a physical Variant (`CONTEXT.md`, ADR-0018).
+ *
+ * One of the two scarce resources a Reservation claims; Capacity is the other, and it is not
+ * this table. Both go through one interface (`reservation/provider.ts`) precisely so that the
+ * second one arrives as another provider rather than as another mechanism — so nothing here is
+ * reached except through that interface, and the Inventory provider is the only thing that
+ * writes these two numbers.
+ *
+ * **A row is what makes a Variant tracked, and its absence is not zero.** A Variant nobody has
+ * counted is not a Variant with none left: the first sells freely and the second sells to
+ * nobody, and a table where "no row" meant "no stock" could not tell them apart. So a digital
+ * Variant simply has no row, and stock arrives when a Merchant says it does.
+ *
+ * **Two columns rather than one, and `available` is neither of them.** `on_hand` is what the
+ * Store physically has and only Capture moves it; `reserved` is how much of that is claimed by
+ * a Reservation still in flight. What is left to sell is `on_hand - reserved`, derived on
+ * every read rather than stored, because a third column would be a number that can disagree
+ * with the other two — and the disagreement would be invisible until the Store oversold.
+ *
+ * **The check constraints are load-bearing.** ADR-0018 requires check-and-claim to be one
+ * atomic operation, and the provider's `update … where on_hand - reserved >= n` is that
+ * operation; these constraints are the second answer, the one that holds even for a writer
+ * Core does not mediate (ADR-0004). Negative stock is not a state this table can hold.
+ */
+export const inventory = pgTable(
+  "core_inventory",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * The Variant this counts, and exactly one row per Variant.
+     *
+     * Unique in DDL rather than by convention: two rows counting the same Variant would be two
+     * answers to how many there are, and the claim is made by a conditional `update` that
+     * would then move only one of them.
+     */
+    variantId: uuid("variant_id")
+      .notNull()
+      .unique()
+      // A deleted Variant takes its stock with it. There is nothing to count once the sellable
+      // thing is gone, and an Order's Line Items depend on none of this (ADR-0009).
+      .references(() => variant.id, { onDelete: "cascade" }),
+    /** What the Store physically has. Only Capture moves it, by consuming a Reservation. */
+    onHand: bigint("on_hand", { mode: "number" }).notNull().default(0),
+    /** How much of `on_hand` is claimed by a Reservation that is still held. */
+    reserved: bigint("reserved", { mode: "number" }).notNull().default(0),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("core_inventory_on_hand_is_not_negative", sql`${table.onHand} >= 0`),
+    check("core_inventory_reserved_is_not_negative", sql`${table.reserved} >= 0`),
+    // The one that says the Store never promises what it does not have: everything reserved is
+    // something on hand.
+    check(
+      "core_inventory_reserved_within_stock",
+      sql`${table.reserved} <= ${table.onHand}`,
+    ),
+  ],
+);
+
+export type InventoryRow = typeof inventory.$inferSelect;
+
+/**
+ * A **Reservation** — a claim on a scarce resource, **held** during purchase, **consumed** at
+ * Capture, **released** on failure or expiry (`CONTEXT.md`, ADR-0018, ADR-0027).
+ *
+ * Core's record of the claim, and deliberately not the claim itself: what makes a unit
+ * unavailable is the provider's own arithmetic — `core_inventory.reserved`, and whatever
+ * Capacity brings — while this row says who claimed what, until when, and how it ended. The
+ * split is what makes one interface with two providers possible: this table needs no column
+ * added for the second one.
+ *
+ * **`provider` and `subject` are the whole of that generality.** `provider` names which
+ * provider owns the claim (`inventory`), and `subject` is what the claim is *on*, in that
+ * provider's own terms — a Variant's identifier here, and a Capacity provider's own key when
+ * one arrives. `subject` is therefore text and carries no foreign key: a column referencing
+ * `core_variant` would be an Inventory column on a table that is not Inventory's.
+ *
+ * **Its two endings are two columns, and both are timestamps.** A held Reservation has neither;
+ * a consumed one has `consumed_at` and the Order that consumed it; a released one has
+ * `released_at`. A single `status` would make "held" the absence of a value that has to be kept
+ * in step with the provider's arithmetic, and the release path is exactly where that goes wrong:
+ * a compensation and the sweeper can reach the same row at the same instant, and `update …
+ * where released_at is null … returning` is what lets only one of them give the units back.
+ *
+ * **No `updated_at`, deliberately** — the third Core table without one, for `core_session`'s
+ * reason (ADR-0037, ADR-0045). This row is written for exactly two reasons after it is created,
+ * and each has its own column saying when it happened. A third column advancing on the same
+ * writes would record the same fact twice and pay a trigger on every hold to keep it there.
+ */
+export const reservation = pgTable(
+  "core_reservation",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Which provider owns this claim — `inventory` today, and Capacity's when it arrives. */
+    provider: text("provider").notNull(),
+    /** What the claim is on, in that provider's own terms. A Variant's id, for Inventory. */
+    subject: text("subject").notNull(),
+    quantity: bigint("quantity", { mode: "number" }).notNull(),
+    /**
+     * When this hold lapses, and the sweeper may give the units back.
+     *
+     * A TTL rather than a lifetime nobody ends (ADR-0027): a request whose process died between
+     * holding and Capture would otherwise keep stock claimed for a Shopper who has gone. It is
+     * generous compared with how long a placement takes, because releasing a hold out from
+     * under a run that is still going is the worse mistake — that one oversells.
+     */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** When Capture took these units for good — inside the same transaction as the Order. */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    /** When the units went back, whether by a compensation or by the sweeper. */
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    /**
+     * The Order that consumed this Reservation, or null while it is merely held.
+     *
+     * `set null` rather than `cascade`: the units were taken whether or not the Order row
+     * survives, and a stock record that vanished with it would leave `on_hand` short by an
+     * amount nothing accounts for. Nothing in Core deletes an Order (ADR-0009); this is what
+     * the column means if anything ever does.
+     */
+    orderId: uuid("order_id").references(() => order.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // What the sweeper scans: the lapsed ones, oldest deadline first.
+    index("core_reservation_expires_idx").on(table.expiresAt),
+    // Reading an Order's claims, and what a consumed Reservation is found by.
+    index("core_reservation_order_idx").on(table.orderId),
+    check("core_reservation_quantity_is_positive", sql`${table.quantity} > 0`),
+  ],
+);
+
+export type ReservationRow = typeof reservation.$inferSelect;

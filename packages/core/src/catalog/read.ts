@@ -2,6 +2,7 @@ import { asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
 
 /**
  * Reading the catalog.
@@ -35,6 +36,15 @@ export type Variant = {
   readonly sku: string;
   readonly metadata: Record<string, unknown>;
   readonly prices: readonly Price[];
+  /**
+   * What the Store has of it, or `null` when nobody is counting (ADR-0018).
+   *
+   * Read here rather than through a route of its own because this is where a Merchant is
+   * already looking: opening a Product is how you find out about the things you sell, and
+   * how many are left is one of those things. Untracked is `null` and not `0` — the first
+   * sells freely and the second sells to nobody.
+   */
+  readonly inventory: VariantInventory | null;
 };
 
 /** A Product as a list reports it: no Variants, because a list is not a detail view. */
@@ -131,5 +141,16 @@ export async function readVariants(db: Database, productId: string): Promise<Var
     else byVariant.set(variantId, [reported]);
   }
 
-  return variants.map((row) => ({ ...row, prices: byVariant.get(row.id) ?? [] }));
+  // A third query rather than a join, for the reason the second one is: a Variant that nobody
+  // counts has no row, and it must survive being read about.
+  const stock = await readInventoryOf(
+    db,
+    variants.map((row) => row.id),
+  );
+
+  return variants.map((row) => ({
+    ...row,
+    prices: byVariant.get(row.id) ?? [],
+    inventory: stock.get(row.id) ?? null,
+  }));
 }

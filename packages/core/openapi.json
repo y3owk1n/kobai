@@ -432,13 +432,17 @@
               "$ref": "#/components/schemas/Price"
             },
             "description": "Every Price set on this Variant. A Price is a row, so there may be several."
+          },
+          "inventory": {
+            "$ref": "#/components/schemas/Inventory"
           }
         },
         "required": [
           "id",
           "sku",
           "metadata",
-          "prices"
+          "prices",
+          "inventory"
         ]
       },
       "Price": {
@@ -467,6 +471,37 @@
           "currency",
           "metadata"
         ]
+      },
+      "Inventory": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "variantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "onHand": {
+            "type": "integer",
+            "description": "What the Store physically has."
+          },
+          "reserved": {
+            "type": "integer",
+            "description": "How much of it is claimed by Reservations still being placed."
+          },
+          "available": {
+            "type": "integer",
+            "description": "`onHand - reserved` — what is left to sell."
+          }
+        },
+        "required": [
+          "variantId",
+          "onHand",
+          "reserved",
+          "available"
+        ],
+        "description": "What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely."
       },
       "Product": {
         "type": "object",
@@ -563,6 +598,19 @@
         },
         "required": [
           "amount"
+        ]
+      },
+      "SetInventoryRequest": {
+        "type": "object",
+        "properties": {
+          "onHand": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "What the Store has, counted. Replaces whatever was there; it is not added to it."
+          }
+        },
+        "required": [
+          "onHand"
         ]
       },
       "OrderList": {
@@ -2123,6 +2171,121 @@
         }
       }
     },
+    "/admin/variants/{id}/inventory": {
+      "put": {
+        "summary": "Count a Variant's stock",
+        "description": "A statement of what the Store has, replacing whatever was there — not an adjustment to it. The first call is what makes a Variant tracked; an untracked Variant sells freely, which is not the same as one counted at zero. `reserved` is never set here: it belongs to the Reservations currently being placed. Read it back with the Product.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetInventoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the Store now has of this Variant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Inventory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Variant exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "More than that is currently claimed by Reservations being placed. Those either become Orders or lapse, and the count can be set once they have.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/orders": {
       "get": {
         "summary": "List Orders",
@@ -3381,7 +3544,7 @@
             }
           },
           "409": {
-            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
+            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
             "content": {
               "application/json": {
                 "schema": {

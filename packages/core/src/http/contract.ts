@@ -406,6 +406,36 @@ export const Price = z
   })
   .openapi("Price");
 
+/**
+ * What the Store has of a Variant, and what is left to sell (ADR-0018).
+ *
+ * `available` is `onHand - reserved`, worked out on every read rather than stored — a third
+ * number that could disagree with the other two would disagree invisibly, and the first
+ * sign of it would be the Store overselling.
+ */
+export const Inventory = z
+  .object({
+    variantId: z.uuid(),
+    onHand: z.int().meta({ description: "What the Store physically has." }),
+    reserved: z.int().meta({
+      description: "How much of it is claimed by Reservations still being placed.",
+    }),
+    available: z
+      .int()
+      .meta({ description: "`onHand - reserved` — what is left to sell." }),
+  })
+  .openapi("Inventory");
+
+/** Setting stock is a statement of what the Store has, not an adjustment to it. */
+export const SetInventoryRequest = z
+  .object({
+    onHand: z.int().min(0).meta({
+      description:
+        "What the Store has, counted. Replaces whatever was there; it is not added to it.",
+    }),
+  })
+  .openapi("SetInventoryRequest");
+
 export const Variant = z
   .object({
     id: z.uuid(),
@@ -414,6 +444,10 @@ export const Variant = z
     prices: z.array(Price).readonly().meta({
       description:
         "Every Price set on this Variant. A Price is a row, so there may be several.",
+    }),
+    inventory: Inventory.nullable().meta({
+      description:
+        "What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely.",
     }),
   })
   .openapi("Variant");

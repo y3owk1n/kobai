@@ -36,6 +36,7 @@ import {
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
 import { listOrders, readOrder } from "../order/read.ts";
+import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
 import * as contract from "./contract.ts";
 import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.ts";
@@ -302,6 +303,52 @@ const setPriceRoute = createRoute({
 });
 
 /**
+ * Sets what the Store has of a Variant — the Merchant's half of Inventory (ADR-0018).
+ *
+ * `catalog:write` rather than a permission of its own. A stock count is a fact about a Variant,
+ * and the Merchant who may price a Variant is the one who may say how many there are; ADR-0027
+ * settles that a Role is subdivided later by adding rows, which is what to do on the day a
+ * deployment wants a stock clerk who may not edit the catalog.
+ *
+ * A `PUT` because it is idempotent and because it is a *count* rather than an adjustment:
+ * sending the same body twice leaves the same stock, which `POST /variants/{id}/prices`
+ * deliberately does not. It is also what makes a Variant tracked — "start counting this" and
+ * "there are seven" are the same sentence, so they are not two routes.
+ *
+ * Reading it back is `GET /admin/products/{id}`, where a Merchant is already looking: every
+ * Variant there carries its Inventory, or `null` when nobody is counting it.
+ */
+const setInventoryRoute = createRoute({
+  method: "put",
+  path: "/variants/{id}/inventory",
+  summary: "Count a Variant's stock",
+  description:
+    "A statement of what the Store has, replacing whatever was there — not an adjustment to it. The first call is what makes a Variant tracked; an untracked Variant sells freely, which is not the same as one counted at zero. `reserved` is never set here: it belongs to the Reservations currently being placed. Read it back with the Product.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.SetInventoryRequest } },
+    },
+  },
+  responses: {
+    200: json("What the Store now has of this Variant.", contract.Inventory),
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Variant exists.", contract.Refusal),
+    409: json(
+      "More than that is currently claimed by Reservations being placed. Those either become Orders or lapse, and the count can be set once they have.",
+      contract.Refusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Mints an API key — the credential the store surface is gated by (ADR-0020).
  *
  * The value is in this response and in no other, ever: only a digest is stored, so there
@@ -523,6 +570,16 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(created.price, 201);
   });
 
+  guarded.openapi(setInventoryRoute, async (c) => {
+    const counted = await setInventory(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!counted.ok) return refused(c, counted, INVENTORY_STATUS);
+    return c.json(counted.inventory, 200);
+  });
+
   guarded.openapi(listOrdersRoute, async (c) => {
     return c.json({ orders: await listOrders(deps.db) }, 200);
   });
@@ -578,6 +635,16 @@ const PRODUCT_STATUS = {
 const API_KEY_STATUS = {
   invalid: 400,
 } as const satisfies Record<Exclude<ApiKeyCreation, { ok: true }>["reason"], 400>;
+
+/**
+ * 409 for stock already claimed: the request is well formed and the state of the Store refuses
+ * it — the same distinction `sku-taken` draws — and it becomes settable again by itself, as
+ * those Reservations become Orders or lapse.
+ */
+const INVENTORY_STATUS = {
+  "variant-not-found": 404,
+  "stock-is-reserved": 409,
+} as const satisfies Record<Exclude<InventoryUpdate, { ok: true }>["reason"], 404 | 409>;
 
 /** 422 for a currency this Store does not price in: well-formed, and still refused. */
 const PRICE_STATUS = {

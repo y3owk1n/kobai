@@ -72,6 +72,7 @@ export type {
   PlaceOrderWorkflow,
   PricedLine,
   PricedLines,
+  ReservedLines,
   TakenPayment,
   TaxedLine,
   TaxedLines,
@@ -80,6 +81,7 @@ export {
   applyAdjustments,
   calculateTax,
   captureOrder,
+  holdReservations,
   loadCart,
   placeOrderWorkflow,
   priceLines,
@@ -121,7 +123,26 @@ export {
   priceResolutionWorkflow,
   selectPrice,
 } from "./pricing/resolve-price.ts";
+/**
+ * A Reservation as the Workflow carries one, and nothing else about Reservations.
+ *
+ * `HeldReservation` sits on `ReservedLines`, which is the type a replaced `take-payment` or
+ * `capture-order` is measured against, so it has to be nameable. The provider interface behind it
+ * is deliberately **not** here: ADR-0018 promises one interface with two providers and both are
+ * Core's own — Inventory today, Capacity later — so exporting it would promise a shape nothing
+ * lets a Project supply. The day a deployment may bring its own kind of scarcity is a decision
+ * with a config key and an ADR behind it, and this is where it would show up.
+ */
+export type { HeldReservation } from "./reservation/reservation.ts";
 export type { Store } from "./store/read.ts";
+/**
+ * The background sweep (`sweep.ts`): what a Project starts at boot, and what one run of it did.
+ *
+ * On the surface because a Project calls `kobai.startSweeper()` itself — deliberately, after its
+ * migrations — and because a deployment that would rather sweep on a schedule of its own calls
+ * `kobai.sweep()` from wherever that schedule lives.
+ */
+export type { SweeperOptions, SweepOutcome } from "./sweep.ts";
 export type { WorkflowContext, WorkflowRegistry } from "./workflow/context.ts";
 export { openMetadata } from "./workflow/context.ts";
 export type { CompensationFailure, StepReport, WorkflowRun } from "./workflow/run.ts";

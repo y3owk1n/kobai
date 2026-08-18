@@ -130,4 +130,15 @@ if (seeded.status !== "seeded" && seeded.status !== "already-present") {
   });
 }
 
+/**
+ * The background sweep, once the tables it reads exist.
+ *
+ * kobai's only piece of periodic work: lapsed Reservation holds released, expired idempotency
+ * keys deleted. It is a plain interval rather than a job (ADR-0026 is deliberately not involved),
+ * and it is started here rather than by `createKobai` for the same reason the two calls above are
+ * — it needs a migrated database, and a Project whose platform runs migrations elsewhere decides
+ * for itself when that is true. `shutdown()` stops it, through `kobai.close()`.
+ */
+kobai.startSweeper();
+
 consoleLogger.info("ready", { port: boundPort });
