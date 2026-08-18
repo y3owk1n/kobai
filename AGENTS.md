@@ -471,22 +471,35 @@ something to solve in SQL. A **plain** `CREATE INDEX` is not this: no row can re
 cost on a populated table is a lock, and the remedy for that is `CONCURRENTLY`, which cannot
 run inside the transaction a migration is applied in.
 
-**The check reads one spelling of that hazard and there are three.** `ALTER TABLE … ADD
-CONSTRAINT … UNIQUE` — what a `.unique()` on a column generates, and so the *likelier* of the
-two — and `… ADD CONSTRAINT … CHECK`, which fails against rows that do not satisfy it, are
-both unread. The shape above answers all three; only the index is caught for you. A `CHECK` is
-the awkward one and is why it was left: what makes `0027`'s safe is the statement immediately
-before it, so reading it means reading what came earlier rather than what the migration
-created, which is a different question from the one this check asks.
+**Uniqueness arrives in two spellings and the check reads both** (#153). `ALTER TABLE … ADD
+CONSTRAINT … UNIQUE` is what a `.unique()` on a column generates — eight of those in
+`packages/core/src/db/schema.ts` against three `uniqueIndex()`, so it is the *likelier* way a
+future uniqueness requirement arrives — and it rests on the same one excuse: the table was
+created in this migration, or it was not.
+
+**`ALTER TABLE … ADD CONSTRAINT … CHECK` is deliberately not read, and the shape above is
+still what answers it.** Postgres refuses one against a row that does not satisfy it, so the
+hazard is as real as the others; what is missing is any way to tell from the text whether the
+rows do. `packages/core/migrations/0027` adds one and is safe, and what makes it safe is the
+statement immediately before it, which adds `tax` with `DEFAULT 0` and so answers the
+predicate for every row already there — telling that from the same pair with a default the
+check would refuse means *evaluating* the predicate, which is a SQL engine rather than a
+reading. Reading earlier migrations would not rescue it either: the backfill belongs in a
+`--custom` migration of its own, so the generated migration that adds a constraint holds the
+constraint and nothing else, and a check that flagged it would be red for the correct shape as
+well as for the broken one — the same reason `ALTER COLUMN … SET NOT NULL` is left unread. So
+**a `CHECK` arriving at a table with rows in it is yours to put a backfill in front of**;
+nothing here will tell you that you forgot.
 
 Two tests hold this. `packages/plugin-price-log/src/migrations.test.ts` seeds a row and then
 applies the rest of the set — the only place in this repository a migration meets data —
 using `migrationSetUpTo` from `@kobai/core/testing`.
 `tests/migrations-are-safe-against-populated-tables.test.ts` reads every migration in the
-repository for the statements themselves: a required column with no default, and a unique
-index on a table the same migration did not create. That second reading has only the one
-excuse a reading of a single file can make — **the table was created here, so no row it has
-not seen can refuse anything** — which is the same excuse Core's foreign keys already rest on.
+repository for the statements themselves: a required column with no default, and uniqueness —
+as an index or as a constraint — arriving at a table the same migration did not create. Those
+last two have only the one excuse a reading of a single file can make — **the table was
+created here, so no row it has not seen can refuse anything** — which is the same excuse
+Core's foreign keys already rest on.
 Core's own set is otherwise clear and stays clear that way: every `NOT NULL` in it is inside a
 `CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to tables created in the same
 migration.
