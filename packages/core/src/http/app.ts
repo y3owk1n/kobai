@@ -132,8 +132,11 @@ export function coreVersion(): string {
  * rewrites the version while repacking a tarball, so the upgrade gate's synthetic major
  * serves one version and carries a checked-in description naming another; nothing asks it
  * the question, so nothing is wrong today. A release process that bumps at publish time
- * rather than in a commit would ship that mismatch to a Developer, which is a thing to
- * decide when the first publish is arranged (ADR-0058).
+ * rather than in a commit would ship that mismatch to a Developer — **so it is decided in
+ * advance rather than when the first publish is arranged**: the version is bumped in a
+ * commit, with the artifacts regenerated in that same commit. That is one entry on the list
+ * of what the first publish owes, `docs/adr/0061-what-the-first-publish-owes.md`, which is
+ * the record to read before removing a loopback registry pin from any manifest.
  *
  * Everything else about the description comes from the routes themselves.
  */

@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { sectionOf } from "./support/records.ts";
 
 /**
  * No migration in this repository asks a table that already exists for something the rows
@@ -391,37 +392,16 @@ function whyTheDeduplicationDoesNotHold(
 }
 
 /**
- * One section of a Markdown record, from its heading to the next one at the same level or above
- * — or `null` if the record has no such heading. Nested subsections are part of it, which is
- * what makes a section the unit rather than a paragraph.
- */
-function sectionOf(record: string, heading: string): string | null {
-  const lines = record.split("\n");
-  const depth = (line: string) =>
-    /^#{1,6} /.test(line) ? (line.match(/^#+/)?.[0].length ?? 0) : 0;
-
-  const opens = lines.findIndex(
-    (line) => depth(line) > 0 && line.replace(/^#+\s*/, "").trim() === heading,
-  );
-  if (opens === -1) return null;
-
-  const body = lines.slice(opens + 1);
-  const closes = body.findIndex((line) => {
-    const level = depth(line);
-    return level > 0 && level <= depth(lines[opens] ?? "");
-  });
-
-  return (closes === -1 ? body : body.slice(0, closes)).join("\n");
-}
-
-/**
  * Why the record an entry points at does not carry it — or `null` if it does.
  *
  * The reader of this kind is somebody about to publish, and they arrive at the record rather than
- * at this file: `docs/adr/README.md` dates ADR-0058 as expiring at the first publish, and
- * AGENTS.md says a first publish starts by reading it. So the obligation runs that way round —
- * the record is where the list has to be complete, and a debt this constant carries and that
- * record does not is one nothing else in the repository would ever say a word about.
+ * at this file: ADR-0061 is the one list of what the first publish owes, `docs/adr/README.md`
+ * carries it, and AGENTS.md says a first publish starts by reading it. So the obligation runs
+ * that way round — the record is where the list has to be complete, and a debt this constant
+ * carries and that record does not is one nothing else in the repository would ever say a word
+ * about. `tests/publish-guard.test.ts` holds the same list from its other end (#162), which is
+ * why this check can stay about one migration rather than growing into a second index of
+ * release obligations.
  *
  * **The section is named, not just the file**, because that is the whole of what makes the list
  * complete: a record may mention a migration in passing anywhere, and the list a publisher reads
@@ -505,10 +485,14 @@ const ACKNOWLEDGED: readonly Acknowledgement[] = [
    *
    * **That is a release decision rather than a fact about SQL, so it is written where a release
    * decision is found**, which is what `recordedIn` and `under` name between them (#152).
-   * ADR-0058's "What else the licence is holding up" carries the argument in full, the one
-   * question to ask before the first publish, and both answers to it — read it before editing
-   * anything here. That heading is load-bearing: renaming the section fails the gate, which is
-   * what stops the publisher's list going empty without anybody deciding that it should.
+   * ADR-0061 is that place — the one list of what the first publish owes — and the section named
+   * below carries the argument in full, the one question to ask before the first publish, and
+   * both answers to it. Read it before editing anything here. That heading is load-bearing:
+   * renaming the section fails the gate, which is what stops the publisher's list going empty
+   * without anybody deciding that it should. It moved out of ADR-0058 with the rest of that
+   * list (#162), and got narrower on the way: it names the one debt rather than the whole
+   * section a publisher reads, because `tests/publish-guard.test.ts` now holds the list's other
+   * entries and this one can name its own.
    *
    * Two parts of it to have in hand before editing this entry. **An entry here is a place for a
    * reason rather than a suppression**, so expiring one means rewriting its reason and not
@@ -524,12 +508,8 @@ const ACKNOWLEDGED: readonly Acknowledgement[] = [
     statement:
       'CREATE UNIQUE INDEX "core_order_cart_idx" ON "core_order" USING btree ("cart_id")',
     because: "unreachable-until-release",
-    recordedIn: join(
-      "docs",
-      "adr",
-      "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
-    ),
-    under: "What else the licence is holding up",
+    recordedIn: join("docs", "adr", "0061-what-the-first-publish-owes.md"),
+    under: "`0016` adds a unique index to a table that already exists",
   },
 ];
 
@@ -834,18 +814,14 @@ describe("an acknowledgement whose reason does not hold", () => {
   it("names a debt whose record lists it nowhere but in passing", async () => {
     // The same record and the wrong section. A check that read the whole file would pass this
     // and go on passing if the section a publisher reads were emptied or renamed, which is the
-    // one thing this obligation exists to guarantee against — the register of breaks is a real
-    // neighbouring section of the same record, and it is not that list.
+    // one thing this obligation exists to guarantee against — the rule for where the next
+    // obligation goes is a real neighbouring section of the same record, and it is not the entry.
     const debt = {
       migration: join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql"),
       statement: 'CREATE UNIQUE INDEX "i" ON "core_order" USING btree ("cart_id")',
       because: "unreachable-until-release",
-      recordedIn: join(
-        "docs",
-        "adr",
-        "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
-      ),
-      under: "The register of breaks taken under this licence",
+      recordedIn: join("docs", "adr", "0061-what-the-first-publish-owes.md"),
+      under: "Where the next obligation goes",
     } as const;
 
     await expect(reasonsThatDoNotHold([debt], [])).resolves.toEqual([
@@ -858,12 +834,8 @@ describe("an acknowledgement whose reason does not hold", () => {
       migration: join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql"),
       statement: 'CREATE UNIQUE INDEX "i" ON "core_order" USING btree ("cart_id")',
       because: "unreachable-until-release",
-      recordedIn: join(
-        "docs",
-        "adr",
-        "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
-      ),
-      under: "What the licence is holding up",
+      recordedIn: join("docs", "adr", "0061-what-the-first-publish-owes.md"),
+      under: "`0016` adds a unique index to a table that exists",
     } as const;
 
     await expect(reasonsThatDoNotHold([debt], [])).resolves.toEqual([
@@ -887,7 +859,7 @@ describe("an acknowledgement whose reason does not hold", () => {
             statement: 'CREATE UNIQUE INDEX "i" ON "core_order" USING btree ("cart_id")',
             because: "unreachable-until-release",
             recordedIn,
-            under: "What else the licence is holding up",
+            under: "`0016` adds a unique index to a table that already exists",
           },
         ],
         [],

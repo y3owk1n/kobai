@@ -265,7 +265,10 @@ promise puts it under the licence too. Both halves follow, and both matter:
 - **The licence closes for this surface at the same act it closes for everything else** — the
   deliberate removal of the loopback `publishConfig.registry` pin that
   `tests/publish-guard.test.ts` guards. There is now more riding on that one act, which is an
-  argument for the guard rather than against the promise.
+  argument for the guard rather than against the promise. **What else rides on it is
+  [ADR-0061](./0061-what-the-first-publish-owes.md)**, the one list of what the first publish
+  owes; this surface's licence closing is an entry on it, alongside the version rule #158 left
+  behind and three obligations that have nothing to do with a promised surface (#162).
 
 **But ADR-0058's second rule reaches this surface only partway, and the gap is the reason this
 ADR exists rather than a footnote in that one.** "A break the Project's own compiler catches

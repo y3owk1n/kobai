@@ -276,6 +276,20 @@ export type PublishOptions = {
  * `@kobai/core@0.1.0` would install a *second* Core beside the new one. The Project would
  * then hold two Cores, two migration runners and two sets of Workflow declarations, and the
  * upgrade would appear to work while the Plugin talked to the old one.
+ *
+ * **One thing a real release may not copy from this.** It rewrites `manifest.version` and
+ * nothing else, which is what makes it a faithful stand-in
+ * for a version bump — except that since #158 a version bump is *two* edits: the manifest, and
+ * `packages/core/openapi.json`, whose `info.version` is read from that manifest when the
+ * description is generated (ADR-0060). So the tarball this produces serves one version and
+ * carries a description naming another. Nothing is wrong here, because nothing asks: the upgrade
+ * gate never reads the description's version.
+ *
+ * **A release process that bumped at publish time would ship exactly that mismatch**, to a
+ * Developer consuming `@kobai/core/openapi.json`, which ADR-0006 makes the supported path for
+ * anyone not writing TypeScript. So the version is bumped **in a commit**, with the artifacts
+ * regenerated in that same commit — one entry on the list of what the first publish owes,
+ * `docs/adr/0061-what-the-first-publish-owes.md`.
  */
 async function republishedAs(
   tarball: string,

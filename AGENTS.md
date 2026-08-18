@@ -507,11 +507,12 @@ migration.
 **`0016`'s unique index on `core_order.cart_id` is named by that check and shipped anyway**: a
 deployment left anywhere between `0012` — where `core_order` is created — and `0015` could meet
 it with the very duplicates `0016` exists to prevent, since until then a Cart could become two
-Orders. **That one is a release decision and it lives in ADR-0058**, under "What else the licence
-is holding up" — with why the deduplication was not written, the one question to ask before the
-first publish, and both answers to it. Do not re-take it here or in the test; the test's entry
-points at it. What belongs in this file is the mechanism: the acknowledgement is an equality
-rather than an ignore list, so a statement it names that changes fails it and one it does not
+Orders. **That one is a release decision and it lives in
+[ADR-0061](docs/adr/0061-what-the-first-publish-owes.md)**, the one list of what the first
+publish owes, under the heading naming `0016` — with why the deduplication was not written, the
+one question to ask before the first publish, and both answers to it. Do not re-take it here or
+in the test; the test's entry points at it. What belongs in this file is the mechanism: the
+acknowledgement is an equality rather than an ignore list, so a statement it names that changes fails it and one it does not
 name that appears fails it too, and answering a finding there is a decision written down, never a
 line added to a list.
 
@@ -524,8 +525,8 @@ carries a **kind**, and each kind carries the one thing that would show it false
 `deduplicated-ahead-of-it` entry names the migration that removed the duplicates, which has to
 run ahead of it in the same set; an `unreachable-until-release` entry names the record arguing it
 **and the section of that record which lists what falls due**, which has to name the migration
-back — so ADR-0058's "What else the licence is holding up" cannot be shorter than the constant,
-and emptying or renaming it fails rather than quietly emptying the list. **Both checks are
+back — so ADR-0061's entry for `0016` cannot be shorter than the constant, and emptying or
+renaming it fails rather than quietly emptying the list. **Both checks are
 assertions, not conventions**, and a kind added without a warrant does not compile. What neither
 check reads is the argument itself — that the migration named really did remove the right
 duplicates, that the record's prose is still true — because reading it would be checking wording.
@@ -838,10 +839,16 @@ address in every publishable manifest, and `tests/publish-guard.test.ts`. **npm 
 publish target from `publishConfig.registry` before it opens a connection, and that value
 beats both `--registry` and `npm_config_registry`** — so a publish to npmjs.com has to be
 deliberate, and CI publishes by packing a tarball and passing `--registry`, which is the one
-form that honours the flag. **Taking that pin out is also what closes
-[ADR-0058](docs/adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md)'s
-licence**, and that record lists what falls due the moment it closes — a first publish starts by
-reading it.
+form that honours the flag. **Taking that pin out is the act every obligation kobai has taken on
+the strength of nothing having been published falls due on**, and
+[ADR-0061](docs/adr/0061-what-the-first-publish-owes.md) is the one list of them — a first
+publish starts by reading it, and adding to it is three edits: the section there, a pointer in
+whatever argues the obligation, and an entry in `OUTSTANDING` in `tests/publish-guard.test.ts`,
+which holds those two ends together. Closing
+[ADR-0058](docs/adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md)'s licence
+is one entry on that list rather than the whole of it. **The gate cannot say an entry has been
+discharged and deliberately does not try**: what it holds is that the list is complete and
+reachable from every end, and the refusal a publisher meets in `publish-guard.test.ts` names it.
 
 The acceptance test stands up a real registry — `tests/support/local-registry.ts`, verdaccio
 on an ephemeral port, holding this commit's packages — generates a Project, installs, builds
