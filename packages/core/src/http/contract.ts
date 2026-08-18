@@ -8,13 +8,18 @@ import type {
   ProductDeletion,
   VariantDeletion,
 } from "../catalog/delete.ts";
-import type { VariantUpdate } from "../catalog/update.ts";
-import type { PriceCreation, ProductCreation } from "../catalog/write.ts";
+import type { ProductUpdate, VariantUpdate } from "../catalog/update.ts";
+import type {
+  PriceCreation,
+  ProductCreation,
+  VariantCreation,
+} from "../catalog/write.ts";
 import { DEFAULT_PAGE_LIMIT, decodeCursor, MAX_PAGE_LIMIT } from "../db/page.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
 import type { InventoryUpdate } from "../reservation/inventory.ts";
+import type { StoreUpdate } from "../store/write.ts";
 
 /**
  * Every shape kobai's HTTP surface accepts or answers with, as one set of schemas.
@@ -616,6 +621,60 @@ export const Store = z
   })
   .openapi("Store");
 
+/**
+ * What a Merchant may change about the Store — and, in `defaultCurrency`'s case, what they may
+ * name and not move.
+ *
+ * The same `PATCH` both catalog ones are: **every field is optional, each one absent means
+ * "leave it"**, and a named `metadata` **replaces** what is stored rather than merging into it.
+ * A body naming nothing that would change is refused rather than answered 200.
+ *
+ * **`defaultCurrency` is accepted so that it can be refused by name.** A form that submits the
+ * whole record round-trips — the code this Store already prices in is taken and changes
+ * nothing — and any *other* code is refused, because every Price already written carries the
+ * current one and moving the column would reinterpret each of those amounts rather than
+ * convert them. Leaving the field out of this schema would have collapsed that into the
+ * generic "you named nothing" refusal, where a Merchant could not tell a rule from an
+ * oversight.
+ */
+export const UpdateStoreRequest = z
+  .object({
+    name: z.string().optional().meta({
+      description: "What this Store is called. Free to change; nothing is keyed by it.",
+    }),
+    defaultCurrency: z.string().optional().meta({
+      description:
+        "ISO 4217, read case-insensitively. **Only the code this Store already prices in is accepted**, and naming it changes nothing: every Price carries the Store's default currency and no other (ADR-0008), so changing this would reinterpret every amount already stored rather than convert it. Another currency is refused with `default-currency-is-fixed`. Because naming the current one changes nothing, a body naming *only* this field is refused as a request that changes nothing — send it beside a `name` or a `metadata`.",
+    }),
+    metadata: Metadata.optional().meta({
+      description: "Replaces what is stored rather than merging into it.",
+    }),
+  })
+  .openapi("UpdateStoreRequest");
+
+/**
+ * Every way a Store operation can be refused, as a closed set.
+ *
+ * Two routes and one of them refuses nothing, so this is `PATCH /admin/store`'s set: the
+ * request's own two, and the one word that is a fact about the Store rather than about the
+ * request. It is a family of its own rather than a reuse of {@link CatalogRefusal} because a
+ * Price and a Store are different subjects — and because a client narrowing on this one should
+ * not be handed `last-variant` to think about.
+ */
+const STORE_REASONS = {
+  ...REQUEST_REASONS,
+  "default-currency-is-fixed": "default-currency-is-fixed",
+} as const satisfies { [R in Refused<StoreUpdate> | RequestReason]: R };
+
+export const StoreRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(STORE_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("StoreRefusal");
+
 // ---- Catalog --------------------------------------------------------------------------
 
 export const Price = z
@@ -742,6 +801,33 @@ export const CreateProductRequest = z
   .openapi("CreateProductRequest");
 
 /**
+ * What a Merchant may change on a Product that already exists — and, by its absence, what they
+ * may not.
+ *
+ * The same `PATCH` {@link UpdateVariantRequest} is and for the same reasons: **every field is
+ * optional and each one absent means "leave it"**, and a named `metadata` **replaces** what is
+ * stored rather than merging into it, because a merge leaves no way to take a key back out. A
+ * body naming neither is refused rather than answered with the row unchanged.
+ *
+ * **There are no `variants` here, and that is the decision.** A Product's Variants are not a
+ * field of it — one is added with `POST /admin/products/{id}/variants`, corrected with
+ * `PATCH /admin/variants/{id}` and removed with `DELETE /admin/variants/{id}` — so a list here
+ * would be a fourth way to say the same three things, and the only one that could silently
+ * delete the Variant a caller left out of it.
+ */
+export const UpdateProductRequest = z
+  .object({
+    title: z.string().optional().meta({
+      description:
+        "A new title for this Product. Free to change: an Order's Line Items snapshot the title they were bought under (ADR-0009), so nothing already sold is rewritten. Two Products may share a title — it is what a Product is called, not what identifies it.",
+    }),
+    metadata: Metadata.optional().meta({
+      description: "Replaces what is stored rather than merging into it.",
+    }),
+  })
+  .openapi("UpdateProductRequest");
+
+/**
  * What a Merchant may change on a Variant that already exists — and, by its absence, what they
  * may not (ADR-0062).
  *
@@ -824,6 +910,8 @@ const CATALOG_REASONS = {
 } as const satisfies {
   [R in
     | Refused<ProductCreation>
+    | Refused<VariantCreation>
+    | Refused<ProductUpdate>
     | Refused<ProductDeletion>
     | Refused<VariantDeletion>
     | Refused<VariantUpdate>

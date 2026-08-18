@@ -90,6 +90,7 @@ New to the project? These five carry the shape of everything else:
 | [0062](./0062-a-variant-is-corrected-in-place-and-a-price-is-superseded.md) | A Variant is corrected in place, and a Price is superseded | Accepted — the other half of 0059 |
 | [0063](./0063-the-admins-frame-is-conventional-because-a-developer-inherits-it.md) | The Admin's frame is conventional, because a Developer inherits it | Accepted — extends 0010 and 0033 |
 | [0064](./0064-list-pagination-is-a-cursor-and-the-page-number-is-given-up.md) | List pagination is a cursor, and the page number is given up | Accepted — constrains 0060 |
+| [0065](./0065-a-stores-default-currency-is-fixed.md) | A Store's default currency is fixed | Accepted — applies 0062's shape to the Store; holds 0008's question open |
 
 ## Prototypes
 

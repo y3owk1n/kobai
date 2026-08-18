@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTestKobai, seedTestCatalog, type TestKobai } from "../testing/index.ts";
-import { lockVariant, lockVariants } from "./lock.ts";
+import { lockProduct, lockVariant, lockVariants } from "./lock.ts";
 
 /**
  * **The lock four writes lean on, watched being taken.**
@@ -34,6 +34,14 @@ import { lockVariant, lockVariants } from "./lock.ts";
  * 'waited'`, twice, while the two that only read the answer stayed green. That is the whole
  * proof these four cases can tell a held row from an unheld one; a lock nobody has seen missing
  * is not yet known to be missable.
+ *
+ * **`lockProduct` is here for the same reason and was watched the same way** (#172). It is the
+ * head of the chain `lock.ts` names, and `addVariant` is correct only because the Product it
+ * inserts against is held: without the lock a `DELETE /admin/products/{id}` landing between the
+ * check and the insert makes a foreign-key violation and a 500 on a route that declares a 404.
+ * Taking the `.for("share")` out of `lockProduct` alone turned its delete case red —
+ * `expected 'deleted' to be 'waited'` — while every other test in this repository, the new
+ * routes' own included, stayed green.
  */
 
 /**
@@ -105,6 +113,37 @@ describe("holding a Variant still", () => {
   });
 });
 
+describe("holding a Product still", () => {
+  it("keeps a delete out for the length of the transaction", async () => {
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    await kobai.db.transaction(async (tx) => {
+      await expect(lockProduct(tx, catalog.productId)).resolves.toBe(true);
+
+      // `addVariant` is the one caller, and it is correct only because the answer above is
+      // *held*: it inserts a row referencing this Product, and a `DELETE
+      // /admin/products/{id}` landing between the two statements would make that a
+      // foreign-key violation and a 500 on a route that declares a 404.
+      await expect(deletingProductRow(kobai, catalog.productId)).resolves.toBe("waited");
+    });
+
+    // And the assertion can tell the two apart: with nobody holding the row, the very same
+    // delete gets in at once.
+    await expect(deletingProductRow(kobai, catalog.productId)).resolves.toBe("deleted");
+  });
+
+  it("answers `false` for a Product that is not there", async () => {
+    await using kobai = await createTestKobai();
+
+    await kobai.db.transaction(async (tx) => {
+      await expect(lockProduct(tx, "00000000-0000-4000-8000-000000000000")).resolves.toBe(
+        false,
+      );
+    });
+  });
+});
+
 /**
  * Deletes the row from a connection of its own, and says whether it got in.
  *
@@ -115,9 +154,25 @@ async function deletingVariantRow(
   kobai: TestKobai,
   variantId: string,
 ): Promise<"deleted" | "waited"> {
+  return deletingRow(kobai, "core_variant", variantId);
+}
+
+/** The same question one table up, for `lockProduct` — `deleteProduct`'s statement. */
+async function deletingProductRow(
+  kobai: TestKobai,
+  productId: string,
+): Promise<"deleted" | "waited"> {
+  return deletingRow(kobai, "core_product", productId);
+}
+
+async function deletingRow(
+  kobai: TestKobai,
+  table: "core_product" | "core_variant",
+  id: string,
+): Promise<"deleted" | "waited"> {
   try {
     await kobai.database.query(
-      `set lock_timeout = '${WAITS_FOR}'; delete from core_variant where id = '${variantId}'`,
+      `set lock_timeout = '${WAITS_FOR}'; delete from ${table} where id = '${id}'`,
     );
     return "deleted";
   } catch (cause) {

@@ -417,6 +417,46 @@
           "metadata"
         ]
       },
+      "StoreRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "malformed-body",
+              "default-currency-is-fixed"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "UpdateStoreRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What this Store is called. Free to change; nothing is keyed by it."
+          },
+          "defaultCurrency": {
+            "type": "string",
+            "description": "ISO 4217, read case-insensitively. **Only the code this Store already prices in is accepted**, and naming it changes nothing: every Price carries the Store's default currency and no other (ADR-0008), so changing this would reinterpret every amount already stored rather than convert it. Another currency is refused with `default-currency-is-fixed`. Because naming the current one changes nothing, a body naming *only* this field is refused as a request that changes nothing — send it beside a `name` or a `metadata`."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Replaces what is stored rather than merging into it."
+          }
+        }
+      },
       "ProductDetail": {
         "allOf": [
           {
@@ -664,6 +704,20 @@
         "required": [
           "products"
         ]
+      },
+      "UpdateProductRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "A new title for this Product. Free to change: an Order's Line Items snapshot the title they were bought under (ADR-0009), so nothing already sold is rewritten. Two Products may share a title — it is what a Product is called, not what identifies it."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Replaces what is stored rather than merging into it."
+          }
+        }
       },
       "UpdateVariantRequest": {
         "type": "object",
@@ -2055,6 +2109,97 @@
             }
           }
         }
+      },
+      "patch": {
+        "summary": "Change the Store",
+        "description": "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. `defaultCurrency` may be named and may not be moved: the code this Store already prices in is accepted and changes nothing, and any other is refused, because every Price carries the Store's default currency and no other — changing it would reinterpret each amount already stored rather than convert it. A body naming nothing that would change — `{}`, or only the `defaultCurrency` this Store already has — is refused at 400 rather than answered with the record unchanged.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStoreRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Store, as a read of it reports it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Store"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/products": {
@@ -2340,6 +2485,109 @@
           }
         }
       },
+      "patch": {
+        "summary": "Correct a Product",
+        "description": "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProductRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Product, with its Variants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Product exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "summary": "Delete a Product",
         "description": "Every Variant of it goes too, with their Prices and stock counts — this is also how a Product's last Variant is deleted, since a Variant that is a Product's only one cannot be deleted on its own (ADR-0008). Orders already placed are untouched: their Line Items are a snapshot (ADR-0009).",
@@ -2396,6 +2644,131 @@
           },
           "409": {
             "description": "`stock-is-reserved`: one of this Product's Variants has stock currently claimed by Reservations being placed. Those either become Orders or lapse, and it can be deleted once they have.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/products/{id}/variants": {
+      "post": {
+        "summary": "Add a Variant",
+        "description": "A second size, colour or format for a Product a Merchant already has. It answers with the new Variant, which starts with no Price and no stock count — `POST /admin/variants/{id}/prices` sets the first, and `PUT /admin/variants/{id}/inventory` counts it. Every Variant already on the Product is untouched, which is the point: recreating the Product to add one would discard their Prices and their counts.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Variant, as a read of its Product reports it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Variant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Product exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`sku-taken`: a Variant already carries that SKU, and a SKU identifies one Variant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
             "content": {
               "application/json": {
                 "schema": {

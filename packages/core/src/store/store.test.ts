@@ -1,10 +1,13 @@
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
+import { PERMISSIONS } from "../auth/permissions.ts";
 import { defineMigrationSet } from "../migrations/set.ts";
 import {
   createTestKobai,
   inspectSchema,
   type SchemaInspector,
+  seedTestCatalog,
+  sessionOf,
   signInTestMerchant,
   type TableRef,
   type TestKobai,
@@ -60,6 +63,195 @@ describe("GET /admin/store", () => {
     // An id here is the first thing a storefront would key a cache on, and the second thing
     // someone would add a `where` on. ADR-0005: the Store is never a scoping key.
     expect(Object.keys(body).sort()).toEqual(["defaultCurrency", "metadata", "name"]);
+  });
+});
+
+describe("PATCH /admin/store", () => {
+  it("changes the name and the metadata, and reads back that way", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Kyle's posters", metadata: { support: "…" } }),
+    });
+
+    expect(response.status).toBe(200);
+    const updated = await response.json();
+    expect(updated).toEqual({
+      name: "Kyle's posters",
+      defaultCurrency: "USD",
+      metadata: { support: "…" },
+    });
+    // The same bytes the read beside it answers, because a Store is one record however it is
+    // reached — and because this route answers with the row it left rather than with the body
+    // it was sent.
+    await expect(
+      (await kobai.request("/admin/store", { headers: merchant.headers })).json(),
+    ).resolves.toEqual(updated);
+  });
+
+  it("leaves out what the body left out, and replaces the metadata it names", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const headers = { ...merchant.headers, "content-type": "application/json" };
+    await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "Kyle's posters", metadata: { vat: "GB1", old: 1 } }),
+    });
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ metadata: { vat: "GB1" } }),
+    });
+
+    // The name survives a body that did not mention it, and the bag is replaced rather than
+    // merged — the same two judgements both catalog `PATCH`es make (ADR-0062).
+    //
+    // **`toEqual` on the bag**, because `toMatchObject` matches a nested object as a subset
+    // and a merge that left `old` beside `vat` would satisfy it — which is the one
+    // implementation this case exists to rule out.
+    expect(response.status).toBe(200);
+    const changed = (await response.json()) as {
+      name: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(changed.name).toBe("Kyle's posters");
+    expect(changed.metadata).toEqual({ vat: "GB1" });
+  });
+
+  it("refuses a body that names nothing it could change", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    for (const body of [{}, { defaultCurrency: "usd" }]) {
+      const response = await kobai.request("/admin/store", {
+        method: "PATCH",
+        headers: { ...merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      // The second body is the first one: the currency it names is the one this Store already
+      // prices in, so nothing about it would move. A request that changes nothing is more
+      // likely a mistake than an intention, which is where a Merchant is told what may change.
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      const refusal = (await response.json()) as { reason: string; error: string };
+      expect(refusal.reason).toBe("invalid");
+      expect(refusal.error).toContain("`name`");
+    }
+  });
+
+  it("refuses a change to the default currency, and leaves every Price standing", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "Kyle's posters", defaultCurrency: "EUR" }),
+    });
+
+    // The Price of 1250 was written under the rule that a Price carries the Store's default
+    // currency and nothing else (#5), so it says `USD` and says nothing about euros. Letting
+    // this through would silently reinterpret every amount already in the database as an
+    // amount in the new currency — 1250 cents becoming 1250 euro cents — which is a decision
+    // about money that nobody has taken. Refusing is the answer that keeps it takeable.
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "default-currency-is-fixed",
+    });
+
+    // Nothing else in that body moved either: the refusal is decided before the write, so a
+    // name sent alongside a rejected currency is not half-applied.
+    await expect(
+      (await kobai.request("/admin/store", { headers: catalog.merchant.headers })).json(),
+    ).resolves.toMatchObject({ name: "kobai", defaultCurrency: "USD" });
+    await expect(
+      (
+        await kobai.request(`/admin/products/${catalog.productId}`, {
+          headers: catalog.merchant.headers,
+        })
+      ).json(),
+    ).resolves.toMatchObject({
+      variants: [{ prices: [{ amount: 1250, currency: "USD" }] }],
+    });
+  });
+
+  it("takes the Store to the currency it already prices in", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Kyle's posters", defaultCurrency: "usd" }),
+    });
+
+    // A Store does not conflict with itself, so sending the whole record back unchanged is
+    // usable from a form — the same courtesy `PATCH /admin/variants/{id}` extends to a SKU.
+    // Read case-insensitively, as `POST /admin/variants/{id}/prices` reads one.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      name: "Kyle's posters",
+      defaultCurrency: "USD",
+    });
+  });
+
+  it("is refused with no session, and refused to a Role that may only read the Store", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+
+    const anonymous = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Kyle's posters" }),
+    });
+    expect(anonymous.status).toBe(401);
+
+    // Roles are rows, so a narrower one is a row. This one holds the permission the *read*
+    // beside it names, which is the whole point: reading what a Store is called and changing
+    // it are different powers, so `store:read` alone must not be enough to change it.
+    await kobai.db.execute(
+      sql`insert into core_role (name, permissions) values ('viewer', array['store:read'])`,
+    );
+    await kobai.request("/admin/merchants", {
+      method: "POST",
+      headers: { ...owner.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "viewer@example.test",
+        password: "a viewer's very long password",
+        role: "viewer",
+      }),
+    });
+    const viewer = sessionOf(
+      await kobai.request("/admin/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: "viewer@example.test",
+          password: "a viewer's very long password",
+        }),
+      }),
+    );
+
+    expect(
+      (await kobai.request("/admin/store", { headers: viewer.headers })).status,
+    ).toBe(200);
+    const refused = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...viewer.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Kyle's posters" }),
+    });
+
+    expect(refused.status).toBe(403);
+    await expect(refused.json()).resolves.toMatchObject({
+      reason: "permission-denied",
+      required: PERMISSIONS.storeWrite,
+    });
   });
 });
 

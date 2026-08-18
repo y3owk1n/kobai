@@ -751,6 +751,36 @@ contract rather than a copy of it. Its last case is the one that matters and the
 else can see — a page fetched across a concurrent insert — and it was watched failing against
 an offset implementation first, which is the discipline the two race tests already use.
 
+**A correction is a `PATCH`, and there is one way to do that too** (ADR-0062). Three routes
+correct a record that already exists — `PATCH /admin/products/{id}`,
+`PATCH /admin/variants/{id}` and `PATCH /admin/store` — and they behave identically on purpose:
+**an absent field means "leave it"**; a named `metadata` is **replaced** and never merged,
+because a merge leaves no way to take a key back out; and **a body naming nothing the route
+would change is refused at 400** rather than answered 200 with the row unchanged. That refusal
+does a second job at all three, because the schema strips a field the route does not carry — a
+Merchant who sent a Price to a Variant, a `variants` to a Product or only a `defaultCurrency` to
+the Store sent an empty body, so the refusal is where they are told which route does it. A `PUT`
+beside them is a different judgement and needs one: `PUT /admin/variants/{id}/inventory` stays a
+`PUT` because a count *is* the whole fact.
+
+**A Store's default currency does not move** (ADR-0065). `PATCH /admin/store` accepts a
+`defaultCurrency`, takes the code the Store already prices in — so a form submitting the whole
+record round-trips — and refuses any other at **422 `default-currency-is-fixed`**, whether or not
+a single Price has been written. Every Price carries the Store's default and no other (#5), so
+moving the column reinterprets each of those amounts rather than converting them, and ADR-0008
+already says where multi-currency arrives: as more rows. **Do not add a currency-change path,
+and do not narrow the refusal to "when Prices exist"** — relaxing it later is cheap, tightening
+it is a break (ADR-0060), and the narrow version is a read of `core_price` followed by a write.
+
+**A route needing a Permission Core does not define yet brings one with it**, which is one edit
+and one migration. The new string goes **last** in `PERMISSIONS` (`auth/permissions.ts`), because
+`ALL_PERMISSIONS` is that literal's declaration order and `auth.test.ts` holds the seeded `owner`
+Role equal to it; then a `--custom` migration appends it to `owner`, the way `0020` and `0029`
+do. Skip the migration and every deployment that upgrades gets a route nobody can call. **The
+read/write split is the house rule** — `store:read` is not `store:write`, as `catalog:` and
+`api-key:` already are — because which gate a route sits behind is promised as well (ADR-0060),
+so gating a write behind a read permission is a break to undo rather than a decision to take.
+
 **A declared refusal must have the gate that makes it.** Five of the statuses a route
 declares are not the handler's to answer — they are made above it, by middleware: `503` by the
 migration gate, `401` by the session gate at `/admin` and by the API-key gate at `/store`,

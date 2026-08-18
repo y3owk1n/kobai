@@ -204,6 +204,13 @@
       "when": 1787067473685,
       "tag": "0028_mysterious_sinister_six",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1787070269006,
+      "tag": "0029_seed_store_write_permission",
+      "breakpoints": true
     }
   ]
 }

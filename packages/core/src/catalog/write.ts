@@ -9,13 +9,19 @@ import {
 } from "../fulfilment/strategy.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { readStore } from "../store/read.ts";
-import { lockVariant } from "./lock.ts";
-import { type Price, type ProductDetail, readProduct } from "./read.ts";
+import { lockProduct, lockVariant } from "./lock.ts";
+import {
+  type Price,
+  type ProductDetail,
+  readProduct,
+  readVariants,
+  type Variant,
+} from "./read.ts";
 
 /**
- * Changing the catalog: creating a Product, and pricing a Variant.
+ * Changing the catalog: creating a Product, adding a Variant to one, and pricing a Variant.
  *
- * Two operations, and the split is ADR-0008 showing through rather than an arbitrary
+ * Three operations, and the split is ADR-0008 showing through rather than an arbitrary
  * grouping:
  *
  * - **A Product and its first Variant are created together, in one transaction.** There is
@@ -23,6 +29,10 @@ import { type Price, type ProductDetail, readProduct } from "./read.ts";
  *   API can produce — not "discouraged", not "cleaned up later", unreachable. That is what
  *   makes "there is always exactly one sellable thing" a fact the rest of kobai may assume
  *   instead of a case it must handle.
+ * - **A later Variant is added to the Product that already exists.** The same request shape,
+ *   read by the same code, refused by the same two words — because a second size is one more
+ *   row and never a reason to recreate the Product, which would discard every Price and every
+ *   stock count under it (#144's loss, arrived at from the other side).
  * - **Pricing is adding a row.** `setPrice` inserts; it never updates a column, and calling
  *   it twice leaves two Prices rather than one overwritten one. This slice creates one per
  *   Variant, and the second one is representable on purpose: a sale price, a second
@@ -42,6 +52,32 @@ export type ProductCreation =
   | {
       readonly ok: false;
       readonly reason: "invalid" | "sku-taken" | "unknown-fulfilment-strategy";
+      readonly detail: string;
+    };
+
+/** Unvalidated, and the same three keys a Variant of a create names. */
+export type CreateVariantInput = {
+  readonly sku?: unknown;
+  readonly fulfilment?: unknown;
+  readonly metadata?: unknown;
+};
+
+/**
+ * Adding a Variant refuses in four ways, and three of them are creation's own words.
+ *
+ * The fourth is `product-not-found`, which is the whole difference between this and the
+ * Variants of a create: there the Product is being made in the same transaction, and here it
+ * is a row that has to still be there when this one is written.
+ */
+export type VariantCreation =
+  | { readonly ok: true; readonly variant: Variant }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "invalid"
+        | "product-not-found"
+        | "sku-taken"
+        | "unknown-fulfilment-strategy";
       readonly detail: string;
     };
 
@@ -135,13 +171,7 @@ export async function createProduct(
       return created.id;
     });
   } catch (cause) {
-    if (cause instanceof SkuTaken) {
-      return {
-        ok: false,
-        reason: "sku-taken",
-        detail: `A Variant already carries the SKU ${cause.skus.map((sku) => JSON.stringify(sku)).join(", ")}. A SKU identifies one Variant, so it cannot name two.`,
-      };
-    }
+    if (cause instanceof SkuTaken) return skuTaken(cause.skus);
     throw cause;
   }
 
@@ -153,6 +183,78 @@ export async function createProduct(
   const created = await readProduct(db, productId);
   if (!created) throw new Error("A Product was created and could not be read back.");
   return { ok: true, product: created };
+}
+
+/**
+ * Adds a Variant to a Product that already exists.
+ *
+ * **The Product is what this addresses**, because a Variant is a Variant *of* something: it
+ * carries the foreign key, and there is no other way to say which Product a new one belongs
+ * to. It answers with the Variant rather than with the whole Product for the reason
+ * `setPrice` answers with the Price — the caller addressed the parent and made one child, and
+ * the child is what it does not already have.
+ *
+ * **It refuses exactly what creating a Variant inside `createProduct` refuses**, because it is
+ * the same request shape read by the same code: a SKU another Variant carries (`sku-taken`)
+ * and a Strategy this deployment has not wired (`unknown-fulfilment-strategy`). Nothing about
+ * *when* a Variant is made changes what a Variant may say, so no reason was added to the
+ * promised surface for this route (ADR-0060).
+ */
+export async function addVariant(
+  db: Database,
+  productId: string,
+  input: CreateVariantInput,
+  strategies: FulfilmentStrategies,
+): Promise<VariantCreation> {
+  const parsed = parseVariant(input, "");
+  if (!parsed.ok) return parsed;
+
+  // The same question `createProduct` asks about every Variant of a create, at the same point
+  // in the request and for the same reason: a Variant pointing at a Strategy nothing has wired
+  // cannot be sold, so it must not be possible to *arrive* at one here either (ADR-0014).
+  if (!fulfilmentStrategyFor(strategies, parsed.value.fulfilmentStrategy)) {
+    return unknownFulfilmentStrategy(strategies, parsed.value.fulfilmentStrategy);
+  }
+
+  // Asked after the body and before the database, exactly as `setPrice` asks it: a request
+  // that is wrong in itself is wrong whatever the Store holds.
+  if (!isUuid(productId)) return noSuchProduct(productId);
+
+  return db.transaction(async (tx) => {
+    // **Held**, not merely read. The row inserted below references this Product, and one
+    // deleted in between would make that a foreign-key violation and a 500 — a broken server
+    // reported for what is only a Product no longer there. `lock.ts` is what the lock is and
+    // what order these rows are taken in; this is the only row this operation locks.
+    if (!(await lockProduct(tx, productId))) return noSuchProduct(productId);
+
+    const [created] = await tx
+      .insert(variant)
+      .values({
+        productId,
+        sku: parsed.value.sku,
+        fulfilmentStrategy: parsed.value.fulfilmentStrategy,
+        metadata: parsed.value.metadata,
+      })
+      // The unique index is the check, exactly as it is for a create: a select-then-insert
+      // would let two requests offering the same SKU both find nothing, and the loser would
+      // surface as a 500 rather than as the conflict it is (ADR-0018).
+      .onConflictDoNothing({ target: variant.sku })
+      .returning({ id: variant.id });
+    // Nothing was written, so there is nothing to roll back and this needs no throw — the
+    // shape `createProduct` needs only because a refused Variant has to take a Product with it.
+    if (!created) return skuTaken([parsed.value.sku]);
+
+    // Read back rather than assembled from what went in, so what this answers is what a read
+    // of the Product answers — `createProduct`'s property, and the reason this asks the one
+    // function that says what a Variant looks like. **Inside the transaction**, for
+    // `updateVariant`'s reason: a `DELETE` landing between the two statements would otherwise
+    // find nothing to read back and answer 500 on a write that succeeded.
+    const added = (await readVariants(tx, productId)).find(
+      (row) => row.id === created.id,
+    );
+    if (!added) throw new Error("A Variant was added and could not be read back.");
+    return { ok: true, variant: added } as const;
+  });
 }
 
 /**
@@ -240,6 +342,29 @@ export async function setPrice(
   });
 }
 
+/**
+ * What a request naming a SKU somebody else carries is told — creating a Product, and adding
+ * a Variant to one.
+ *
+ * One sentence for both, because it is one fact about the Store: a SKU identifies one Variant.
+ * A create can name several at once and this one can name one, which is why it takes a list.
+ */
+function skuTaken(skus: readonly string[]) {
+  return {
+    ok: false,
+    reason: "sku-taken",
+    detail: `A Variant already carries the SKU ${skus.map((sku) => JSON.stringify(sku)).join(", ")}. A SKU identifies one Variant, so it cannot name two.`,
+  } as const;
+}
+
+function noSuchProduct(productId: string): VariantCreation {
+  return {
+    ok: false,
+    reason: "product-not-found",
+    detail: `No Product ${JSON.stringify(productId)} exists, so there is nothing to add a Variant to.`,
+  };
+}
+
 function notThatVariant(variantId: string): PriceCreation {
   return {
     ok: false,
@@ -292,32 +417,59 @@ function parseVariants(value: unknown): ParsedVariants {
       return invalid("Each entry in `variants` must be an object with a `sku`.");
     }
 
-    const sku = trimmed(entry.sku);
-    if (sku === undefined) {
-      return invalid("Each Variant's `sku` must be a non-empty string.");
-    }
-    if (seen.has(sku)) {
+    const one = parseVariant(entry, "Each Variant's ");
+    if (!one.ok) return one;
+
+    // The one question a list asks and a single Variant cannot: two entries naming one SKU
+    // would otherwise be refused by the unique index as `sku-taken`, which is the wrong word
+    // for a request that conflicts with itself rather than with the Store.
+    if (seen.has(one.value.sku)) {
       return invalid(
-        `\`variants\` names the SKU ${JSON.stringify(sku)} twice. A SKU identifies one Variant.`,
+        `\`variants\` names the SKU ${JSON.stringify(one.value.sku)} twice. A SKU identifies one Variant.`,
       );
     }
-    seen.add(sku);
+    seen.add(one.value.sku);
 
-    const metadata = asMetadata(entry.metadata);
-    if (metadata === undefined) {
-      return invalid(metadataDetail("Each Variant's `metadata`"));
-    }
-
-    // Read out of the body here; whether this deployment *has* that Strategy is asked once,
-    // against the wired set, by the caller. A name and not an enum, because the set is open
-    // (ADR-0014) — a schema listing Core's two would be exactly the closed set it rules out.
-    const fulfilment = parseFulfilment(entry.fulfilment, "Each Variant's `fulfilment`");
-    if (!fulfilment.ok) return fulfilment;
-
-    parsed.push({ sku, fulfilmentStrategy: fulfilment.value, metadata });
+    parsed.push(one.value);
   }
 
   return { ok: true, value: parsed };
+}
+
+type ParsedOneVariant =
+  | { readonly ok: true; readonly value: ParsedVariant }
+  | { readonly ok: false; readonly reason: "invalid"; readonly detail: string };
+
+/**
+ * One Variant, out of whichever body it arrived in.
+ *
+ * **One reading rather than two**, for the reason `parseFulfilment` is exported: a Variant
+ * added to an existing Product and a Variant named inside a create are the same three fields,
+ * so they must not be able to come to different judgements about the same body. `possessive`
+ * is the only difference — a create names a list and has to say *which* entry is wrong, and a
+ * body that is one Variant says `sku` plainly.
+ */
+function parseVariant(
+  entry: Record<string, unknown>,
+  possessive: "" | "Each Variant's ",
+): ParsedOneVariant {
+  const invalid = (detail: string) => ({ ok: false, reason: "invalid", detail }) as const;
+
+  const sku = trimmed(entry.sku);
+  if (sku === undefined) {
+    return invalid(`${possessive}\`sku\` must be a non-empty string.`);
+  }
+
+  const metadata = asMetadata(entry.metadata);
+  if (metadata === undefined) return invalid(metadataDetail(`${possessive}\`metadata\``));
+
+  // Read out of the body here; whether this deployment *has* that Strategy is asked once,
+  // against the wired set, by the caller. A name and not an enum, because the set is open
+  // (ADR-0014) — a schema listing Core's two would be exactly the closed set it rules out.
+  const fulfilment = parseFulfilment(entry.fulfilment, `${possessive}\`fulfilment\``);
+  if (!fulfilment.ok) return fulfilment;
+
+  return { ok: true, value: { sku, fulfilmentStrategy: fulfilment.value, metadata } };
 }
 
 type ParsedFulfilment =

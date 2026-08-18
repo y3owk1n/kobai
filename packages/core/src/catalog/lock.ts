@@ -1,10 +1,12 @@
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { Transaction } from "../db/client.ts";
-import { variant } from "../db/schema.ts";
+import { product, variant } from "../db/schema.ts";
 
 /**
  * Holding a Variant still — the one way a write that *references* a Variant keeps it from
  * going, and the one place the order every site takes these rows in is written out in full.
+ * {@link lockProduct} is the same bargain one link up the chain, and it lives here so that the
+ * order stays written down once.
  *
  * **`catalog/delete.ts` is the exception and is not a caller**: it takes `for update` on the
  * rows it is removing, which is a different lock for the opposite reason — one write depends on
@@ -61,6 +63,32 @@ import { variant } from "../db/schema.ts";
  * restated at each call site — and why ADR-0059 and the delete routes state the rule too, from
  * the side they enforce it on.
  */
+
+/**
+ * Locks the Product, and answers whether there is one — `false` is "no such Product".
+ *
+ * The head of the chain above, and the same bargain `lockVariant` strikes one link down:
+ * `addVariant` asks whether a Product is there and then writes a row referencing it, and a
+ * `DELETE /admin/products/{id}` landing in between would make that a foreign-key violation and
+ * a **500** on a route that declares a 404. Existence is not a fact one statement can both
+ * check and depend on, so the lock is what makes the two statements one operation (ADR-0018).
+ *
+ * **`for share`, and taking it alone is allowed.** Two Merchants adding two Variants to one
+ * Product have no quarrel with each other; the write this blocks is `catalog/delete.ts`'s
+ * `for update`. And a caller need hold no more of the chain than it uses — a prefix nobody
+ * holds cannot make a cycle — so `addVariant` takes this row and nothing else. **A caller that
+ * ever needs a Variant or an Inventory row as well takes them after this one**, in the order
+ * at the head of this file.
+ */
+export async function lockProduct(tx: Transaction, productId: string): Promise<boolean> {
+  const rows = await tx
+    .select({ id: product.id })
+    .from(product)
+    .where(eq(product.id, productId))
+    .for("share")
+    .limit(1);
+  return rows.length > 0;
+}
 
 /**
  * Locks the Variant, and answers whether there is one — `false` is "no such Variant".

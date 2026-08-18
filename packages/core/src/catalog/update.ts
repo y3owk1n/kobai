@@ -1,17 +1,27 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { violatesUniqueIndex } from "../db/errors.ts";
-import { variant } from "../db/schema.ts";
+import { product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import {
   type FulfilmentStrategies,
   fulfilmentStrategyFor,
 } from "../fulfilment/strategy.ts";
 import { asMetadata, metadataDetail, trimmed } from "../input.ts";
-import { readVariants, type Variant } from "./read.ts";
+import { type ProductDetail, readVariants, type Variant } from "./read.ts";
 import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 
 /**
+ * Correcting a catalog entry in place — a Variant, and the Product it hangs off.
+ *
+ * **The two are the same shape of question and the Product's is the easier one**, which is why
+ * ADR-0062 settled the Variant's four fields and left this beside it: a Product has no SKU, no
+ * Strategy and nothing claiming it, so `title` and `metadata` are free to move for the one
+ * reason that makes any of this safe — an Order's Line Items snapshot the title they were
+ * bought under, so nothing a Shopper or an accountant reads is joined to the row this changes.
+ * Both `PATCH`es therefore behave identically: an absent field means "leave it", a named
+ * `metadata` is replaced rather than merged, and a body naming nothing is refused.
+ *
  * Correcting a Variant — its SKU, the Fulfilment Strategy it points at, and its metadata.
  *
  * Its own module for `delete.ts`'s reason: what a *create* may say is one question and what a
@@ -27,6 +37,27 @@ import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
  * ADR-0060 — this route adds no `reason` to the promised surface, so a client that already
  * branches on the catalog family's set needs no new arm for it.
  */
+
+/** Unvalidated: it arrives as a JSON body, and everything below narrows it in one place. */
+export type UpdateProductInput = {
+  readonly title?: unknown;
+  readonly metadata?: unknown;
+};
+
+/**
+ * Correcting a Product refuses in two ways, and neither is new.
+ *
+ * There is no `title-taken` and there is not going to be one: a title is what a Product is
+ * called, not what identifies it, and two Products may perfectly well share one. The SKU on
+ * the Variant below is the identifying string, and it is the one with an index behind it.
+ */
+export type ProductUpdate =
+  | { readonly ok: true; readonly product: ProductDetail }
+  | {
+      readonly ok: false;
+      readonly reason: "invalid" | "product-not-found";
+      readonly detail: string;
+    };
 
 /** Unvalidated: it arrives as a JSON body, and everything below narrows it in one place. */
 export type UpdateVariantInput = {
@@ -50,6 +81,97 @@ export type VariantUpdate =
         | "unknown-fulfilment-strategy";
       readonly detail: string;
     };
+
+/**
+ * Changes what this Product says about itself, and leaves its Variants alone.
+ *
+ * **One statement decides everything, so this takes no lock either** — `updateVariant`'s
+ * argument one table up: existence is what the `update` answers, there is no uniqueness to
+ * defend, and nothing here is asked of a second row. The transaction is for the read back, so
+ * what this answers is the Product this write left rather than whatever the next request
+ * leaves between the two statements.
+ *
+ * **Its Variants are not this route's business**, in either direction: it neither creates one
+ * (`POST /admin/products/{id}/variants` does) nor touches the ones that are there. A `variants`
+ * key in the body is stripped by the schema and so arrives as a body naming nothing, which is
+ * exactly what the refusal below is for.
+ */
+export async function updateProduct(
+  db: Database,
+  productId: string,
+  input: UpdateProductInput,
+): Promise<ProductUpdate> {
+  const changes: { title?: string; metadata?: Record<string, unknown> } = {};
+
+  if (input.title !== undefined) {
+    const title = trimmed(input.title);
+    if (title === undefined) {
+      return {
+        ok: false,
+        reason: "invalid",
+        detail: "`title` must be a non-empty string.",
+      };
+    }
+    changes.title = title;
+  }
+
+  if (input.metadata !== undefined) {
+    const metadata = asMetadata(input.metadata);
+    if (metadata === undefined) {
+      return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
+    }
+    // Replaced whole rather than merged, for the reason a Variant's is: a merge leaves no way
+    // to remove a key a Merchant put there by mistake.
+    changes.metadata = metadata;
+  }
+
+  // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first: a
+  // request that changes nothing is likelier a mistake than an intention. It does the same
+  // second job here — the schema strips a field this route does not carry, so a body naming
+  // `variants` is this body, and the refusal is where a Merchant who tried to add one is told
+  // which route adds one.
+  if (Object.keys(changes).length === 0) {
+    return {
+      ok: false,
+      reason: "invalid",
+      detail:
+        "Name a `title`, a `metadata`, or both. A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
+    };
+  }
+
+  if (!isUuid(productId)) return noSuchProduct(productId);
+
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(product)
+      .set(changes)
+      .where(eq(product.id, productId))
+      .returning({
+        id: product.id,
+        title: product.title,
+        metadata: product.metadata,
+      });
+    if (!updated) return noSuchProduct(productId);
+
+    // The Variants are read back rather than left out, so this answers what
+    // `GET /admin/products/{id}` answers — one shape for a Product opened, whether it was just
+    // corrected or merely looked at. `readProduct` is not called because the row is already
+    // here, and asking for it again inside the same transaction would be a second read of what
+    // this statement just returned.
+    return {
+      ok: true,
+      product: { ...updated, variants: await readVariants(tx, productId) },
+    } as const;
+  });
+}
+
+function noSuchProduct(productId: string): ProductUpdate {
+  return {
+    ok: false,
+    reason: "product-not-found",
+    detail: `No Product ${JSON.stringify(productId)} exists, so there is nothing to correct.`,
+  };
+}
 
 /**
  * Changes what this Variant says about itself, and leaves everything that refers to it alone.
