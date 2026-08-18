@@ -82,6 +82,7 @@ New to the project? These five carry the shape of everything else:
 | [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053 |
 | [0057](./0057-the-reservation-sweeper-is-an-interval-not-a-job.md) | The Reservation sweeper is an interval, not a job | Accepted — amends part of 0026 |
 | [0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md) | A promised surface may be broken until the first release, and a compile error is the notice | Accepted — its first rule expires at the first publish |
+| [0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md) | Catalog deletion refuses rather than cascading or releasing | Accepted — completes 0008 |
 
 ## Prototypes
 

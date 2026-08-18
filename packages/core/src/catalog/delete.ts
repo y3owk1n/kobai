@@ -13,12 +13,10 @@ import { variantsWithClaimedStock } from "../reservation/inventory.ts";
  * and ADR-0009's "catalog data is freely deletable", which is only true because an Order's
  * Line Items snapshot everything they display.
  *
- * **What a delete leaves behind, and why that is right.** `core_reservation.subject` is text
- * with no foreign key (ADR-0018), so the Reservations a deleted Variant's stock was claimed
- * under survive it — and they should. A Reservation is Core's *record* that a claim happened,
- * consumed or released on a day nothing can change now; deleting the Variant does not make it
- * not have happened, exactly as it does not un-place the Orders. What is refused below is a
- * claim that is still **live**, because that one is about to become an Order or lapse.
+ * **ADR-0059 is where the argument lives** — why a Product's last Variant is refused rather than
+ * cascading, why a live claim on stock is refused rather than released, why neither blocks a
+ * Merchant for long, and what a delete leaves behind. Read it before changing either refusal:
+ * both reason strings are shape a caller branches on, and nothing narrows them.
  */
 
 /** Deleting a Product refuses in two ways, and each names something a Merchant can act on. */
@@ -97,11 +95,10 @@ export async function deleteProduct(
  * nullable and `set null`, so the reference kept for navigation goes and the snapshot —
  * title, SKU, unit amount, tax, total — stays exactly as Capture wrote it (ADR-0009).
  *
- * **A Product's last Variant is refused rather than taken** (ADR-0008). `write.ts` guarantees
- * that a Product with no Variant is unreachable by giving the API no way to create one, and
- * this is the other end of the same guarantee: the alternative — quietly deleting the Product
- * too — would have a route delete a resource its caller never addressed, which is a worse
- * thing for a `DELETE` to do than to refuse. Deleting the Product is one call away and says so.
+ * **A Product's last Variant is refused rather than taken** — the other end of ADR-0008's
+ * guarantee that `write.ts` makes unreachable at creation, argued in full in ADR-0059 along with
+ * why cascading to the Product was rejected. Deleting the Product is one call away and the
+ * refusal says so.
  */
 export async function deleteVariant(
   db: Database,
@@ -185,7 +182,8 @@ export type PriceDeletion =
  * belonging to another Variant is not found here rather than deleted from under a Variant
  * nobody named. **The last Price is not a special case**: a Variant with no Price is a state
  * the API already produces at creation, and it is what a Merchant reaches for to stop selling
- * something at once — an unpriced Variant cannot be quoted and cannot be put in a Cart.
+ * something at once — an unpriced Variant cannot be quoted and cannot be put in a Cart. That is
+ * what the two refusals above lean on, and ADR-0059 says why it has to stay true.
  */
 export async function deletePrice(
   db: Database,
