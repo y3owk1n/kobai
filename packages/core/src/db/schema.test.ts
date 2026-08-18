@@ -14,10 +14,9 @@ import { createTestKobai, inspectSchema } from "../testing/index.ts";
  *
  * Store, Merchant, Role, the catalog's Product, Variant and Price, the Cart and its Line
  * Items, and now the Order with its own and its Adjustments. Each must arrive carrying
- * `metadata`, because
- * ADR-0004's bargain is that Core's tables are closed *and* there is a cheap way to stash a
- * field anyway. Adding an entity here without the column fails this test, which is the point of
- * the list.
+ * `metadata`, because ADR-0004's bargain is that Core's tables are closed *and* there is a
+ * cheap way to stash a field anyway. Adding an entity here without the column fails this test,
+ * which is the point of the list.
  *
  * On the Cart and the Line Item the column is more than cheap: ADR-0013 has a Project's
  * replaced pricing Step read its inputs from a Line Item's `metadata`, so it is the door a

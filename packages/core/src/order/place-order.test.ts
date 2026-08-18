@@ -34,6 +34,18 @@ async function place(kobai: TestKobai, headers: Record<string, string>, cartId: 
   });
 }
 
+/**
+ * One Variant at 1250, `quantity` of it, placed.
+ *
+ * The arrangement every Adjustment and tax test below wants, and the amount is named here
+ * because all of them assert arithmetic on it.
+ */
+async function placePricedCart(kobai: TestKobai, quantity: number) {
+  const catalog = await seedTestCatalog(kobai, { prices: [1250] });
+  const cart = await seedTestCart(kobai, { catalog, quantity });
+  return { catalog, response: await place(kobai, cart.apiKey.headers, cart.id) };
+}
+
 describe("the declaration", () => {
   it("names its Steps in order, without opening Core", async () => {
     expect(placeOrderWorkflow.describe()).toEqual({
@@ -280,19 +292,12 @@ describe("Adjustments on an Order", () => {
     }),
   );
 
-  /** One Variant at 1250, `quantity` of it, placed — the arrangement all three tests want. */
-  async function placeAdjusted(kobai: TestKobai, quantity: number) {
-    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
-    const cart = await seedTestCart(kobai, { catalog, quantity });
-    return { catalog, response: await place(kobai, cart.apiKey.headers, cart.id) };
-  }
-
   it("reports each one as a line rather than folding it into an amount", async () => {
     await using kobai = await createTestKobai({
       workflows: { "place-order": { steps: { "apply-adjustments": adjust } } },
     });
 
-    const { response } = await placeAdjusted(kobai, 2);
+    const { response } = await placePricedCart(kobai, 2);
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
@@ -330,7 +335,7 @@ describe("Adjustments on an Order", () => {
       workflows: { "place-order": { steps: { "apply-adjustments": adjust } } },
     });
 
-    const { response } = await placeAdjusted(kobai, 2);
+    const { response } = await placePricedCart(kobai, 2);
     const order = (await response.json()) as {
       total: number;
       lineItems: readonly { total: number }[];
@@ -348,7 +353,7 @@ describe("Adjustments on an Order", () => {
       workflows: { "place-order": { steps: { "apply-adjustments": adjust } } },
     });
 
-    const { catalog, response } = await placeAdjusted(kobai, 1);
+    const { catalog, response } = await placePricedCart(kobai, 1);
     const order = (await response.json()) as { id: string; workflow: unknown };
 
     const read = await kobai.request(`/store/orders/${order.id}`, {
@@ -386,10 +391,8 @@ describe("Adjustments on an Order", () => {
 describe("the tax Step", () => {
   it("charges none, and says so on the snapshot", async () => {
     await using kobai = await createTestKobai();
-    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
-    const cart = await seedTestCart(kobai, { catalog, quantity: 2 });
 
-    const response = await place(kobai, cart.apiKey.headers, cart.id);
+    const { response } = await placePricedCart(kobai, 2);
 
     await expect(response.json()).resolves.toMatchObject({
       total: 2500,
@@ -414,10 +417,8 @@ describe("the tax Step", () => {
     await using kobai = await createTestKobai({
       workflows: { "place-order": { steps: { "calculate-tax": tenPerCent } } },
     });
-    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
-    const cart = await seedTestCart(kobai, { catalog, quantity: 2 });
 
-    const response = await place(kobai, cart.apiKey.headers, cart.id);
+    const { response } = await placePricedCart(kobai, 2);
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
@@ -479,10 +480,7 @@ describe("the tax Step", () => {
         },
       },
     });
-    const catalog = await seedTestCatalog(kobai, { prices: [1250] });
-    const cart = await seedTestCart(kobai, { catalog, quantity: 2 });
-
-    const response = await place(kobai, cart.apiKey.headers, cart.id);
+    const { response } = await placePricedCart(kobai, 2);
 
     await expect(response.json()).resolves.toMatchObject({
       // 2500 of goods, halved to 1250, taxed at 125 — and not the 250 an unadjusted base
@@ -490,5 +488,51 @@ describe("the tax Step", () => {
       lineItems: [{ tax: 125, total: 1375 }],
       total: 1375,
     });
+  });
+});
+
+/**
+ * Money is an integer count of the currency's minor unit, and Capture is where that is kept.
+ *
+ * Core's own Steps cannot produce a fraction, so the only way to reach this is the way a
+ * deployment actually would: a replaced Step dividing or applying a percentage without
+ * rounding. It is a bug in that Step rather than a decision the Workflow made, so it travels as
+ * one — and the point worth asserting is what is *not* in the database afterwards.
+ */
+describe("amounts are whole minor units", () => {
+  it("writes no Order when a Step returns a fraction of a penny", async () => {
+    const thirtyThreePercentOff = defineStep(
+      "a-third-off-to-the-nearest-nothing",
+      (input: PricedLines): AdjustedLines => ({
+        cart: input.cart,
+        lines: input.lines.map((line) => ({
+          ...line,
+          // 1250 / 3 is 416.66…, which no `bigint` column can hold and no Shopper can pay.
+          adjustments: [
+            {
+              code: "a-third-off",
+              description: "A third off",
+              amount: -line.unitAmount / 3,
+            },
+          ],
+        })),
+        adjustments: [],
+      }),
+    );
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": { steps: { "apply-adjustments": thirtyThreePercentOff } },
+      },
+    });
+
+    const { response } = await placePricedCart(kobai, 1);
+
+    // A bug, not a refusal: the request was fine and this deployment is wired to charge
+    // fractions of a penny, which is not something a storefront can act on.
+    expect(response.status).toBe(500);
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+    await expect(
+      kobai.database.query("select id from core_order_adjustment"),
+    ).resolves.toEqual([]);
   });
 });

@@ -391,6 +391,7 @@ export const captureOrder = defineStep(
   "capture-order",
   async (input: TaxedLines, context): Promise<Order> => {
     const currency = oneCurrency(input.lines);
+    inWholeMinorUnits(input);
     const lines = input.lines.map((line) => ({
       variantId: line.variantId,
       title: line.title,
@@ -434,11 +435,11 @@ export const captureOrder = defineStep(
         // Variant and a SKU is unique across the deployment, so this is a real correlation
         // rather than a bet on what `returning` happens to preserve.
         .returning({ id: orderLineItem.id, sku: orderLineItem.sku });
-      const lineIdBySku = new Map(insertedLines.map((line) => [line.sku, line.id]));
+      const lineIdBySku = lineIdsBySku(insertedLines);
 
       const adjustments = [
         ...lines.flatMap((line) =>
-          rowsFor(line.adjustments, written.id, lineIdBySku.get(line.sku) ?? null),
+          rowsFor(line.adjustments, written.id, idOf(lineIdBySku, line.sku)),
         ),
         // The Order's own go in with a null line, which is what makes them the Order's.
         ...rowsFor(input.adjustments, written.id, null),
@@ -453,6 +454,69 @@ export const captureOrder = defineStep(
     });
   },
 );
+
+/**
+ * Every amount about to be written is a **whole number of minor units**, or nothing is.
+ *
+ * Money is integer minor units everywhere in kobai — 1250 is USD 12.50 — and the columns are
+ * `bigint`, so a fraction is not a rounding to argue about but a value Postgres will not hold.
+ * Core's own Steps cannot produce one; a replaced `apply-adjustments` dividing a line in half,
+ * or a `calculate-tax` applying a percentage without rounding, can and will.
+ *
+ * Checked here, in front of the write, for the same reason {@link oneCurrency} is: this is the
+ * point of no return, and the alternative is an Order half-written against a database error
+ * naming a column rather than the Step that produced the value. It travels as a bug rather than
+ * a refusal — a refusal would tell a storefront its request was declined, when what happened is
+ * that this deployment is wired to charge fractions of a penny.
+ */
+function inWholeMinorUnits(input: TaxedLines): void {
+  const amounts = [
+    ...input.adjustments.map((adjustment) => adjustment.amount),
+    ...input.lines.flatMap((line) => [
+      line.unitAmount,
+      line.quantity,
+      line.tax,
+      ...line.adjustments.map((adjustment) => adjustment.amount),
+    ]),
+  ];
+
+  if (!amounts.every(Number.isSafeInteger)) {
+    throw new Error(
+      `This Order was priced, adjusted or taxed in something other than whole minor units: ${amounts.filter((amount) => !Number.isSafeInteger(amount)).join(", ")}. A Step of this deployment returned a fraction, and money in kobai is an integer count of the currency's minor unit.`,
+    );
+  }
+}
+
+/**
+ * The Line Item rows just written, keyed by the SKU each one snapshotted.
+ *
+ * The keying is what attaches an Adjustment to the line it belongs to, so it has to be a real
+ * correlation rather than a convenient one. Two lines sharing a SKU would collapse here and
+ * silently move one line's money onto another, which Core's own Steps cannot produce — a Cart
+ * holds one line per Variant in DDL, and a SKU is unique across the deployment — but a replaced
+ * `price-lines` can. That is a bug in the Step that produced it rather than a decision the
+ * Workflow made, so it travels as one and the transaction takes the Order with it.
+ */
+function lineIdsBySku(rows: readonly { id: string; sku: string }[]): Map<string, string> {
+  const bySku = new Map(rows.map((row) => [row.sku, row.id]));
+  if (bySku.size !== rows.length) {
+    throw new Error(
+      "This Order was captured with two Line Items carrying the same SKU, so an Adjustment on one cannot be told from an Adjustment on the other. A Step replacing `price-lines` returned a line per Variant more than once.",
+    );
+  }
+  return bySku;
+}
+
+/** The line a SKU names. Absent is impossible and therefore worth saying out loud. */
+function idOf(lineIdBySku: Map<string, string>, sku: string): string {
+  const id = lineIdBySku.get(sku);
+  if (id === undefined) {
+    throw new Error(
+      `An Order's Line Item for ${JSON.stringify(sku)} was not written back.`,
+    );
+  }
+  return id;
+}
 
 /** What one line came to: the goods, its own Adjustments, and the tax on the adjusted figure. */
 function totalOf(line: TaxedLine): number {
