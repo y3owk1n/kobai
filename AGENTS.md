@@ -398,13 +398,10 @@ The same shape is already how a Cart keeps one line per Variant and how a Cart b
 one Order; those are unique indexes rather than conditional updates, and both are the ADR's
 "a row lock or a unique constraint".
 
-`tests/`-style emptiness assertions cannot see this, so **the guardrail is a concurrent test**:
-`packages/core/src/reservation/the-last-unit.test.ts` dispatches many `POST /store/orders` at one
-unit of stock and asserts exactly one Order, every other request refused with
-`insufficient-inventory`, and the shelf left at zero rather than at minus something. It was
-watched failing against a deliberately non-atomic hold before it was made to pass — one 201 and
-five 500s, every loser stopped by the guard inside Capture and refunded by a compensation that
-should never have run. **Write the next such test the same way round.**
+No sequential assertion can see any of this, so **the guardrail is a concurrent test** —
+`packages/core/src/reservation/the-last-unit.test.ts`, dispatching many `POST /store/orders` at
+one unit of stock. How one of those is written, and why each of its assertions is there, is in
+[Writing tests](#writing-tests) with the other seams; **write the next one the same way round.**
 
 **One interface, and the providers are Core's own.** `reservation/provider.ts` is ADR-0018's
 single Reservation interface; Inventory is its only implementation and Capacity joins
@@ -942,6 +939,29 @@ makes, in what order — is promised to nobody. `seedTestCatalog`'s, `seedTestCa
 `packages/core/src/testing/catalog.test.ts`, `packages/core/src/testing/cart.test.ts` and
 `packages/core/src/testing/order.test.ts` against the running application rather than against
 the object each returns.
+
+**Contention has a shape, and it stays in the HTTP seam.** ADR-0018 requires check-and-consume to
+be a row lock or a unique constraint and **never a `select` followed by an `update`** — and
+nothing sequential can tell those apart, because the forbidden shape passes every assertion in
+`reservation.test.ts`. So the test *dispatches at once*:
+`packages/core/src/reservation/the-last-unit.test.ts` puts one unit on the shelf, builds a Cart
+per Shopper, and fires `POST /store/orders` at all of them inside one `Promise.all`. Four things
+about how it is written carry to the next one:
+
+- **Assert on what the losers were told, and on the books, not only on the winner.** One 201, and
+  every other request refused with the *reason that is true* rather than failing some other way;
+  the shelf left at **zero rather than at minus something**; and **one card charged, none
+  refunded**. That last one is what tells atomicity from a backstop — a hold that let everybody
+  through is still caught inside Capture and the shelf still ends at zero, but by then every
+  loser has been charged and refunded for a purchase that never happened.
+- **A Cart each, not one Cart many times.** A Cart becomes exactly one Order, so the second shape
+  is a test about *that* uniqueness rather than about scarcity, and it would pass either way.
+- **How many is a named constant with its reason beside it.** Big enough that more than one
+  request is inside the gap on any scheduling, small enough to stay well inside the connection
+  pool — queueing behind connections serialises the very thing the test exists to overlap.
+- **It was watched failing against a deliberately non-atomic implementation before it was made to
+  pass**, and what it did then is written down in the file. **Write the next such test the same
+  way round**; a race nobody has seen lost is not yet known to be losable.
 
 The **migration seam** covers what HTTP cannot — that sets apply independently, into
 separate tracking tables, in any order. Take a harness with `{ migrate: false }` and drive
