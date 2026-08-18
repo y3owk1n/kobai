@@ -1,15 +1,22 @@
 import { defineKobaiConfig } from "@kobai/core";
 import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
 import { projectMigrationSet } from "./src/migration-set.ts";
+import { manualPaymentProvider } from "./src/payments/manual.ts";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
 
 /**
  * Everything this Project has customised, in one file.
  *
- * A Developer should be able to read this and know what their deployment does differently
- * from stock kobai. Three things, and nothing else: one Plugin's tables are wired, one Step
- * of Core's price-resolution Workflow is somebody else's now, and one Step the same Plugin
- * offers watches what that Workflow decided.
+ * A Developer should be able to read this and know what their deployment does differently from
+ * stock kobai. Four things, and nothing else: one Plugin's tables are wired, one Step of Core's
+ * price-resolution Workflow is somebody else's now, one Step the same Plugin offers watches what
+ * that Workflow decided, and this Project supplies the Payment Provider — because kobai ships
+ * none.
+ *
+ * The last of those is a different *kind* of customisation from the three before it, and the
+ * distinction is worth reading for. A replaced Step changes a decision Core would otherwise have
+ * made; a supplied Payment Provider fills a hole Core deliberately left, and without it this
+ * deployment would serve its catalog and its Admin and refuse to place an Order (ADR-0053).
  *
  * `@kobai/core` is an ordinary versioned dependency in this Project's `package.json`, at the
  * same version it would be without either line. There is no fork, no copied service and no
@@ -60,4 +67,24 @@ export default defineKobaiConfig({
       after: { "select-price": [recordPriceResolution] },
     },
   },
+
+  /**
+   * Dependency substitution (ADR-0003's third Extension Point), and the first implementation of a
+   * named kobai interface that did not come from kobai.
+   *
+   * Core defines `PaymentProvider` and implements it nowhere on purpose: a provider Core shipped
+   * would have left every implementation of every named interface Core's own, which is the exact
+   * finding #72 reports against `Logger`. So the one that exists is this Project's own source, in
+   * `src/payments/manual.ts`, wired here — and a Store that takes cards swaps that file's export
+   * for an adapter around its processor and changes nothing else in this repository.
+   *
+   * A **subject** rather than a scalar, like `session` and `migrationSets`: the next thing this
+   * deployment needs to say about its payments goes beside the provider (ADR-0050).
+   *
+   * Take this line out and the rest of this file still works. The catalog serves, the Admin
+   * serves, and `POST /store/orders` refuses with `no-payment-provider` — a Store that cannot yet
+   * be bought from is still a Store worth reading, and only a database that cannot be migrated
+   * stops a boot (ADR-0048).
+   */
+  payments: { provider: manualPaymentProvider },
 });

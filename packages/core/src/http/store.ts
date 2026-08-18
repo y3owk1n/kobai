@@ -15,6 +15,7 @@ import type { Database } from "../db/client.ts";
 import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
 import { type Order, readOrder, readOrderPlacedFrom } from "../order/read.ts";
+import type { PaymentProvider } from "../payment/provider.ts";
 import type {
   PriceResolutionRefusal,
   PriceResolutionWorkflow,
@@ -61,6 +62,14 @@ export type StoreDependencies = {
    * it is threaded here once rather than remembered per route (#113).
    */
   readonly workflows: WorkflowRegistry;
+  /**
+   * The Payment Provider this deployment was wired with, for the Step that takes money
+   * (ADR-0053).
+   *
+   * `undefined` is a deployment that wired none, and it reaches `take-payment` as that — the Step
+   * refuses with `no-payment-provider` and nothing else on this surface is affected.
+   */
+  readonly paymentProvider: PaymentProvider | undefined;
 };
 
 /**
@@ -333,10 +342,14 @@ const placeOrderRoute = createRoute({
     // there is nothing narrower to say.
     400: REFUSALS.invalid,
     401: REFUSALS.noApiKey,
+    402: json(
+      "The Payment Provider declined. No Order exists — money is taken before Capture precisely so that a refused card leaves nothing in the Merchant's books — and `error` carries whatever the provider said for itself.",
+      contract.PlaceOrderRefusal,
+    ),
     403: REFUSALS.secretKeyRequired,
     404: json("A Step refused: there is no such Cart.", contract.PlaceOrderRefusal),
     409: json(
-      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the idempotency key names a different request, or one still in flight.",
+      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
       contract.PlaceOrderRefusal,
     ),
     422: json(
@@ -385,6 +398,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     db: deps.db,
     metadata: openMetadata(new URL(c.req.url)),
     workflows: deps.workflows,
+    paymentProvider: deps.paymentProvider,
   });
 
   store.openapi(resolvePriceRoute, async (c) => {
@@ -713,13 +727,22 @@ const PLACE_ORDER_REFUSAL_STATUS = {
   "cart-empty": 422,
   "variant-not-found": 422,
   "price-not-set": 422,
+  // 402 is the one status on this surface that means "the money did not move", and it is the
+  // only thing it means: the request was fine, the Cart was fine, and the provider said no.
+  "payment-declined": 402,
+  // A deployment with no Payment Provider is a conflict with the state of this Store rather than
+  // a fault in the request — 409 beside the Cart that can no longer be placed, because in both
+  // cases retrying the same request changes nothing until somebody changes the Store. It is not
+  // a 503: everything else here is serving, and kobai ships no provider by decision (ADR-0053),
+  // so this is a deployment that has not finished being configured rather than one that is down.
+  "no-payment-provider": 409,
 } as const satisfies Record<
   PlaceOrderRefusal | PriceResolutionRefusal,
   PlaceOrderRefusalStatus
 >;
 
-/** The three statuses a refused Capture can carry. The route declares exactly these. */
-type PlaceOrderRefusalStatus = 404 | 409 | 422;
+/** The four statuses a refused Capture can carry. The route declares exactly these. */
+type PlaceOrderRefusalStatus = 402 | 404 | 409 | 422;
 
 const placeOrderStatusFor = statusMapper<PlaceOrderRefusalStatus>(
   PLACE_ORDER_REFUSAL_STATUS,

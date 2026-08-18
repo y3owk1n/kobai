@@ -71,6 +71,16 @@ describe("a Cart becomes an Order", () => {
       ],
       adjustments: [],
       metadata: {},
+      // The money, recorded against the Order — for the total, and by whatever this deployment
+      // was wired to take it with. A placed Order is a paid Order (ADR-0053).
+      payment: {
+        id: expect.any(String),
+        provider: "test",
+        reference: expect.any(String),
+        amount: 2500,
+        currency: "USD",
+        createdAt: expect.any(String),
+      },
       createdAt: expect.any(String),
       // Not a debugging nicety: this is what lets a Developer who replaced a Step see that
       // theirs ran, so it is part of the response contract.
@@ -81,6 +91,7 @@ describe("a Cart becomes an Order", () => {
           { step: "price-lines", implementation: "price-lines" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "calculate-tax" },
+          { step: "take-payment", implementation: "take-payment" },
           { step: "capture-order", implementation: "capture-order" },
         ],
       },

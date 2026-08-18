@@ -3,6 +3,7 @@ import type { KobaiProjectConfig, Logger } from "../config.ts";
 import { createKobai, type Kobai } from "../kobai.ts";
 import type { MigrationOutcome } from "../migrations/run.ts";
 import { createTestDatabase, type TestDatabase } from "./database.ts";
+import { testPaymentProvider } from "./payments.ts";
 
 export type TestKobai = Kobai & {
   /** The throwaway database this instance is bound to. */
@@ -73,6 +74,11 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
       // boots with the same key a `kobai.config.ts` carries, and an unusable one is refused
       // here exactly as it would be at a Project's boot.
       session: options?.session,
+      // A provider that pays, unless the test said otherwise — the same courtesy as
+      // `silentLogger`, and for the same reason: Core ships none (ADR-0053), so without one
+      // every test that places an Order would be a test about not having a Payment Provider.
+      // Saying `payments: {}` is how a test asks for the deployment that has none.
+      payments: options?.payments ?? { provider: testPaymentProvider },
       logger: options?.logger ?? silentLogger,
     });
   } catch (cause) {

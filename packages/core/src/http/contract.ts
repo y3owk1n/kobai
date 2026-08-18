@@ -735,6 +735,32 @@ export const OrderLineItem = z
   .openapi("OrderLineItem");
 
 /**
+ * The **Payment** taken for an Order — the record that money moved (ADR-0053).
+ *
+ * kobai defines the Payment Provider interface and ships no implementation of it, so `provider`
+ * names whatever the deployment was wired with and `reference` is that system's own handle on the
+ * payment. kobai stores both and parses neither: quote the reference at the provider, not here.
+ */
+export const Payment = z
+  .object({
+    id: z.uuid(),
+    provider: z.string().meta({
+      description:
+        "What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money.",
+    }),
+    reference: z.string().meta({
+      description:
+        "The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against.",
+    }),
+    amount: z.int().meta({
+      description: "What was taken, in minor units of `currency` — the Order's total.",
+    }),
+    currency: z.string().meta({ description: "ISO 4217." }),
+    createdAt: z.iso.datetime(),
+  })
+  .openapi("Payment");
+
+/**
  * An Order — the immutable financial record of a completed purchase.
  *
  * There is no `updatedAt`, deliberately: an Order is never edited (ADR-0009), so a second
@@ -765,6 +791,10 @@ export const Order = z
         "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line.",
     }),
     metadata: Metadata,
+    payment: Payment.nullable().meta({
+      description:
+        "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as, and it is the difference between an Order somebody has settled and one nobody has.",
+    }),
     createdAt: z.iso.datetime().meta({
       description: "The moment of Capture, when this Order became immutable.",
     }),

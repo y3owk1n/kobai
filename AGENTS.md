@@ -654,6 +654,24 @@ const price = await kobai.request("/store/variants/…/price", { headers: key.he
 A test whose subject is the *kind* of key should ask for the kind it means
 (`{ kind: "publishable" }`) and say why, rather than leaning on the default.
 
+**The harness wires a Payment Provider, because Core ships none and almost no test is about
+one** (ADR-0053). `createTestKobai` passes `testPaymentProvider` — takes every payment, gives
+any of it back, remembers nothing — the same courtesy `silentLogger` is, and for the same
+reason: without it every test that places an Order would be a test about not having a
+provider. It is not a provider a deployment could use, and it is not what a test *about*
+payment should reach for:
+
+```ts
+await using kobai = await createTestKobai({ payments: { provider: mine } }); // one of your own
+await using none = await createTestKobai({ payments: {} });                  // a deployment with none
+```
+
+**Ask the provider what it is holding; never count that a callback was reached.** A refund is
+the one thing `place-order` can undo, so a test about unwinding writes a provider that keeps
+books and asserts on them — `packages/core/src/payment/payment.test.ts` is the shape, and the
+distinction is the same one ADR-0036 draws for a compensation that throws: "the code ran" and
+"the Shopper got their money back" are two facts, and a counter only ever knows the first.
+
 **Almost every test needs something to sell before it can assert anything, and that
 arrangement is one line.** `seedTestCatalog` creates a Product, the Variant that makes it
 sellable and a Price on that Variant — through the public API, like everything else here, so

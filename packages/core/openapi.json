@@ -1085,6 +1085,9 @@
             "additionalProperties": {},
             "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
           },
+          "payment": {
+            "$ref": "#/components/schemas/Payment"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -1100,6 +1103,7 @@
           "lineItems",
           "adjustments",
           "metadata",
+          "payment",
           "createdAt"
         ]
       },
@@ -1200,6 +1204,47 @@
           "metadata"
         ]
       },
+      "Payment": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string",
+            "description": "What took the money, as the deployment named it — `manual`, `stripe`. An Order placed before the deployment changed provider still says which system holds its money."
+          },
+          "reference": {
+            "type": "string",
+            "description": "The provider's own handle on this payment. Opaque to kobai, and what a refund is asked against."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "What was taken, in minor units of `currency` — the Order's total."
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "reference",
+          "amount",
+          "currency",
+          "createdAt"
+        ],
+        "description": "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as, and it is the difference between an Order somebody has settled and one nobody has."
+      },
       "PlacedOrder": {
         "allOf": [
           {
@@ -1231,24 +1276,6 @@
               "workflow"
             ]
           }
-        ]
-      },
-      "SecretKeyRequired": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "secret-key-required"
-            ]
-          }
-        },
-        "required": [
-          "error",
-          "reason"
         ]
       },
       "PlaceOrderRefusal": {
@@ -1283,6 +1310,24 @@
               "steps"
             ],
             "description": "How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "SecretKeyRequired": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "secret-key-required"
+            ]
           }
         },
         "required": [
@@ -3124,6 +3169,16 @@
               }
             }
           },
+          "402": {
+            "description": "The Payment Provider declined. No Order exists — money is taken before Capture precisely so that a refused card leaves nothing in the Merchant's books — and `error` carries whatever the provider said for itself.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceOrderRefusal"
+                }
+              }
+            }
+          },
           "403": {
             "description": "The API key is live and publishable, and this route requires a secret one.",
             "content": {
@@ -3145,7 +3200,7 @@
             }
           },
           "409": {
-            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the idempotency key names a different request, or one still in flight.",
+            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
             "content": {
               "application/json": {
                 "schema": {

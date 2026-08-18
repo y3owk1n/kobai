@@ -8,10 +8,12 @@ import {
   order,
   orderAdjustment,
   orderLineItem,
+  payment,
   product,
   variant,
 } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import type { PaymentProvider } from "../payment/provider.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { runWorkflow } from "../workflow/run.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
@@ -29,13 +31,14 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  * **ADR-0009 decides the Step order, and it is not a matter of taste.** An Order is never
  * edited, so no compensation can ever undo the Order write — which means the Order write has to
  * be the *last thing that can fail*. Everything that can fail happens before it, and
- * `capture-order` declares no compensation because there is nothing it could honestly do. The
- * slots this Workflow grows later — holding Reservations, taking Payment — arrive *between*
- * `price-lines` and `capture-order` for exactly that reason, and consuming Reservations joins
- * the same transaction the Order is written in rather than becoming a fourth thing that can
- * fail afterwards (ADR-0018).
+ * `capture-order` declares no compensation because there is nothing it could honestly do. That
+ * is why `take-payment` sits immediately in front of it — money is the one thing here that moves
+ * outside the database, so it is the one thing a compensation has to undo — and why the slot this
+ * Workflow grows later, holding Reservations, arrives earlier still, with consuming them joining
+ * the same transaction the Order is written in rather than becoming another thing that can fail
+ * afterwards (ADR-0018).
  *
- * Five slots today:
+ * Six slots today:
  *
  * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired,
  *   already placed or empty. It applies no pricing rule; it hands over what was selected.
@@ -47,8 +50,11 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  *   goes.
  * - **`calculate-tax`** works out the tax on each line, and Core's own implementation returns
  *   **zero** — see {@link calculateTax}.
- * - **`capture-order`** writes the Order, its snapshot Line Items and its Adjustments in one
- *   transaction.
+ * - **`take-payment`** asks the deployment's Payment Provider for what the Order comes to, and
+ *   **its compensation refunds** — see {@link takePayment}. Core implements no provider
+ *   (ADR-0053), so a deployment wired with none refuses here and nowhere else.
+ * - **`capture-order`** writes the Order, its snapshot Line Items, its Adjustments and the
+ *   Payment in one transaction.
  *
  * **`apply-adjustments` runs before `calculate-tax`, and that is arithmetic rather than
  * ordering taste.** ADR-0022 says an Adjustment changes what a line total means in every Order
@@ -78,7 +84,9 @@ export type PlaceOrderRefusal =
   | "cart-not-found"
   | "cart-expired"
   | "cart-placed"
-  | "cart-empty";
+  | "cart-empty"
+  | "no-payment-provider"
+  | "payment-declined";
 
 /** One line of the Cart being placed, with everything the snapshot will need. */
 export type CartLineToPlace = {
@@ -193,11 +201,31 @@ export type TaxedLine = AdjustedLine & {
   readonly tax: number;
 };
 
-/** What `calculate-tax` produces and `capture-order` writes. */
+/** What `calculate-tax` produces and `take-payment` charges for. */
 export type TaxedLines = {
   readonly cart: CartToPlace;
   readonly lines: readonly TaxedLine[];
   readonly adjustments: readonly Adjustment[];
+};
+
+/**
+ * The money a Payment Provider took, as `take-payment` reports it and `capture-order` records it.
+ *
+ * A copy rather than a reference to anything: `provider` is what took it and `reference` is that
+ * provider's own handle on it, so an Order placed a year ago still says which system holds the
+ * money and what to quote at it. Core parses neither.
+ */
+export type TakenPayment = {
+  readonly provider: string;
+  readonly reference: string;
+  /** Minor units of `currency` — what was actually charged, which is the Order's total. */
+  readonly amount: number;
+  readonly currency: string;
+};
+
+/** What `take-payment` produces and `capture-order` writes: the Order, and the money for it. */
+export type PaidOrder = TaxedLines & {
+  readonly payment: TakenPayment;
 };
 
 /**
@@ -210,7 +238,7 @@ export type TaxedLines = {
  * **It takes no lock on the Cart, unlike every route that changes one.** `cart/write.ts` holds
  * the row `for update` for the length of one mutation, which is a few milliseconds; this
  * Workflow runs on past here to hold Reservations and take Payment, so a lock held from here to
- * Capture would be a database row held across a call to somebody else's payment processor. What
+ * Capture would be a database row held across a call to somebody else's Payment Provider. What
  * that costs is that a line added to the Cart while an Order is being placed is not on the
  * Order — which is the right answer anyway: an Order records what was placed, and what was
  * placed is what this Step read.
@@ -382,6 +410,117 @@ export const calculateTax = defineStep(
 );
 
 /**
+ * What this run charged, for the run that charged it.
+ *
+ * Core hands a compensation **the very value** its `run` was given (ADR-0036), so the taxed lines
+ * are the key that ties the charge to the refund — no bookkeeping crosses between runs, and a
+ * failure now can only ever give back what this run took. Weak, so a run that succeeds leaves
+ * nothing behind to collect; and outside the Step rather than on the value it passes along,
+ * because that value belongs to the Workflow.
+ *
+ * A stack rather than one entry, for the same reason `@kobai/plugin-price-log` keeps one: nothing
+ * stops a Project wiring an extra charging Step into the same Workflow, both keyed on the same
+ * input, and Core unwinds in reverse — so each compensation gives back the payment its own `run`
+ * put on top.
+ */
+const charged = new WeakMap<TaxedLines, ChargedTo[]>();
+
+/** A payment, and the provider that took it — because that is the one that can give it back. */
+type ChargedTo = {
+  readonly provider: PaymentProvider;
+  readonly payment: TakenPayment;
+};
+
+/**
+ * **`take-payment`** — the money moves, through an interface Core does not implement (ADR-0053).
+ *
+ * Core defines {@link PaymentProvider} and ships no implementation of it, so what happens here
+ * belongs to whoever wired one in `kobai.config.ts`. Three answers, and they are deliberately
+ * three:
+ *
+ * - **No provider configured** is a refusal, `no-payment-provider`, and nothing else about the
+ *   deployment is affected — it booted, it serves its catalog and it serves the Admin. A store
+ *   that cannot yet be bought from is still a store worth reading (ADR-0048).
+ * - **Declined** is a refusal too, `payment-declined`, and it leaves no Order at all: this Step
+ *   runs before Capture precisely so that a Shopper whose card was refused has nothing in the
+ *   Merchant's books.
+ * - **A provider that throws** is a bug or an outage rather than a decision, so it travels as one
+ *   and surfaces as a 500. A refusal would tell a storefront its purchase was declined when what
+ *   actually happened is that the provider is unreachable.
+ *
+ * **The amount is Core's to compute, not a Step's to report.** It is composed from the lines,
+ * their Adjustments and their tax by the same function `capture-order` writes the total with — so
+ * the figure charged and the figure recorded are one expression, and cannot drift by anybody
+ * forgetting to keep a running total in step.
+ *
+ * **Its compensation refunds, and this is where ADR-0036's unwinding meets real money.** A
+ * payment taken against a Capture that fails must not keep a Shopper's money, so the compensation
+ * asks the provider to give back exactly what was taken. A refund that itself throws is contained:
+ * it is reported beside whatever stopped the run rather than in place of it, so the storefront
+ * still learns why it was refused and an operator still learns that money is where it should not
+ * be.
+ */
+export const takePayment = defineStep(
+  "take-payment",
+
+  async (input: TaxedLines, context): Promise<PaidOrder> => {
+    const provider = context.paymentProvider;
+    if (!provider) {
+      throw refuse(
+        "no-payment-provider",
+        "This deployment has no Payment Provider configured, so it cannot take money. kobai ships none by design (ADR-0053): a Project supplies one through `payments.provider` in its `kobai.config.ts`. Everything else about this Store still works.",
+      );
+    }
+
+    // In front of the money, not only in front of the write. A replaced `calculate-tax` applying
+    // a percentage without rounding produces a figure no Shopper can pay and no `bigint` column
+    // can hold — and charging it first and refunding it afterwards is a worse way to find out
+    // than refusing to charge at all. `capture-order` asks again, because a replaced
+    // `take-payment` need not have asked.
+    inWholeMinorUnits(input);
+
+    const request = {
+      amount: orderTotalOf(input),
+      currency: oneCurrency(input.lines),
+      shopper: input.cart.shopper,
+      // ADR-0013's open half, handed on untouched — a payment method token, a saved-card
+      // handle, anything a real provider needs and Core has never modelled arrives this way.
+      metadata: context.metadata,
+    };
+    const outcome = await provider.charge(request);
+
+    if (!outcome.ok) throw refuse("payment-declined", outcome.detail);
+
+    const payment: TakenPayment = {
+      provider: provider.name,
+      reference: outcome.reference,
+      amount: request.amount,
+      currency: request.currency,
+    };
+    // Recorded before the Step returns, so the compensation can find it however the run ends
+    // after this line — including a Capture that never got as far as writing anything down.
+    charged.set(input, [...(charged.get(input) ?? []), { provider, payment }]);
+
+    return { ...input, payment };
+  },
+
+  async (input) => {
+    const taken = charged.get(input)?.pop();
+    // Nothing taken, nothing to give back. Core would not call this unless the Step completed,
+    // but a compensation should not assume it is being called for the reason it expects.
+    if (taken === undefined) return;
+
+    // Back to the provider that took it, rather than to whatever the context holds now: the money
+    // is somewhere in particular, and only the system holding it can return it.
+    await taken.provider.refund({
+      reference: taken.payment.reference,
+      amount: taken.payment.amount,
+      currency: taken.payment.currency,
+    });
+  },
+);
+
+/**
  * **Capture** — the Order comes into existence and becomes immutable.
  *
  * One transaction, and it is the last thing in this Workflow that can fail. Nothing here is
@@ -407,7 +546,7 @@ export const calculateTax = defineStep(
  */
 export const captureOrder = defineStep(
   "capture-order",
-  async (input: TaxedLines, context): Promise<Order> => {
+  async (input: PaidOrder, context): Promise<Order> => {
     const currency = oneCurrency(input.lines);
     inWholeMinorUnits(input);
     const lines = input.lines.map((line) => ({
@@ -424,8 +563,7 @@ export const captureOrder = defineStep(
       metadata: line.metadata,
       adjustments: line.adjustments,
     }));
-    const total =
-      lines.reduce((sum, line) => sum + line.total, 0) + sumOf(input.adjustments);
+    const total = orderTotalOf(input);
 
     try {
       return await context.db.transaction(async (tx: Transaction): Promise<Order> => {
@@ -467,6 +605,18 @@ export const captureOrder = defineStep(
         // in Postgres, and no Adjustment at all is the ordinary case.
         if (adjustments.length > 0) await tx.insert(orderAdjustment).values(adjustments);
 
+        // The money, recorded against the Order in the same transaction that writes it — so an
+        // Order and the account of what was paid for it can never exist without each other.
+        // The payment itself moved a moment ago, outside any transaction, which is exactly why
+        // `take-payment` is the Step that carries a compensation.
+        await tx.insert(payment).values({
+          orderId: written.id,
+          provider: input.payment.provider,
+          reference: input.payment.reference,
+          amount: input.payment.amount,
+          currency: input.payment.currency,
+        });
+
         const captured = await readOrder(tx, written.id);
         if (!captured)
           throw new Error("An Order was written and could not be read back.");
@@ -496,11 +646,15 @@ const ONE_ORDER_PER_CART = "core_order_cart_idx";
  * Core's own Steps cannot produce one; a replaced `apply-adjustments` dividing a line in half,
  * or a `calculate-tax` applying a percentage without rounding, can and will.
  *
- * Checked here, in front of the write, for the same reason {@link oneCurrency} is: this is the
- * point of no return, and the alternative is an Order half-written against a database error
- * naming a column rather than the Step that produced the value. It travels as a bug rather than
- * a refusal — a refusal would tell a storefront its request was declined, when what happened is
- * that this deployment is wired to charge fractions of a penny.
+ * Asked **twice, by two Steps, and each has its own reason**. `take-payment` asks in front of the
+ * money, because a fraction charged and then refunded is a worse way to discover this than a
+ * charge that never happened. `capture-order` asks again in front of the write, for the same
+ * reason {@link oneCurrency} does: it is the point of no return, and a deployment that replaced
+ * `take-payment` need not have asked at all — the alternative is an Order half-written against a
+ * database error naming a column rather than the Step that produced the value.
+ *
+ * It travels as a bug rather than a refusal — a refusal would tell a storefront its request was
+ * declined, when what happened is that this deployment is wired to charge fractions of a penny.
  */
 function inWholeMinorUnits(input: TaxedLines): void {
   const amounts = [
@@ -554,6 +708,19 @@ function idOf(lineIdBySku: Map<string, string>, sku: string): string {
 /** What one line came to: the goods, its own Adjustments, and the tax on the adjusted figure. */
 function totalOf(line: TaxedLine): number {
   return line.unitAmount * line.quantity + sumOf(line.adjustments) + line.tax;
+}
+
+/**
+ * What the whole Order comes to: every line total, plus the Adjustments belonging to no line.
+ *
+ * One expression, read by **both** the Step that charges and the Step that writes — which is the
+ * property worth having. A total computed twice is a total that can be computed two ways, and the
+ * shape of that failure is a Shopper charged one figure while their Order records another.
+ */
+function orderTotalOf(input: TaxedLines): number {
+  return (
+    input.lines.reduce((sum, line) => sum + totalOf(line), 0) + sumOf(input.adjustments)
+  );
 }
 
 /**
@@ -624,6 +791,7 @@ export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order
   .step(priceLines)
   .step(applyAdjustments)
   .step(calculateTax)
+  .step(takePayment)
   .step(captureOrder)
   .build();
 

@@ -6,6 +6,7 @@ import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
 import type { PlaceOrderWorkflow } from "../order/place-order.ts";
+import type { PaymentProvider } from "../payment/provider.ts";
 import type { PriceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import type { WorkflowRegistry } from "../workflow/context.ts";
 import { createAdminRoutes } from "./admin.ts";
@@ -30,6 +31,12 @@ export type HttpDependencies = {
    * this deployment's version of it (ADR-0054).
    */
   readonly workflows: WorkflowRegistry;
+  /**
+   * The Payment Provider this deployment was wired with, or `undefined` if it was wired with
+   * none — which is a deployment that serves everything except the placing of an Order
+   * (ADR-0053).
+   */
+  readonly paymentProvider: PaymentProvider | undefined;
   /**
    * How long this deployment's sessions live — the default, or what its `kobai.config.ts`
    * said (ADR-0050). Threaded through rather than imported by the modules that need it,
@@ -177,6 +184,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       priceWorkflow: deps.priceWorkflow,
       placeOrderWorkflow: deps.placeOrderWorkflow,
       workflows: deps.workflows,
+      paymentProvider: deps.paymentProvider,
     }),
   );
   app.route("/store", store);

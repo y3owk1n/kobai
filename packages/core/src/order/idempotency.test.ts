@@ -6,7 +6,7 @@ import {
   type TestKobai,
 } from "../testing/index.ts";
 import { defineStep } from "../workflow/step.ts";
-import type { TaxedLines } from "./place-order.ts";
+import type { PaidOrder } from "./place-order.ts";
 
 /**
  * **Idempotent `place-order`** — a storefront that retried after a timeout gets the Order it
@@ -184,17 +184,15 @@ describe("a key whose first attempt never came back", () => {
   it("is refused while that attempt is still running, and says which", async () => {
     // The in-flight state, reached deliberately rather than by hoping two requests interleave:
     // a Step of this deployment's own holds the first request open at the point of no return,
-    // which is exactly where a slow Payment Provider will hold it once there is one.
+    // which is one Step past where a slow Payment Provider holds it — payment has been taken by
+    // the time this runs, so the second request meets a key whose first attempt has money on it.
     const arrival = signal();
     const carryOn = signal();
-    const holdOn = defineStep(
-      "hold-on",
-      async (input: TaxedLines): Promise<TaxedLines> => {
-        arrival.fire();
-        await carryOn.fired;
-        return input;
-      },
-    );
+    const holdOn = defineStep("hold-on", async (input: PaidOrder): Promise<PaidOrder> => {
+      arrival.fire();
+      await carryOn.fired;
+      return input;
+    });
     await using kobai = await createTestKobai({
       workflows: { "place-order": { before: { "capture-order": [holdOn] } } },
     });

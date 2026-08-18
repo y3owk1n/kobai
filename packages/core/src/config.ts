@@ -1,6 +1,7 @@
 import type { SessionOptions } from "./auth/session.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import type { placeOrderWorkflow } from "./order/place-order.ts";
+import type { PaymentsOptions } from "./payment/provider.ts";
 import type { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
 import type { WorkflowOverrides } from "./workflow/workflow.ts";
 
@@ -60,6 +61,24 @@ export type KobaiProjectConfig = {
    * says is worse than one that refuses to start.
    */
   readonly session?: SessionOptions;
+  /**
+   * How this Project takes money — the Payment Provider it supplies, because Core supplies none
+   * (ADR-0053).
+   *
+   * ```ts
+   * payments: { provider: myProvider }
+   * ```
+   *
+   * **A subject, not a scalar**, for `session`'s reason above: a bare `paymentProvider` at the
+   * top level would be the first key in this file naming a mechanism rather than a subject, and
+   * the next thing a deployment needs to say about its payments would have nowhere to go.
+   *
+   * Saying nothing here is a working deployment that cannot be bought from yet. It boots, serves
+   * its catalog and serves the Admin, and refuses `place-order` alone with
+   * `no-payment-provider` — refusing to boot is reserved for a database that cannot be migrated
+   * (ADR-0048).
+   */
+  readonly payments?: PaymentsOptions;
 };
 
 /**
