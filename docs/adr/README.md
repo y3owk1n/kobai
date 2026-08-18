@@ -84,9 +84,10 @@ New to the project? These five carry the shape of everything else:
 | [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053 |
 | [0057](./0057-the-reservation-sweeper-is-an-interval-not-a-job.md) | The Reservation sweeper is an interval, not a job | Accepted — amends part of 0026 |
 | [0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md) | A promised surface may be broken until the first release, and a compile error is the notice | Accepted — its first rule expires at the first publish |
-| [0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md) | Catalog deletion refuses rather than cascading or releasing | Accepted — completes 0008 |
+| [0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md) | Catalog deletion refuses rather than cascading or releasing | Accepted — completes 0008; its open question settled by **0062** |
 | [0060](./0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md) | The HTTP surface is promised, and a refusal's `reason` is part of it | Accepted — **amends 0019 and 0003** |
 | [0061](./0061-what-the-first-publish-owes.md) | What the first publish owes is one list, and the next obligation joins it | Accepted — **a live list until the first publish** |
+| [0062](./0062-a-variant-is-corrected-in-place-and-a-price-is-superseded.md) | A Variant is corrected in place, and a Price is superseded | Accepted — the other half of 0059 |
 
 ## Prototypes
 

@@ -1,5 +1,5 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
+import type { Database, Queryable } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
@@ -121,8 +121,13 @@ export async function readProduct(
  * Two queries rather than a join, because a join multiplies each Variant by its Prices and
  * the rows then have to be folded back apart in TypeScript anyway — and a Variant with no
  * Price yet has to survive that fold, which is exactly the row an inner join drops.
+ *
+ * **`Queryable`, so a write can read its own work back inside its transaction** — which is how
+ * `catalog/update.ts` answers with the Variant it just corrected rather than with whatever the
+ * next request left. It takes no lock of its own either way: these are plain reads, and a plain
+ * read in Postgres blocks on nothing.
  */
-export async function readVariants(db: Database, productId: string): Promise<Variant[]> {
+export async function readVariants(db: Queryable, productId: string): Promise<Variant[]> {
   const variants = await db
     .select({
       id: variant.id,

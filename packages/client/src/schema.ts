@@ -506,6 +506,79 @@ export interface paths {
         };
       };
     };
+    /**
+     * Correct a Variant
+     * @description Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateVariantRequest"];
+        };
+      };
+      responses: {
+        /** @description The Variant, as a read of its Product reports it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Variant"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CatalogRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Variant exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CatalogRefusal"];
+          };
+        };
+        /** @description `sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CatalogRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["CatalogRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
   };
   "/admin/variants/{id}/prices": {
     /**
@@ -1702,6 +1775,15 @@ export interface components {
     };
     ProductList: {
       products: components["schemas"]["Product"][];
+    };
+    UpdateVariantRequest: {
+      /** @description A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused. */
+      sku?: string;
+      fulfilment?: components["schemas"]["VariantFulfilment"];
+      /** @description Replaces what is stored rather than merging into it. */
+      metadata?: {
+        [key: string]: unknown;
+      };
     };
     SetPriceRequest: {
       /** @description Minor units — 1250 for USD 12.50. Whole, and not negative. */
