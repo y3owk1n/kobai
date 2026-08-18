@@ -396,6 +396,116 @@ export interface paths {
         };
       };
     };
+    /**
+     * Delete a Product
+     * @description Every Variant of it goes too, with their Prices and stock counts — this is also how a Product's last Variant is deleted, since a Variant that is a Product's only one cannot be deleted on its own (ADR-0008). Orders already placed are untouched: their Line Items are a snapshot (ADR-0009).
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description Deleted. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Product exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description `stock-is-reserved`: one of this Product's Variants has stock currently claimed by Reservations being placed. Those either become Orders or lapse, and it can be deleted once they have. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/variants/{id}": {
+    /**
+     * Delete a Variant
+     * @description Its Prices, its stock count and any Cart line that selected it go with it. Orders do not: an Order's Line Items are a snapshot, so deleting the Variant they were placed for leaves them saying exactly what was bought and what it cost (ADR-0009).
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description Deleted. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Variant exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description Two reasons: `last-variant`, this is the only Variant of its Product and every Product has at least one (ADR-0008) — delete the Product instead, which takes this Variant with it; or `stock-is-reserved`, its stock is currently claimed by Reservations being placed, which either become Orders or lapse. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
   };
   "/admin/variants/{id}/prices": {
     /**
@@ -447,6 +557,58 @@ export interface paths {
         };
         /** @description Well formed, and still refused: this Store does not price in that currency. */
         422: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/variants/{id}/prices/{priceId}": {
+    /**
+     * Remove a Price
+     * @description Removing the last one is allowed and leaves the Variant unpriced, which is how a Merchant stops something being sold at once — an unpriced Variant cannot be quoted and cannot be put in a Cart. Orders already placed are unaffected: what was charged is on the Order (ADR-0009).
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+          /** @description A Price of this Variant. Anything else is not found. */
+          priceId: string;
+        };
+      };
+      responses: {
+        /** @description Removed. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Variant exists, or it carries no such Price. */
+        404: {
           content: {
             "application/json": components["schemas"]["Refusal"];
           };

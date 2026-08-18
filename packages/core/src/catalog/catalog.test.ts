@@ -190,6 +190,21 @@ describe("the catalog is behind the Merchant session", () => {
       path: "/admin/variants/2f1b8a5e-0000-4000-8000-000000000000/prices",
       permission: PERMISSIONS.catalogWrite,
     },
+    {
+      method: "DELETE",
+      path: "/admin/products/2f1b8a5e-0000-4000-8000-000000000000",
+      permission: PERMISSIONS.catalogWrite,
+    },
+    {
+      method: "DELETE",
+      path: "/admin/variants/2f1b8a5e-0000-4000-8000-000000000000",
+      permission: PERMISSIONS.catalogWrite,
+    },
+    {
+      method: "DELETE",
+      path: "/admin/variants/2f1b8a5e-0000-4000-8000-000000000000/prices/3c2c9b6f-0000-4000-8000-000000000000",
+      permission: PERMISSIONS.catalogWrite,
+    },
   ] as const;
 
   it.each(ROUTES)("refuses $method $path with no session", async ({ method, path }) => {

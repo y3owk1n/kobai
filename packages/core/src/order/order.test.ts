@@ -294,13 +294,15 @@ describe("an Order does not depend on the catalog it was placed from", () => {
     });
     const order = await seedTestOrder(kobai, { catalog });
 
-    // In SQL, because there is no route that deletes a Product yet — and because a Merchant
-    // deleting a row directly is the writer ADR-0004 says is the normal case rather than the
-    // exception. ADR-0009 keeps catalog data freely deletable *because* an Order depends on
-    // none of it; the foreign key is what has to give way, not the Order.
-    await kobai.database.query("delete from core_product where id = $1", [
-      catalog.productId,
-    ]);
+    // Through the route a Merchant actually has (#115). It used to be SQL, which proved
+    // ADR-0009 about the schema rather than about the surface — and the surface is where the
+    // claim is made: catalog data stays freely deletable *because* an Order depends on none
+    // of it, so the foreign key is what gives way, not the Order.
+    const deleted = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "DELETE",
+      headers: catalog.merchant.headers,
+    });
+    expect(deleted.status).toBe(204);
 
     const read = await kobai.request(`/store/orders/${order.id}`, {
       headers: catalog.apiKey.headers,
@@ -432,7 +434,11 @@ describe("what placing an Order refuses", () => {
     // price is resolved at Capture rather than trusted from the Cart.
     const price = catalog.variants[0]?.prices[0];
     if (price === undefined) throw new Error("the seeded Variant should carry a Price");
-    await kobai.database.query("delete from core_price where id = $1", [price.id]);
+    const removed = await kobai.request(
+      `/admin/variants/${catalog.variantId}/prices/${price.id}`,
+      { method: "DELETE", headers: catalog.merchant.headers },
+    );
+    expect(removed.status).toBe(204);
 
     const response = await placeOrder(kobai, catalog.apiKey.headers, cart.id);
 

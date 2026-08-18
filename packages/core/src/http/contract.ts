@@ -558,6 +558,13 @@ export const SetPriceRequest = z
   })
   .openapi("SetPriceRequest");
 
+/** The Variant, and a Price of it — a plain string each, for {@link IdParam}'s reason. */
+export const VariantPriceParams = IdParam.extend({
+  priceId: z
+    .string()
+    .meta({ description: "A Price of this Variant. Anything else is not found." }),
+});
+
 // ---- Price resolution -----------------------------------------------------------------
 
 /** One Step of a Workflow run: the slot it filled, and what filled it. */

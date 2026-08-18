@@ -27,6 +27,14 @@ import {
   schemeOf,
   sessionCookie,
 } from "../auth/session-cookie.ts";
+import {
+  deletePrice,
+  deleteProduct,
+  deleteVariant,
+  type PriceDeletion,
+  type ProductDeletion,
+  type VariantDeletion,
+} from "../catalog/delete.ts";
 import { listProducts, readProduct } from "../catalog/read.ts";
 import {
   createProduct,
@@ -275,6 +283,67 @@ const readProductRoute = createRoute({
 });
 
 /**
+ * Deletes a Product and every Variant of it.
+ *
+ * The Orders placed for those Variants are untouched, which is what makes a catalog entry
+ * something a Merchant may simply be rid of rather than something they must keep forever in
+ * case the books need it (ADR-0009).
+ */
+const deleteProductRoute = createRoute({
+  method: "delete",
+  path: "/products/{id}",
+  summary: "Delete a Product",
+  description:
+    "Every Variant of it goes too, with their Prices and stock counts — this is also how a Product's last Variant is deleted, since a Variant that is a Product's only one cannot be deleted on its own (ADR-0008). Orders already placed are untouched: their Line Items are a snapshot (ADR-0009).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Deleted." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Product exists.", contract.Refusal),
+    409: json(
+      "`stock-is-reserved`: one of this Product's Variants has stock currently claimed by Reservations being placed. Those either become Orders or lapse, and it can be deleted once they have.",
+      contract.Refusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Deletes a Variant — the sellable thing, and everything that only means anything while it is
+ * sellable.
+ *
+ * An Order placed for it is untouched, which is the whole reason this route can exist at all:
+ * its Line Items are a snapshot and the reference they keep to the Variant is for navigation
+ * only, so it goes to `null` and nothing a Shopper or an accountant reads moves (ADR-0009).
+ */
+const deleteVariantRoute = createRoute({
+  method: "delete",
+  path: "/variants/{id}",
+  summary: "Delete a Variant",
+  description:
+    "Its Prices, its stock count and any Cart line that selected it go with it. Orders do not: an Order's Line Items are a snapshot, so deleting the Variant they were placed for leaves them saying exactly what was bought and what it cost (ADR-0009).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Deleted." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Variant exists.", contract.Refusal),
+    409: json(
+      "Two reasons: `last-variant`, this is the only Variant of its Product and every Product has at least one (ADR-0008) — delete the Product instead, which takes this Variant with it; or `stock-is-reserved`, its stock is currently claimed by Reservations being placed, which either become Orders or lapse.",
+      contract.Refusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Adds a Price to a Variant — an insert, never an update.
  *
  * The Variant is what the route addresses because the Variant is what is sellable. Calling
@@ -307,6 +376,36 @@ const setPriceRoute = createRoute({
       "Well formed, and still refused: this Store does not price in that currency.",
       contract.Refusal,
     ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Removes one Price from a Variant — the other half of an insert-only surface.
+ *
+ * Addressed through the Variant, exactly as setting one is, so the two routes read as one
+ * pair and a Price identifier belonging to another Variant is not found rather than obeyed.
+ *
+ * There is no refusal for the last one. A Variant with no Price is a state the API already
+ * produces at creation, and taking the last Price away is the quickest thing a Merchant can
+ * do to stop something being sold: an unpriced Variant cannot be quoted and cannot be put in
+ * a Cart.
+ */
+const deletePriceRoute = createRoute({
+  method: "delete",
+  path: "/variants/{id}/prices/{priceId}",
+  summary: "Remove a Price",
+  description:
+    "Removing the last one is allowed and leaves the Variant unpriced, which is how a Merchant stops something being sold at once — an unpriced Variant cannot be quoted and cannot be put in a Cart. Orders already placed are unaffected: what was charged is on the Order (ADR-0009).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: { params: contract.VariantPriceParams },
+  responses: {
+    204: { description: "Removed." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Variant exists, or it carries no such Price.", contract.Refusal),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -574,10 +673,29 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(found, 200);
   });
 
+  guarded.openapi(deleteProductRoute, async (c) => {
+    const deleted = await deleteProduct(deps.db, c.req.valid("param").id);
+    if (!deleted.ok) return refused(c, deleted, PRODUCT_DELETION_STATUS);
+    return c.body(null, 204);
+  });
+
+  guarded.openapi(deleteVariantRoute, async (c) => {
+    const deleted = await deleteVariant(deps.db, c.req.valid("param").id);
+    if (!deleted.ok) return refused(c, deleted, VARIANT_DELETION_STATUS);
+    return c.body(null, 204);
+  });
+
   guarded.openapi(setPriceRoute, async (c) => {
     const created = await setPrice(deps.db, c.req.valid("param").id, c.req.valid("json"));
     if (!created.ok) return refused(c, created, PRICE_STATUS);
     return c.json(created.price, 201);
+  });
+
+  guarded.openapi(deletePriceRoute, async (c) => {
+    const params = c.req.valid("param");
+    const deleted = await deletePrice(deps.db, params.id, params.priceId);
+    if (!deleted.ok) return refused(c, deleted, PRICE_DELETION_STATUS);
+    return c.body(null, 204);
   });
 
   guarded.openapi(setInventoryRoute, async (c) => {
@@ -667,6 +785,29 @@ const INVENTORY_STATUS = {
   "variant-not-found": 404,
   "stock-is-reserved": 409,
 } as const satisfies Record<Exclude<InventoryUpdate, { ok: true }>["reason"], 404 | 409>;
+
+/**
+ * 409 for stock already claimed, exactly as `PUT /variants/{id}/inventory` answers about the
+ * same units: the request is well formed and the state of the Store refuses it, and it becomes
+ * deletable again by itself as those Reservations become Orders or lapse.
+ */
+const PRODUCT_DELETION_STATUS = {
+  "product-not-found": 404,
+  "stock-is-reserved": 409,
+} as const satisfies Record<Exclude<ProductDeletion, { ok: true }>["reason"], 404 | 409>;
+
+/** 409 for the two refusals that are facts about the Store rather than about the request. */
+const VARIANT_DELETION_STATUS = {
+  "variant-not-found": 404,
+  "last-variant": 409,
+  "stock-is-reserved": 409,
+} as const satisfies Record<Exclude<VariantDeletion, { ok: true }>["reason"], 404 | 409>;
+
+/** Both halves of a Price's address can be wrong, and neither is more than a 404. */
+const PRICE_DELETION_STATUS = {
+  "variant-not-found": 404,
+  "price-not-found": 404,
+} as const satisfies Record<Exclude<PriceDeletion, { ok: true }>["reason"], 404>;
 
 /** 422 for a currency this Store does not price in: well-formed, and still refused. */
 const PRICE_STATUS = {
