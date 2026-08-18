@@ -11,7 +11,12 @@ import {
   publishPackages,
   startLocalRegistry,
 } from "./support/local-registry.ts";
+import {
+  migrationReportFindings,
+  packagesShippingAMigrationSet,
+} from "./support/migration-sets.ts";
 import { bootProject, PROJECT_TIMEOUT, runInProject } from "./support/project.ts";
+import { publishedKobaiPackageDirectories } from "./support/workspace.ts";
 
 /**
  * The acceptance test for #11, and the only one that proves the promise rather than
@@ -42,12 +47,11 @@ let database: TestDatabase;
 
 beforeAll(async () => {
   registry = await startLocalRegistry();
-  await publishPackages(registry, [
-    "packages/core",
-    "packages/client",
-    "packages/plugin-price-log",
-    "packages/plugin-made-to-order",
-  ]);
+  // Every package a generated Project resolves from a registry, taken from the list
+  // `create-kobai` itself uses to rewrite a `workspace:*` into a range. It was typed out
+  // here as well, and a package added to one and not the other failed inside the install
+  // below with a 404 naming the registry rather than the list it was missing from (#129).
+  await publishPackages(registry, await publishedKobaiPackageDirectories());
 
   workspace = await mkdtemp(join(tmpdir(), "kobai-generated-"));
   project = join(workspace, "my-store");
@@ -65,6 +69,7 @@ describe("a Project generated into a clean directory", () => {
     "installs kobai as an ordinary versioned dependency, builds, boots and serves",
     async () => {
       const result = await scaffold({ directory: project });
+      const shippedSets = await packagesShippingAMigrationSet();
 
       // Criterion 2: what a Developer gets is a repository, not a folder. The first commit
       // is what makes every later change visibly theirs.
@@ -97,20 +102,23 @@ describe("a Project generated into a clean directory", () => {
       const served = await bootProject(project, database.url);
       try {
         // Criterion 10: it serves a request. `/health` is the one that also says whether
-        // every migration set applied — Core's, the Plugin's, and the Project's own.
+        // every migration set applied — Core's, each Plugin's, and the Project's own — and
+        // that there are as many of them as this workspace ships packages that own one.
+        // This Project was generated into a temp directory and installed from a registry, so
+        // it cannot see that workspace; the template it was generated from is that
+        // workspace's own reference Project, which is what makes the count a question rather
+        // than a restatement. See `migrationReportFindings` and #129.
         const health = await fetch(`${served.origin}/health`);
         expect(health.status).toBe(200);
-        await expect(health.json()).resolves.toMatchObject({
-          status: "ok",
-          migrations: {
-            sets: [
-              { name: "core" },
-              { name: "plugin-price-log" },
-              { name: "plugin-made-to-order" },
-              { name: "project" },
-            ],
-          },
-        });
+        const body = (await health.json()) as {
+          status: string;
+          migrations: { sets: { name: string; applied: number }[] };
+        };
+        expect(body).toMatchObject({ status: "ok" });
+        expect(
+          migrationReportFindings(body.migrations.sets, shippedSets),
+          "The generated Project's migrations disagree with what this workspace ships.",
+        ).toEqual([]);
 
         // Criterion 7: the vendored Admin was generated as source and built by the Project's
         // own toolchain, and the Project's own process serves it.

@@ -615,14 +615,17 @@ shared should live where it is booted and tested, not in a template nobody runs.
 `@kobai/plugin-made-to-order`, `@kobai/client` and `create-kobai` are at `0.1.0` and are no
 longer `private`, because a generated Project depends on them as ordinary versioned
 dependencies and `workspace:*` resolves nowhere outside this workspace. **A package the
-reference Project depends on has to be published**, and in three more places than its own
-manifest: `PUBLISHED_KOBAI_PACKAGES` in `packages/create-kobai/src/adaptations.ts`, so a
-generated Project asks a registry for a version rather than for `workspace:*`, and the
-`publishPackages` list in each acceptance test that stands a registry up
+reference Project depends on has to be published, and it is named in exactly one place:**
+`PUBLISHED_KOBAI_PACKAGES` in `packages/create-kobai/src/adaptations.ts`, which is what makes
+a generated Project ask a registry for a version rather than for `workspace:*`. Every
+acceptance test that stands a registry up
 (`tests/a-generated-project-boots.test.ts`, `tests/a-project-boots-from-its-own-compose-file.test.ts`,
-`tests/the-upgrade-gate.test.ts`) — a package missing from one of those fails deep inside an
-install with a 404 naming the registry rather than the list. Nothing has actually been released; choosing a
-release process is a separate decision.
+`tests/the-upgrade-gate.test.ts`) fills it through `publishedKobaiPackageDirectories()` in
+`tests/support/workspace.ts`, which places each of those names in the workspace with `pnpm
+list`. It used to be four copies of the list, and a package added to one and not the others
+failed deep inside an install with a 404 naming the registry rather than the list it was
+missing from (#129). Nothing has actually been released; choosing a release process is a
+separate decision.
 
 What stands where `private: true` stood is `publishConfig.registry`, pinned at a loopback
 address in every publishable manifest, and `tests/publish-guard.test.ts`. **npm resolves the
@@ -1021,12 +1024,42 @@ and it was never a number's job to close it.
 that is deliberately one migration short, because an assertion nobody has seen fail is not
 yet known to be able to.
 
+**Never write down which migration *sets* exist either** (#129). That was the same tax one
+level up: a dozen sites across six files spelled the same list four ways — a package path, a
+set name, a tracking-table name, a manifest key — and adding a Plugin edited most of them.
+The two answers live beside each other and are deliberately **two modules**, because they do
+not have the same reach: `tests/support/wired-migration-sets.ts` reads
+`reference/kobai.config.ts` with Core's set in front, exactly as `createKobai` composes it,
+and `tests/support/migration-sets.ts` asks pnpm and the journals on disk and has never heard
+of that config. So an **in-repo** test derives its expectation from the config; a **container
+or generated-Project** test — which asserts from outside a booted image, and must not reach
+into this workspace's config — goes structural through `migrationReportFindings()` instead:
+no set applied nothing, and as many sets applied as the workspace ships packages that own
+one. Keeping the config out of that module's import graph is what makes the boundary
+something other than a comment, so **do not merge the two files back together.**
+
+Everything derived that way inherits ADR-0049's trap, and the answer is the same shape: a set
+dropped from `reference/kobai.config.ts` shrinks the expectation along with the thing it
+checks. `tests/every-migration-set-is-wired.test.ts` is what cannot agree with itself — it
+compares that config against the packages on disk, in both directions, and names any package
+whose tables no deployment in this repository would ever create — and it has been watched
+failing, both against a workspace written to offend and against the real config with a
+Plugin's set taken out of it.
+
+**Adding a Plugin to the reference Project should need no test edit, with one deliberate
+exception.** `reference/src/kobai.config.test.ts` names the sets that config wires, and that
+enumeration is that test's whole subject — it is the Project's test of its own config file,
+the way `adaptations.ts`'s length is asserted. Extending it is the work. Anywhere else, a
+list of set names is the tax coming back: check whether the enumeration is the test's actual
+subject before adding to it.
+
 **One migration test is not in-process, and that is the point.**
 `tests/the-cli-and-the-migrator-agree.test.ts` shells out to the real `drizzle-kit migrate`
 and then runs the programmatic migrator against the same database — CLI first, then the other
-way round, with Core's set and a Plugin's — and asserts that each recognises the other's work
-and applies nothing. ADR-0030 rests entirely on that agreement, and the two migrators are two
-*implementations* with different defaults, so nothing smaller than running both can see it.
+way round, with every set the reference Project wires — and asserts that each recognises the
+other's work and applies nothing. ADR-0030 rests entirely on that agreement, and the two
+migrators are two *implementations* with different defaults, so nothing smaller than running
+both can see it.
 Until #46 it was checked by hand whenever somebody remembered, which is what a drizzle bump
 now arriving automatically made untenable.
 

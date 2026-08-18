@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { createTestDatabase, type TestDatabase } from "@kobai/core/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { devOnlyDependencies } from "./support/build-tooling.ts";
@@ -13,6 +11,10 @@ import {
   databaseUrlForContainer,
   startContainer,
 } from "./support/container.ts";
+import {
+  migrationReportFindings,
+  packagesShippingAMigrationSet,
+} from "./support/migration-sets.ts";
 
 /**
  * The image `devbox run up` builds, inspected as an image rather than read as a Dockerfile.
@@ -33,7 +35,6 @@ import {
  * path from this one.
  */
 
-const run = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
 /** A build, an inspection, a boot and a handful of requests, on a cold runner. */
@@ -171,18 +172,17 @@ describe("the image the repository ships", () => {
       };
       expect(body).toMatchObject({ status: "ok" });
 
-      // Not merely that every set is listed: that each of them applied something. A set
-      // whose `migrations/` directory the prune removed reports zero and is otherwise
-      // silent, which is the quietest way for a Plugin's tables to never exist.
+      // Not merely that every set is listed: that each of them applied something, and that
+      // there are as many as this workspace ships packages that own one. The image was built
+      // from that workspace and cannot see it, which is what makes the count a question
+      // rather than a restatement — see `migrationReportFindings` and #129.
       expect(
-        body.migrations.sets.map((set) => [set.name, set.applied > 0]),
-        `A migration set applied nothing inside the container. Its output:\n${await served.logs()}`,
-      ).toEqual([
-        ["core", true],
-        ["plugin-price-log", true],
-        ["plugin-made-to-order", true],
-        ["project", true],
-      ]);
+        migrationReportFindings(
+          body.migrations.sets,
+          await packagesShippingAMigrationSet(),
+        ),
+        `The container's migrations disagree with what this workspace ships. Whatever the runtime stage prunes, \`migrations/\` is not it. Its output:\n${await served.logs()}`,
+      ).toEqual([]);
 
       // The Admin, served by the Project's own process from the bytes `vite build` produced.
       const admin = await fetch(`${served.origin}/admin-ui/`);
@@ -205,37 +205,27 @@ type MigrationOwner = {
   readonly sqlFiles: readonly string[];
 };
 
+/**
+ * Every workspace package that owns a migration set, with what its `migrations/` has to
+ * carry and where the image keeps it.
+ *
+ * Discovery itself moved to `support/migration-sets.ts` in #129, because three tests were
+ * each asking the workspace this question their own way and a fourth was answering it from
+ * a list. This is the part that is peculiar to an image: the workspace is copied to `/repo`
+ * verbatim, so a package's path inside the container is its path here with a prefix.
+ */
 async function migrationOwners(): Promise<MigrationOwner[]> {
-  const { stdout } = await run(
-    "pnpm",
-    ["list", "--recursive", "--depth", "-1", "--json"],
-    { cwd: repoRoot, maxBuffer: 8 * 1024 * 1024 },
+  return Promise.all(
+    (await packagesShippingAMigrationSet()).map(async (owner) => {
+      const directory = join(owner.directory, "migrations");
+      const journal = await readFile(join(directory, "meta/_journal.json"), "utf8");
+      const { entries = [] } = JSON.parse(journal) as { entries?: { tag?: string }[] };
+
+      return {
+        name: owner.name,
+        pathInImage: `/repo/${owner.path}/migrations`,
+        sqlFiles: entries.flatMap(({ tag }) => (tag === undefined ? [] : [`${tag}.sql`])),
+      };
+    }),
   );
-
-  const owners: MigrationOwner[] = [];
-  for (const { name, path } of JSON.parse(stdout) as { name: string; path: string }[]) {
-    const directory = join(path, "migrations");
-    // The journal is what the runner reads first, so a package that has one owns a set and
-    // a package that has none owns nothing — which is the same question `stat` would answer
-    // and one fewer call to make.
-    const journal = await readFile(join(directory, "meta/_journal.json"), "utf8").catch(
-      () => null,
-    );
-    if (journal === null) continue;
-
-    const { entries = [] } = JSON.parse(journal) as { entries?: { tag?: string }[] };
-    owners.push({
-      name,
-      pathInImage: `/repo/${relative(repoRoot, directory)}`,
-      sqlFiles: entries.flatMap(({ tag }) => (tag === undefined ? [] : [`${tag}.sql`])),
-    });
-  }
-
-  if (owners.length === 0) {
-    // Failing open would make the assertion above pass by checking nothing.
-    throw new Error(
-      "No workspace package was found to own a migration set, so the image was checked for none. Core always owns one.",
-    );
-  }
-  return owners;
 }
