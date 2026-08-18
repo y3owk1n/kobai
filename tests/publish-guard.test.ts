@@ -1,6 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { sectionOf } from "./support/records.ts";
 
 /**
  * `private: true` used to be the only thing between a stray `pnpm publish` and npmjs.com,
@@ -18,6 +20,14 @@ import { describe, expect, it } from "vitest";
  * This is ADR-0030's shape applied to a different danger: the primary control is that the
  * dangerous thing is not reachable by accident, and a test is what keeps the control in
  * place after the person who added it has gone.
+ *
+ * **This file holds a second thing, and it is here because a publisher arrives here first**
+ * (#162). Removing a pin is the act every obligation kobai has taken on the strength of nothing
+ * having been published falls due on, and those obligations were recorded in four separate
+ * records that each assumed you had found the other three. ADR-0061 is now the one list; the
+ * block at the foot of this file holds it to naming every place an obligation is argued, and
+ * every one of those places to naming the list back. The refusals above name the record, so it
+ * is what a publisher reads before an assertion here can be deleted.
  */
 
 const repoRoot = new URL("../", import.meta.url);
@@ -70,7 +80,7 @@ describe("publishing kobai has to be deliberate", () => {
 
     expect(
       unguarded,
-      "A publishable package with no loopback registry pin can be published to npmjs.com by a single mistyped command. See ADR-0034.",
+      "A publishable package with no loopback registry pin can be published to npmjs.com by a single mistyped command. See ADR-0034. If the pin is coming out on purpose, that is the act everything in docs/adr/0061-what-the-first-publish-owes.md falls due on — read the list before this assertion goes.",
     ).toEqual([]);
   });
 
@@ -111,7 +121,7 @@ describe("publishing kobai has to be deliberate", () => {
 
     expect(
       offenders,
-      "Publishing kobai to npmjs.com is a decision nobody has taken yet. If it is being taken now, ADR-0034 is where it gets recorded and this assertion is what gets deleted — deliberately, not as collateral.",
+      "Publishing kobai to npmjs.com is a decision nobody has taken yet. If it is being taken now, ADR-0034 is where it gets recorded, docs/adr/0061-what-the-first-publish-owes.md is what that decision owes first, and this assertion is what gets deleted — deliberately, not as collateral.",
     ).toEqual([]);
   });
 
@@ -134,5 +144,195 @@ describe("publishing kobai has to be deliberate", () => {
     const versions = new Set(publishable(await packageManifests()).map((m) => m.version));
 
     expect([...versions]).toHaveLength(1);
+  });
+});
+
+/**
+ * The record that answers "what does the first publish owe?", and the only place that answers
+ * it. Repository-relative, and named by the two refusals above that a publisher has to get past.
+ */
+const OWED = join("docs", "adr", "0061-what-the-first-publish-owes.md");
+
+/**
+ * One thing the first publish falls due on, and where its argument is written.
+ *
+ * ADR-0061 is the list; this is the list's index, and it exists so the gate can hold the two
+ * ends together. Four correct records had each recorded an obligation against the same act and
+ * none pointed at the others (#162), so what is checked is **reachability from either end**:
+ * the record carries a section per obligation, that section names every place the argument
+ * lives, and every one of those places names the record back.
+ *
+ * **What is not checked is whether an obligation has been discharged**, and that is a decision
+ * rather than a gap. "Has a database been migrated from this checkout and kept?" is not a
+ * question a process can ask, and a green gate reads as permission — so the one thing this file
+ * does at the act itself is what it already did: refuse it, now naming the list. ADR-0061's
+ * "What is asserted, and what cannot be" is the argument in full.
+ */
+type Obligation = {
+  /** Short enough for a failure message to carry it. */
+  readonly owes: string;
+  /** The heading in ADR-0061, verbatim, under which the entry stands. */
+  readonly under: string;
+} & (
+  | {
+      /**
+       * Argued by a record or a file of its own, which is the ordinary case: the reasoning
+       * belongs where the decision it qualifies was made, and the list carries the entry.
+       */
+      readonly argued: "elsewhere";
+      /** Repository-relative, at least one, each naming ADR-0061 in return. */
+      readonly at: readonly [string, ...string[]];
+    }
+  | {
+      /**
+       * Argued in ADR-0061 itself, because no decision elsewhere qualifies it. Stated rather
+       * than spelled as an empty list, so that "nowhere else" is something somebody wrote.
+       */
+      readonly argued: "in the list itself";
+    }
+);
+
+/**
+ * What the first publish owes, as of this commit.
+ *
+ * Adding to it is three edits — the section in ADR-0061, the pointer in whatever argues the
+ * obligation, and the entry here — and ADR-0061 § "Where the next obligation goes" is the rule
+ * that says so. **Removing an entry is a release decision**, not a tidy-up: each of these is
+ * survivable only because nothing has been published.
+ */
+const OUTSTANDING: readonly Obligation[] = [
+  {
+    owes: "ADR-0058's licence to break a promised surface expires",
+    under: "The licence to break a promised surface closes",
+    argued: "elsewhere",
+    at: [
+      join(
+        "docs",
+        "adr",
+        "0058-a-promised-surface-may-be-broken-until-the-first-release.md",
+      ),
+      join(
+        "docs",
+        "adr",
+        "0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md",
+      ),
+    ],
+  },
+  {
+    // The other end of this one is held by `tests/migrations-are-safe-against-populated-
+    // tables.test.ts`, whose acknowledgement names this record and this heading and whose gate
+    // holds the heading to naming the migration back (#161). So the section cannot be emptied
+    // from either side.
+    owes: "migration 0016 indexes a table that may already hold duplicates",
+    under: "`0016` adds a unique index to a table that already exists",
+    argued: "elsewhere",
+    at: [join("tests", "migrations-are-safe-against-populated-tables.test.ts")],
+  },
+  {
+    owes: "a version policy, a changelog, provenance, and what 0.1.0 promises",
+    under: "A version policy, a changelog, provenance, and what `0.1.0` promises",
+    argued: "elsewhere",
+    at: [
+      join(
+        "docs",
+        "adr",
+        "0034-kobai-is-published-and-the-reference-project-is-what-create-kobai-generates.md",
+      ),
+    ],
+  },
+  {
+    owes: "the version is bumped in a commit, with the artifacts regenerated in it",
+    under: "The version is bumped in a commit, and the artifacts are regenerated in it",
+    argued: "elsewhere",
+    at: [
+      join("packages", "core", "src", "http", "app.ts"),
+      join("tests", "support", "local-registry.ts"),
+    ],
+  },
+  {
+    owes: "no manifest names a repository, and the licence text ships only because pnpm packs it",
+    under:
+      "A publishable manifest names no repository, and its licence text is the packer's doing",
+    argued: "in the list itself",
+  },
+];
+
+/** Repository-relative, spelled the way a record writes it whatever `join` produced here. */
+const posix = (path: string) => path.split(sep).join("/");
+
+/**
+ * How a place names the record: by filename, because a record links its neighbours relatively
+ * and a source file names one in a comment — and the filename is unique either way.
+ */
+const basenameOf = (path: string) => posix(path).split("/").at(-1) ?? path;
+
+/** A repository file, or `null` if it is not there — which is a finding rather than a crash. */
+const read = (path: string) =>
+  readFile(fileURLToPath(new URL(posix(path), repoRoot)), "utf8").catch(() => null);
+
+/**
+ * Where an obligation's argument is written — empty for the one argued in the list itself.
+ *
+ * One reading of the union, so the two tests below cannot come to differ about what an entry
+ * with no other home means.
+ */
+const sitesOf = (obligation: Obligation): readonly string[] =>
+  obligation.argued === "in the list itself" ? [] : obligation.at;
+
+describe("what the first publish owes is one list, and every entry point reaches it", () => {
+  it("carries a section in that record for every obligation outstanding", async () => {
+    // Failing open would be the whole of this file passing by checking nothing: an empty list
+    // is indistinguishable from a list that has been discharged, and only one of those is a
+    // thing anybody did.
+    expect(OUTSTANDING.length).toBeGreaterThan(0);
+
+    const record = await read(OWED);
+    expect(record, `${OWED} is not there to read.`).not.toBeNull();
+
+    const missing = OUTSTANDING.filter(
+      (obligation) => sectionOf(record ?? "", obligation.under) === null,
+    ).map((obligation) => `${obligation.owes} → no section "${obligation.under}"`);
+
+    expect(
+      missing,
+      `${OWED} is what a publisher reads instead of four records they have never heard of. A section deleted or renamed out from under an obligation shortens that list without anybody deciding it should. See ADR-0061.`,
+    ).toEqual([]);
+  });
+
+  it("names, in each obligation's own section, every place its argument lives", async () => {
+    const record = (await read(OWED)) ?? "";
+
+    const unnamed = OUTSTANDING.flatMap((obligation) => {
+      const section = sectionOf(record, obligation.under) ?? "";
+      return sitesOf(obligation)
+        .filter((path) => !section.includes(posix(path)))
+        .map((path) => `"${obligation.under}" does not name ${posix(path)}`);
+    });
+
+    // Deliberately whether the section names the file and not what it says about it: the
+    // argument is prose, and a check that read it would be checking wording (#161).
+    expect(
+      unnamed,
+      "An entry that does not say where its argument is written sends a publisher back to searching, which is what having one list was for. Name the file in the section, in the form the check reads: repository-relative, with forward slashes.",
+    ).toEqual([]);
+  });
+
+  it("is named by every place an obligation is argued", async () => {
+    const sites = OUTSTANDING.flatMap(sitesOf);
+    expect(sites.length).toBeGreaterThan(0);
+
+    const silent: string[] = [];
+    for (const path of sites) {
+      const contents = await read(path);
+      if (contents === null) silent.push(`${posix(path)} is not there to read`);
+      else if (!contents.includes(basenameOf(OWED))) {
+        silent.push(`${posix(path)} does not name ${basenameOf(OWED)}`);
+      }
+    }
+
+    expect(
+      silent,
+      "An obligation is only findable if the place that argues it names the list. This is the assertion that stops what the first publish owes fragmenting back into records that each assume you found the others (#162).",
+    ).toEqual([]);
   });
 });

@@ -67,6 +67,16 @@ When a first release does happen it needs a version policy, a changelog, provena
 answer to what `0.1.0` promises — none of which this ADR settles. Until then the guard in the
 next section is what keeps "publishable" from drifting into "published" by accident.
 
+**Those four are not the whole of what the first publish owes, and the list is
+[ADR-0061](./0061-what-the-first-publish-owes.md).** This record's sentence was one of four
+written in four places against the same act — a licence that expires, a migration that is
+survivable only while nothing is installed, a rule about when a version may be bumped — each
+correct where it stood and none of them findable from the others (#162). ADR-0061 carries all of
+them, with this paragraph's four as one entry pointing back here, and it is the record a first
+publish starts from. What is decided *here* stays here: this is where the argument for
+publishable-not-published lives, and superseding it was considered and rejected there, because
+nothing in this record stops being true at the first publish except the section heading above.
+
 ## What stands where `private: true` stood
 
 `private: true` was the only thing between a mistyped `pnpm publish` and npmjs.com, and
