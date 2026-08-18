@@ -73,25 +73,84 @@ export type WorkflowContext = {
 };
 
 /**
- * The open half of a context, read off a request's query string.
+ * What {@link openMetadataWithBody} answers: both halves of an open context assembled, or the
+ * keys that arrived in both (#121).
  *
- * This is ADR-0013's openness made real at the edge rather than only in the types. The
- * store surface's price route models nothing in the query string — the Variant is in the
- * path — so every parameter here is by definition something Core has never heard of, and it
- * is carried through verbatim for a Project's Step to read. Lead-time pricing is the case
- * that ADR names, and it must be reachable *without changing Core*: if a Developer had to
- * add a parameter to a Core route to get their own input to their own Step, the extension
- * surface would be wrong.
+ * A union rather than a merge and a separate check, because the two must not come apart: a
+ * caller that forgot to ask about the collision would be back to Core silently choosing which
+ * half a Step reads, which is the whole thing the refusal exists to prevent.
+ *
+ * `collided` is sorted, so the same mistake reads the same way twice.
+ */
+export type OpenMetadataResult =
+  | { readonly ok: true; readonly metadata: Readonly<Record<string, unknown>> }
+  | { readonly ok: false; readonly collided: readonly string[] };
+
+/**
+ * The open half of a context as a request's **query string** carries it.
+ *
+ * This is ADR-0013's openness made real at the edge rather than only in the types. Core models
+ * nothing in a store route's query string — a route's own inputs are on its path and in its
+ * body, and both are named on its schema — so every parameter here is by definition something
+ * Core has never heard of, and it is carried through verbatim for a Project's or a Plugin's
+ * Step to read. Lead-time pricing is the case that ADR names, and it must be reachable
+ * *without changing Core*: if a Developer had to add a parameter to a Core route to get their
+ * own input to their own Step, the extension surface would be wrong.
  *
  * Values arrive as strings and are not parsed, because parsing implies a shape and Core has
  * no business having an opinion about the shape of an input it does not model. A repeated
  * parameter keeps its last value — an array for some keys and a string for others would be a
  * shape too.
  *
+ * This is the whole of the open context for a route that takes **no body**, which cannot grow
+ * one and so can never collide; a route that takes one reaches for
+ * {@link openMetadataWithBody} instead.
+ *
  * A route that one day *does* model a query parameter must take it out of what it passes
  * here, or Core would start reading a key out of the open half and the openness would
  * quietly become a schema.
  */
-export function openMetadata(url: URL): Record<string, unknown> {
+export function openMetadata(url: URL): Readonly<Record<string, unknown>> {
   return Object.fromEntries(url.searchParams);
+}
+
+/**
+ * Both halves of the open context of a request that carries a body — its query string and the
+ * `metadata` object on that body — or the keys that arrived in both (#121).
+ *
+ * **Two ways in, because the query string cannot do the whole job.** A lead time or a customer
+ * tier is fine in a URL; a card token is not, because a query parameter is written to access
+ * logs, to proxy logs and into the `Referer` of anything a confirmation page loads — a
+ * credential in one has already leaked, which is what a `PaymentProvider` reading its own key
+ * out of this context made urgent (ADR-0053). The body also carries the types a query string
+ * has no way to spell: a number stays a number, and a nested object stays nested. It arrives as
+ * whatever JSON it was written as, unparsed and untouched, for the same reason the query half
+ * arrives as strings — the caller chose the shape and Core has no opinion about it.
+ *
+ * **A key in both halves is refused, and neither half wins.** Core cannot choose for the Step,
+ * because it has never heard of the key: any precedence rule would be Core forming an opinion
+ * about an input it does not model, and a Step reading a value that silently came from the
+ * other place is exactly the bug worth being loud about. Two things follow, and both are
+ * decisions rather than details. The check is on **names and never on values** — refusing only
+ * when the two disagree would make the answer depend on what the caller sent, so one
+ * storefront's bug would be served today and refused tomorrow. And refusing keeps the decision
+ * open: a refusal can become body-wins or query-wins later without breaking a caller that works
+ * today, where neither of those could become a refusal.
+ *
+ * `undefined` is a caller that sent no `metadata` at all, which is every storefront that has
+ * never heard of this — the query half is the answer, exactly as it was.
+ */
+export function openMetadataWithBody(
+  url: URL,
+  body: Readonly<Record<string, unknown>> | undefined,
+): OpenMetadataResult {
+  const query = openMetadata(url);
+  if (body === undefined) return { ok: true, metadata: query };
+
+  const collided = Object.keys(body)
+    .filter((key) => Object.hasOwn(query, key))
+    .sort();
+  if (collided.length > 0) return { ok: false, collided };
+
+  return { ok: true, metadata: { ...query, ...body } };
 }

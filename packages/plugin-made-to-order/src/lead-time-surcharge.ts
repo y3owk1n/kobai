@@ -41,16 +41,18 @@ import { madeToOrderSurcharge } from "./db/schema.ts";
  * storefront asks for delivery sooner than usual, and a figure Core cannot compute lands on
  * the Order.
  *
- * Today the open context is filled from the request's **query string** alone —
- * `openMetadata(url)` is `Object.fromEntries(url.searchParams)` — so a storefront asks like
- * this:
+ * The open context has **two** halves and this Step does not care which one a Lead Time came
+ * from (#121), so a storefront asks either way:
  *
  * ```
  * POST /store/orders?leadTimeDays=3
+ * POST /store/orders   { "cartId": "…", "metadata": { "leadTimeDays": 3 } }
  * ```
  *
- * That is a limitation of the transport rather than of this Plugin (filed as #121: a JSON body
- * would be the natural place for it), and it is why every value here arrives as a **string**.
+ * Which is why the value is read as a **string or a number**: the query half has only strings
+ * and the body half has whatever JSON was written. A Lead Time is fine in a URL — it is not a
+ * credential, which is what the body half exists for — so nothing here prefers one.
+ *
  * This Step reads whatever arrives and says so when it cannot: a lead time it does not
  * understand is refused rather than ignored, because ignoring it would deliver late and charge
  * nothing.
@@ -70,7 +72,8 @@ import { madeToOrderSurcharge } from "./db/schema.ts";
  * for.
  *
  * Its name is the Plugin's, not Core's — Core has never heard of it, which is the point — so it
- * is exported: a storefront spells it in a query string, and a test should not have to guess.
+ * is exported: a storefront spells it in a query string or on the body, and a test should not
+ * have to guess.
  */
 export const LEAD_TIME_DAYS_KEY = "leadTimeDays";
 
@@ -232,9 +235,9 @@ function surchargeFor(
  * first commission. The cost is that one broken parameter refuses every placement, which is the
  * loud half of a choice between loud and late.
  *
- * The value arrives as a string, because the open context is filled from a query string (#121).
- * A number is accepted too, so that a transport which one day carries typed values needs no
- * change here.
+ * The value arrives as a **string** when the caller put it in the query string and as whatever
+ * JSON they wrote when they put it on the body, so both are read (#121). Nothing else is: a
+ * boolean or an array is a storefront that means something this Plugin cannot honour.
  */
 function requestedLeadTimeDays(
   metadata: Readonly<Record<string, unknown>>,

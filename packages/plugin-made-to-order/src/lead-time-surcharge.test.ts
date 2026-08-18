@@ -47,10 +47,10 @@ function aCommission(kobai: Kobai): Promise<TestCatalog> {
 /**
  * Placing a Cart, asking for it in `leadTimeDays` days.
  *
- * The lead time goes in the **query string**, which is the whole of how the open context is
- * filled today — `openMetadata(url)` is `Object.fromEntries(url.searchParams)`, so a body would
- * reach no Step at all (#121). That is a limitation of the transport rather than of this
- * Plugin, and this is where a test has to live with it.
+ * The lead time goes in the **query string**, which is one of the two halves of the open
+ * context (#121) and the one a Lead Time belongs in: it is not a credential, and a URL is where
+ * a storefront can put it with no request body of its own. `placeWithBodyMetadata` below is the
+ * other half, and this Plugin cannot tell them apart.
  */
 function place(kobai: Kobai, cart: TestCart, leadTimeDays?: string): Promise<Response> {
   const path =
@@ -62,6 +62,22 @@ function place(kobai: Kobai, cart: TestCart, leadTimeDays?: string): Promise<Res
     method: "POST",
     headers: { ...cart.apiKey.headers, "content-type": "application/json" },
     body: JSON.stringify({ cartId: cart.id }),
+  });
+}
+
+/** The same placement, with the lead time on the body instead — and typed, which a URL cannot. */
+function placeWithBodyMetadata(
+  kobai: Kobai,
+  cart: TestCart,
+  leadTimeDays: unknown,
+): Promise<Response> {
+  return kobai.request("/store/orders", {
+    method: "POST",
+    headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+    body: JSON.stringify({
+      cartId: cart.id,
+      metadata: { [LEAD_TIME_DAYS_KEY]: leadTimeDays },
+    }),
   });
 }
 
@@ -117,6 +133,43 @@ describe("the Step this Plugin offers", () => {
     // hurried — a Return for that line refunds both.
     expect(order.adjustments).toEqual([]);
     expect(order.total).toBe(1250 + SEVEN_DAYS_SAVED);
+  });
+
+  it("charges the same for a Lead Time sent on the body as one sent in the URL", async () => {
+    // The open context has two halves and a Step is handed one merged object (#121), so this
+    // Plugin has nothing to do to accept the second — which is the assertion. The body carries
+    // the number *as a number*, which is the thing a query string can never do.
+    await using kobai = await createTestKobai(wiredHere);
+    const catalog = await aCommission(kobai);
+    const cart = await seedTestCart(kobai, { catalog });
+
+    const response = await placeWithBodyMetadata(kobai, cart, 3);
+
+    expect(response.status).toBe(201);
+    const order = (await response.json()) as PlacedOrder;
+    expect(order.lineItems[0]?.adjustments).toMatchObject([
+      {
+        code: LEAD_TIME_SURCHARGE_CODE,
+        description: "Made to order in 3 days rather than 10.",
+        amount: SEVEN_DAYS_SAVED,
+      },
+    ]);
+    expect(order.total).toBe(1250 + SEVEN_DAYS_SAVED);
+  });
+
+  it("refuses a Lead Time on the body it cannot read, exactly as it would in the URL", async () => {
+    // A body can hold shapes a query string cannot, and this Plugin declines them for the same
+    // reason it declines "soon": delivering late and charging nothing is the worse answer.
+    await using kobai = await createTestKobai(wiredHere);
+    const catalog = await aCommission(kobai);
+    const cart = await seedTestCart(kobai, { catalog });
+
+    const response = await placeWithBodyMetadata(kobai, cart, { days: 3 });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "lead-time-not-understood",
+    });
   });
 
   it("is a row rather than an answer, and reads back the same", async () => {

@@ -180,8 +180,19 @@ export type { Store } from "./store/read.ts";
  * `kobai.sweep()` from wherever that schedule lives.
  */
 export type { SweeperOptions, SweepOutcome } from "./sweep.ts";
-export type { WorkflowContext, WorkflowRegistry } from "./workflow/context.ts";
-export { openMetadata } from "./workflow/context.ts";
+export type {
+  OpenMetadataResult,
+  WorkflowContext,
+  WorkflowRegistry,
+} from "./workflow/context.ts";
+/**
+ * How the open half of a Workflow's context is read off a request (ADR-0013, #121).
+ *
+ * Two of them because a route that takes a body has two halves to read and a refusal to make,
+ * and a route that takes none has neither. On the surface because a Project that serves a
+ * Workflow of its own from a route of its own fills a context the way Core's routes do.
+ */
+export { openMetadata, openMetadataWithBody } from "./workflow/context.ts";
 export type { CompensationFailure, StepReport, WorkflowRun } from "./workflow/run.ts";
 /**
  * `runWorkflow` is the one way a Step invokes another Workflow (ADR-0054), on the surface

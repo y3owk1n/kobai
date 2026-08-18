@@ -4,6 +4,7 @@ import {
   createTestKobai,
   seedTestCart,
   seedTestCatalog,
+  type TestCart,
   type TestKobai,
 } from "../testing/index.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
@@ -635,5 +636,221 @@ describe("amounts are whole minor units", () => {
     await expect(
       kobai.database.query("select id from core_order_adjustment"),
     ).resolves.toEqual([]);
+  });
+});
+
+/**
+ * The **open context**, and the two ways a caller fills it (ADR-0013, #121).
+ *
+ * Whatever the caller sent that Core does not model reaches a Step verbatim, and there are two
+ * places to put it: the request's query string, and a `metadata` object on the body. The body is
+ * what the query string cannot be — a `PaymentProvider` reads a card token out of this same open
+ * context, and a query parameter is written to access logs, to proxy logs and into a
+ * confirmation page's `Referer`, so a credential in one has already leaked.
+ *
+ * Every assertion here is about Core *not* having an opinion: it merges the two halves, it
+ * refuses rather than choosing between them when they name the same key, and it reads no key out
+ * of the result — not even one spelled like a field of its own request.
+ */
+describe("the open context of the request that places an Order", () => {
+  /** What the watching Step below saw, or nothing if it never ran. */
+  type Seen = { metadata?: Readonly<Record<string, unknown>> };
+
+  /**
+   * A deployment with a Step wired only to look, inserted before the point of no return so the
+   * Order is still placed.
+   *
+   * What a Step sees *is* the promise, which is why it is observed here rather than inferred
+   * from a response body Core composes — and `seen` staying empty is an assertion of its own,
+   * because a request turned back never runs a Step at all.
+   */
+  async function watching(): Promise<{ kobai: TestKobai; seen: Seen } & AsyncDisposable> {
+    const seen: Seen = {};
+    const kobai = await createTestKobai({
+      workflows: {
+        "place-order": {
+          before: {
+            "capture-order": [
+              defineStep(
+                "watches-the-open-context",
+                (input: PaidOrder, context): PaidOrder => {
+                  seen.metadata = context.metadata;
+                  return input;
+                },
+              ),
+            ],
+          },
+        },
+      },
+    });
+
+    return { kobai, seen, [Symbol.asyncDispose]: () => kobai[Symbol.asyncDispose]() };
+  }
+
+  async function placeWith(
+    kobai: TestKobai,
+    cart: TestCart,
+    { query = "", metadata }: { query?: string; metadata?: Record<string, unknown> },
+  ) {
+    return kobai.request(`/store/orders${query}`, {
+      method: "POST",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ cartId: cart.id, ...(metadata ? { metadata } : {}) }),
+    });
+  }
+
+  it("carries what the body sent to a Step, verbatim", async () => {
+    await using watched = await watching();
+    const { kobai, seen } = watched;
+    const cart = await seedTestCart(kobai);
+
+    // Types a query string cannot carry at all, which is half of why the body is worth having:
+    // a number stays a number and a nested object stays nested.
+    const sent = {
+      card_token: "tok_visa_4242",
+      leadTimeDays: 3,
+      gift: true,
+      note: null,
+      recipient: { name: "Ada", tags: ["fragile", "urgent"] },
+    };
+
+    const response = await placeWith(kobai, cart, { metadata: sent });
+
+    expect(response.status).toBe(201);
+    expect(seen.metadata).toEqual(sent);
+    // And it is **not stored**, which is the difference between this `metadata` and the column
+    // of the same name: an Order's own is the Cart's, snapshotted at Capture (ADR-0009).
+    await expect(
+      kobai.database.query("select metadata from core_order"),
+    ).resolves.toEqual([{ metadata: {} }]);
+  });
+
+  it("carries the query string too, and merges the two halves", async () => {
+    await using watched = await watching();
+    const { kobai, seen } = watched;
+    const cart = await seedTestCart(kobai);
+
+    const response = await placeWith(kobai, cart, {
+      query: "?leadTimeDays=3",
+      metadata: { card_token: "tok_visa_4242" },
+    });
+
+    expect(response.status).toBe(201);
+    // The query half still arrives as strings, because a query string has no other type.
+    expect(seen.metadata).toEqual({ leadTimeDays: "3", card_token: "tok_visa_4242" });
+  });
+
+  it("refuses a key that arrived in both halves rather than choosing between them", async () => {
+    await using watched = await watching();
+    const { kobai, seen } = watched;
+    const cart = await seedTestCart(kobai);
+
+    const response = await placeWith(kobai, cart, {
+      query: "?leadTimeDays=3&card_token=tok_a",
+      metadata: { leadTimeDays: 3, card_token: "tok_b", gift: true },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      reason: "metadata-in-both",
+      // Every colliding key, named, and in sorted order so the same mistake reads the same way
+      // twice.
+      error: expect.stringContaining('"card_token", "leadTimeDays"'),
+    });
+    // Turned back before the Workflow ran at all: no Step saw a context and no Order exists.
+    expect(seen.metadata).toBeUndefined();
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+  });
+
+  it("refuses a colliding key even when both halves say the same thing", async () => {
+    // Deliberately not "refuse only when they differ": that would make the answer depend on the
+    // *values* of an input Core does not model, so one storefront bug would be served today and
+    // refused tomorrow.
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+
+    const response = await placeWith(kobai, cart, {
+      query: "?leadTimeDays=3",
+      metadata: { leadTimeDays: "3" },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "metadata-in-both" });
+  });
+
+  it("leaves the idempotency key unspent, because nothing was attempted", async () => {
+    // A refusal here is a malformed request rather than a purchase, so the storefront's one
+    // safe retry has to survive it — the corrected request must be able to reuse the key it
+    // sent, and it places.
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+    const retried = { "idempotency-key": "one-purchase" };
+
+    const refused = await kobai.request("/store/orders?leadTimeDays=3", {
+      method: "POST",
+      headers: {
+        ...cart.apiKey.headers,
+        ...retried,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ cartId: cart.id, metadata: { leadTimeDays: 3 } }),
+    });
+    expect(refused.status).toBe(400);
+
+    const corrected = await kobai.request("/store/orders", {
+      method: "POST",
+      headers: {
+        ...cart.apiKey.headers,
+        ...retried,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ cartId: cart.id, metadata: { leadTimeDays: 3 } }),
+    });
+
+    expect(corrected.status).toBe(201);
+  });
+
+  it("reads no key out of it, however the caller spells them", async () => {
+    await using watched = await watching();
+    const { kobai, seen } = watched;
+    const decoy = await seedTestCart(kobai, { quantity: 5 });
+    const cart = await seedTestCart(kobai, { catalog: decoy.catalog, quantity: 2 });
+
+    // Every name Core models on this request, and some it models elsewhere, all pointed
+    // somewhere else. If Core read a single one of them, this would be the wrong Order.
+    const sent = {
+      cartId: decoy.id,
+      id: decoy.id,
+      quantity: 99,
+      total: 1,
+      currency: "EUR",
+      status: "cancelled",
+      metadata: { cartId: decoy.id },
+    };
+
+    const response = await placeWith(kobai, cart, { metadata: sent });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      total: 2500,
+      currency: "USD",
+      lineItems: [{ quantity: 2 }],
+    });
+    expect(seen.metadata).toEqual(sent);
+    // And the Cart the body pointed at is untouched — still placeable, which it would not be if
+    // it had been the one placed, because a Cart becomes exactly one Order.
+    const second = await placeWith(kobai, decoy, {});
+    expect(second.status).toBe(201);
+  });
+
+  it("leaves a caller that sent no metadata with the query string alone", async () => {
+    await using watched = await watching();
+    const { kobai, seen } = watched;
+    const cart = await seedTestCart(kobai);
+
+    const response = await placeWith(kobai, cart, { query: "?leadTimeDays=3" });
+
+    expect(response.status).toBe(201);
+    expect(seen.metadata).toEqual({ leadTimeDays: "3" });
   });
 });

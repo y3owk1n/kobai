@@ -6,7 +6,7 @@ import {
   type ResolvedPrice,
 } from "../pricing/resolve-price.ts";
 import { createTestKobai, seedTestCatalog } from "../testing/index.ts";
-import { openMetadata, type WorkflowContext } from "./context.ts";
+import { openMetadata, openMetadataWithBody, type WorkflowContext } from "./context.ts";
 import { runWorkflow, UnwindFailure } from "./run.ts";
 import { defineStep, type Step, StepFailure } from "./step.ts";
 import {
@@ -138,6 +138,39 @@ describe("running a Workflow", () => {
     ).toEqual({ leadTimeDays: "10" });
 
     expect(openMetadata(new URL("http://kobai.test/store/variants/x/price"))).toEqual({});
+  });
+
+  it("fills it from the body too, for a request that has one", () => {
+    // The half a query string cannot carry (#121): a credential does not belong in a URL, and
+    // a number is a number here rather than the digits of one.
+    const url = new URL("http://kobai.test/store/orders?leadTimeDays=10");
+
+    expect(
+      openMetadataWithBody(url, { card_token: "tok_visa", tier: { name: "gold" } }),
+    ).toEqual({
+      ok: true,
+      metadata: { leadTimeDays: "10", card_token: "tok_visa", tier: { name: "gold" } },
+    });
+
+    // No body half is not an empty one: the query string is the whole answer, exactly as it was
+    // before there was another way in.
+    expect(openMetadataWithBody(url, undefined)).toEqual({
+      ok: true,
+      metadata: { leadTimeDays: "10" },
+    });
+  });
+
+  it("refuses a key that arrived in both halves rather than picking one", () => {
+    // Neither body-wins nor query-wins: Core has never heard of the key, so choosing would be
+    // Core forming an opinion about an input it does not model — and a Step reading the value
+    // from the other place is the failure worth being loud about. Names, never values, so the
+    // same request is refused however the two happen to compare.
+    const refused = openMetadataWithBody(
+      new URL("http://kobai.test/store/orders?leadTimeDays=10&card_token=tok_a"),
+      { card_token: "tok_a", leadTimeDays: 10, gift: true },
+    );
+
+    expect(refused).toEqual({ ok: false, collided: ["card_token", "leadTimeDays"] });
   });
 
   it("carries inputs Core has never heard of to the Steps", async () => {

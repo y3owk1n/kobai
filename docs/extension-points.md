@@ -368,6 +368,54 @@ contract — reaches your Step **without changing Core**. If it could not, the e
 surface would be wrong (ADR-0013). The cost is type safety at that one boundary, and it is
 paid deliberately.
 
+#### Two ways in, and they are for different things
+
+A storefront fills the open context in either of two places, and both land on the same
+`context.metadata`:
+
+| Where | What it is for |
+| --- | --- |
+| The request's **query string** | Anything a URL may safely hold — a lead time, a customer tier, a flag. Values arrive as **strings**, because a query string has no other type, and a repeated parameter keeps its last value. |
+| A **`metadata` object on the request body** | Anything a URL may not: a card token, a completed bank authorisation, anything you would not want in a log. Values arrive as the **JSON you wrote** — a number stays a number, and a nested object stays nested. |
+
+**Only a route that runs a Workflow has an open context at all**, because a Step is the only
+thing that reads one. There are two of them: `GET /store/variants/{id}/price`, which has no
+body to grow and so has the query-string half alone, and `POST /store/orders`, which has both.
+A Cart route takes a body and runs no Workflow, so neither half of a request to one reaches
+anything — `POST /store/carts?tier=gold` is a parameter kobai discards.
+
+**Do not confuse this `metadata` with the column of the same name.** The one on `POST
+/store/orders` is **never stored** — it lives for the length of the request and is gone. The
+Order's own `metadata` is the Cart's, snapshotted at Capture like everything else on an Order
+(ADR-0009), so metadata you want kept goes on the Cart, and metadata a Step needs for this one
+placement goes here.
+
+**Prefer the body for a credential, and treat that as a rule rather than a preference.** A
+query parameter is written to access logs, to proxy logs, and into the `Referer` of anything
+your confirmation page loads; a credential in a URL is a credential that has already leaked.
+This is the case that made the body exist at all — a `PaymentProvider` reads what it needs out
+of this same open context (ADR-0053).
+
+```jsonc
+// POST /store/orders?leadTimeDays=3
+{
+  "cartId": "…",
+  "metadata": { "card_token": "tok_visa_4242", "tier": { "name": "gold", "since": 2019 } }
+}
+```
+
+**A key sent in both halves is refused, at 400 with `reason: "metadata-in-both"`.** Neither
+half wins, and that is deliberate: Core has never heard of your key, so choosing between them
+would be Core forming an opinion about an input it does not model — and a Step reading a value
+that silently came from the other place is the failure worth being loud about. The check is on
+**names, never on values**, so the same request is refused however the two happen to compare;
+refusing only when they disagree would have your storefront's bug served today and refused
+tomorrow. Send each key in one place.
+
+If you serve a Workflow of your own from a route of your own, `openMetadata(url)` and
+`openMetadataWithBody(url, body.metadata)` are on the surface, and the second returns either
+the merged object or the keys that collided.
+
 ## 3. Dependency substitution behind named interfaces — **proven**
 
 **Status: proven, and here is exactly what moved it.** This row read *partial* until the

@@ -38,6 +38,32 @@ export const Metadata = z.record(z.string(), z.unknown()).meta({
   description: "Unindexed, untyped JSON owned by the Merchant and the Project.",
 });
 
+/**
+ * ADR-0013's escape hatch, in the description: the open half of a Workflow's context, sent on
+ * the request that runs one.
+ *
+ * The same shapelessness as {@link Metadata} and a different thing entirely — this is **not
+ * stored**. It lives for the length of one request, reaches every Step of the Workflow that
+ * request runs, and is gone.
+ *
+ * **A named component**, unlike `Metadata`, which is inlined wherever it appears. A Developer
+ * reading `metadata` on a request body has every reason to expect the column, so the
+ * description has to be able to say which of the two this is — and a name is what a generated
+ * client shows them. It is deliberately not shared with `Metadata`: they will diverge the day
+ * either grows a constraint, and merging them now would make that a breaking change to both.
+ *
+ * **The whole description lives here**, because a `$ref` to it is what a field carrying it
+ * emits: a `.meta()` on such a field does not sit beside the reference, it *overwrites this
+ * one* for every other field too. So say it once, and say it generally.
+ */
+export const OpenMetadata = z
+  .record(z.string(), z.unknown())
+  .meta({
+    description:
+      "Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either.",
+  })
+  .openapi("OpenMetadata");
+
 // ---- Refusals ------------------------------------------------------------------------
 
 /**
@@ -968,8 +994,31 @@ export const PlaceOrderRequest = z
       description:
         "The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020).",
     }),
+    // No `.meta()` here: this field emits a `$ref`, and a description on it would replace
+    // `OpenMetadata`'s own rather than sit beside it. The schema says the whole thing.
+    metadata: OpenMetadata.optional(),
   })
   .openapi("PlaceOrderRequest");
+
+/**
+ * The two ways this route turns a body back before the Workflow runs, as a **closed set**.
+ *
+ * The shared {@link Refusal} everywhere else on this surface leaves `reason` a bare string,
+ * which is right where the reasons come from a Step and Core cannot enumerate them. These two
+ * are Core's own and there are two of them — the schema, and a key sent in both halves of the
+ * open context — so a client can narrow on the difference, which matters because the fixes are
+ * different: one is a malformed body and the other is a key in the wrong place.
+ *
+ * `invalid` is what `invalidRequestHook` answers with for every route on the surface; the enum
+ * has to keep carrying it for that reason, and this route declaring the set does not make the
+ * hook this route's.
+ */
+export const PlaceOrderRequestRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(["invalid", "metadata-in-both"]),
+  })
+  .openapi("PlaceOrderRequestRefusal");
 
 /**
  * The key a storefront names so that retrying is safe — Stripe's header, and Stripe's name for

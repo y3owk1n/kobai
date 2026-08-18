@@ -1471,6 +1471,26 @@
           }
         ]
       },
+      "PlaceOrderRequestRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "metadata-in-both"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "PlaceOrderRefusal": {
         "type": "object",
         "properties": {
@@ -1534,11 +1554,19 @@
           "cartId": {
             "type": "string",
             "description": "The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020)."
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/OpenMetadata"
           }
         },
         "required": [
           "cartId"
         ]
+      },
+      "OpenMetadata": {
+        "type": "object",
+        "additionalProperties": {},
+        "description": "Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either."
       }
     },
     "parameters": {}
@@ -3585,11 +3613,11 @@
             }
           },
           "400": {
-            "description": "The request does not fit this endpoint's schema.",
+            "description": "The request does not fit this endpoint's schema, or a key arrived in both the query string and `metadata`.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Refusal"
+                  "$ref": "#/components/schemas/PlaceOrderRequestRefusal"
                 }
               }
             }

@@ -1226,10 +1226,10 @@ export interface paths {
             "application/json": components["schemas"]["PlacedOrder"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, or a key arrived in both the query string and `metadata`. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["PlaceOrderRequestRefusal"];
           };
         };
         /** @description No live API key was presented. */
@@ -1811,6 +1811,12 @@ export interface components {
         steps: components["schemas"]["StepReport"][];
       };
     };
+    PlaceOrderRequestRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /** @enum {string} */
+      reason: "invalid" | "metadata-in-both";
+    };
     PlaceOrderRefusal: {
       error: string;
       reason: string;
@@ -1830,6 +1836,11 @@ export interface components {
     PlaceOrderRequest: {
       /** @description The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020). */
       cartId: string;
+      metadata?: components["schemas"]["OpenMetadata"];
+    };
+    /** @description Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either. */
+    OpenMetadata: {
+      [key: string]: unknown;
     };
   };
   responses: never;
