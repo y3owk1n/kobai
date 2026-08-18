@@ -92,10 +92,11 @@ than working around it.** A fresh clone, a `git worktree add`, an agent's worktr
 them `node_modules` is absent, and `devbox run lint` and `devbox run format` used to fail there
 with `Command "biome" not found` — a message naming a binary, leaving the reader to work out
 that a package manager never ran, on the command this file tells you to reach for *first*
-(#133). So every script in the workspace's `devbox.json` that runs a binary out of
-`node_modules` opens with **`sh scripts/require-install.sh <its own name> &&`**, and the
-refusal names the command, both ways to fix it, and this section. `install` and `ci` carry no
-guard, because they *are* the install.
+(#133). So every script in **every** `devbox.json` in this repository that runs a binary out
+of `node_modules` opens with **`sh scripts/require-install.sh <its own name> &&`**, and the
+refusal names the command that could not run and what to run instead of it. `install` and
+`ci` carry no guard, because they *are* the install; nor do the docker-only scripts, which
+need nothing installed at all.
 
 It is a guard rather than an install in front of each script, deliberately. Prefixing
 `pnpm install --frozen-lockfile` would make the fast commands pay for an install every time —
@@ -114,15 +115,52 @@ not, so a guard defined there was missing from every script run the second way t
 documents, and `devbox run lint` inside `devbox shell` died at 127 naming an internal
 function. **The hook may export variables a script reads; a script may call none of its
 functions.** `tests/a-fresh-checkout-is-told-what-to-run.test.ts` holds that, holds the
-message against a checkout with no `node_modules`, and derives from `devbox.json` itself the
-list of scripts needing the guard — so **a new script that runs `pnpm` needs the guard,
+message against a checkout with no `node_modules`, and derives from each `devbox.json` itself
+the list of scripts needing the guard — so **a new script that runs `pnpm` needs the guard,
 passing its own name**, and the sweep names it if it does not.
 
-**This covers the workspace's `devbox.json` and not the Project's.** `reference/devbox.json`
-— and so the `devbox.json` every generated Project receives — still has the gap, and closing
-it there means a second copy of the guard in a tree that is byte-compared against its
-template. That is a decision nobody has taken; the sweep above reads the workspace file only,
-and says so rather than appearing to cover both.
+**A Project ships a guard of its own, and there are deliberately two of them** (#139). A
+generated Project is the fresh-checkout case *by definition* — it is the only state it has
+ever been in — and its Developer has neither this repository in front of them nor
+`devbox run ci` in muscle memory, so `devbox run dev` failing with `Command "vite" not found`
+was the worse half of the same bug. `reference/scripts/require-install.sh` is that second
+copy: generated into `packages/create-kobai/template/` like everything else under
+`reference/`, packed into the tarball a Developer installs, and named by the same prefix in
+front of every script in the Project's `devbox.json` that runs pnpm. **It needed no entry in
+`adaptations.ts`** — the file is the same in both trees, which is what anything genuinely
+shared between them should be.
+
+**The two copies do the same thing and say different things, and it is the doing that is held
+identical.** kobai's refusal points at `devbox run ci` and at this section; a Project has
+neither, and has `devbox run up`, which installs nothing locally because the install happens
+inside the image. One message forced on both would have made one of them false, which is the
+failure the guard exists to remove. So each copy carries its words in exactly two shell
+variables, `fix` and `note`, and
+`tests/a-fresh-checkout-is-told-what-to-run.test.ts` compares every line of the two files that
+is neither one of those two nor a comment, and fails naming the one that differs. **What is
+held identical is the check, not the file**: each copy's header explains itself to its own
+reader, and a Developer's Project has no reason to be told about #133. A fix applied to one copy and not the other —
+the drift this ticket weighed against copying at all — is now a red build rather than an
+invisible difference, and that comparison has been watched failing against a copy whose check
+was changed alone. The same file runs all **three** copies (the third is the template's, which
+is what a Developer actually receives) against a directory with and without `node_modules`,
+and sweeps all three `devbox.json`s for the scripts that need the prefix.
+
+Four shapes were rejected, each for a reason worth keeping:
+
+- **Inline the check in each of the Project's scripts.** No second file, but six copies of a
+  one-liner inside JSON strings, and the reasoning that justifies it would live only in the
+  workspace's copy.
+- **Say it in the Project's README instead.** A README is read before the first command or
+  not at all, and this failure arrives during it.
+- **Have `create-kobai` run the install itself.** It changes what the scaffolder promises,
+  and it does nothing for the second clone of that Project — a colleague's checkout is the
+  same fresh state again.
+- **Move the two sentences into `devbox.json`'s `env` block**, so the guards could be
+  compared byte for byte. That buys a stricter comparison of the half nobody doubted by
+  moving the words a reader sees one indirection away from the file that prints them — and
+  the guard would then degrade silently, printing a message with its advice missing, whenever
+  it is run any way other than through devbox.
 
 **`devbox run -- <cmd>` runs from the project root and ignores a preceding `cd`.** So this:
 
@@ -352,7 +390,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
 | `reference/src/db/schema.ts` | The Project's **own** tables, in its own migration set. |
 | `reference/admin/` | The **Admin**, vendored into the Project as source a Developer edits (ADR-0033). |
-| `reference/Dockerfile`, `reference/compose.yaml`, `reference/devbox.json` | The **Project's**, generated into what a Developer receives. |
+| `reference/Dockerfile`, `reference/compose.yaml`, `reference/devbox.json`, `reference/scripts/` | The **Project's**, generated into what a Developer receives. |
 | `compose.yaml`, `Dockerfile`, `devbox.json` | The **workspace's** — what `devbox run ci` and `devbox run up` use. |
 
 ### `updated_at` is a trigger, and a new Core table needs one
@@ -517,10 +555,27 @@ Workflow context — a number Core has never modelled — which closes ADR-0013'
 end for the first time. Two things about it are worth knowing before extending it: it decides
 which lines to surcharge from `line.fulfilment.hasLeadTime` and **never from the Strategy's
 name**, because a Strategy is named by the key a Project wired it under and so does not know its
-own name; and the open context is reachable only through the **query string** today
-(`openMetadata` is `Object.fromEntries(url.searchParams)`, #121), which is why its tests place
-Orders at `POST /store/orders?leadTimeDays=3`. **Capacity is still out of scope** — the Strategy
-says only *that* there is a Lead Time, never that a date can be met (ADR-0012).
+own name; and the open context has **two halves** since #138 — the query string and an optional
+`metadata` object on the request body — so its tests place Orders both at
+`POST /store/orders?leadTimeDays=3` and with `{ cartId, metadata: { leadTimeDays: 3 } }`, and
+the Step reads a lead time spelled either way.
+
+**The two halves merge, and a key arriving in both is refused rather than resolved.**
+`openMetadata(url)` is still `Object.fromEntries(url.searchParams)` and is the whole context
+for a route that takes no body; a route that runs a Workflow *and* takes one — `POST
+/store/orders` is the only one today — calls `openMetadataWithBody(url, body)` instead, which
+returns a discriminated union — `{ ok: true, metadata }` or
+`{ ok: false, collided }` — so a caller cannot merge and forget to ask. A collision is on the
+**key name** and never on the value: `POST /store/orders` refuses it at **400
+`metadata-in-both`**, naming every colliding key, before it claims the idempotency key, because
+nothing was attempted. There is deliberately no precedence rule, since any of them would be Core
+forming an opinion about an input it does not model — and a refusal can still become body-wins
+later, where body-wins could never become a refusal. Two consequences for a Step reading the
+context: a query value is always a **string** and a body value is whatever JSON it was written
+as, so `@kobai/plugin-made-to-order` accepts `3` and `"3"` and nothing else; and **a credential
+belongs on the body**, because a query string is written to access logs, proxy logs and the
+`Referer` of anything a confirmation page loads. **Capacity is still out of scope** — the
+Strategy says only *that* there is a Lead Time, never that a date can be met (ADR-0012).
 
 ### The API contract
 

@@ -15,6 +15,19 @@
 #
 # It answers "nothing has installed here", never "what is installed is current": a stale
 # `node_modules` is what the gate's own `--frozen-lockfile` is for.
+#
+# **There is a second copy of this in `reference/scripts/require-install.sh`**, because a
+# generated Project ships one of its own and cannot reach into the repository that generated
+# it (#139). Every line of code below is identical in the two, and
+# tests/a-fresh-checkout-is-told-what-to-run.test.ts fails naming the line if that stops being
+# true. What may differ is `fix` and `note` — a Project has no `devbox run ci` and no
+# AGENTS.md — and this comment, which is written for a reader of kobai rather than of a
+# Project, and which no test compares.
+
+# What to run instead, and where the rest of it is written. This checkout is kobai's own, so
+# the gate is a way out too and this file's own §Development is where the reasoning lives.
+fix='Run `devbox run install` first, or `devbox run ci`, which installs before everything else.'
+note='See AGENTS.md § Development.'
 
 root=${DEVBOX_PROJECT_ROOT:-.}
 
@@ -22,5 +35,5 @@ if [ -d "$root/node_modules" ]; then
   exit 0
 fi
 
-printf '\n  Nothing has installed in this checkout, so `devbox run %s` has no binaries to run.\n  Run `devbox run install` first, or `devbox run ci`, which installs before everything else.\n  See AGENTS.md § Development.\n\n' "$1" >&2
+printf '\n  Nothing has installed in this checkout, so `devbox run %s` has no binaries to run.\n  %s\n  %s\n\n' "$1" "$fix" "$note" >&2
 exit 1

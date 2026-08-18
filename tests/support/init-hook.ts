@@ -34,12 +34,16 @@ type DevboxConfig = {
   } | null;
 };
 
-/** `devbox.json`, parsed. HuJSON, so comments and trailing commas are both allowed. */
-export async function readDevbox(): Promise<DevboxConfig> {
-  const contents = await readFile(
-    fileURLToPath(new URL("devbox.json", repoRoot)),
-    "utf8",
-  );
+/**
+ * A `devbox.json`, parsed. HuJSON, so comments and trailing commas are both allowed.
+ *
+ * The path is an argument because this repository holds three of these files — the
+ * workspace's, the reference Project's, and the copy of the Project's that every Developer
+ * receives — and the guard in front of every command that needs an install is swept across
+ * all of them. It defaults to the workspace's, which is the one the hook belongs to.
+ */
+export async function readDevbox(path = "devbox.json"): Promise<DevboxConfig> {
+  const contents = await readFile(fileURLToPath(new URL(path, repoRoot)), "utf8");
   const errors: ParseError[] = [];
   // `allowTrailingComma` because `devbox add` rewrites the file in that style, which
   // `tests/no-push-script.test.ts` has to allow for too.
@@ -50,7 +54,7 @@ export async function readDevbox(): Promise<DevboxConfig> {
   const [failure] = errors;
   if (failure !== undefined) {
     throw new Error(
-      `devbox.json did not parse: ${printParseErrorCode(failure.error)} at offset ${failure.offset}.`,
+      `${path} did not parse: ${printParseErrorCode(failure.error)} at offset ${failure.offset}.`,
     );
   }
   return config;
