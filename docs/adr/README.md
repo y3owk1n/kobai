@@ -28,7 +28,7 @@ New to the project? These five carry the shape of everything else:
 |---|---|---|
 | [0001](./0001-customisation-lives-in-a-project-not-a-fork.md) | Customisation lives in a scaffolded Project, not a fork | Accepted |
 | [0002](./0002-headless-the-storefront-is-out-of-scope.md) | Headless: kobai ships no storefront | Accepted |
-| [0003](./0003-the-extension-surface-and-what-we-promise.md) | The extension surface, and what we promise stability on | Accepted |
+| [0003](./0003-the-extension-surface-and-what-we-promise.md) | The extension surface, and what we promise stability on | Accepted — **amended by 0047 and 0060** |
 | [0004](./0004-plugins-own-their-tables-core-tables-are-closed.md) | Plugins own their tables; Core's tables are closed | Accepted |
 | [0005](./0005-single-tenant-with-first-class-channels-and-regions.md) | Single-tenant, with Channels and Regions first-class | Accepted |
 | [0006](./0006-typescript-on-node-with-a-rest-openapi-contract.md) | TypeScript on Node, with a REST/OpenAPI contract | Accepted |
@@ -44,7 +44,7 @@ New to the project? These five carry the shape of everything else:
 | [0016](./0016-kobai-is-not-a-cms-in-v1.md) | kobai is not a CMS ~~in v1~~ | **Amended by 0023.** Naming correction stands |
 | [0017](./0017-plugins-offer-steps-and-the-project-wires-them.md) | Plugins offer Steps; the Project wires them | Accepted — unwinding edge settled by 0036 |
 | [0018](./0018-one-reservation-model-implemented-without-holds.md) | One Reservation model, ~~implemented without holds~~ | **"No holds" superseded by 0027.** Interface and atomicity stand |
-| [0019](./0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md) | Plugins are npm packages, and semver covers only the promised surface | Accepted |
+| [0019](./0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md) | Plugins are npm packages, and semver covers only the promised surface | Accepted — **two exceptions: 0047, 0060** |
 | [0020](./0020-core-owns-merchant-auth-and-api-keys-but-not-shopper-credentials.md) | Core owns Merchant auth and API keys, but not Shopper credentials | **"One role" superseded by 0027.** Rest stands |
 | [0021](./0021-v1-ships-one-real-order-1-0-is-the-envisioned-platform.md) | ~~v1 ships one real order; 1.0 is the envisioned platform~~ | **Superseded by 0024** |
 | [0022](./0022-shapes-modelled-now-features-built-later.md) | Translations, Adjustments and Returns are modelled now; ~~Bundles are ruled out~~ | **Amended by 0024 and 0027.** Bundles are a Plugin |
@@ -83,6 +83,7 @@ New to the project? These five carry the shape of everything else:
 | [0057](./0057-the-reservation-sweeper-is-an-interval-not-a-job.md) | The Reservation sweeper is an interval, not a job | Accepted — amends part of 0026 |
 | [0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md) | A promised surface may be broken until the first release, and a compile error is the notice | Accepted — its first rule expires at the first publish |
 | [0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md) | Catalog deletion refuses rather than cascading or releasing | Accepted — completes 0008 |
+| [0060](./0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md) | The HTTP surface is promised, and a refusal's `reason` is part of it | Accepted — **amends 0019 and 0003** |
 
 ## Prototypes
 

@@ -129,6 +129,21 @@ const signInRoute = (Session: contract.SessionSchema) =>
 // ---- Everything else ---------------------------------------------------------------------
 
 /**
+ * The 400 a catalog route answers — `REFUSALS.invalid`'s body, declared through the catalog
+ * family's schema.
+ *
+ * Its own constant rather than `REFUSALS.invalid` because a catalog route's 400 belongs to the
+ * catalog family: one schema per family is what ADR-0060 settled on, so the 400 a route shares
+ * with every other route is declared through the same schema as its 409 and its 422. The
+ * wording is the shared one because the refusal is — only the set of reasons the schema admits
+ * is wider, and `refusal-reasons.test.ts` is what holds that set to what this route answers.
+ */
+const CATALOG_INVALID_REQUEST = json(
+  "The request does not fit this endpoint's schema, or is not JSON at all.",
+  contract.CatalogRefusal,
+);
+
+/**
  * Creates a Merchant — how a deployment grows a team.
  *
  * It is an ordinary guarded route, and that is the whole of what is interesting about it. It
@@ -153,10 +168,13 @@ const createMerchantRoute = createRoute({
   },
   responses: {
     201: json("The Merchant, and the Role they hold.", contract.Merchant),
-    400: REFUSALS.invalid,
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, or names a Role this deployment does not have.",
+      contract.MerchantRefusal,
+    ),
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    409: json("A Merchant already holds that address.", contract.Refusal),
+    409: json("A Merchant already holds that address.", contract.MerchantRefusal),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -234,13 +252,13 @@ const createProductRoute = createRoute({
   },
   responses: {
     201: json("The Product, with its Variants.", contract.ProductDetail),
-    400: REFUSALS.invalid,
+    400: CATALOG_INVALID_REQUEST,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    409: json("A Variant already carries one of those SKUs.", contract.Refusal),
+    409: json("A Variant already carries one of those SKUs.", contract.CatalogRefusal),
     422: json(
       "A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
-      contract.Refusal,
+      contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -276,7 +294,7 @@ const readProductRoute = createRoute({
     200: json("The Product.", contract.ProductDetail),
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such Product exists.", contract.Refusal),
+    404: json("No such Product exists.", contract.CatalogRefusal),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -302,10 +320,10 @@ const deleteProductRoute = createRoute({
     204: { description: "Deleted." },
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such Product exists.", contract.Refusal),
+    404: json("No such Product exists.", contract.CatalogRefusal),
     409: json(
       "`stock-is-reserved`: one of this Product's Variants has stock currently claimed by Reservations being placed. Those either become Orders or lapse, and it can be deleted once they have.",
-      contract.Refusal,
+      contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -333,10 +351,10 @@ const deleteVariantRoute = createRoute({
     204: { description: "Deleted." },
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such Variant exists.", contract.Refusal),
+    404: json("No such Variant exists.", contract.CatalogRefusal),
     409: json(
       "Two reasons: `last-variant`, this is the only Variant of its Product and every Product has at least one (ADR-0008) — delete the Product instead, which takes this Variant with it; or `stock-is-reserved`, its stock is currently claimed by Reservations being placed, which either become Orders or lapse.",
-      contract.Refusal,
+      contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -368,13 +386,13 @@ const setPriceRoute = createRoute({
   },
   responses: {
     201: json("The Price.", contract.Price),
-    400: REFUSALS.invalid,
+    400: CATALOG_INVALID_REQUEST,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such Variant exists.", contract.Refusal),
+    404: json("No such Variant exists.", contract.CatalogRefusal),
     422: json(
       "Well formed, and still refused: this Store does not price in that currency.",
-      contract.Refusal,
+      contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -405,7 +423,10 @@ const deletePriceRoute = createRoute({
     204: { description: "Removed." },
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such Variant exists, or it carries no such Price.", contract.Refusal),
+    404: json(
+      "No such Variant exists, or it carries no such Price.",
+      contract.CatalogRefusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -444,13 +465,13 @@ const setInventoryRoute = createRoute({
   },
   responses: {
     200: json("What the Store now has of this Variant.", contract.Inventory),
-    400: REFUSALS.invalid,
+    400: CATALOG_INVALID_REQUEST,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such Variant exists.", contract.Refusal),
+    404: json("No such Variant exists.", contract.CatalogRefusal),
     409: json(
       "More than that is currently claimed by Reservations being placed. Those either become Orders or lapse, and the count can be set once they have.",
-      contract.Refusal,
+      contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
@@ -528,7 +549,7 @@ const revokeApiKeyRoute = createRoute({
     204: { description: "Revoked." },
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    404: json("No such API key exists.", contract.Refusal),
+    404: json("No such API key exists.", contract.ApiKeyNotFound),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -666,7 +687,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     const found = await readProduct(deps.db, c.req.valid("param").id);
     if (!found) {
       return c.json(
-        { error: "No such Product exists.", reason: "product-not-found" },
+        { error: "No such Product exists.", reason: "product-not-found" as const },
         404,
       );
     }
@@ -741,7 +762,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     const revoked = await revokeApiKey(deps.db, c.req.valid("param").id);
     if (!revoked) {
       return c.json(
-        { error: "No such API key exists.", reason: "api-key-not-found" },
+        { error: "No such API key exists.", reason: "api-key-not-found" as const },
         404,
       );
     }

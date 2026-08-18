@@ -86,10 +86,10 @@ export interface paths {
             "application/json": components["schemas"]["Session"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description Those credentials are not valid. */
@@ -165,10 +165,10 @@ export interface paths {
             "application/json": components["schemas"]["Merchant"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, is not JSON at all, or names a Role this deployment does not have. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["MerchantRefusal"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -186,7 +186,7 @@ export interface paths {
         /** @description A Merchant already holds that address. */
         409: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["MerchantRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -300,10 +300,10 @@ export interface paths {
             "application/json": components["schemas"]["ProductDetail"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -321,13 +321,13 @@ export interface paths {
         /** @description A Variant already carries one of those SKUs. */
         409: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it. */
         422: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -379,7 +379,7 @@ export interface paths {
         /** @description No such Product exists. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -427,13 +427,13 @@ export interface paths {
         /** @description No such Product exists. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description `stock-is-reserved`: one of this Product's Variants has stock currently claimed by Reservations being placed. Those either become Orders or lapse, and it can be deleted once they have. */
         409: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -483,13 +483,13 @@ export interface paths {
         /** @description No such Variant exists. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Two reasons: `last-variant`, this is the only Variant of its Product and every Product has at least one (ADR-0008) — delete the Product instead, which takes this Variant with it; or `stock-is-reserved`, its stock is currently claimed by Reservations being placed, which either become Orders or lapse. */
         409: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -531,10 +531,10 @@ export interface paths {
             "application/json": components["schemas"]["Price"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -552,13 +552,13 @@ export interface paths {
         /** @description No such Variant exists. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Well formed, and still refused: this Store does not price in that currency. */
         422: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -610,7 +610,7 @@ export interface paths {
         /** @description No such Variant exists, or it carries no such Price. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -652,10 +652,10 @@ export interface paths {
             "application/json": components["schemas"]["Inventory"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -673,13 +673,13 @@ export interface paths {
         /** @description No such Variant exists. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description More than that is currently claimed by Reservations being placed. Those either become Orders or lapse, and the count can be set once they have. */
         409: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -845,10 +845,10 @@ export interface paths {
             "application/json": components["schemas"]["IssuedApiKey"];
           };
         };
-        /** @description The request does not fit this endpoint's schema. */
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
         400: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -910,7 +910,7 @@ export interface paths {
         /** @description No such API key exists. */
         404: {
           content: {
-            "application/json": components["schemas"]["Refusal"];
+            "application/json": components["schemas"]["ApiKeyNotFound"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -1558,11 +1558,14 @@ export interface components {
       /** @description What this Role may do. A deployment may hold a permission this build of Core has never heard of. */
       permissions: string[];
     };
-    Refusal: {
+    InvalidRequest: {
       /** @description What went wrong, in prose. */
       error: string;
-      /** @description Machine-readable. Branch on this. */
-      reason: string;
+      /**
+       * @description `invalid` if the body does not fit this endpoint's schema; `malformed-body` if it is not JSON at all. Different fixes, so they are different words.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body";
     };
     InvalidCredentials: {
       error: string;
@@ -1584,6 +1587,15 @@ export interface components {
     };
     Merchant: components["schemas"]["MerchantIdentity"] & {
       role: components["schemas"]["RoleSummary"];
+    };
+    MerchantRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "unknown-role" | "email-taken";
     };
     SessionRefusal: {
       error: string;
@@ -1662,6 +1674,15 @@ export interface components {
       metadata: {
         [key: string]: unknown;
       };
+    };
+    CatalogRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy";
     };
     CreateProductRequest: {
       title: string;
@@ -1848,6 +1869,15 @@ export interface components {
        */
       revokedAt: string | null;
     };
+    ApiKeyNotFound: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "api-key-not-found";
+    };
     ResolvedPrice: {
       variant: components["schemas"]["VariantIdentity"];
       price: {
@@ -1879,6 +1909,7 @@ export interface components {
     };
     PriceRefusal: {
       error: string;
+      /** @description Machine-readable. Branch on this. Core's own are `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
       reason: string;
       workflow: {
         name: string;
@@ -1924,9 +1955,13 @@ export interface components {
       };
     };
     CartRefusal: {
+      /** @description What went wrong, in prose. */
       error: string;
-      /** @enum {string} */
-      reason: "invalid" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced";
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced";
     };
     CreateCartRequest: {
       /** @description Needs a secret key. A publishable one is refused (ADR-0020). */
@@ -1977,10 +2012,11 @@ export interface components {
       /** @description What went wrong, in prose. */
       error: string;
       /** @enum {string} */
-      reason: "invalid" | "metadata-in-both";
+      reason: "invalid" | "malformed-body" | "metadata-in-both";
     };
     PlaceOrderRefusal: {
       error: string;
+      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
       reason: string;
       /** @description How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this. */
       workflow?: {
