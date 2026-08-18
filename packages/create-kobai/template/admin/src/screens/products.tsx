@@ -25,9 +25,9 @@ import { messageOf } from "@/lib/refusal";
 /**
  * The Products this Merchant has created (spec story 22).
  *
- * `GET /admin/products` is unpaginated and newest first, and this screen shows it as it
- * arrives. The envelope the API answers in is why pagination can be added beside the list
- * later rather than by breaking this.
+ * `GET /admin/products` answers newest first, a page at a time (ADR-0064), and this screen asks
+ * for no page and shows what arrives — **so it shows the first page and no more**. See the
+ * Orders screen for why that gap is left open here rather than closed.
  *
  * The form beneath it creates one. No acceptance criterion asks for creation, and it is here
  * because the criteria that *are* asked for cannot otherwise be seen: a Merchant on a fresh

@@ -44,6 +44,7 @@ import {
   setPrice,
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
+import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
@@ -142,6 +143,24 @@ const signInRoute = (Session: contract.SessionSchema) =>
 const CATALOG_INVALID_REQUEST = json(
   "The request does not fit this endpoint's schema, or is not JSON at all.",
   contract.CatalogRefusal,
+);
+
+/**
+ * The 400 every list route answers, and the only one any of them has.
+ *
+ * `InvalidRequest` rather than the family schema each list otherwise belongs to, because a
+ * paging parameter is the whole of what these three routes can refuse: they take no body, so
+ * there is no `malformed-body` to reach them and no Merchant's rule for them to break. It is
+ * one constant across three families for the same reason `PageQuery` is one schema — the three
+ * refuse the identical thing, and a client that learned it once has learned it everywhere.
+ *
+ * **A `limit` over the ceiling is here rather than clamped**, which is the decision ADR-0064
+ * makes and the reason this response exists at all: a caller that asked for 5,000 and received
+ * a hundred would read the short page as the end of the list.
+ */
+const PAGE_QUERY_INVALID = json(
+  `\`limit\` is not a whole number between 1 and ${MAX_PAGE_LIMIT}, or \`after\` is not a cursor this API issued. A \`limit\` above the ceiling is refused rather than reduced to it.`,
+  contract.InvalidRequest,
 );
 
 /**
@@ -270,12 +289,13 @@ const listProductsRoute = createRoute({
   method: "get",
   path: "/products",
   summary: "List Products",
-  description:
-    "Newest first, unpaginated. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { query: contract.PageQuery },
   responses: {
-    200: json("Every Product.", contract.ProductList),
+    200: json("A page of Products.", contract.ProductList),
+    400: PAGE_QUERY_INVALID,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     500: REFUSALS.serverError,
@@ -576,12 +596,13 @@ const listApiKeysRoute = createRoute({
   method: "get",
   path: "/api-keys",
   summary: "List API keys",
-  description:
-    "Newest first, unpaginated, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time.",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time. Pages exactly as the other lists do (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.apiKeyRead)] as const,
+  request: { query: contract.PageQuery },
   responses: {
-    200: json("Every API key, and whether it still works.", contract.ApiKeyList),
+    200: json("A page of API keys, and whether each still works.", contract.ApiKeyList),
+    400: PAGE_QUERY_INVALID,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     500: REFUSALS.serverError,
@@ -622,12 +643,13 @@ const listOrdersRoute = createRoute({
   method: "get",
   path: "/orders",
   summary: "List Orders",
-  description:
-    "Newest first, unpaginated, and without Line Items — open one for those. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time, and without Line Items — open one for those. Follow \`nextCursor\` for the next page: this is the list that takes an insert from every Order a storefront places, and a cursor is what makes paging it during a busy hour show each Order exactly once (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.orderRead)] as const,
+  request: { query: contract.PageQuery },
   responses: {
-    200: json("Every Order this Store has taken.", contract.OrderList),
+    200: json("A page of the Orders this Store has taken.", contract.OrderList),
+    400: PAGE_QUERY_INVALID,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     500: REFUSALS.serverError,
@@ -732,7 +754,10 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(listProductsRoute, async (c) => {
-    return c.json({ products: await listProducts(deps.db) }, 200);
+    const page = await listProducts(deps.db, c.req.valid("query"));
+    // `undefined` rather than `null`, and `JSON.stringify` drops the key — which is the wire
+    // shape ADR-0064 asks for: absent means there is no further page.
+    return c.json({ products: page.items, nextCursor: page.nextCursor }, 200);
   });
 
   guarded.openapi(readProductRoute, async (c) => {
@@ -793,7 +818,8 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(listOrdersRoute, async (c) => {
-    return c.json({ orders: await listOrders(deps.db) }, 200);
+    const page = await listOrders(deps.db, c.req.valid("query"));
+    return c.json({ orders: page.items, nextCursor: page.nextCursor }, 200);
   });
 
   guarded.openapi(readOrderRoute, async (c) => {
@@ -818,7 +844,8 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(listApiKeysRoute, async (c) => {
-    return c.json({ apiKeys: await listApiKeys(deps.db) }, 200);
+    const page = await listApiKeys(deps.db, c.req.valid("query"));
+    return c.json({ apiKeys: page.items, nextCursor: page.nextCursor }, 200);
   });
 
   guarded.openapi(revokeApiKeyRoute, async (c) => {

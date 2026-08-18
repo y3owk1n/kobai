@@ -247,14 +247,28 @@ export interface paths {
   "/admin/products": {
     /**
      * List Products
-     * @description Newest first, unpaginated. The envelope is why pagination can arrive beside the list rather than by breaking this response.
+     * @description Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064).
      */
     get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
       responses: {
-        /** @description Every Product. */
+        /** @description A page of Products. */
         200: {
           content: {
             "application/json": components["schemas"]["ProductList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -773,14 +787,28 @@ export interface paths {
   "/admin/orders": {
     /**
      * List Orders
-     * @description Newest first, unpaginated, and without Line Items — open one for those. The envelope is why pagination can arrive beside the list rather than by breaking this response.
+     * @description Newest first, 20 at a time, and without Line Items — open one for those. Follow `nextCursor` for the next page: this is the list that takes an insert from every Order a storefront places, and a cursor is what makes paging it during a busy hour show each Order exactly once (ADR-0064).
      */
     get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
       responses: {
-        /** @description Every Order this Store has taken. */
+        /** @description A page of the Orders this Store has taken. */
         200: {
           content: {
             "application/json": components["schemas"]["OrderList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -865,14 +893,28 @@ export interface paths {
   "/admin/api-keys": {
     /**
      * List API keys
-     * @description Newest first, unpaginated, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time.
+     * @description Newest first, 20 at a time, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time. Pages exactly as the other lists do (ADR-0064).
      */
     get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
       responses: {
-        /** @description Every API key, and whether it still works. */
+        /** @description A page of API keys, and whether each still works. */
         200: {
           content: {
             "application/json": components["schemas"]["ApiKeyList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -1775,6 +1817,8 @@ export interface components {
     };
     ProductList: {
       products: components["schemas"]["Product"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
     };
     UpdateVariantRequest: {
       /** @description A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused. */
@@ -1801,6 +1845,8 @@ export interface components {
     };
     OrderList: {
       orders: components["schemas"]["OrderSummary"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
     };
     OrderSummary: {
       /** Format: uuid */
@@ -1937,6 +1983,8 @@ export interface components {
     };
     ApiKeyList: {
       apiKeys: components["schemas"]["ApiKeySummary"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
     };
     ApiKeySummary: {
       /** Format: uuid */

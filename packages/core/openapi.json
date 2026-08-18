@@ -655,6 +655,10 @@
             "items": {
               "$ref": "#/components/schemas/Product"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one."
           }
         },
         "required": [
@@ -727,6 +731,10 @@
             "items": {
               "$ref": "#/components/schemas/OrderSummary"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one."
           }
         },
         "required": [
@@ -1124,6 +1132,10 @@
             "items": {
               "$ref": "#/components/schemas/ApiKeySummary"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one."
           }
         },
         "required": [
@@ -2149,19 +2161,54 @@
       },
       "get": {
         "summary": "List Products",
-        "description": "Newest first, unpaginated. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+        "description": "Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064).",
         "security": [
           {
             "merchantSession": []
           }
         ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list."
+            },
+            "required": false,
+            "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page."
+            },
+            "required": false,
+            "description": "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page.",
+            "name": "after",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Every Product.",
+            "description": "A page of Products.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProductList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequest"
                 }
               }
             }
@@ -2912,19 +2959,54 @@
     "/admin/orders": {
       "get": {
         "summary": "List Orders",
-        "description": "Newest first, unpaginated, and without Line Items — open one for those. The envelope is why pagination can arrive beside the list rather than by breaking this response.",
+        "description": "Newest first, 20 at a time, and without Line Items — open one for those. Follow `nextCursor` for the next page: this is the list that takes an insert from every Order a storefront places, and a cursor is what makes paging it during a busy hour show each Order exactly once (ADR-0064).",
         "security": [
           {
             "merchantSession": []
           }
         ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list."
+            },
+            "required": false,
+            "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page."
+            },
+            "required": false,
+            "description": "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page.",
+            "name": "after",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Every Order this Store has taken.",
+            "description": "A page of the Orders this Store has taken.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OrderList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequest"
                 }
               }
             }
@@ -3141,19 +3223,54 @@
       },
       "get": {
         "summary": "List API keys",
-        "description": "Newest first, unpaginated, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time.",
+        "description": "Newest first, 20 at a time, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time. Pages exactly as the other lists do (ADR-0064).",
         "security": [
           {
             "merchantSession": []
           }
         ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list."
+            },
+            "required": false,
+            "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page."
+            },
+            "required": false,
+            "description": "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page.",
+            "name": "after",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Every API key, and whether it still works.",
+            "description": "A page of API keys, and whether each still works.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiKeyList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequest"
                 }
               }
             }

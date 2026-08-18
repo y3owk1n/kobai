@@ -1,5 +1,13 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database, Queryable } from "../db/client.ts";
+import {
+  cursorAt,
+  type Page,
+  type PageRequest,
+  pageSize,
+  rowsAfter,
+  takePage,
+} from "../db/page.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
@@ -75,23 +83,42 @@ export type Product = {
 export type ProductDetail = Product & { readonly variants: readonly Variant[] };
 
 /**
- * Every Product, newest first — a Merchant listing them has just created one and is looking
- * for it.
+ * A page of Products, newest first — a Merchant listing them has just created one and is
+ * looking for it.
  *
- * Unpaginated, deliberately: a page parameter is an interface promise, and inventing one
- * before there is a Merchant with enough Products to need it would fix its shape by
- * guesswork. The list has an envelope (`{ products }`) precisely so pagination can arrive
- * beside it rather than by breaking the response.
+ * One page rather than all of them (ADR-0064), and located by a cursor rather than an offset:
+ * this is the list where an unbounded response hurts first, because a Merchant's catalog grows
+ * and nothing about the route said when to stop. `page.after` is the record the caller last
+ * saw, so a Product created since changes nothing about what follows it.
  */
-export async function listProducts(db: Database): Promise<Product[]> {
-  return (
-    db
-      .select({ id: product.id, title: product.title, metadata: product.metadata })
-      .from(product)
-      // `id` breaks the tie, so two Products created in the same instant still come back in
-      // one stable order rather than in whichever order Postgres happened to read them.
-      .orderBy(desc(product.createdAt), desc(product.id))
-  );
+export async function listProducts(
+  db: Database,
+  page: PageRequest,
+): Promise<Page<Product>> {
+  const rows = await db
+    .select({
+      id: product.id,
+      title: product.title,
+      metadata: product.metadata,
+      cursorAt: cursorAt(product.createdAt),
+    })
+    .from(product)
+    .where(rowsAfter(page, product.createdAt, product.id))
+    // `id` breaks the tie, so two Products created in the same instant still come back in
+    // one stable order rather than in whichever order Postgres happened to read them — and
+    // so that the cursor above names one row rather than a group of them.
+    .orderBy(desc(product.createdAt), desc(product.id))
+    .limit(pageSize(page));
+
+  const { rows: found, nextCursor } = takePage(rows, page);
+
+  // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
+  // response by being forgotten about — the same reason a Payment is rebuilt rather than
+  // spread. A Product reports three fields, and these are them.
+  return {
+    items: found.map((row) => ({ id: row.id, title: row.title, metadata: row.metadata })),
+    nextCursor,
+  };
 }
 
 /**

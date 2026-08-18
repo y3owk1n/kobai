@@ -33,6 +33,9 @@ import { messageOf } from "@/lib/refusal";
  * they could not name. Nothing in the list is presentable — only a digest of a key is
  * stored, so there is no value to show and no fragment of one is offered instead. `name` is
  * what tells two keys apart, which is why minting demands one.
+ *
+ * It asks for no page and shows what arrives, so it shows the first page and no more — see the
+ * Orders screen for why that gap is left open here rather than closed.
  */
 export function ApiKeys({ client }: { readonly client: KobaiClient }) {
   const [keys, setKeys] = useState<readonly ApiKeySummary[] | null>(null);

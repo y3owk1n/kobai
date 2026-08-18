@@ -1,5 +1,13 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import type { Queryable } from "../db/client.ts";
+import {
+  cursorAt,
+  type Page,
+  type PageRequest,
+  pageSize,
+  rowsAfter,
+  takePage,
+} from "../db/page.ts";
 import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { type Fulfilment, readFulfilmentsOf } from "../fulfilment/fulfilment.ts";
@@ -199,19 +207,25 @@ export type Order = OrderSummary & {
 };
 
 /**
- * Every Order, newest first — what the Admin lists (spec story 56).
+ * A page of Orders, newest first — what the Admin lists (spec story 56).
  *
- * Unpaginated, exactly as `listProducts` is and for the same reason: a page parameter is an
- * interface promise, and inventing one before there is a Store with enough Orders to need it
- * would fix its shape by guesswork. The envelope the route answers in (`{ orders }`) is what
- * lets pagination arrive beside the list rather than by breaking the response.
+ * **The list a cursor was decided for** (ADR-0064). This is the one table guaranteed both to
+ * grow without bound and to take concurrent inserts, from every `POST /store/orders` a
+ * storefront makes — so a Merchant paging through it during a busy hour is the ordinary case,
+ * and an offset would show them one Order twice and hide another with no error and no clue.
+ * `page.after` names the record the last page ended at, so an Order captured since is simply
+ * above the page being read.
  *
  * The Payments come back in a second query rather than a join, so that an Order with none is
  * an absence from a map rather than a row of nulls to interpret — and so that this reads the
- * same way {@link readOrder} does.
+ * same way {@link readOrder} does. It asks about the page's Orders rather than the table's,
+ * which is the other half of what paging is for.
  */
-export async function listOrders(db: Queryable): Promise<OrderSummary[]> {
-  const rows = await db
+export async function listOrders(
+  db: Queryable,
+  page: PageRequest,
+): Promise<Page<OrderSummary>> {
+  const fetched = await db
     .select({
       id: order.id,
       number: order.number,
@@ -220,13 +234,21 @@ export async function listOrders(db: Queryable): Promise<OrderSummary[]> {
       currency: order.currency,
       total: order.total,
       createdAt: order.createdAt,
+      cursorAt: cursorAt(order.createdAt),
     })
     .from(order)
+    .where(rowsAfter(page, order.createdAt, order.id))
     // `id` breaks the tie, so two Orders captured in the same instant still come back in one
-    // stable order rather than in whichever order Postgres happened to read them.
-    .orderBy(desc(order.createdAt), desc(order.id));
+    // stable order rather than in whichever order Postgres happened to read them — and so that
+    // a cursor cut from the last of them names one row rather than a group of them.
+    .orderBy(desc(order.createdAt), desc(order.id))
+    .limit(pageSize(page));
 
-  if (rows.length === 0) return [];
+  const { rows, nextCursor } = takePage(fetched, page);
+  // Only to skip the second query, so the cursor still travels: an empty page carries no
+  // cursor *today*, because nothing was filtered out on the way — and the day one of these
+  // routes filters, that is exactly the page `nextCursor` has to keep speaking for.
+  if (rows.length === 0) return { items: [], nextCursor };
 
   const payments = await db
     .select(paymentColumns)
@@ -239,15 +261,18 @@ export async function listOrders(db: Queryable): Promise<OrderSummary[]> {
     );
   const taken = new Map(payments.map((row) => [row.orderId, paymentOf(row)]));
 
-  return rows.map((row) => ({
-    id: row.id,
-    number: row.number,
-    shopper: shopperOf(row),
-    currency: row.currency,
-    total: row.total,
-    payment: taken.get(row.id) ?? null,
-    createdAt: row.createdAt.toISOString(),
-  }));
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      number: row.number,
+      shopper: shopperOf(row),
+      currency: row.currency,
+      total: row.total,
+      payment: taken.get(row.id) ?? null,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    nextCursor,
+  };
 }
 
 /**
