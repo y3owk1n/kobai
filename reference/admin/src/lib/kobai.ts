@@ -1,4 +1,5 @@
-import { createKobaiClient, type KobaiClient } from "@kobai/client";
+import { createKobaiClient, type KobaiClient, type SessionRefusal } from "@kobai/client";
+import { knownReasonOf } from "@/lib/refusal";
 
 /**
  * The Admin's only door to kobai, and the only module in it that reaches the network.
@@ -30,18 +31,23 @@ import { createKobaiClient, type KobaiClient } from "@kobai/client";
  */
 
 /** Why the admin gate turned a request back. The four have four different fixes. */
-export type SessionEnded =
-  | "session-missing"
-  | "session-malformed"
-  | "session-unknown"
-  | "session-expired";
+export type SessionEnded = SessionRefusal["reason"];
 
-const SESSION_ENDED: readonly SessionEnded[] = [
-  "session-missing",
-  "session-malformed",
-  "session-unknown",
-  "session-expired",
-];
+/**
+ * The same four as a value, because a membership test needs one and a type is not one.
+ *
+ * Keyed by the union rather than listed in an array: **a fifth way for the gate to refuse has
+ * no key here and does not compile**, which is the convention `lib/refusal.ts` explains at
+ * length and ADR-0063 asks of every closed family the Admin reads. It used to be four strings
+ * typed as `SessionEnded[]`, which would have gone on compiling — and gone on quietly failing
+ * to notice the fifth — for as long as the four it did list stayed spelled the same.
+ */
+const SESSION_ENDED: Record<SessionEnded, true> = {
+  "session-missing": true,
+  "session-malformed": true,
+  "session-unknown": true,
+  "session-expired": true,
+};
 
 /**
  * A client for the admin surface, watching for the session ending underneath it.
@@ -93,6 +99,5 @@ async function refusalReason(response: Response): Promise<SessionEnded | undefin
     .clone()
     .json()
     .catch(() => undefined);
-  if (typeof body !== "object" || body === null || !("reason" in body)) return undefined;
-  return SESSION_ENDED.find((known) => known === body.reason);
+  return knownReasonOf(body, SESSION_ENDED);
 }

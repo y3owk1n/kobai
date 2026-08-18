@@ -99,6 +99,14 @@ async function productionClosure(): Promise<Set<string>> {
  * installed packages, so asking whether the image installed one answers nothing either way;
  * in a generated Project `@kobai/client` is a legitimate build input of the Admin and its
  * presence would not be evidence of a failed prune.
+ *
+ * **The production closure is subtracted too**, for the same reason {@link devOnlyDependencies}
+ * subtracts it and with the same consequence if it did not: a package can be the Admin's build
+ * input *and* something the Node process needs, and then its presence in the image is correct.
+ * `zod` is the one that showed this — #174 gave the Admin's forms zod schemas mirroring
+ * `contract.ts`'s structure, and `zod` is already a production dependency of `@kobai/core`, so
+ * an image that had genuinely pruned every build tool would still carry it. A check that
+ * flagged it would be answered by deleting the check.
  */
 export async function adminBuildTooling(manifestPath: string): Promise<string[]> {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
@@ -113,5 +121,6 @@ export async function adminBuildTooling(manifestPath: string): Promise<string[]>
     );
   }
 
-  return declared.filter((name) => !name.startsWith("@kobai/"));
+  const production = await productionClosure();
+  return declared.filter((name) => !name.startsWith("@kobai/") && !production.has(name));
 }

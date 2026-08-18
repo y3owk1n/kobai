@@ -32,14 +32,21 @@ const description = new URL("../packages/core/openapi.json", import.meta.url);
  *
  * `import` is not among them: Vite resolves a module graph at build time and the result is
  * part of the bundle, not a call to kobai. Everything here is a runtime request.
+ *
+ * Patterns rather than substrings, because of the one that needs a boundary: `fetch(` as a
+ * substring is also inside TanStack Query's `refetch()`, which the Admin calls to re-read a
+ * query it already has (#174). So `fetch` is matched only where nothing word-like precedes
+ * it — which still catches `window.fetch(` and `globalThis.fetch(`, since a `.` is not a word
+ * character, and stops the scan reporting a cache API as a network primitive. Narrowing what
+ * counts as a `fetch`, not what counts as a violation.
  */
-const NETWORK_PRIMITIVES = [
-  "fetch(",
-  "XMLHttpRequest",
-  "EventSource",
-  "WebSocket",
-  "sendBeacon",
-  "navigator.serviceWorker",
+const NETWORK_PRIMITIVES: readonly { readonly name: string; readonly found: RegExp }[] = [
+  { name: "fetch(", found: /(?<![\w$])fetch\(/ },
+  { name: "XMLHttpRequest", found: /XMLHttpRequest/ },
+  { name: "EventSource", found: /EventSource/ },
+  { name: "WebSocket", found: /WebSocket/ },
+  { name: "sendBeacon", found: /sendBeacon/ },
+  { name: "navigator.serviceWorker", found: /navigator\.serviceWorker/ },
 ];
 
 /** The one import in the Admin that is allowed to produce something network-capable. */
@@ -77,8 +84,8 @@ describe("the Admin's only route to kobai", () => {
     const files = await adminSourceFiles();
 
     const offenders = files.flatMap((file) =>
-      NETWORK_PRIMITIVES.filter((primitive) => file.text.includes(primitive)).map(
-        (primitive) => `${file.path} uses ${primitive}`,
+      NETWORK_PRIMITIVES.filter((primitive) => primitive.found.test(file.text)).map(
+        (primitive) => `${file.path} uses ${primitive.name}`,
       ),
     );
 

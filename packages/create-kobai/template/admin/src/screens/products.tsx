@@ -1,5 +1,16 @@
-import type { KobaiClient, Product } from "@kobai/client";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { PackageIcon } from "lucide-react";
+import type { ComponentProps } from "react";
+import { type UseFormReturn, useForm } from "react-hook-form";
+import { z } from "zod";
+import { LinkButton } from "@/components/link-button";
+import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,8 +21,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -20,66 +40,89 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { messageOf } from "@/lib/refusal";
+import { catalogReasonOf, orThrow, problemOf, Refused } from "@/lib/refusal";
+import { useKobaiClient } from "@/lib/session";
 
 /**
- * The Products this Merchant has created (spec story 22).
+ * The Products this Merchant has created (spec story 22), a page at a time.
  *
- * `GET /admin/products` answers newest first, a page at a time (ADR-0064), and this screen asks
- * for no page and shows what arrives — **so it shows the first page and no more**. See the
- * Orders screen for why that gap is left open here rather than closed.
+ * `GET /admin/products` answers newest first and pages by cursor (ADR-0064), and **the cursor
+ * this page was asked for is in the URL** — so a page is a link, a refresh lands on it, and the
+ * back button walks back through the pages. `components/pager.tsx` owns that; this screen owns
+ * what a page of Products looks like.
  *
- * The form beneath it creates one. No acceptance criterion asks for creation, and it is here
- * because the criteria that *are* asked for cannot otherwise be seen: a Merchant on a fresh
- * deployment would have to reach for `curl` before the Admin could list anything, price
- * anything, or show a resolved price differing from an entered one. It is two ordinary calls
- * — `POST /admin/products` then `POST /admin/variants/{id}/prices` — and nothing else.
+ * Everything is read through TanStack Query, keyed by the cursor, so paging back is the cache
+ * answering rather than a second round trip. There is no optimistic update anywhere in this
+ * Admin (ADR-0063): creating a Product invalidates the list and the list is re-read, because
+ * what a Product looks like once kobai has it — its identifier, its Variants — is kobai's
+ * answer and not something a browser can predict correctly.
  */
-export function Products({
-  client,
-  onOpen,
-}: {
-  readonly client: KobaiClient;
-  readonly onOpen: (id: string) => void;
-}) {
-  const [products, setProducts] = useState<readonly Product[] | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+const PRODUCTS = "products";
 
-  const load = useCallback(async () => {
-    const { data, error } = await client.GET("/admin/products");
-    if (data) {
-      setProducts(data.products);
-      setProblem(null);
-      return;
-    }
-    setProblem(messageOf(error, "The Products could not be read."));
-  }, [client]);
+export function Products() {
+  const client = useKobaiClient();
+  const after = usePageCursor();
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const page = useQuery({
+    // The cursor is part of the key, so each page is cached as itself.
+    queryKey: [PRODUCTS, after ?? null],
+    queryFn: async () =>
+      orThrow(
+        await client.GET("/admin/products", {
+          // `after` is omitted rather than sent empty for the first page: an empty string is
+          // not a cursor kobai issued, and it is refused as one.
+          params: { query: after === undefined ? {} : { after } },
+        }),
+      ),
+    // The previous page stays on screen while the next one is fetched, so moving through a
+    // list is a spinner over what you were reading rather than the whole table disappearing.
+    placeholderData: keepPreviousData,
+  });
+
+  const products = page.data?.products;
 
   return (
     <div className="grid gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Products</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            Products
+            {/* A refetch, which is a different thing from a first load — and the first load
+                has a skeleton of its own below. */}
+            {page.isFetching && !page.isPending ? <Spinner /> : null}
+          </CardTitle>
           <CardDescription>
-            Everything this Store sells. Open one to see its Variant, its Price, and the
-            price a storefront would receive.
+            Everything this Store sells, newest first. Open one to see its Variant, its
+            Price, and the price a storefront would receive.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Problem problem={problem} />
-          {products === null && problem === null ? (
-            <p className="text-muted-foreground text-sm">Reading the catalog…</p>
+          <Problem
+            problem={
+              page.isError
+                ? problemOf(page.error, "The Products could not be read.")
+                : null
+            }
+          />
+
+          {page.isPending ? <ProductsLoading /> : null}
+
+          {products !== undefined && products.length === 0 ? (
+            <Empty className="border">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <PackageIcon />
+                </EmptyMedia>
+                <EmptyTitle>No Products yet</EmptyTitle>
+                <EmptyDescription>
+                  Nothing is for sale until a Product exists. Create one below — a title,
+                  a SKU and a Price is the thinnest sellable thing.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : null}
-          {products !== null && products.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              No Products yet. Create one below.
-            </p>
-          ) : null}
-          {products !== null && products.length > 0 ? (
+
+          {products !== undefined && products.length > 0 ? (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -92,75 +135,131 @@ export function Products({
                   <TableRow key={product.id}>
                     <TableCell className="font-medium">{product.title}</TableCell>
                     <TableCell>
-                      <Button
+                      <LinkButton
+                        to={`/products/${product.id}`}
                         size="sm"
                         variant="outline"
-                        onClick={() => onOpen(product.id)}
                       >
                         Open
-                      </Button>
+                      </LinkButton>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           ) : null}
+
+          <Pager nextCursor={page.data?.nextCursor} label="Products" />
         </CardContent>
       </Card>
 
-      <NewProduct client={client} onCreated={() => void load()} />
+      <NewProduct />
     </div>
   );
 }
 
-function NewProduct({
-  client,
-  onCreated,
-}: {
-  readonly client: KobaiClient;
-  readonly onCreated: () => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [sku, setSku] = useState("");
-  const [amount, setAmount] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+/**
+ * A page of Products, before there is one.
+ *
+ * A skeleton in the shape of the table it is standing in for, rather than the words "Reading
+ * the catalog…" this screen used to show. Both say "wait"; only one says how much is coming.
+ */
+function ProductsLoading() {
+  return (
+    <div className="grid gap-3" role="status" aria-label="Reading the Products">
+      {["first", "second", "third"].map((row) => (
+        <Skeleton key={row} className="h-9 w-full" />
+      ))}
+    </div>
+  );
+}
 
-  async function submit(event: FormEvent): Promise<void> {
-    event.preventDefault();
-    setBusy(true);
-    setProblem(null);
+/**
+ * The shape of the form, and **only** the shape.
+ *
+ * It mirrors `contract.ts`'s structure — that a title and a SKU are strings, that an amount is
+ * a whole number of minor units — and re-implements no rule (ADR-0063). Whether that SKU is
+ * already taken, whether this Store prices in that currency, whether the amount is one kobai
+ * will accept: every one of those lives in Core, may change there, and arrives here as a
+ * refusal. A schema that guessed at them would be a second, stale copy of Core's rules that a
+ * Merchant could not appeal.
+ *
+ * `min(1)` on the two strings is the field being **required** — what the `required` attribute
+ * said before there was a schema — and not a claim about what kobai will accept.
+ *
+ * The amount is parsed rather than coerced from a blank: an `<input>` hands over a string, so
+ * an empty one has to be caught before `Number("")` turns it into a free Product.
+ */
+const NewProductForm = z.object({
+  title: z.string().min(1, "A Product needs a title."),
+  sku: z.string().min(1, "A Variant is identified by its SKU, so it needs one."),
+  amount: z
+    .string()
+    .min(1, "A Price is a whole number of minor units — 1250 is 12.50.")
+    .transform((typed) => Number(typed))
+    .pipe(
+      z
+        .number("A Price is a whole number of minor units — 1250 is 12.50.")
+        .int("Minor units are whole: 1250, not 12.50."),
+    ),
+});
 
-    // A Product and its Variants are created together: a Product with no Variant is not a
-    // state the API can produce, because a Product is never sellable in itself (ADR-0008).
-    const created = await client.POST("/admin/products", {
-      body: { title, variants: [{ sku }] },
-    });
-    const variant = created.data?.variants[0];
+type NewProductInput = z.input<typeof NewProductForm>;
+type NewProductValues = z.output<typeof NewProductForm>;
 
-    if (!created.data || !variant) {
-      setProblem(messageOf(created.error, "The Product could not be created."));
-      setBusy(false);
-      return;
-    }
+/**
+ * A Product that was created and then not priced.
+ *
+ * Creating one is two calls — a Product with its Variant, then a Price on that Variant — and
+ * the second failing leaves a real Product in the catalog with nothing to sell it at. That is
+ * a different sentence from "the Product could not be created", so it is a different type; it
+ * extends {@link Refused} so the refusal it carries still narrows like any other.
+ */
+class NotPriced extends Refused {}
 
-    // A Price is a row on the Variant, added second and separately — which is what makes a
-    // sale price or a second currency more rows later rather than a migration (ADR-0008).
-    const priced = await client.POST("/admin/variants/{id}/prices", {
-      params: { path: { id: variant.id } },
-      body: { amount: Number(amount) },
-    });
-    if (!priced.data) {
-      setProblem(messageOf(priced.error, "The Product was created but not priced."));
-    } else {
-      setTitle("");
-      setSku("");
-      setAmount("");
-    }
+/**
+ * Creating the thinnest sellable thing.
+ *
+ * No acceptance criterion asks for creation, and it is here because the criteria that *are*
+ * asked for cannot otherwise be seen: a Merchant on a fresh deployment would have to reach for
+ * `curl` before the Admin could list anything, price anything, or show a resolved price
+ * differing from an entered one.
+ */
+function NewProduct() {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
 
-    setBusy(false);
-    onCreated();
-  }
+  const form = useForm<NewProductInput, unknown, NewProductValues>({
+    resolver: zodResolver(NewProductForm),
+    defaultValues: { title: "", sku: "", amount: "" },
+  });
+
+  const create = useMutation({
+    mutationFn: async ({ title, sku, amount }: NewProductValues) => {
+      // A Product and its Variants are created together: a Product with no Variant is not a
+      // state the API can produce, because a Product is never sellable in itself (ADR-0008).
+      const product = orThrow(
+        await client.POST("/admin/products", { body: { title, variants: [{ sku }] } }),
+      );
+
+      const variant = product.variants[0];
+      if (!variant) throw new Error("kobai created a Product with no Variant.");
+
+      // A Price is a row on the Variant, added second and separately — which is what makes a
+      // sale price or a second currency more rows later rather than a migration (ADR-0008).
+      const priced = await client.POST("/admin/variants/{id}/prices", {
+        params: { path: { id: variant.id } },
+        body: { amount },
+      });
+      if (priced.error !== undefined) throw new NotPriced(priced.error);
+
+      return product;
+    },
+    onSuccess: () => form.reset(),
+    // Whichever half failed, a Product may now exist — so the list is re-read either way, and
+    // it is re-read rather than patched in place, which is what "no optimistic updates" means.
+    onSettled: () => queries.invalidateQueries({ queryKey: [PRODUCTS] }),
+  });
 
   return (
     <Card>
@@ -170,45 +269,128 @@ function NewProduct({
           One Product, one Variant, one Price — the thinnest sellable thing.
         </CardDescription>
       </CardHeader>
-      <form onSubmit={submit}>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
-          <Problem problem={problem} className="sm:col-span-3" />
-          <div className="grid gap-1.5">
-            <Label htmlFor="title">Title</Label>
-            <Input
-              id="title"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              required
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="sku">SKU</Label>
-            <Input
-              id="sku"
-              value={sku}
-              onChange={(event) => setSku(event.target.value)}
-              required
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="amount">Price, in minor units</Label>
-            <Input
-              id="amount"
-              inputMode="numeric"
-              placeholder="1250"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-              required
-            />
-          </div>
+      <form onSubmit={form.handleSubmit((values) => create.mutate(values))}>
+        <CardContent className="grid gap-4 sm:grid-cols-3">
+          <Problem
+            className="sm:col-span-3"
+            problem={create.isError ? whyNotCreated(create.error) : null}
+          />
+
+          <NewProductField form={form} name="title" label="Title" />
+          <NewProductField form={form} name="sku" label="SKU" />
+          <NewProductField
+            form={form}
+            name="amount"
+            label="Price, in minor units"
+            inputMode="numeric"
+            placeholder="1250"
+          />
         </CardContent>
         <CardFooter className="mt-4">
-          <Button type="submit" disabled={busy}>
+          <Button type="submit" disabled={create.isPending}>
+            {create.isPending ? <Spinner /> : null}
             Create
           </Button>
         </CardFooter>
       </form>
     </Card>
   );
+}
+
+/**
+ * One field of the New Product form: a label, an input, and whatever the schema said about it.
+ *
+ * The three were the same eight lines three times over, and the shape is what the next form in
+ * this Admin should copy — `Field` is shadcn's, `FieldError` reads react-hook-form's error
+ * objects as they come, and the invalid state is set in both the places that need it: `Field`
+ * colours itself from `data-invalid`, and the `Input` announces itself with `aria-invalid`.
+ *
+ * The `id` carries the form's name as well as the field's, because an `id` is unique to the
+ * document rather than to the form it is in — a second form on this screen with its own "title"
+ * would otherwise point its label at this input.
+ */
+function NewProductField({
+  form,
+  name,
+  label,
+  ...input
+}: {
+  readonly form: UseFormReturn<NewProductInput, unknown, NewProductValues>;
+  readonly name: keyof NewProductInput;
+  readonly label: string;
+  // `form` is HTML's own attribute on an `<input>` as well as react-hook-form's object, and
+  // the two would otherwise collide into `never`. An input inside a `<form>` needs no such
+  // attribute; the one here is the hook's.
+} & Omit<ComponentProps<typeof Input>, "id" | "name" | "form">) {
+  const error = form.formState.errors[name];
+  const id = `new-product-${name}`;
+
+  return (
+    <Field data-invalid={error !== undefined}>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Input
+        id={id}
+        aria-invalid={error !== undefined}
+        {...input}
+        {...form.register(name)}
+      />
+      <FieldError errors={[error]} />
+    </Field>
+  );
+}
+
+/**
+ * Why kobai turned the creation back, in words a Merchant can act on.
+ *
+ * **Every `reason` `CatalogRefusal` carries has an arm here, and the `never` at the bottom is
+ * what makes that true** — a reason added to that family in Core reddens this build in the
+ * same commit rather than falling through to a message that no longer fits (ADR-0063). That is
+ * the value of the exhaustiveness; it is not that every reason deserves its own copy. Most of
+ * these cannot arrive at this form at all — it sends no currency, names no Fulfilment Strategy
+ * and deletes nothing — so they show the prose kobai itself sent, which is what a refusal from
+ * a route this screen did not expect should say.
+ *
+ * Nothing here is *predicted*: the form is submitted and the answer is rendered. Asking whether
+ * a SKU is free before submitting would put a rule in the Admin that lives in Core, and Core
+ * may change it — or a Developer's Project may already have, through a replaced Step.
+ */
+function whyNotCreated(thrown: unknown): string {
+  const fallback =
+    thrown instanceof NotPriced
+      ? "The Product was created, but the Price was not."
+      : "The Product could not be created.";
+
+  const reason = catalogReasonOf(thrown);
+
+  switch (reason) {
+    case "sku-taken":
+      return "Another Variant already carries that SKU. A SKU is what identifies a Variant, so this one needs its own.";
+
+    case "invalid":
+    case "malformed-body":
+      // kobai's own prose names the field, which is more than this screen knows.
+      return problemOf(thrown, fallback);
+
+    case "unsupported-currency":
+    case "unknown-fulfilment-strategy":
+    case "product-not-found":
+    case "variant-not-found":
+    case "price-not-found":
+    case "last-variant":
+    case "stock-is-reserved":
+      // Not reachable from this form as it stands. Reported as kobai said it rather than as a
+      // sentence written here for a case nobody has seen.
+      return problemOf(thrown, fallback);
+
+    case undefined:
+      // A 500, which carries no `reason` on purpose, or the network being gone.
+      return fallback;
+
+    default: {
+      // Unreachable, and it is the compiler that says so: a `reason` with no arm above lands
+      // here, and `never` does not accept it.
+      const unreached: never = reason;
+      return unreached;
+    }
+  }
 }
