@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import {
   createTestKobai,
@@ -121,10 +120,13 @@ describe("a path no route serves", () => {
     // `requirePermission` answers before the handler ever looks (ADR-0027).
     await using kobai = await createTestKobai();
     const owner = await signInTestMerchant(kobai);
-    // A Role holding nothing at all. Roles are rows, so a narrower one is a row.
-    await kobai.db.execute(
-      sql`insert into core_role (name, permissions) values ('bookkeeper', array[]::text[])`,
-    );
+    // A Role holding nothing at all, made the way a Merchant makes one (#173).
+    const role = await kobai.request("/admin/roles", {
+      method: "POST",
+      headers: { ...owner.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "bookkeeper", permissions: [] }),
+    });
+    expect(role.status, "creating the bookkeeper Role").toBe(201);
     const credentials = {
       email: "books@example.test",
       password: "a bookkeeper's very long password",

@@ -412,10 +412,10 @@ describe("the admin surface has no unauthenticated write path", () => {
       });
     }
 
-    // A sweep that found nothing would pass every assertion made over it. Twenty-one is every
+    // A sweep that found nothing would pass every assertion made over it. Twenty-seven is every
     // admin operation but `POST /admin/session`; the number moving is a route being added or
     // removed, which is exactly when somebody should look at this file.
-    expect(operations).toHaveLength(21);
+    expect(operations).toHaveLength(27);
     // …and every one of them is refused on a deployment that has no Merchant at all, which
     // is the state the old anonymous path existed for.
     const [row] = await kobai.database.query<{ count: string }>(
@@ -945,11 +945,14 @@ describe("permissions gate the endpoint", () => {
   it("refuses a Role that does not hold the permission, while its session stays valid", async () => {
     kobai = await createTestKobai();
     const owner = await signInTestMerchant(kobai);
-    // A Role holding nothing at all. Roles are rows, so a narrower one is a row — not a
-    // different mechanism.
-    await kobai.db.execute(
-      sql`insert into core_role (name, permissions) values ('bookkeeper', array[]::text[])`,
+    // A Role holding nothing at all, made the way a Merchant makes one (#173). It used to be
+    // written with `insert into core_role`, which was the finding rather than the shortcut:
+    // ADR-0027's model was real in the schema and reachable from nowhere else.
+    const role = await kobai.request(
+      "/admin/roles",
+      json({ name: "bookkeeper", permissions: [] }, owner.headers),
     );
+    expect(role.status, "creating the bookkeeper Role").toBe(201);
     await kobai.request(
       "/admin/merchants",
       json(
@@ -980,9 +983,11 @@ describe("permissions gate the endpoint", () => {
   it("refuses the route that adds a colleague to a Role without merchant:write", async () => {
     kobai = await createTestKobai();
     const owner = await signInTestMerchant(kobai);
-    await kobai.db.execute(
-      sql`insert into core_role (name, permissions) values ('bookkeeper', array[]::text[])`,
+    const role = await kobai.request(
+      "/admin/roles",
+      json({ name: "bookkeeper", permissions: [] }, owner.headers),
     );
+    expect(role.status, "creating the bookkeeper Role").toBe(201);
     await kobai.request(
       "/admin/merchants",
       json(

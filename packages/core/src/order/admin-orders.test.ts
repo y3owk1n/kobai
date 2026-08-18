@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
@@ -265,10 +264,16 @@ describe("reading the books is its own Permission", () => {
 
     // The colleague this Permission exists for: they keep the catalog, and what every Shopper
     // paid is none of their business. A Role is a row and a narrower one is a narrower row
-    // (ADR-0027) — no rule about *which* Orders, anywhere.
-    await kobai.db.execute(
-      sql`insert into core_role (name, permissions) values ('merchandiser', array['catalog:read', 'catalog:write']::text[])`,
-    );
+    // (ADR-0027) — no rule about *which* Orders, anywhere. Made the way a Merchant makes one
+    // since #173, rather than with `insert into core_role`.
+    await kobai.request("/admin/roles", {
+      method: "POST",
+      headers: { ...owner.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "merchandiser",
+        permissions: [PERMISSIONS.catalogRead, PERMISSIONS.catalogWrite],
+      }),
+    });
     await kobai.request("/admin/merchants", {
       method: "POST",
       headers: { ...owner.headers, "content-type": "application/json" },

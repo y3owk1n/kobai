@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import {
@@ -235,10 +234,13 @@ describe("the catalog is behind the Merchant session", () => {
     async ({ method, path, permission }) => {
       kobai = await createTestKobai();
       const owner = await merchantHeaders(kobai);
-      // A Role holding nothing at all. Roles are rows, so a narrower one is a row.
-      await kobai.db.execute(
-        sql`insert into core_role (name, permissions) values ('bookkeeper', array[]::text[])`,
-      );
+      // A Role holding nothing at all, made the way a Merchant makes one (#173).
+      const role = await kobai.request("/admin/roles", {
+        method: "POST",
+        headers: owner,
+        body: JSON.stringify({ name: "bookkeeper", permissions: [] }),
+      });
+      expect(role.status, "creating the bookkeeper Role").toBe(201);
       await kobai.request("/admin/merchants", {
         method: "POST",
         headers: owner,

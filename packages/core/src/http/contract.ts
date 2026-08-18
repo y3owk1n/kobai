@@ -1,6 +1,7 @@
 import { z } from "@hono/zod-openapi";
 import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
 import type { MerchantCreation } from "../auth/merchant.ts";
+import type { RoleCreation, RoleDeletion, RoleUpdate } from "../auth/role.ts";
 import type { SessionPolicy, SessionRejection } from "../auth/session.ts";
 import type { CartRefusal as CartRefusalReason } from "../cart/write.ts";
 import type {
@@ -514,6 +515,114 @@ export const MerchantRefusal = z
     }),
   })
   .openapi("MerchantRefusal");
+
+/**
+ * The list, in an envelope — the Merchants of this deployment, and how to ask for the rest.
+ *
+ * Each carries the Role it holds rather than an identifier for one, because *who has access*
+ * is the question this list is asked: a client that had to fetch a Role per row would be
+ * asking it twice.
+ */
+export const MerchantList = z
+  .object({ merchants: z.array(Merchant).readonly(), nextCursor: NextCursor })
+  .openapi("MerchantList");
+
+/**
+ * A Role as this surface reports it — the name a Merchant is created against, and what it
+ * carries (ADR-0027).
+ *
+ * `permissions` is an array of plain strings and is **not** an enum of Core's own. Closing it
+ * would contradict {@link RoleSummary}'s description one field away, which already promises
+ * that a deployment may hold a Permission this build has never heard of, and would foreclose
+ * a Plugin-supplied Permission before anybody has designed one (ADR-0066).
+ */
+export const Role = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    permissions: z.array(z.string()).readonly().meta({
+      description:
+        "What a Merchant holding this Role may do. Core's own are listed in `PermissionDenied.required`'s description; a word Core does not know is stored and answered back unchanged, so a Plugin's Permission is a string like any other.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("Role");
+
+export const RoleList = z
+  .object({ roles: z.array(Role).readonly(), nextCursor: NextCursor })
+  .openapi("RoleList");
+
+export const CreateRoleRequest = z
+  .object({
+    name: z.string().meta({
+      description:
+        "How a Merchant is created against this Role, so no two Roles may share one.",
+    }),
+    permissions: z.array(z.string()).optional().meta({
+      description:
+        "Defaults to none, which is a Role that can sign in and reach nothing. Each entry must be a non-empty string and nothing more is checked — an unknown word is preserved rather than refused.",
+    }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("CreateRoleRequest");
+
+/**
+ * What a Merchant may change about a Role that already exists.
+ *
+ * The same `PATCH` {@link UpdateProductRequest} and {@link UpdateVariantRequest} are: **every
+ * field is optional and each one absent means "leave it"**, a named `metadata` **replaces**
+ * what is stored, and a body naming none of them is refused rather than answered with the row
+ * unchanged.
+ *
+ * A named `permissions` replaces the whole set, because a set is what it is — there is
+ * deliberately no add-one and no remove-one, which would be two more spellings of this field
+ * and each would need its own answer to the lockout below.
+ */
+export const UpdateRoleRequest = z
+  .object({
+    name: z.string().optional().meta({
+      description:
+        "A new name for this Role. Merchants hold a Role by identifier, so renaming one moves every Merchant with it; what it breaks is a `POST /admin/merchants` that names the old one.",
+    }),
+    permissions: z.array(z.string()).optional().meta({
+      description:
+        "Replaces the whole set rather than adding to it. It takes effect on the next request every Merchant holding this Role makes — a Role is read on each one, not cached into the session.",
+    }),
+    metadata: Metadata.optional().meta({
+      description: "Replaces what is stored rather than merging into it.",
+    }),
+  })
+  .openapi("UpdateRoleRequest");
+
+/**
+ * Every way a Role can be refused, as a closed set.
+ *
+ * `last-administrator` is the one refusal on this surface that is about rows the request never
+ * named: it is answered when a change would leave no Merchant holding `merchant:write`, which
+ * is a deployment with no way back into itself (ADR-0066).
+ */
+const ROLE_REASONS = {
+  ...REQUEST_REASONS,
+  "role-not-found": "role-not-found",
+  "role-name-taken": "role-name-taken",
+  "role-in-use": "role-in-use",
+  "last-administrator": "last-administrator",
+} as const satisfies {
+  [R in
+    | Refused<RoleCreation>
+    | Refused<RoleUpdate>
+    | Refused<RoleDeletion>
+    | RequestReason]: R;
+};
+
+export const RoleRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(ROLE_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("RoleRefusal");
 
 /**
  * The one path parameter this API has, and it is a plain string on purpose.

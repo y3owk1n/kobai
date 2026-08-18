@@ -13,7 +13,15 @@
 export const PERMISSIONS = {
   /** Read the Store. */
   storeRead: "store:read",
-  /** Create a Merchant. The permission that makes a deployment able to grow a team. */
+  /**
+   * Administer access — add a Merchant, and make, change or delete the Roles one is added
+   * against.
+   *
+   * One Permission for all of it, because it is one power: a Merchant who may add a colleague
+   * may add one against `owner` and sign in as them, so a `role:write` beside this would draw
+   * a boundary that does not exist (ADR-0066). What it does *not* reach is seeing who has
+   * access, which is `merchantRead` below.
+   */
   merchantWrite: "merchant:write",
   /** Read the catalog — Products, their Variants, and those Variants' Prices. */
   catalogRead: "catalog:read",
@@ -55,6 +63,23 @@ export const PERMISSIONS = {
    * migrations ran, and a new permission goes at the end.
    */
   storeWrite: "store:write",
+  /**
+   * See who has access — the Merchants of this deployment, and the Roles they may be given.
+   *
+   * The half of administering access that `merchant:write`'s transitive argument does not
+   * reach (ADR-0066). Adding a colleague confers everything, because the colleague can be
+   * added against `owner`; reading the roster confers nothing, and without a word for it the
+   * only way to let somebody see who has access would be to give them the power to change it.
+   * Every other pair on this surface already splits the same way — `catalog:`, `api-key:`,
+   * `store:` — and which gate a route sits behind is promised (ADR-0060), so this is a
+   * decision to take now rather than a break to undo later.
+   *
+   * It reads oddly last, after the write it belongs beside, for the same reason `api-key:read`
+   * and `store:write` do: the seeded `owner` Role is a text array appended to one migration at
+   * a time and a test asserts it equals `ALL_PERMISSIONS` exactly, so this list's order is the
+   * order the migrations ran.
+   */
+  merchantRead: "merchant:read",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

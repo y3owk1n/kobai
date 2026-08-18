@@ -38,6 +38,14 @@ One named thing a Role may do, as a string — `store:read`. Additive: a new Per
 new string, not a new structure.
 _Avoid_: scope, grant, right, capability, claim
 
+**Administrator**:
+A Merchant whose Role holds `merchant:write` — the Permission that adds a colleague and so,
+transitively, grants any Permission the deployment has. Not a second kind of account and not a
+rank: it is a Merchant, described by what their Role carries. The word earns an entry because a
+deployment must always have one, and the refusal that keeps it that way says so by name —
+`last-administrator`. See ADR-0066.
+_Avoid_: admin, superuser, owner (that is the name of one Role, not the category), root
+
 **API key**:
 The credential a storefront authenticates with, and the only thing that opens the store
 surface. **Publishable** or **secret**, and which one is visible in the value itself —

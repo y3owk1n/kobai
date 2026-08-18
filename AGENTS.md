@@ -772,14 +772,52 @@ already says where multi-currency arrives: as more rows. **Do not add a currency
 and do not narrow the refusal to "when Prices exist"** — relaxing it later is cheap, tightening
 it is a break (ADR-0060), and the narrow version is a read of `core_price` followed by a write.
 
+**A Role is a row a Merchant can make, and one Permission administers every change to one**
+(ADR-0066). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are #173's six.
+The three **writes** sit behind **`merchant:write`** and there is deliberately no `role:write`
+beside it: a Merchant who may add a colleague may add one against `owner`, so that Permission is
+already the power to administer access entire, and a second word would name a boundary that does
+not exist. The three **reads** — `GET /admin/roles`, `GET /admin/roles/{id}` and
+`GET /admin/merchants` — sit behind
+**`merchant:read`**, because that argument reaches the writes and stops there. Seeing the roster
+escalates to nothing, and gating it on the write meant granting the power to change who has
+access in order to let somebody see it; `merchant:` would also have been the only family here
+with a write and no read. Four things about that surface are decisions and not implementation:
+
+- **A read is `merchant:read` and a write is `merchant:write`, and neither moves.** Which gate a
+  route sits behind is promised surface (ADR-0060), so a route added here takes the one its verb
+  says — a new write, `DELETE /admin/merchants/{id}` included, needs no Permission of its own.
+- **A Permission Core has never heard of is stored, not refused.** `permissions` is an array of
+  non-empty strings and nothing checks *which* strings — a shape, not a vocabulary. `Session`'s
+  own description already promises this ("a deployment may hold a permission this build of Core
+  has never heard of"), and closing the set would foreclose a Plugin-supplied Permission before
+  anybody has designed one. **Do not validate against `PERMISSIONS`**; the Admin's picker is
+  where a typo is caught, as an affordance (ADR-0063).
+- **The last Merchant able to administer Merchants cannot be stripped.**
+  `PATCH /admin/roles/{id}` refuses at **422 `last-administrator`** when the change would leave
+  no Merchant holding `merchant:write`, because the first Merchant is seeded only while there is
+  none (ADR-0041) and the way back would be raw SQL. **The guard is a `pg_advisory_xact_lock`
+  taken before the read, not a conditional update** — the condition is about *other* rows, which
+  a subquery does not lock, so ADR-0018's one-statement answer does not reach it and two requests
+  each stripping a different last administrator would both commit.
+  `packages/core/src/auth/the-last-administrator.test.ts` is the concurrent test, and it has been
+  watched failing with that line removed.
+- **A Role Merchants hold is refused rather than cascaded or reassigned** — **422 `role-in-use`**,
+  ADR-0059's shape reached through `core_merchant.role_id`'s `on delete restrict`. The delete is
+  one statement and the violation is *read* (`violatesForeignKey`), not asked for first: a
+  `select` then a `delete` lets a concurrent `POST /admin/merchants` slip a holder in between.
+
 **A route needing a Permission Core does not define yet brings one with it**, which is one edit
 and one migration. The new string goes **last** in `PERMISSIONS` (`auth/permissions.ts`), because
 `ALL_PERMISSIONS` is that literal's declaration order and `auth.test.ts` holds the seeded `owner`
-Role equal to it; then a `--custom` migration appends it to `owner`, the way `0020` and `0029`
+Role equal to it; then a `--custom` migration appends it to `owner`, the way `0029` and `0030`
 do. Skip the migration and every deployment that upgrades gets a route nobody can call. **The
-read/write split is the house rule** — `store:read` is not `store:write`, as `catalog:` and
-`api-key:` already are — because which gate a route sits behind is promised as well (ADR-0060),
-so gating a write behind a read permission is a break to undo rather than a decision to take.
+read/write split is the house rule** — `store:read` is not `store:write`, as `catalog:`,
+`api-key:` and `merchant:` already are — because which gate a route sits behind is promised as
+well (ADR-0060), so gating a write behind a read permission is a break to undo rather than a
+decision to take, and gating a read behind a write is granting the power to change a thing in
+order to let somebody see it. `order:read` stands alone only because an Order is immutable
+(ADR-0009), so there is no write for a Permission to gate.
 
 **A declared refusal must have the gate that makes it.** Five of the statuses a route
 declares are not the handler's to answer — they are made above it, by middleware: `503` by the
@@ -1039,9 +1077,11 @@ Merchant, exactly as a boot does (`seedTestMerchant` is the same call without th
 and then signs them in through the public API. There is no HTTP way to create the first one
 and a test that reaches for `POST /admin/merchants` anonymously is asserting against a 401. A
 test about *not* holding a permission should create a narrower Role itself — that is the
-subject, and a helper would hide it; that second Merchant goes through `POST /admin/merchants`
-with the seeded one's session, which is the only way there is, and `sessionOf(response)` reads
-the session cookie off their sign-in response the way a browser would.
+subject, and a helper would hide it; **that Role goes through `POST /admin/roles`** since #173,
+never through `insert into core_role`, and that second Merchant goes through
+`POST /admin/merchants` with the seeded one's session, which is the only way there is, and
+`sessionOf(response)` reads the session cookie off their sign-in response the way a browser
+would.
 
 **`auth.test.ts` sweeps the whole admin surface** — every operation the generated description
 carries, called with no cookie, asserted 401 — so a route registered on the wrong half of

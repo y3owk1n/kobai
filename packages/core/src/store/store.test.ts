@@ -212,12 +212,15 @@ describe("PATCH /admin/store", () => {
     });
     expect(anonymous.status).toBe(401);
 
-    // Roles are rows, so a narrower one is a row. This one holds the permission the *read*
-    // beside it names, which is the whole point: reading what a Store is called and changing
-    // it are different powers, so `store:read` alone must not be enough to change it.
-    await kobai.db.execute(
-      sql`insert into core_role (name, permissions) values ('viewer', array['store:read'])`,
-    );
+    // A narrower Role, made the way a Merchant makes one (#173). This one holds the permission
+    // the *read* beside it names, which is the whole point: reading what a Store is called and
+    // changing it are different powers, so `store:read` alone must not be enough to change it.
+    const role = await kobai.request("/admin/roles", {
+      method: "POST",
+      headers: { ...owner.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "viewer", permissions: [PERMISSIONS.storeRead] }),
+    });
+    expect(role.status, "creating the viewer Role").toBe(201);
     await kobai.request("/admin/merchants", {
       method: "POST",
       headers: { ...owner.headers, "content-type": "application/json" },

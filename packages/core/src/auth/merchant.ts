@@ -1,5 +1,13 @@
-import { eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
+import {
+  cursorAt,
+  type Page,
+  type PageRequest,
+  pageSize,
+  rowsAfter,
+  takePage,
+} from "../db/page.ts";
 import { merchant, role } from "../db/schema.ts";
 import {
   digestOfNoMerchant,
@@ -246,6 +254,47 @@ export async function authenticateMerchant(
     id: row.id,
     email: row.email,
     role: { name: row.roleName, permissions: row.permissions },
+  };
+}
+
+/**
+ * A page of Merchants, newest first, each with the Role they hold.
+ *
+ * The Role is joined rather than named by identifier, because *who has access* is the question
+ * this list is asked and a client that had to fetch a Role per row would be asking it twice.
+ * The digest is not selected here or anywhere: nothing outside {@link authenticateMerchant}
+ * has any business reading it.
+ */
+export async function listMerchants(
+  db: Database,
+  page: PageRequest,
+): Promise<Page<Merchant>> {
+  const rows = await db
+    .select({
+      id: merchant.id,
+      email: merchant.email,
+      roleName: role.name,
+      permissions: role.permissions,
+      cursorAt: cursorAt(merchant.createdAt),
+    })
+    .from(merchant)
+    .innerJoin(role, eq(role.id, merchant.roleId))
+    .where(rowsAfter(page, merchant.createdAt, merchant.id))
+    // `id` breaks the tie, so the cursor names one row rather than a group of them.
+    .orderBy(desc(merchant.createdAt), desc(merchant.id))
+    .limit(pageSize(page));
+
+  const { rows: found, nextCursor } = takePage(rows, page);
+
+  // Field by field rather than by spread, so neither the column the cursor is cut from nor
+  // anything else this query adds later can reach a response by being forgotten about.
+  return {
+    items: found.map((row) => ({
+      id: row.id,
+      email: row.email,
+      role: { name: row.roleName, permissions: row.permissions },
+    })),
+    nextCursor,
   };
 }
 
