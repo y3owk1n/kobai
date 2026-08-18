@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { migrationsTableFor } from "@kobai/core/migrations";
 import {
   createTestDatabase,
   inspectSchema,
@@ -17,7 +18,9 @@ import {
   publishPackages,
   startLocalRegistry,
 } from "./support/local-registry.ts";
+import { packagesShippingAMigrationSet } from "./support/migration-sets.ts";
 import { bootProject, runInProject } from "./support/project.ts";
+import { publishedKobaiPackageDirectories } from "./support/workspace.ts";
 
 /**
  * **The release gate.** The only test of the promise the whole project rests on: that a
@@ -88,6 +91,27 @@ function nextMajor(version: string): string {
   return major === 0 ? "1.0.0" : `${major + 1}.0.0`;
 }
 
+/** The generated Project's `dependencies`, as they stand on disk right now. */
+async function projectDependencies(): Promise<Record<string, string>> {
+  const manifest = JSON.parse(await readFile(join(project, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  return manifest.dependencies ?? {};
+}
+
+/**
+ * The kobai half of a dependency block.
+ *
+ * The scope is the predicate because it is what `kobai-upgrade` moves and what the Project's
+ * `.npmrc` points at — so a Plugin added to the reference Project is covered by this without
+ * being named anywhere in this file.
+ */
+function kobaiRangesIn(dependencies: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(dependencies).filter(([name]) => name.startsWith("@kobai/")),
+  );
+}
+
 /** Filled in before anything else, so every message can name the two versions. */
 let THIS_VERSION: string;
 let SYNTHETIC_MAJOR: string;
@@ -95,18 +119,26 @@ let SYNTHETIC_MAJOR: string;
 /** Two installs, two builds, two boots and a dozen requests, on a cold runner. */
 const GATE_TIMEOUT = 1_800_000;
 
-/** Every kobai package a generated Project resolves from a registry. */
-const PUBLISHED = [
-  "packages/core",
-  "packages/client",
-  "packages/plugin-price-log",
-  "packages/plugin-made-to-order",
-];
+/**
+ * Every kobai package a generated Project resolves from a registry, and **deliberately not a
+ * list of migration sets** (#129).
+ *
+ * The two overlap and are not the same question: `@kobai/client` is here and ships no
+ * migrations, and a future Plugin that shipped none would be here too. What this is is
+ * `create-kobai`'s own `PUBLISHED_KOBAI_PACKAGES` — the list the scaffolder uses to rewrite
+ * a `workspace:*` into a version range — placed in the workspace by pnpm, so the packages a
+ * generated Project asks for and the packages this test publishes are one list rather than
+ * two copies of it. It is filled in `beforeAll` because that lookup shells out.
+ */
+let PUBLISHED: readonly string[];
 
 let registry: LocalRegistry;
 let workspace: string;
 let project: string;
 let database: TestDatabase;
+
+/** Every `@kobai/*` range the generated Project carried before the upgrade ran. */
+let kobaiRangesBefore: Record<string, string>;
 
 /** What the Project held and served before anything was upgraded. */
 let before: Snapshot;
@@ -120,6 +152,7 @@ beforeAll(async () => {
   SYNTHETIC_MAJOR = nextMajor(THIS_VERSION);
 
   registry = await startLocalRegistry();
+  PUBLISHED = await publishedKobaiPackageDirectories();
 
   // The same packages, twice: once as this commit built them, and once as a major that does
   // not exist. See `PublishOptions.version` for why the second is a fair thing to make.
@@ -129,6 +162,12 @@ beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "kobai-upgrade-gate-"));
   project = join(workspace, "my-store");
   await scaffold({ directory: project });
+
+  // What the Project depended on before the command touched it. Read off the scaffolded
+  // manifest rather than typed out below, so a Plugin added to the reference Project is
+  // covered here on the day it lands (#129) — and so a dependency the upgrade *dropped* is
+  // as visible as one it failed to move.
+  kobaiRangesBefore = kobaiRangesIn(await projectDependencies());
 
   // The one line a Developer would not write: point the `@kobai` scope at the registry
   // holding this commit's packages. Everything else resolves wherever npm normally looks.
@@ -249,14 +288,26 @@ describe("a customised Project taken across a Core major", () => {
 
   it("moves every kobai dependency to the new major, and installs it", async () => {
     // Criterion 3, read out of what the command wrote and what the install put on disk.
-    const manifest = JSON.parse(
-      await readFile(join(project, "package.json"), "utf8"),
-    ) as { dependencies: Record<string, string> };
+    //
+    // **Every one it had, not three it was told to expect.** The list is the Project's own
+    // manifest as it was scaffolded, so this covers a Plugin added to the reference Project
+    // without an edit here, and it fails in the direction a list of names cannot: a
+    // dependency the command *removed* is a key missing from the comparison rather than a
+    // name nobody happened to check (#129).
+    const kobaiRangesAfter = kobaiRangesIn(await projectDependencies());
 
-    expect(manifest.dependencies["@kobai/core"]).toBe(`^${SYNTHETIC_MAJOR}`);
-    expect(manifest.dependencies["@kobai/plugin-price-log"]).toBe(`^${SYNTHETIC_MAJOR}`);
-    expect(manifest.dependencies["@kobai/plugin-made-to-order"]).toBe(
-      `^${SYNTHETIC_MAJOR}`,
+    // A generated Project depends on Core and on at least one Plugin, and two empty objects
+    // are equal — so the floor is what keeps the comparison from passing by finding nothing.
+    expect(Object.keys(kobaiRangesBefore)).toContain("@kobai/core");
+    expect(Object.keys(kobaiRangesBefore).length).toBeGreaterThan(1);
+
+    expect(
+      kobaiRangesAfter,
+      `The Project's kobai dependencies did not all move to the new major. It had ${JSON.stringify(kobaiRangesBefore)} and now has ${JSON.stringify(kobaiRangesAfter)}.`,
+    ).toEqual(
+      Object.fromEntries(
+        Object.keys(kobaiRangesBefore).map((name) => [name, `^${SYNTHETIC_MAJOR}`]),
+      ),
     );
 
     const installed = JSON.parse(
@@ -288,7 +339,7 @@ describe("a customised Project taken across a Core major", () => {
     ).toContain("pnpm-lock.yaml");
   });
 
-  it("still boots, and applies every migration set into the database it already had", () => {
+  it("still boots, and applies every migration set into the database it already had", async () => {
     // Criterion 5. Migrations are the part most likely to break across a major, and the
     // database here is the one the pre-upgrade Project wrote to.
     expect(
@@ -296,10 +347,26 @@ describe("a customised Project taken across a Core major", () => {
       `The upgraded Project did not report healthy. Its output:\n${after.logs}`,
     ).toMatchObject({ status: "ok" });
 
+    // **The same Project, asked twice, either side of the boundary** — which is what this
+    // file is for, and which no list of set names typed here could have said (#129). The
+    // expectation is the pre-upgrade boot's own answer; nothing about it had to be written
+    // down, and it fails in both directions: a set that vanished across the upgrade, and one
+    // that appeared.
     expect(
       after.health.migrations.sets.map((set) => set.name),
       "A migration set went missing across the upgrade. Core's, each Plugin's and the Project's own are all applied by the same runner, so a set that vanished is a set the new version stopped wiring.",
-    ).toEqual(["core", "plugin-price-log", "plugin-made-to-order", "project"]);
+    ).toEqual(before.health.migrations.sets.map((set) => set.name));
+
+    // Two identical short lists agree, so the floor comes from somewhere neither boot could
+    // have produced: pnpm and the journals on disk, saying how many packages this workspace
+    // ships a migration set for. Only the count, because the *applied* half is asked of the
+    // database rather than of `/health` two tests below — after an upgrade onto a database
+    // that already held every migration, a set correctly applies nothing.
+    const shippedSets = await packagesShippingAMigrationSet();
+    expect(
+      before.health.migrations.sets.map((set) => set.name),
+      `The Project applied ${before.health.migrations.sets.length} migration set(s) before the upgrade and this workspace ships ${shippedSets.length} package(s) that own one: ${shippedSets.map((pkg) => pkg.name).join(", ")}.`,
+    ).toHaveLength(shippedSets.length);
   });
 
   it("still serves the price the Project's own Step decided, not Core's", () => {
@@ -334,16 +401,18 @@ describe("a customised Project taken across a Core major", () => {
       "The Plugin's offered Step stopped recording after the upgrade, so its table survived and its wiring did not.",
     ).toBeGreaterThan(before.priceLog.length);
 
+    // **Postgres's catalog against the application's own account of itself**, which is a
+    // real question and not a restatement: `/health` reports the list the runner was handed,
+    // and this reports the tables that actually exist. The names come from Core's own
+    // `migrationsTableFor`, the function the runner derives them with, so a set reported as
+    // applied and tracked nowhere fails here (#129).
     const tracking = await inspectSchema(database).migrationTracking();
     expect(
       tracking.map((fact) => fact.table).sort(),
       "A migration set's tracking table went missing, so the runner can no longer tell what it has applied. Core, each Plugin and the Project each track their own (ADR-0030).",
-    ).toEqual([
-      "__drizzle_migrations_core",
-      "__drizzle_migrations_plugin_made_to_order",
-      "__drizzle_migrations_plugin_price_log",
-      "__drizzle_migrations_project",
-    ]);
+    ).toEqual(
+      after.health.migrations.sets.map((set) => migrationsTableFor(set.name)).sort(),
+    );
 
     expect(
       tracking.filter((fact) => fact.applied === 0),

@@ -1,11 +1,7 @@
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import {
-  coreMigrationSet,
-  MIGRATIONS_TABLE_STEM,
-  runMigrations,
-} from "@kobai/core/migrations";
+import { MIGRATIONS_TABLE_STEM, runMigrations } from "@kobai/core/migrations";
 import {
   createTestKobai,
   declaredMigrations,
@@ -13,7 +9,13 @@ import {
   type MigrationTrackingFact,
 } from "@kobai/core/testing";
 import { priceLogMigrationSet } from "@kobai/plugin-price-log";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { packagesShippingAMigrationSet } from "./support/migration-sets.ts";
+import {
+  type WiredMigrationSet,
+  wiredMigrationSets,
+  wiringDisagreements,
+} from "./support/wired-migration-sets.ts";
 
 /**
  * ADR-0030 rests on one property, and this is where it is asserted rather than remembered.
@@ -35,8 +37,9 @@ import { describe, expect, it } from "vitest";
  * thing: the two migrators are two *implementations*, and only running both proves they read
  * each other's rows. Both orders, because "the CLI recognises what the migrator wrote" and
  * "the migrator recognises what the CLI wrote" are separate claims about separate code.
- * Core **and** a Plugin, because the drift the prototype found was specifically about a
- * database holding both — one tracking table per package is the arrangement at risk.
+ * Every set this repository's own Project wires — Core's, each Plugin's and the Project's
+ * own — because the drift the prototype found was specifically about a database holding
+ * several at once, and one tracking table per package is the arrangement at risk.
  */
 
 const run = promisify(execFile);
@@ -46,16 +49,44 @@ const repoRoot = fileURLToPath(new URL("../", import.meta.url));
  * The migration sets in this database, each beside the workspace package whose
  * `drizzle.config.ts` the CLI reads for it.
  *
- * Written as pairs rather than derived from `set.name`: the name *is* the unscoped npm
- * package name, so `@kobai/${set.name}` would be right for both of these and quietly wrong
- * for the first Plugin published under another scope.
+ * **Every set the reference Project wires, derived rather than listed** (#129). It was two
+ * pairs typed out here, which meant a new Plugin's set was covered only if whoever added it
+ * remembered this file — and #128 did not, so `@kobai/plugin-made-to-order` shipped without
+ * the two migrators ever having been asked to agree about it. The drift ADR-0030 is about is
+ * specifically a database holding *several* sets, so the list that matters is all of them.
+ *
+ * The pairing is still not `@kobai/${set.name}`. A set's name is the *unscoped* package
+ * name, so that guess is right for every package in this repository and quietly wrong for
+ * the first Plugin published under another scope; `wiredMigrationSets` matches each set's
+ * `migrationsFolder` against pnpm's own view of the workspace instead, and throws rather
+ * than dropping a set it cannot attribute.
+ *
+ * What it cannot see is a set dropped from `reference/kobai.config.ts`, which shrinks this
+ * list along with the expectations built from it — the tautology ADR-0049 warns about. That
+ * is `tests/every-migration-set-is-wired.test.ts`, which compares that config against the
+ * packages on disk.
  */
-const SETS = [
-  { set: coreMigrationSet, package: "@kobai/core" },
-  { set: priceLogMigrationSet, package: "@kobai/plugin-price-log" },
-] as const;
+let SETS: readonly WiredMigrationSet[];
 
-type TrackedSet = (typeof SETS)[number];
+beforeAll(async () => {
+  const [shipped, wired] = await Promise.all([
+    packagesShippingAMigrationSet(),
+    wiredMigrationSets(),
+  ]);
+  SETS = wired;
+
+  // **A short list would leave both migrators agreeing about less and saying so nowhere**,
+  // and every expectation below is derived from this one — so the precondition is asked of
+  // the disk rather than of a floor typed here. `tests/every-migration-set-is-wired.test.ts`
+  // asserts the same agreement as its subject; this is the guard that keeps *this* file from
+  // quietly checking a subset of what it claims to.
+  const findings = wiringDisagreements(shipped, wired);
+  if (findings.length > 0) {
+    throw new Error(
+      `This file runs both migrators over every migration set this repository ships, and the reference Project's wiring does not cover them:\n- ${findings.join("\n- ")}`,
+    );
+  }
+});
 
 /**
  * What drizzle-kit prints once it has finished, whether or not it had anything to apply.
@@ -95,7 +126,7 @@ const BUILD_FIRST =
  */
 function disagreements(
   tracking: readonly MigrationTrackingFact[],
-  sets: readonly TrackedSet[],
+  sets: readonly WiredMigrationSet[],
 ): string[] {
   const findings: string[] = [];
   const declared = new Map(sets.map(({ set }) => [set.migrationsTable, set]));
@@ -134,9 +165,10 @@ function disagreements(
  * have done the work and left the database looking exactly right.
  */
 async function drizzleKitMigrate(
-  { set, package: packageName }: TrackedSet,
+  { set, owner }: WiredMigrationSet,
   databaseUrl: string,
 ): Promise<void> {
+  const packageName = owner.name;
   let stdout: string;
   try {
     ({ stdout } = await run(
@@ -162,7 +194,7 @@ async function drizzleKitMigrate(
  * One ordering, applied to both sides of every comparison below.
  *
  * `inspectSchema` sorts in SQL, under Postgres's collation; sorting the expectation in
- * TypeScript would be a second rule that happens to agree on today's two rows. Neither side
+ * TypeScript would be a second rule that happens to agree on today's rows. Neither side
  * is trusted to be sorted, so no comparison here depends on which rule that was.
  */
 function byLocation(facts: readonly MigrationTrackingFact[]): MigrationTrackingFact[] {
@@ -181,7 +213,7 @@ function byLocation(facts: readonly MigrationTrackingFact[]): MigrationTrackingF
  * written into it (ADR-0049), so there is now one reader of it.
  */
 async function appliedExactlyOnce(
-  sets: readonly TrackedSet[],
+  sets: readonly WiredMigrationSet[],
 ): Promise<MigrationTrackingFact[]> {
   return byLocation(
     await Promise.all(

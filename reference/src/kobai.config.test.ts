@@ -47,6 +47,12 @@ describe("the reference Project's configuration", () => {
     // neither Core nor any Plugin has heard of. They are the same kind of object applied by
     // the same runner, which is what makes "a Project owns tables on the same terms a Plugin
     // does" a fact about the code rather than a claim in a document.
+    //
+    // **This is the one enumeration of the set list #129 deliberately left standing**, and
+    // it is where a Plugin's line is meant to be read: this is the Project's test of its own
+    // `kobai.config.ts`, so the list *is* the subject rather than an expectation borrowed to
+    // check something else. Everywhere else in the repository the list is derived — see
+    // `tests/support/wired-migration-sets.ts` and AGENTS.md § Writing tests.
     expect(config.migrationSets?.map((set) => set.name)).toEqual([
       "plugin-price-log",
       "plugin-made-to-order",

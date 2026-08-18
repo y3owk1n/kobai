@@ -12,6 +12,11 @@ import {
   publishPackages,
   startLocalRegistry,
 } from "./support/local-registry.ts";
+import {
+  migrationReportFindings,
+  packagesShippingAMigrationSet,
+} from "./support/migration-sets.ts";
+import { publishedKobaiPackageDirectories } from "./support/workspace.ts";
 
 /**
  * `docker compose up`, on the compose file and the Dockerfile a Developer actually receives.
@@ -53,12 +58,11 @@ beforeAll(async () => {
   // Reachable from a container: the `pnpm install` that needs `@kobai/*` runs *inside* the
   // build, where `127.0.0.1` is the build container rather than this machine.
   registry = await startLocalRegistry({ reachableFromContainers: true });
-  await publishPackages(registry, [
-    "packages/core",
-    "packages/client",
-    "packages/plugin-price-log",
-    "packages/plugin-made-to-order",
-  ]);
+  // Every package a generated Project resolves from a registry, taken from the list
+  // `create-kobai` itself uses to rewrite a `workspace:*` into a range. It was typed out
+  // here as well, and a package added to one and not the other failed inside the image build
+  // with a 404 naming the registry rather than the list it was missing from (#129).
+  await publishPackages(registry, await publishedKobaiPackageDirectories());
 
   workspace = await mkdtemp(join(tmpdir(), "kobai-containerised-"));
   project = join(workspace, "my-store");
@@ -133,18 +137,19 @@ describe("a generated Project, brought up by its own compose file", () => {
       };
       expect(body).toMatchObject({ status: "ok" });
 
-      // Not merely that the sets are listed: that each of them applied something. A set that
-      // found no `migrations/` directory in the image reports zero and is otherwise silent,
-      // which is the quietest way for a Plugin's tables to never exist.
+      // Not merely that the sets are listed: that each of them applied something, and that
+      // there are as many as this workspace ships packages that own one. This Project was
+      // generated into a temp directory and installed from a registry, so it cannot see that
+      // workspace — but the template it was generated from is that workspace's own reference
+      // Project, which is what makes the count a question. See `migrationReportFindings`
+      // and #129.
       expect(
-        body.migrations.sets.map((set) => [set.name, set.applied > 0]),
-        "A migration set applied nothing inside the container. Whatever the Dockerfile prunes, `migrations/` is not it.",
-      ).toEqual([
-        ["core", true],
-        ["plugin-price-log", true],
-        ["plugin-made-to-order", true],
-        ["project", true],
-      ]);
+        migrationReportFindings(
+          body.migrations.sets,
+          await packagesShippingAMigrationSet(),
+        ),
+        "The container's migrations disagree with what this workspace ships. Whatever the Dockerfile prunes, `migrations/` is not it.",
+      ).toEqual([]);
 
       // The Admin, from the same process and the same origin — one container, no CORS
       // (ADR-0010).

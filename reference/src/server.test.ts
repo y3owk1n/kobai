@@ -1,8 +1,15 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createTestDatabase, type TestDatabase } from "@kobai/core/testing";
+import { coreMigrationSet } from "@kobai/core/migrations";
+import {
+  appliedMigrations,
+  createTestDatabase,
+  declaredMigrations,
+  type TestDatabase,
+} from "@kobai/core/testing";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import config from "../kobai.config.ts";
 
 /**
  * The one seam that cannot be reached in-process: the process itself.
@@ -54,17 +61,43 @@ describe("the reference Project's entrypoint", () => {
     // Project's `package.json` is, precisely because `src/` and `dist/src/` sit at
     // different depths — a path correct in source and wrong in `dist` would apply no
     // migrations at all rather than throwing, and only a test of the built thing sees it.
+    //
+    // The list comes from `kobai.config.ts`, the one file that decides it, with Core's own
+    // set in front exactly as `createKobai` puts it there — so wiring a fourth Plugin is a
+    // line in that file and nothing here (#129).
+    const wired = [coreMigrationSet, ...(config.migrationSets ?? [])];
+    // A config wiring nothing would leave both sides at Core's set alone and agree, so the
+    // floor is the price of deriving: this Project wires a Plugin's set beside its own, and
+    // which packages ship one at all is asked of the disk in
+    // `tests/every-migration-set-is-wired.test.ts`.
+    expect(wired.length).toBeGreaterThan(1);
     await expect(response.json()).resolves.toMatchObject({
       status: "ok",
-      migrations: {
-        sets: [
-          { name: "core" },
-          { name: "plugin-price-log" },
-          { name: "plugin-made-to-order" },
-          { name: "project" },
-        ],
-      },
+      migrations: { sets: wired.map((set) => ({ name: set.name })) },
     });
+
+    // **What the derived list cannot say**, and the reason it is safe to derive one at all.
+    // `/health` is the application repeating the list it was handed, so a set named there is
+    // no evidence its migrations reached the container: a package that ships `dist` and no
+    // `migrations/` is reported by name, with nothing behind it. This asks the database
+    // instead, one migration at a time and matched by the digest Drizzle stores, so the
+    // failure names the tag that never applied rather than reporting that two lists differ
+    // (ADR-0049).
+    //
+    // The direction neither half covers — a set quietly dropped from `kobai.config.ts`,
+    // which shrinks both sides — is `tests/every-migration-set-is-wired.test.ts`, where the
+    // config meets the packages on disk.
+    for (const set of wired) {
+      const declared = await declaredMigrations(set);
+      expect(
+        declared.length,
+        `${set.name} declares no migrations at all.`,
+      ).toBeGreaterThan(0);
+      await expect(
+        appliedMigrations(database, set),
+        `The built artifact reported ${set.name} as applied and the database does not hold every migration it declares. A package that ships \`dist\` without \`migrations/\` looks exactly like this.`,
+      ).resolves.toEqual(declared);
+    }
   });
 
   it("seeds the first Merchant from the environment, and can be signed in as", async () => {
