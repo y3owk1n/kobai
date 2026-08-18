@@ -706,6 +706,39 @@ export const orderAdjustment = pgTable(
      * directions rather than a branch that eventually gets the sign wrong somewhere.
      */
     amount: bigint("amount", { mode: "number" }).notNull(),
+    /**
+     * Tax on **this Adjustment**, in minor units, and only ever on an Order-level one.
+     *
+     * A delivery surcharge is ADR-0022's own example of an Adjustment belonging to no line, and
+     * it is taxable in most jurisdictions — so a replaced `calculate-tax` needs somewhere to put
+     * that figure. `core_order_line_item.tax` is not it: an Order-level Adjustment is on no line.
+     *
+     * **This is the shape chosen over an Order-level tax figure beside `core_order.total`**, and
+     * the argument is what a tax Step writes and what a receipt shows (#117). A real tax engine —
+     * Avalara, TaxJar, Stripe Tax — answers per taxable item with carriage among them, so tax per
+     * Adjustment is what it already has in hand; a single figure on the Order makes it sum first
+     * and throws the attribution away. A receipt then cannot be rendered: an invoice shows tax
+     * against the thing that bore it, and a Return refunding only the delivery surcharge has to
+     * know that surcharge's tax to refund it. And a `core_order.tax` would have had to mean
+     * either *all* tax — duplicating the sum of the line taxes, in a second place able to
+     * disagree — or *the remainder after the lines*, which is a figure nothing else in kobai
+     * names. The parts are not recoverable from a total; a total is always recoverable from the
+     * parts.
+     *
+     * **Zero on a line-level Adjustment, and the check constraint keeps it there.**
+     * `calculate-tax` runs after `apply-adjustments` and taxes the *adjusted* line, so a line's
+     * Adjustments are already inside `core_order_line_item.tax` — a second figure here would be
+     * charged twice or dropped, and neither is discoverable from the row. If the tax spec ever
+     * wants tax attributed to a single line-level Adjustment, that is a migration dropping this
+     * constraint together with a decision about what a line's `total` then means.
+     *
+     * `default(0)` rather than ADR-0038's three migrations, and it is the ADR's own first case:
+     * the value is right for future rows as well as past ones. Core charges no tax at all, so
+     * zero is what every Adjustment already written truthfully carries and what every Adjustment
+     * a deployment with no tax Step will write truthfully carries. It is `core_order_line_item`'s
+     * `tax` column exactly, for the same reason.
+     */
+    tax: bigint("tax", { mode: "number" }).notNull().default(0),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -713,6 +746,11 @@ export const orderAdjustment = pgTable(
   (table) => [
     // Reading an Order reads its Adjustments by `order_id`, which is every view of one.
     index("core_order_adjustment_order_idx").on(table.orderId),
+    // A line's Adjustment is taxed through its line, never on its own row — see `tax` above.
+    check(
+      "core_order_adjustment_line_level_is_untaxed",
+      sql`${table.orderLineItemId} is null or ${table.tax} = 0`,
+    ),
   ],
 );
 

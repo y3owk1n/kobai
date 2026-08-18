@@ -109,6 +109,7 @@ export type {
   PricedLines,
   ReservedLines,
   TakenPayment,
+  TaxedAdjustment,
   TaxedLine,
   TaxedLines,
 } from "./order/place-order.ts";
@@ -125,6 +126,7 @@ export {
 export type {
   Order,
   OrderAdjustment,
+  OrderLevelAdjustment,
   OrderLineItem,
   OrderShopper,
   Payment,

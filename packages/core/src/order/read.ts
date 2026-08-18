@@ -34,6 +34,21 @@ export type OrderAdjustment = {
   readonly metadata: Record<string, unknown>;
 };
 
+/**
+ * An Adjustment on the **Order as a whole** — and the only kind that carries a tax (#117).
+ *
+ * A delivery surcharge is on no line, so no Line Item's `tax` can hold what it was taxed; this
+ * is where a replaced `calculate-tax` puts that figure, and the Order's `total` accounts for it.
+ * A line's Adjustments are read as {@link OrderAdjustment} and have no `tax` of their own,
+ * because `calculate-tax` taxes the adjusted line and their tax is already inside the line's.
+ * That absence is the shape, not an omission: a field whose only honest value on a line's
+ * Adjustment is zero would be the first thing somebody wrote a second tax figure into.
+ */
+export type OrderLevelAdjustment = OrderAdjustment & {
+  /** Minor units, signed with `amount` — a taxed discount reduces the tax it is on. */
+  readonly tax: number;
+};
+
 /** One line of an Order: what was bought, as it was described and priced at Capture. */
 export type OrderLineItem = {
   readonly id: string;
@@ -162,8 +177,11 @@ export type Order = OrderSummary & {
    * A line's own are on the line, not here, and the split is not presentational: an Adjustment
    * on a line is part of what that line came to, and one here is not attributable to any of
    * them. `total` accounts for both.
+   *
+   * These are the ones that carry a `tax` of their own, for the reason
+   * {@link OrderLevelAdjustment} gives.
    */
-  readonly adjustments: readonly OrderAdjustment[];
+  readonly adjustments: readonly OrderLevelAdjustment[];
   /**
    * How this Order gets to the Shopper — **one entry per way**, on independent timelines
    * (ADR-0014).
@@ -312,6 +330,7 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
       code: orderAdjustment.code,
       description: orderAdjustment.description,
       amount: orderAdjustment.amount,
+      tax: orderAdjustment.tax,
       metadata: orderAdjustment.metadata,
     })
     .from(orderAdjustment)
@@ -330,10 +349,21 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     .where(eq(payment.orderId, row.id))
     .limit(1);
 
-  const adjustmentsOf = (lineItemId: string | null): readonly OrderAdjustment[] =>
+  /**
+   * One line's Adjustments — **without a tax**, which is the shape rather than an omission.
+   *
+   * `calculate-tax` taxes the adjusted line, so a line's Adjustments are already inside the
+   * line's own `tax`; the column is zero on every one of them in DDL (#117).
+   */
+  const adjustmentsOf = (lineItemId: string): readonly OrderAdjustment[] =>
     adjustments
       .filter((one) => one.orderLineItemId === lineItemId)
-      .map(({ orderLineItemId: _line, ...adjustment }) => adjustment);
+      .map(({ orderLineItemId: _line, tax: _tax, ...adjustment }) => adjustment);
+
+  /** The Order's own: the ones attached to no line at all, and the only ones with a tax. */
+  const ownAdjustments: readonly OrderLevelAdjustment[] = adjustments
+    .filter((one) => one.orderLineItemId === null)
+    .map(({ orderLineItemId: _line, ...adjustment }) => adjustment);
 
   return {
     id: row.id,
@@ -342,8 +372,7 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     currency: row.currency,
     total: row.total,
     lineItems: lines.map((line) => ({ ...line, adjustments: adjustmentsOf(line.id) })),
-    // The Order's own: the ones attached to no line at all.
-    adjustments: adjustmentsOf(null),
+    adjustments: ownAdjustments,
     fulfilments,
     metadata: row.metadata,
     payment: paid ? paymentOf(paid) : null,

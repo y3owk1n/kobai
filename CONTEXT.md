@@ -202,7 +202,9 @@ _Avoid_: item, order line, cart line, product (never)
 **Adjustment**:
 A discount or surcharge applied to a Line Item or an Order, held as its own line rather
 than folded into an amount. The **lead-time surcharge of ADR-0012 is an Adjustment** — the
-first and, in v1, only one.
+first and, in v1, only one. An Adjustment on the **Order** carries its own **tax**, because
+it belongs to no line and no line's tax can hold it; one on a Line Item carries none,
+because tax is charged on the adjusted line and so already accounts for it.
 _Avoid_: discount, promotion, surcharge, markup, fee, modifier
 
 **Return**:

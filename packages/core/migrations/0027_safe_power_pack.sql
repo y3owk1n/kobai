@@ -1,0 +1,2 @@
+ALTER TABLE "core_order_adjustment" ADD COLUMN "tax" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "core_order_adjustment" ADD CONSTRAINT "core_order_adjustment_line_level_is_untaxed" CHECK ("core_order_adjustment"."order_line_item_id" is null or "core_order_adjustment"."tax" = 0);

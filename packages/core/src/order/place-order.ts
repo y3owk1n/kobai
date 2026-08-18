@@ -236,11 +236,38 @@ export type TaxedLine = AdjustedLine & {
   readonly tax: number;
 };
 
+/**
+ * One **Order-level** Adjustment, with the tax `calculate-tax` worked out for it (#117).
+ *
+ * A delivery surcharge belongs to no line and is taxable in most jurisdictions, so this is where
+ * that figure goes: an Order-level Adjustment has no Line Item whose `tax` could carry it. The
+ * shape is a tax **per Adjustment** rather than one figure beside the Order's total, because a
+ * real tax engine answers per taxable item and a receipt has to show tax against the thing that
+ * bore it — see `core_order_adjustment.tax` in `db/schema.ts` for the full argument and for what
+ * was rejected.
+ *
+ * There is deliberately no counterpart on {@link AdjustedLine.adjustments}: `calculate-tax` taxes
+ * the *adjusted* line, so a line's own Adjustments are already inside {@link TaxedLine.tax}, and
+ * a second figure would be charged twice or dropped.
+ */
+export type TaxedAdjustment = Adjustment & {
+  /** Minor units, signed with the Adjustment: a taxed discount reduces the tax it is on. */
+  readonly tax: number;
+};
+
 /** What `calculate-tax` produces and `hold-reservations` claims against. */
 export type TaxedLines = {
   readonly cart: CartToPlace;
   readonly lines: readonly TaxedLine[];
-  readonly adjustments: readonly Adjustment[];
+  /**
+   * The Order's own, each now carrying its tax — which is why this is not simply what
+   * `apply-adjustments` handed over.
+   *
+   * A replaced `calculate-tax` has to state one for every Adjustment here, and the compiler is
+   * what asks: a tax Step that silently left the carriage untaxed is exactly the bug this slot
+   * exists to make impossible.
+   */
+  readonly adjustments: readonly TaxedAdjustment[];
 };
 
 /**
@@ -476,13 +503,17 @@ export const applyAdjustments = defineStep(
  * It taxes the **adjusted** figure: `unitAmount × quantity` plus this line's Adjustments, which
  * is what `apply-adjustments` running first is for. A replacement that wants the tax base has
  * everything it needs on the input and nothing to ask Core for.
+ *
+ * **The Order's own Adjustments are taxed here too, and separately** (#117). A delivery surcharge
+ * is on no line, so no line's tax can carry it; each one gets its own figure, and Core's is zero
+ * for the same reason every other figure here is.
  */
 export const calculateTax = defineStep(
   "calculate-tax",
   (input: AdjustedLines): TaxedLines => ({
     cart: input.cart,
     lines: input.lines.map((line) => ({ ...line, tax: 0 })),
-    adjustments: input.adjustments,
+    adjustments: input.adjustments.map((adjustment) => ({ ...adjustment, tax: 0 })),
   }),
 );
 
@@ -762,7 +793,7 @@ export const captureOrder = defineStep(
 
         const adjustments = [
           ...lines.flatMap((line) =>
-            rowsFor(line.adjustments, written.id, idOf(lineIdBySku, line.sku)),
+            rowsFor(untaxed(line.adjustments), written.id, idOf(lineIdBySku, line.sku)),
           ),
           // The Order's own go in with a null line, which is what makes them the Order's.
           ...rowsFor(input.adjustments, written.id, null),
@@ -870,7 +901,7 @@ const ONE_ORDER_PER_CART = "core_order_cart_idx";
  */
 function inWholeMinorUnits(input: TaxedLines): void {
   const amounts = [
-    ...input.adjustments.map((adjustment) => adjustment.amount),
+    ...input.adjustments.flatMap((adjustment) => [adjustment.amount, adjustment.tax]),
     ...input.lines.flatMap((line) => [
       line.unitAmount,
       line.quantity,
@@ -941,7 +972,8 @@ function totalOf(line: TaxedLine): number {
 }
 
 /**
- * What the whole Order comes to: every line total, plus the Adjustments belonging to no line.
+ * What the whole Order comes to: every line total, plus the Adjustments belonging to no line and
+ * the tax on each of them.
  *
  * One expression, read by **both** the Step that charges and the Step that writes — which is the
  * property worth having. A total computed twice is a total that can be computed two ways, and the
@@ -949,15 +981,22 @@ function totalOf(line: TaxedLine): number {
  */
 function orderTotalOf(input: TaxedLines): number {
   return (
-    input.lines.reduce((sum, line) => sum + totalOf(line), 0) + sumOf(input.adjustments)
+    input.lines.reduce((sum, line) => sum + totalOf(line), 0) +
+    input.adjustments.reduce(
+      // The carriage and the tax on the carriage. An Order-level Adjustment is the only
+      // Adjustment with a tax of its own, because it is the only one on no line (#117).
+      (sum, adjustment) => sum + adjustment.amount + adjustment.tax,
+      0,
+    )
   );
 }
 
 /**
- * Adjustments summed, which is all that is needed in either direction.
+ * A line's Adjustments summed, which is all that is needed in either direction.
  *
  * A discount is a negative amount, so there is no branch here and there is deliberately none
- * anywhere else either — see {@link Adjustment.amount}.
+ * anywhere else either — see {@link Adjustment.amount}. Amounts only: a line's Adjustments carry
+ * no tax of their own, and {@link orderTotalOf} is where the Order's own bring theirs.
  */
 function sumOf(adjustments: readonly Adjustment[]): number {
   return adjustments.reduce((sum, adjustment) => sum + adjustment.amount, 0);
@@ -970,7 +1009,7 @@ function sumOf(adjustments: readonly Adjustment[]): number {
  * transaction — nothing else about them distinguishes one from another afterwards.
  */
 function rowsFor(
-  adjustments: readonly Adjustment[],
+  adjustments: readonly TaxedAdjustment[],
   orderId: string,
   orderLineItemId: string | null,
 ) {
@@ -981,8 +1020,21 @@ function rowsFor(
     code: adjustment.code,
     description: adjustment.description,
     amount: adjustment.amount,
+    tax: adjustment.tax,
     metadata: adjustment.metadata ?? {},
   }));
+}
+
+/**
+ * A line's Adjustments, as rows that carry no tax of their own.
+ *
+ * `calculate-tax` taxes the adjusted line, so their tax is already inside the line's own `tax`
+ * and a figure on the row would be charged twice or dropped — which is why the type a Step
+ * declares them with has no `tax` at all, and why the check constraint on
+ * `core_order_adjustment` refuses one (#117).
+ */
+function untaxed(adjustments: readonly Adjustment[]): readonly TaxedAdjustment[] {
+  return adjustments.map((adjustment) => ({ ...adjustment, tax: 0 }));
 }
 
 /**

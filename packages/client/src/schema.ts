@@ -1545,7 +1545,7 @@ export interface components {
       shopper: components["schemas"]["CartShopper"];
       /** @description ISO 4217. Every amount here is in it. */
       currency: string;
-      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments. */
+      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments and the tax on each of them. */
       total: number;
       payment: components["schemas"]["Payment"];
       /**
@@ -1581,8 +1581,8 @@ export interface components {
     Order: components["schemas"]["OrderSummary"] & {
       /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
       lineItems: components["schemas"]["OrderLineItem"][];
-      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
-      adjustments: components["schemas"]["OrderAdjustment"][];
+      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher or a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own, because there is no Line Item whose tax could carry it. */
+      adjustments: components["schemas"]["OrderLevelAdjustment"][];
       /** @description How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed. */
       fulfilments: components["schemas"]["Fulfilment"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
@@ -1629,6 +1629,10 @@ export interface components {
       metadata: {
         [key: string]: unknown;
       };
+    };
+    OrderLevelAdjustment: components["schemas"]["OrderAdjustment"] & {
+      /** @description Tax on this Adjustment, in minor units, signed with `amount`. Zero until a tax Step is wired. A line's own Adjustments carry no such figure: a line is taxed after they are applied, so their tax is inside the line's `tax`. */
+      tax: number;
     };
     Fulfilment: {
       /** Format: uuid */

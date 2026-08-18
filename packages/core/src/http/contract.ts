@@ -760,6 +760,26 @@ export const OrderAdjustment = z
   .openapi("OrderAdjustment");
 
 /**
+ * An Adjustment on the **Order as a whole**, and the only kind that carries a tax (#117).
+ *
+ * A delivery surcharge belongs to no line, so no Line Item's `tax` can hold what it was taxed —
+ * this is where a tax Step puts that figure, and the Order's `total` accounts for it. A line's
+ * Adjustments are an `OrderAdjustment` and have no `tax`, because a line is taxed *after* its
+ * Adjustments are applied and so their tax is already inside the line's own.
+ *
+ * The alternative was one tax figure beside the Order's `total`. It was rejected because a
+ * receipt shows tax against the thing that bore it and a Return refunds one surcharge at a time,
+ * neither of which a lump sum can answer — `core_order_adjustment.tax` in `db/schema.ts` carries
+ * the argument in full.
+ */
+export const OrderLevelAdjustment = OrderAdjustment.extend({
+  tax: z.int().meta({
+    description:
+      "Tax on this Adjustment, in minor units, signed with `amount`. Zero until a tax Step is wired. A line's own Adjustments carry no such figure: a line is taxed after they are applied, so their tax is inside the line's `tax`.",
+  }),
+}).openapi("OrderLevelAdjustment");
+
+/**
  * One line of an Order — a **snapshot**, and the reason it looks nothing like a Cart's.
  *
  * `title`, `sku` and `unitAmount` were copied at Capture, so renaming a Product or repricing a
@@ -846,7 +866,7 @@ export const OrderSummary = z
     currency: z.string().meta({ description: "ISO 4217. Every amount here is in it." }),
     total: z.int().meta({
       description:
-        "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments.",
+        "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments and the tax on each of them.",
     }),
     payment: Payment.nullable().meta({
       description:
@@ -906,9 +926,9 @@ export const Order = OrderSummary.extend({
     description:
       "In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position.",
   }),
-  adjustments: z.array(OrderAdjustment).readonly().meta({
+  adjustments: z.array(OrderLevelAdjustment).readonly().meta({
     description:
-      "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line.",
+      "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher or a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own, because there is no Line Item whose tax could carry it.",
   }),
   fulfilments: z.array(Fulfilment).readonly().meta({
     description:
