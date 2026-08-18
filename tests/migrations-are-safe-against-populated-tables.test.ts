@@ -310,12 +310,21 @@ function unsafeStatements(migration: Migration): string[] {
  *
  * `0016` is the hazard #119 was filed about, in the repository rather than in a fixture.
  * `core_order` is created by `0012`, and until `0016` shipped with #118 a Cart could become
- * two Orders — so a deployment sitting on `0015` can be holding exactly the duplicate
- * `cart_id` values the index refuses, and would get no service at its next boot (ADR-0030).
- * It is survivable only because nothing has been released and no such deployment exists,
- * which is an argument about today: **before the first release this needs either the
- * deduplication ADR-0038 would put in front of it or a decision that it does not.** Deleting
- * this entry then is the point of it being here.
+ * two Orders — so a deployment left anywhere from `0012` to `0015` can be holding exactly the
+ * duplicate `cart_id` values the index refuses, and would get no service at its next boot
+ * (ADR-0030).
+ * It is survivable only because nothing has been released and no such deployment exists.
+ *
+ * **That is a release decision rather than a fact about SQL, so it is written where a release
+ * decision is found**: `docs/adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md`,
+ * under "What else the licence is holding up" (#152). It carries the argument in full, the one
+ * question to ask before the first publish, and both answers to it — read it before editing
+ * anything here.
+ *
+ * The one part of it to have in hand before editing this line: **an entry here is a place for a
+ * reason rather than a suppression**, so expiring one means rewriting its reason and not deleting
+ * it. The reading above is per-file, so this statement is named whatever else becomes true, and
+ * deleting the entry while `0016` stands turns the gate red.
  */
 const ACKNOWLEDGED = [
   `${join("packages", "core", "migrations", "0016_fresh_gwen_stacy.sql")}: CREATE UNIQUE INDEX "core_order_cart_idx" ON "core_order" USING btree ("cart_id")`,

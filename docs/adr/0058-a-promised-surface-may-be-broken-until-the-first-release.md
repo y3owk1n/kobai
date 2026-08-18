@@ -234,6 +234,82 @@ freely the licence is being spent.
   watched failing against the method spelling — `TS2578: Unused '@ts-expect-error' directive` —
   before the change it pins was made.
 
+## What else the licence is holding up
+
+The licence is spent on more than promised surfaces. **Anything in this repository that is
+survivable only because nothing has been published falls due at the same act** — the deliberate
+removal of the loopback pin — and that act happens once, so the debts belong where whoever takes
+it will already be reading. This section is that place, and it is deliberately *not* the register
+above: the register dates breaks a Developer's own compiler announces, so that a reader holding an
+error can place it. What lands here is the opposite kind, a hazard no compiler anywhere will say a
+word about.
+
+**A debt recorded where the decision it qualifies lives stays there.**
+[ADR-0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md)'s consequences
+carry one — two refusal reasons promised in prose and nowhere else, which this licence permits
+changing outright until the first publish — and moving it here would separate it from the decision
+it is a consequence of. What belongs here is a debt with **no such home**: something no record
+argues, whose only trace was a constant in a test file.
+
+### `0016` adds a unique index to a table that already exists
+
+`packages/core/migrations/0016_fresh_gwen_stacy.sql` is one statement:
+
+```sql
+CREATE UNIQUE INDEX "core_order_cart_idx" ON "core_order" USING btree ("cart_id");
+```
+
+`core_order` is created by `0012_careful_wallow.sql`, so the index arrives at a table that may
+already hold rows — and the duplicates it would refuse are not hypothetical. `0016` shipped with
+#118, which made a Cart become exactly one Order; *before* #118 a retried request placed a second
+one, so a database anywhere from `0012` to `0015` can hold precisely the duplicate `cart_id`
+values this index rejects. **The window opens at `0012` rather than at `0015`**, because it opens
+where the table does, and every migration in between shipped under that same pre-#118 code. Under
+[ADR-0030](./0030-generate-and-migrate-only-never-drizzle-kit-push.md) the set runs against a live
+database at boot, so such a deployment would get no service at its next start rather than a bad
+index, and the failure would land on somebody who wrote none of it.
+
+The answer would be [ADR-0038](./0038-widening-a-populated-table-takes-three-migrations.md)'s
+shape one door along: deduplicate in a `--custom` migration, then let the generated one add the
+index. **It is not written, and that is the decision this section records.** Writing it means
+renumbering `0016` through the tail of Core's set — each `.sql` with its drizzle snapshot and its
+journal entry — **to protect a database that does not exist**. Nothing has been published, so
+nothing has ever installed kobai at a version carrying `0012` and not `0016`; the only databases
+that have applied this set are this repository's own, each created seconds before it is migrated,
+and whatever a maintainer has pointed `devbox run up` at. That last clause is the whole of the
+risk, and it is the one thing the first publish has to check.
+
+### The question to ask before the first publish, and both answers
+
+**Before the loopback pin comes out of any publishable manifest: has a database been migrated
+from this checkout and *kept* — a staging environment, a demo, a long-lived local
+instance — that reached `0012`, where `core_order` is created, without reaching `0016`?** Ask it at `0012` and not
+at `0015`: a database left at any migration in that range may hold Orders written by the code that
+placed two of them.
+
+- **No, which is the expected answer.** Then the reason changes and the acknowledgement stays.
+  Every database that can exist after the first publish is created by an installed version
+  carrying `0012` and `0016` both, applies the whole run in one pass, and holds no row for the
+  index to refuse — so the statement is safe for good, and
+  `tests/migrations-are-safe-against-populated-tables.test.ts` should say *that* rather than cite
+  this record. It stops being true only if some released version cuts Core's set between the two,
+  which is not a thing a release does.
+- **Yes.** Then either the deduplication is owed after all, in front of `0016` and with the
+  renumbering it costs — or that database is dropped and recreated, which is the same answer at a
+  fraction of the price and is available for exactly as long as it holds nothing anybody needs.
+  **Asking before publishing is what keeps the cheap answer on the table**, because after the
+  first publish the same question has to be asked of deployments the maintainer cannot see.
+
+**Expiring does not mean deleting the acknowledgement**, and the obvious reading is wrong in a way
+worth being exact about. That check reads one migration file at a time, so a unique index on a
+table *that file* did not create is named whatever else is true — the safe shape ADR-0038
+prescribes produces the identical finding, because the deduplication answering it lives in a file
+of its own. The check's own words are that such a statement is "answered where a reason can be
+written down beside it". So the entry is a place for a reason rather than a suppression, this
+section is that reason, and what the first publish calls for is a rewritten reason. Deleting the
+entry while `0016` stands turns the gate red — watched rather than assumed, by emptying the
+constant and reading the failure, which names `0016` and that one statement.
+
 ## Consequences
 
 - **The codemod set is still empty and now honestly so.** ADR-0035's zero has meant "nothing
@@ -243,9 +319,18 @@ freely the licence is being spent.
   prove a codemod transforms anything, because every break kobai has taken is the kind the
   Project's own compiler announces rather than the kind a codemod migrates. The first break that
   *is* — a renamed config key, a moved file — will close it.
-- **The first release has a task in it, and nothing in the gate can assert that task is done.**
-  `tests/publish-guard.test.ts` guards the loopback pin; removing that pin on purpose is the act
-  that ends this record's first rule, and whoever takes it should say so here.
+- **The first release has tasks in it, and nothing in the gate can assert that any of them is
+  done.** `tests/publish-guard.test.ts` guards the loopback pin; removing that pin on purpose is
+  the act that ends this record's first rule, and whoever takes it should say so here. It is the
+  same act "What else the licence is holding up" falls due on, so a reader who arrives to end the
+  licence has both lists in front of them — which is the whole reason that section is here rather
+  than in a record of its own.
+- **This record is now two things, and only the first is in its title.** It states the rule about
+  promised surfaces and registers the breaks taken under it; it also holds the one debt that rests
+  on the same licence and had nowhere else to be written down (#152). If that second list ever
+  grows past a couple of entries it wants a record of its own — *what the first publish falls due
+  on* is a different subject from *what may be broken before it*, and the register's own reading of
+  its length depends on counting broken surfaces and nothing else.
 - **`docs/extension-points.md` §2 points at this record**, because that is where a Developer is
   told the Step signature is the flagship promise, and it is the page they will re-read the
   moment the promise moves.

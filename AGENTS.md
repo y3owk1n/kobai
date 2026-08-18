@@ -504,15 +504,16 @@ Core's own set is otherwise clear and stays clear that way: every `NOT NULL` in 
 `CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to tables created in the same
 migration.
 
-**One statement in the repository is named by that check and shipped anyway**, and it is
-acknowledged in the test by file and text with the reason: `0016`'s unique index on
-`core_order.cart_id`, which a deployment sitting on `0015` could meet with the very duplicates
-`0016` exists to prevent, since until then a Cart could become two Orders. It survives only
-because nothing has been released, which is an argument about today — **before the first
-release it needs either the deduplication above in front of it or a decision that it does
-not.** The acknowledgement is an equality rather than an ignore list, so it fails if that
-statement changes or if a second one joins it; answering a finding there is a decision written
-down, never a line added to a list.
+**One statement in the repository is named by that check and shipped anyway**: `0016`'s unique
+index on `core_order.cart_id`, which a deployment left anywhere between `0012` — where
+`core_order` is created — and `0015` could meet with the very duplicates `0016` exists to
+prevent, since until then a Cart could become two Orders. **That
+one is a release decision and it lives in ADR-0058**, under "What else the licence is holding
+up" — with why the deduplication was not written, the one question to ask before the first
+publish, and both answers to it. Do not re-take it here or in the test; the test's entry points
+at it. What belongs in this file is the mechanism: the acknowledgement is an equality rather
+than an ignore list, so it fails if that statement changes or if a second one joins it, and
+answering a finding there is a decision written down, never a line added to a list.
 
 ### Scarcity is claimed in one statement, and the sweeper is a plain interval
 
@@ -777,7 +778,10 @@ address in every publishable manifest, and `tests/publish-guard.test.ts`. **npm 
 publish target from `publishConfig.registry` before it opens a connection, and that value
 beats both `--registry` and `npm_config_registry`** — so a publish to npmjs.com has to be
 deliberate, and CI publishes by packing a tarball and passing `--registry`, which is the one
-form that honours the flag.
+form that honours the flag. **Taking that pin out is also what closes
+[ADR-0058](docs/adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md)'s
+licence**, and that record lists what falls due the moment it closes — a first publish starts by
+reading it.
 
 The acceptance test stands up a real registry — `tests/support/local-registry.ts`, verdaccio
 on an ephemeral port, holding this commit's packages — generates a Project, installs, builds
