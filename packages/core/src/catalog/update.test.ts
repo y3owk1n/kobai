@@ -223,7 +223,133 @@ describe("swapping a Variant's Fulfilment Strategy", () => {
   });
 });
 
+describe("PATCH /admin/products/{id}", () => {
+  it("changes the title, and answers with the Product as a read would report it", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = catalog.merchant.headers;
+
+    const response = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ title: "A2 poster, second edition" }),
+    });
+
+    expect(response.status).toBe(200);
+    const updated = await response.json();
+    expect(updated).toMatchObject({
+      id: catalog.productId,
+      title: "A2 poster, second edition",
+    });
+
+    // The same bytes a read reports, because the answer is read back rather than assembled
+    // from what went in — and a Product read carries its Variants, so a rename cannot quietly
+    // report a different shape from the route a Merchant looks at it through.
+    await expect(
+      (await kobai.request(`/admin/products/${catalog.productId}`, { headers })).json(),
+    ).resolves.toEqual(updated);
+  });
+
+  it("leaves out what the body left out, and replaces the metadata it names", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+    const address = `/admin/products/${catalog.productId}`;
+    await kobai.request(address, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ metadata: { shelf: "A", campaign: "spring" } }),
+    });
+
+    const response = await kobai.request(address, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ metadata: { shelf: "B" } }),
+    });
+
+    // The title is untouched because the body did not mention it, and the bag is *replaced*
+    // rather than merged — a merge would leave no way to take `campaign` back out, which is
+    // the same judgement `PATCH /admin/variants/{id}` makes about the same field (ADR-0062).
+    //
+    // **`toEqual` on the bag, and that is the whole assertion**: `toMatchObject` matches a
+    // nested object as a *subset*, so a merge leaving `campaign` beside `shelf` would satisfy
+    // it — the one implementation this case exists to rule out would pass.
+    expect(response.status).toBe(200);
+    const corrected = (await response.json()) as {
+      title: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(corrected.title).toBe("A poster");
+    expect(corrected.metadata).toEqual({ shelf: "B" });
+  });
+
+  it("refuses a body that names nothing it could change", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    for (const body of [{}, { variants: [{ sku: "MUG" }] }]) {
+      const response = await kobai.request(`/admin/products/${catalog.productId}`, {
+        method: "PATCH",
+        headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      // The second body is the first one: a field this route does not carry is stripped
+      // before the handler sees it, so "I sent a Variant and nothing happened" and "I sent
+      // nothing" are one request — and this refusal is where a Merchant is told where a
+      // Variant is added instead.
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      const refusal = (await response.json()) as { reason: string; error: string };
+      expect(refusal.reason).toBe("invalid");
+      expect(refusal.error).toContain("/variants");
+    }
+  });
+
+  it("answers 404 for a Product that does not exist, and for an id that is not one", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    for (const id of ["2f1b8a5e-0000-4000-8000-000000000000", "not-an-identifier"]) {
+      const response = await kobai.request(`/admin/products/${id}`, {
+        method: "PATCH",
+        headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify({ title: "Anything" }),
+      });
+
+      expect(response.status, id).toBe(404);
+      await expect(response.json(), id).resolves.toMatchObject({
+        reason: "product-not-found",
+      });
+    }
+  });
+});
+
 describe("an Order does not depend on the catalog it was placed from", () => {
+  it("reads back byte for byte when the Product it was placed from is renamed", async () => {
+    kobai = await createTestKobai();
+    const order = await seedTestOrder(kobai, { quantity: 2 });
+    const headers = order.catalog.merchant.headers;
+    const address = `/admin/orders/${order.id}`;
+
+    const before = await (await kobai.request(address, { headers })).text();
+
+    const renamed = await kobai.request(`/admin/products/${order.catalog.productId}`, {
+      method: "PATCH",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ title: "A2 poster, second edition" }),
+    });
+    expect(renamed.status).toBe(200);
+
+    // A Line Item snapshots the title it was bought under (ADR-0009), so an Order placed
+    // before the correction still says what the Merchant was selling then. That is the whole
+    // reason a Product's title is safe to move at all, and it is only worth asserting because
+    // the old title is in the body being compared — checked below.
+    const after = await kobai.request(address, { headers });
+    expect(after.status).toBe(200);
+    await expect(after.text()).resolves.toBe(before);
+    expect(before).toContain("A poster");
+  });
+
   it("reads back byte for byte when the Variant it named is corrected", async () => {
     kobai = await createTestKobai();
     const order = await seedTestOrder(kobai, { quantity: 2 });
@@ -309,12 +435,18 @@ describe("PATCH /admin/variants/{id}", () => {
     });
 
     // Replaced rather than merged: a merge would leave no way to take a key back out.
+    //
+    // `toEqual` on the bag rather than `toMatchObject` around it, because an empty object is a
+    // subset of every object — the version of this assertion that read
+    // `toMatchObject({ metadata: {} })` passed just as happily against a merge that had kept
+    // `edition`, which is the one thing it exists to catch (#172).
     const emptied = await kobai.request(`/admin/variants/${catalog.variantId}`, {
       method: "PATCH",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ metadata: {} }),
     });
-    await expect(emptied.json()).resolves.toMatchObject({ metadata: {} });
+    const bag = (await emptied.json()) as { metadata: Record<string, unknown> };
+    expect(bag.metadata).toEqual({});
   });
 
   it("refuses a SKU another Variant carries, and leaves both alone", async () => {

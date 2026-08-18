@@ -173,9 +173,15 @@ async function addressable(kobai: TestKobai) {
 
   return {
     fill(path: string): string {
-      // The Cart routes address a Cart where everything else addresses a Variant, and both
-      // spell the parameter `{id}`.
-      const id = path.startsWith("/store/carts") ? cart.id : variant.id;
+      // Three families address three different things through the one parameter name `{id}`:
+      // a Cart on the store surface, a Product on the routes under `/admin/products`, and a
+      // Variant everywhere else. A swept request is meant to be refused for its body, so it
+      // must not be refused for pointing at the wrong kind of row.
+      const id = path.startsWith("/store/carts")
+        ? cart.id
+        : path.startsWith("/admin/products")
+          ? catalog.productId
+          : variant.id;
       return path
         .replaceAll("{id}", id)
         .replaceAll("{priceId}", price.id)

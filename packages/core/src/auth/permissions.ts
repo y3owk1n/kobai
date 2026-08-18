@@ -40,6 +40,21 @@ export const PERMISSIONS = {
    * surface for one to gate.
    */
   orderRead: "order:read",
+  /**
+   * Change the Store — its name and its metadata.
+   *
+   * Its own permission rather than a second use of `store:read`, on the split every other pair
+   * on this surface already draws: `catalog:read` is not `catalog:write` and `api-key:read` is
+   * not `api-key:write`, because seeing what a deployment is and changing it are different
+   * powers. Which gate a route sits behind is promised surface (ADR-0060), so gating a write
+   * behind the read permission would have been a break to undo rather than a decision to take.
+   *
+   * It reads oddly last, beside `api-key:read`, and belongs there for the same reason: the
+   * seeded `owner` Role is a text array appended to one migration at a time, and a test
+   * asserts it equals `ALL_PERMISSIONS` exactly — so this list's order is the order the
+   * migrations ran, and a new permission goes at the end.
+   */
+  storeWrite: "store:write",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

@@ -36,12 +36,19 @@ import {
   type VariantDeletion,
 } from "../catalog/delete.ts";
 import { listProducts, readProduct } from "../catalog/read.ts";
-import { updateVariant, type VariantUpdate } from "../catalog/update.ts";
 import {
+  type ProductUpdate,
+  updateProduct,
+  updateVariant,
+  type VariantUpdate,
+} from "../catalog/update.ts";
+import {
+  addVariant,
   createProduct,
   type PriceCreation,
   type ProductCreation,
   setPrice,
+  type VariantCreation,
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
@@ -49,6 +56,7 @@ import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
+import { type StoreUpdate, updateStore } from "../store/write.ts";
 import * as contract from "./contract.ts";
 import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.ts";
 
@@ -249,6 +257,51 @@ const readStoreRoute = createRoute({
 });
 
 /**
+ * Changes the Store — its name and its metadata, and never the currency it prices in.
+ *
+ * `store:write` and not `store:read`: seeing what a deployment is called and changing it are
+ * different powers, which is the split `catalog:read`/`catalog:write` and
+ * `api-key:read`/`api-key:write` already draw. Which gate a route sits behind is promised
+ * surface (ADR-0060), so this is not a decision to take once traffic exists.
+ *
+ * **The default currency is refused rather than changed**, and `store/write.ts` carries that
+ * argument in full: every Price already written carries the current one, so moving it would
+ * reinterpret those amounts rather than convert them. The field is on the request anyway, so
+ * that a form submitting the whole record round-trips and so that the refusal has a name a
+ * client can branch on.
+ */
+const updateStoreRoute = createRoute({
+  method: "patch",
+  path: "/store",
+  summary: "Change the Store",
+  description:
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. `defaultCurrency` may be named and may not be moved: the code this Store already prices in is accepted and changes nothing, and any other is refused, because every Price carries the Store's default currency and no other — changing it would reinterpret each amount already stored rather than convert it. A body naming nothing that would change — `{}`, or only the `defaultCurrency` this Store already has — is refused at 400 rather than answered with the record unchanged.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateStoreRequest } },
+    },
+  },
+  responses: {
+    200: json("The Store, as a read of it reports it.", contract.Store),
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+      contract.StoreRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    422: json(
+      "Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in.",
+      contract.StoreRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Creates a Product and the Variants that make it sellable, in one transaction.
  *
  * There is deliberately no route that creates a Product on its own. A Product is never
@@ -316,6 +369,91 @@ const readProductRoute = createRoute({
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     404: json("No such Product exists.", contract.CatalogRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Corrects a Product — its title and its metadata.
+ *
+ * The route ADR-0062 deferred when it settled the Variant's four fields, in its own words "the
+ * same shape of question and a much easier one — a Product has no SKU, no Strategy and nothing
+ * claiming it". So it is safe for exactly ADR-0009's reason and no other: an Order's Line Items
+ * snapshot the title they were bought under, so a typo fixed a year later rewrites nothing
+ * anybody has been charged for.
+ *
+ * **A `PATCH` and not a `PUT`**, and identically to the Variant beside it: a full replacement
+ * would make a client that omitted `metadata` clear it, which is data loss spelled as an
+ * ordinary request.
+ */
+const updateProductRoute = createRoute({
+  method: "patch",
+  path: "/products/{id}",
+  summary: "Correct a Product",
+  description:
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateProductRequest } },
+    },
+  },
+  responses: {
+    200: json("The Product, with its Variants.", contract.ProductDetail),
+    400: CATALOG_INVALID_REQUEST,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Product exists.", contract.CatalogRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Adds a Variant to a Product that already exists.
+ *
+ * Addressed through the Product, because a Variant belongs to one and there is nowhere else to
+ * say which. It is the other half of `POST /admin/products`: that route makes a Product and
+ * the Variants it is born with, and this one is how a second size arrives afterwards — without
+ * recreating the Product, which would discard every Price and every stock count under it.
+ *
+ * The body is `CreateVariantRequest`, the very schema a create nests, so a Variant says the
+ * same three things whenever it is made and is refused by the same two words for saying them
+ * wrong.
+ */
+const addVariantRoute = createRoute({
+  method: "post",
+  path: "/products/{id}/variants",
+  summary: "Add a Variant",
+  description:
+    "A second size, colour or format for a Product a Merchant already has. It answers with the new Variant, which starts with no Price and no stock count — `POST /admin/variants/{id}/prices` sets the first, and `PUT /admin/variants/{id}/inventory` counts it. Every Variant already on the Product is untouched, which is the point: recreating the Product to add one would discard their Prices and their counts.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateVariantRequest } },
+    },
+  },
+  responses: {
+    201: json("The Variant, as a read of its Product reports it.", contract.Variant),
+    400: CATALOG_INVALID_REQUEST,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Product exists.", contract.CatalogRefusal),
+    409: json(
+      "`sku-taken`: a Variant already carries that SKU, and a SKU identifies one Variant.",
+      contract.CatalogRefusal,
+    ),
+    422: json(
+      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
+      contract.CatalogRefusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -747,6 +885,12 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(store, 200);
   });
 
+  guarded.openapi(updateStoreRoute, async (c) => {
+    const changed = await updateStore(deps.db, c.req.valid("json"));
+    if (!changed.ok) return refused(c, changed, STORE_UPDATE_STATUS);
+    return c.json(changed.store, 200);
+  });
+
   guarded.openapi(createProductRoute, async (c) => {
     const created = await createProduct(deps.db, c.req.valid("json"), deps.fulfilment);
     if (!created.ok) return refused(c, created, PRODUCT_STATUS);
@@ -769,6 +913,27 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
       );
     }
     return c.json(found, 200);
+  });
+
+  guarded.openapi(updateProductRoute, async (c) => {
+    const corrected = await updateProduct(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!corrected.ok) return refused(c, corrected, PRODUCT_UPDATE_STATUS);
+    return c.json(corrected.product, 200);
+  });
+
+  guarded.openapi(addVariantRoute, async (c) => {
+    const added = await addVariant(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+      deps.fulfilment,
+    );
+    if (!added.ok) return refused(c, added, VARIANT_CREATION_STATUS);
+    return c.json(added.variant, 201);
   });
 
   guarded.openapi(deleteProductRoute, async (c) => {
@@ -880,6 +1045,45 @@ const PRODUCT_STATUS = {
 } as const satisfies Record<
   Exclude<ProductCreation, { ok: true }>["reason"],
   400 | 409 | 422
+>;
+
+/**
+ * 422 for a currency this Store will not move to: the body is well formed and it is the state
+ * of the Store that refuses it — `unsupported-currency`'s distinction, about the same column.
+ *
+ * Not 409, deliberately. A 409 says "somebody got there first" and invites a retry; this one
+ * never becomes possible by itself, because what refuses it is every Price already written.
+ */
+const STORE_UPDATE_STATUS = {
+  invalid: 400,
+  "default-currency-is-fixed": 422,
+} as const satisfies Record<Exclude<StoreUpdate, { ok: true }>["reason"], 400 | 422>;
+
+/**
+ * Correcting a Product answers two ways, and there is no 409 among them: a title identifies
+ * nothing, so there is no row that could already have taken it (ADR-0062's Variant is the one
+ * with a unique index behind it).
+ */
+const PRODUCT_UPDATE_STATUS = {
+  invalid: 400,
+  "product-not-found": 404,
+} as const satisfies Record<Exclude<ProductUpdate, { ok: true }>["reason"], 400 | 404>;
+
+/**
+ * Adding a Variant answers at creation's statuses, plus the one refusal creating a Product
+ * cannot make: the Product it is addressed at is not there.
+ *
+ * 404 for that, and not 409 — nothing conflicts, the address is simply wrong, which is the
+ * answer every other route addressing a row that has gone gives.
+ */
+const VARIANT_CREATION_STATUS = {
+  invalid: 400,
+  "product-not-found": 404,
+  "sku-taken": 409,
+  "unknown-fulfilment-strategy": 422,
+} as const satisfies Record<
+  Exclude<VariantCreation, { ok: true }>["reason"],
+  400 | 404 | 409 | 422
 >;
 
 /** Only one way to get a key wrong, and it is the request's fault. */

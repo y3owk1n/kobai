@@ -186,6 +186,16 @@ describe("the catalog is behind the Merchant session", () => {
       permission: PERMISSIONS.catalogRead,
     },
     {
+      method: "PATCH",
+      path: "/admin/products/2f1b8a5e-0000-4000-8000-000000000000",
+      permission: PERMISSIONS.catalogWrite,
+    },
+    {
+      method: "POST",
+      path: "/admin/products/2f1b8a5e-0000-4000-8000-000000000000/variants",
+      permission: PERMISSIONS.catalogWrite,
+    },
+    {
       method: "POST",
       path: "/admin/variants/2f1b8a5e-0000-4000-8000-000000000000/prices",
       permission: PERMISSIONS.catalogWrite,
@@ -213,7 +223,7 @@ describe("the catalog is behind the Merchant session", () => {
     const response = await kobai.request(path, {
       method,
       headers: { "content-type": "application/json" },
-      body: method === "POST" ? "{}" : undefined,
+      body: method === "GET" || method === "DELETE" ? undefined : "{}",
     });
 
     expect(response.status).toBe(401);
@@ -255,7 +265,7 @@ describe("the catalog is behind the Merchant session", () => {
           ...bookkeeper.headers,
           "content-type": "application/json",
         },
-        body: method === "POST" ? "{}" : undefined,
+        body: method === "GET" || method === "DELETE" ? undefined : "{}",
       });
 
       // 403 and not 404: the gate answers before the handler, so it never leaks whether the
@@ -381,6 +391,118 @@ describe("GET /admin/products/:id", () => {
     const response = await kobai.request("/admin/products/not-a-uuid", { headers });
 
     expect(response.status).toBe(404);
+  });
+});
+
+describe("POST /admin/products/:id/variants", () => {
+  it("adds a Variant to a Product that already exists", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}/variants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sku: "POSTER-A3", metadata: { size: "A3" } }),
+    });
+
+    // A second size is one more row on the Product a Merchant already has, so nothing that
+    // Product carries — its Variants' Prices, their stock counts — has to be discarded to
+    // reach one. Recreating it was the only way until this route existed, which is the same
+    // loss #144 removed for a SKU.
+    expect(response.status).toBe(201);
+    const added = await response.json();
+    expect(added).toMatchObject({
+      sku: "POSTER-A3",
+      // The defaults a Variant created inside `POST /admin/products` gets, because it is the
+      // same request shape read by the same code: `physical` unless it said otherwise, no
+      // Price, and untracked until somebody counts it.
+      fulfilment: { strategy: "physical" },
+      metadata: { size: "A3" },
+      prices: [],
+      inventory: null,
+    });
+
+    // Read back rather than assembled from what went in, so what this answers is what the
+    // Product reports — `createProduct`'s property, asserted the way correcting one is.
+    const read = (await (
+      await kobai.request(`/admin/products/${product.id}`, { headers })
+    ).json()) as { variants: unknown[] };
+    expect(read.variants).toEqual([product.variants[0], added]);
+  });
+
+  it("refuses a SKU another Variant already carries, and adds nothing", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}/variants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sku: "POSTER-A2" }),
+    });
+
+    // Creation's refusal, made by creation's check: the unique index answers it, so two
+    // Merchants adding the same SKU at one instant cannot both be told there was no such SKU
+    // (ADR-0018).
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ reason: "sku-taken" });
+    const read = (await (
+      await kobai.request(`/admin/products/${product.id}`, { headers })
+    ).json()) as { variants: unknown[] };
+    expect(read.variants).toEqual(product.variants);
+  });
+
+  it("refuses a Fulfilment Strategy this deployment has not wired", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}/variants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sku: "MADE", fulfilment: { strategy: "made-to-order" } }),
+    });
+
+    // 422 and the word creating one answers with: the body is well formed, and it is *this*
+    // deployment that has not wired that Strategy — a fact fixed in `kobai.config.ts`.
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "unknown-fulfilment-strategy",
+    });
+  });
+
+  it("answers 404 for a Product that does not exist, and for an id that is not one", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    for (const id of ["2f1b8a5e-0000-4000-8000-000000000000", "not-an-identifier"]) {
+      const response = await kobai.request(`/admin/products/${id}/variants`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ sku: "ANYTHING" }),
+      });
+
+      expect(response.status, id).toBe(404);
+      await expect(response.json(), id).resolves.toMatchObject({
+        reason: "product-not-found",
+      });
+    }
+  });
+
+  it("refuses a Variant with no SKU, which is a Variant nobody could identify", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}/variants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ metadata: { size: "A3" } }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
   });
 });
 
