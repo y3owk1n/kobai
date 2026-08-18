@@ -225,11 +225,11 @@ const createMerchantRoute = createRoute({
  * Merchants were write-only until #173: one could be created and never seen again, which made
  * *who has access* a question this API could not answer about itself.
  *
- * **Gated by `merchant:write`, the same Permission that creates one**, and that is a decision
- * rather than an oversight — ADR-0066 argues it. A Merchant who may add a colleague may already
- * grant every Permission this deployment has, by creating one against `owner`, so
- * `merchant:write` *is* the power to administer access; a `merchant:read` beside it would name
- * a boundary that does not exist.
+ * **Gated by `merchant:read`, and not by the `merchant:write` that creates one** (ADR-0066).
+ * Adding a colleague confers everything, because the colleague can be added against `owner`, so
+ * one Permission covers every write on this surface; reading the roster confers nothing, and
+ * gating it the same way would mean granting the power to change who has access in order to let
+ * somebody see it.
  */
 const listMerchantsRoute = createRoute({
   method: "get",
@@ -237,7 +237,7 @@ const listMerchantsRoute = createRoute({
   summary: "List Merchants",
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — who has access to this deployment, and what each of them may do. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered (ADR-0064).`,
   security: MERCHANT_SESSION,
-  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  middleware: [requirePermission(PERMISSIONS.merchantRead)] as const,
   request: { query: contract.PageQuery },
   responses: {
     200: json("A page of Merchants.", contract.MerchantList),
@@ -289,13 +289,19 @@ const createRoleRoute = createRoute({
   },
 });
 
+/**
+ * Lists the Roles this deployment has.
+ *
+ * **Gated by `merchant:read`**, as the read beside it is: what a colleague may be given is part
+ * of who has access, and seeing it is not the power to change it (ADR-0066).
+ */
 const listRolesRoute = createRoute({
   method: "get",
   path: "/roles",
   summary: "List Roles",
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — what this deployment may assign a colleague. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered (ADR-0064).`,
   security: MERCHANT_SESSION,
-  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  middleware: [requirePermission(PERMISSIONS.merchantRead)] as const,
   request: { query: contract.PageQuery },
   responses: {
     200: json("A page of Roles.", contract.RoleList),
@@ -313,7 +319,7 @@ const readRoleRoute = createRoute({
   summary: "Read a Role",
   description: "One Role, and everything it may do.",
   security: MERCHANT_SESSION,
-  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  middleware: [requirePermission(PERMISSIONS.merchantRead)] as const,
   request: { params: contract.IdParam },
   responses: {
     200: json("The Role.", contract.Role),

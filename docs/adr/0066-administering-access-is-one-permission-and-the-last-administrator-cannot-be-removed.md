@@ -1,4 +1,4 @@
-# Roles are administered through one Permission, and the last administrator cannot be removed
+# Administering access is one Permission, and the last administrator cannot be removed
 
 `POST`, `GET`, `PATCH` and `DELETE /admin/roles` create, read, change and remove a Role, and
 `GET /admin/merchants` says who holds which. Six operations, all of them new promised surface
@@ -14,8 +14,8 @@ are rows, so a narrower one is a row"*, which was true and was the finding. Ever
 one kind of Merchant, holding everything.
 
 Most of these six routes need no record: they are ADR-0064's pagination and ADR-0062's `PATCH`
-applied to one more table. Four things about them are decisions, three are hard to reverse, and
-this is where they are written down.
+applied to one more table. Four things about them are decisions, every one of them promised
+surface from the day it ships, and this is where they are written down.
 
 ## A Permission this build of Core has never heard of is preserved, not rejected
 
@@ -24,7 +24,7 @@ must be a non-empty string — a shape, not a vocabulary — and is stored and a
 unchanged.
 
 The alternative was there for the taking, and it looks like ordinary rigour: `PERMISSIONS` in
-`auth/permissions.ts` is a closed literal of the eight words Core defines, and refusing anything
+`auth/permissions.ts` is a closed literal of the nine words Core defines, and refusing anything
 else would catch a typo the moment a Merchant made it. It is still wrong, for two reasons that
 outlast the typo.
 
@@ -134,36 +134,56 @@ violation surfacing as a 500.
 key would then refuse what the read had already promised was safe. The delete is one statement
 and the violation is caught and named — the same shape `createMerchant` uses for a taken email.
 
-## One Permission gates all six, and it is `merchant:write`
+## The writes are one Permission, and seeing who has access is another
 
-**Decided: every route here — the reads included — sits behind `merchant:write`, and #173 adds
-no Permission.**
+**Decided: `POST`, `PATCH` and `DELETE /admin/roles` sit behind `merchant:write`, the Permission
+that already creates a Merchant; `GET /admin/roles`, `GET /admin/roles/{id}` and
+`GET /admin/merchants` sit behind `merchant:read`, which #173 adds and
+`packages/core/migrations/0030` seeds onto `owner`.**
 
-This departs from the read/write split the surface otherwise draws (`store:read` is not
-`store:write`; `catalog:` and `api-key:` likewise), so it needs an argument rather than a
-precedent.
+**One Permission for the writes, because they are one power.** A Merchant who may add a colleague
+may add one against `owner`, sign in as them, and hold every Permission the deployment has. So
+`merchant:write` is not "the power to create a row in `core_merchant`" — it is the power to
+administer access, entire, and it confers whatever any Role could confer. Naming a `role:write`
+beside it would draw a boundary that does not exist, and would leave a deployment believing it
+had separated two powers that are one. **That is why there are three writes and one word for
+them, and it is the half of this record that did not move.**
 
-**`merchant:write` already confers everything a Role could confer.** A Merchant who may add a
-colleague may add one against `owner`, sign in as them, and hold every Permission the deployment
-has. So it is not "the power to create a row in `core_merchant`" — it is the power to administer
-access, entire. Naming a `role:write` beside it would draw a boundary that does not exist, and
-would leave a deployment believing it had separated two powers that are one.
+**That argument reaches the writes and stops there.** Reading the roster grants nothing and
+escalates to nothing: a Merchant who can see that a colleague holds `owner` is no nearer holding
+it. So gating the reads on `merchant:write` did not follow from the transitivity above — it was a
+separate decision, and the consequence it carried is the one that settles it. **To let somebody
+see who has access, a deployment would have had to grant them the power to change it.** The
+auditor is a real Role — see the team, grant nothing — and under one Permission the only way to
+staff it was to make the auditor an administrator. That is over-granting forced by the absence of
+a word, which is the more expensive of the two mistakes on a surface whose whole subject is who
+may do what.
 
-The reads are the weaker half of that. There is a real Role that wants
-`GET /admin/merchants` and not `POST /admin/merchants` — an auditor who may see who has access
-without granting any — and `api-key:read` is the precedent for splitting exactly that out. What
-decided it the other way is that nothing in this ticket needs the distinction, and that the two
-mistakes are not equally expensive: a route gated too narrowly refuses somebody who should be
-let in, which is visible the first time it happens, and one gated too widely lets somebody in
-quietly. The narrow one is also the one this repository is set up to relax —
-[ADR-0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md)'s licence is open
-until the first publish, and adding a Permission is one edit and one migration, which AGENTS.md
-already documents.
+**And it would have been the only family on this surface with a write and no read.**
+`catalog:read`/`catalog:write`, `api-key:read`/`api-key:write` and `store:read`/`store:write` all
+pair, because seeing what a deployment is and changing it are different powers. `order:read`
+stands alone in the other direction and for a reason that expires nowhere: an Order is immutable
+(ADR-0009), so there is no order write for a Permission to gate. A `merchant:` family with a
+write and no read is not a smaller version of that split; it is the split refused, in the one
+place a deployment is most likely to want it.
 
-**This is the part of the record to revisit first**, and the trigger is concrete: the day a
-deployment wants a Merchant who can see the team and not change it, or the day a Plugin brings
-Permissions of its own, `merchant:read` is the shape of the answer. After the first publish it
-costs a major.
+What was weighed against splitting, and did not survive the consequence above, was that nothing
+in #173's own routes needs the distinction, and that a route gated too narrowly refuses somebody
+who should be let in — visible the first time it happens — while one gated too widely lets
+somebody in quietly. The second is what a read behind `merchant:write` *is*, so the asymmetry
+argues for the split rather than against it. The cost of taking it now is one entry in
+`PERMISSIONS` and one migration appending it to `owner`, the move `0020` and `0029` already made;
+the cost of taking it later is
+[ADR-0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md)'s licence expiring
+first, after which which gate a route sits behind is promised (ADR-0060) and moving one costs a
+major.
+
+**Two things follow for whoever extends this surface.** A new *write* here needs no new
+Permission and should take `merchant:write` — the transitive argument covers anything that
+changes who has access, `DELETE /admin/merchants/{id}` included. And a Merchant holding
+`merchant:read` sees every Role's Permission set and every colleague's address, which is the
+point rather than a leak: it is what "see who has access" means, and it is why the Permission is
+`merchant:read` rather than something narrower that answered half the question.
 
 ## Consequences
 
@@ -179,9 +199,11 @@ costs a major.
   joins `core_role` on every authenticated request rather than copying the permission set into
   the session, so access follows the job without anybody signing out — which is what the Admin's
   permission affordances (#178) assume, and `role.test.ts` now asserts.
-- **No migration, and no schema change.** `core_role` already had every column these routes
-  need, its `updated_at` trigger among them (ADR-0037) — which is why #173 is the rare surface
-  ticket that adds no migration at all.
+- **One migration, and no schema change.** `core_role` already had every column these routes
+  need, its `updated_at` trigger among them (ADR-0037), so nothing here alters a table. The one
+  migration is `0030`, which appends `merchant:read` to the seeded `owner` Role — a data change
+  of the shape `0020` and `0029` are, and the price of defining a Permission at all: skip it and
+  every deployment that upgrades gets three routes nobody can call.
 - **Roles are testable through the public API**, so no test in this repository builds a narrower
   Role with SQL any more. The four that did now call `POST /admin/roles`, which is what makes
   them tests of something a Merchant can actually do.

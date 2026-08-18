@@ -772,14 +772,21 @@ already says where multi-currency arrives: as more rows. **Do not add a currency
 and do not narrow the refusal to "when Prices exist"** — relaxing it later is cheap, tightening
 it is a break (ADR-0060), and the narrow version is a read of `core_price` followed by a write.
 
-**A Role is a row a Merchant can make, and one Permission administers all of it** (ADR-0066).
-`POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are #173's six, and every
-one of them sits behind **`merchant:write`** — the reads included, which departs from the
-read/write split below and is argued in the record rather than inherited: a Merchant who may add
-a colleague may add one against `owner`, so that Permission is already the power to administer
-access entire, and a `role:write` beside it would name a boundary that does not exist. Three
-things about that surface are decisions and not implementation:
+**A Role is a row a Merchant can make, and one Permission administers every change to one**
+(ADR-0066). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are #173's six.
+The three **writes** sit behind **`merchant:write`** and there is deliberately no `role:write`
+beside it: a Merchant who may add a colleague may add one against `owner`, so that Permission is
+already the power to administer access entire, and a second word would name a boundary that does
+not exist. The three **reads** — `GET /admin/roles`, `GET /admin/roles/{id}` and
+`GET /admin/merchants` — sit behind
+**`merchant:read`**, because that argument reaches the writes and stops there. Seeing the roster
+escalates to nothing, and gating it on the write meant granting the power to change who has
+access in order to let somebody see it; `merchant:` would also have been the only family here
+with a write and no read. Four things about that surface are decisions and not implementation:
 
+- **A read is `merchant:read` and a write is `merchant:write`, and neither moves.** Which gate a
+  route sits behind is promised surface (ADR-0060), so a route added here takes the one its verb
+  says — a new write, `DELETE /admin/merchants/{id}` included, needs no Permission of its own.
 - **A Permission Core has never heard of is stored, not refused.** `permissions` is an array of
   non-empty strings and nothing checks *which* strings — a shape, not a vocabulary. `Session`'s
   own description already promises this ("a deployment may hold a permission this build of Core
@@ -803,11 +810,14 @@ things about that surface are decisions and not implementation:
 **A route needing a Permission Core does not define yet brings one with it**, which is one edit
 and one migration. The new string goes **last** in `PERMISSIONS` (`auth/permissions.ts`), because
 `ALL_PERMISSIONS` is that literal's declaration order and `auth.test.ts` holds the seeded `owner`
-Role equal to it; then a `--custom` migration appends it to `owner`, the way `0020` and `0029`
+Role equal to it; then a `--custom` migration appends it to `owner`, the way `0029` and `0030`
 do. Skip the migration and every deployment that upgrades gets a route nobody can call. **The
-read/write split is the house rule** — `store:read` is not `store:write`, as `catalog:` and
-`api-key:` already are — because which gate a route sits behind is promised as well (ADR-0060),
-so gating a write behind a read permission is a break to undo rather than a decision to take.
+read/write split is the house rule** — `store:read` is not `store:write`, as `catalog:`,
+`api-key:` and `merchant:` already are — because which gate a route sits behind is promised as
+well (ADR-0060), so gating a write behind a read permission is a break to undo rather than a
+decision to take, and gating a read behind a write is granting the power to change a thing in
+order to let somebody see it. `order:read` stands alone only because an Order is immutable
+(ADR-0009), so there is no write for a Permission to gate.
 
 **A declared refusal must have the gate that makes it.** Five of the statuses a route
 declares are not the handler's to answer — they are made above it, by middleware: `503` by the

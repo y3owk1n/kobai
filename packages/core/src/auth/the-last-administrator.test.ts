@@ -96,13 +96,24 @@ describe("stripping every administering Role at once", () => {
     // And then the thing the statuses cannot say: somebody can still administer Merchants,
     // asked the way a deployment locked out of itself would find out — by every one of them
     // trying, and exactly one getting in.
+    //
+    // **The probe is a write, because administering is the write.** `merchant:read` opens the
+    // reads on this surface and puts nobody's Permission back (ADR-0066), so a Merchant who can
+    // list Roles and nothing else is exactly the locked-out state this file is about — and a
+    // read would report them as the administrator who is still standing.
     const admits = await Promise.all(
       administrators.map(
-        async (each) =>
-          (await kobai.request("/admin/roles", { headers: each.session.headers })).status,
+        async (each, index) =>
+          (
+            await kobai.request("/admin/roles", {
+              method: "POST",
+              headers: { ...each.session.headers, "content-type": "application/json" },
+              body: JSON.stringify({ name: `made-by-${index}`, permissions: [] }),
+            })
+          ).status,
       ),
     );
-    expect(admits.filter((status) => status === 200)).toHaveLength(1);
+    expect(admits.filter((status) => status === 201)).toHaveLength(1);
   });
 });
 

@@ -372,11 +372,87 @@ describe("a Merchant against a narrower Role", () => {
 
     expect(orders.status).toBe(200);
     expect([roles.status, merchants.status]).toEqual([403, 403]);
-    // 403 and not 404: they are signed in, and the answer names the Permission they lack.
+    // 403 and not 404: they are signed in, and the answer names the Permission they lack —
+    // `merchant:read` on a read, which is a Role a deployment can actually grant (ADR-0066).
     await expect(roles.json()).resolves.toMatchObject({
       reason: "permission-denied",
-      required: PERMISSIONS.merchantWrite,
+      required: PERMISSIONS.merchantRead,
     });
+  });
+});
+
+describe("a Role that may see who has access and not change it", () => {
+  it("reads every Role and Merchant, and is refused every write on that surface", async () => {
+    // The auditor ADR-0066 names, and the whole reason `merchant:read` exists: while the reads
+    // sat behind `merchant:write`, letting somebody see who had access meant granting them the
+    // power to change it — a Merchant they added against `owner` and signed in as would hold
+    // everything this deployment has.
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    const bookkeeping = await createRole(owner, {
+      name: "bookkeeper",
+      permissions: [PERMISSIONS.orderRead],
+    });
+    await createRole(owner, { name: "auditor", permissions: [PERMISSIONS.merchantRead] });
+    const auditor = await signInAgainst(owner, "auditor");
+
+    const roles = await kobai.request("/admin/roles", { headers: auditor.headers });
+    const role = await kobai.request(`/admin/roles/${bookkeeping}`, {
+      headers: auditor.headers,
+    });
+    const merchants = await kobai.request("/admin/merchants", {
+      headers: auditor.headers,
+    });
+
+    const created = await kobai.request(
+      "/admin/roles",
+      json({ name: "another", permissions: [] }, auditor.headers),
+    );
+    const changed = await kobai.request(`/admin/roles/${bookkeeping}`, {
+      method: "PATCH",
+      headers: { ...auditor.headers, "content-type": "application/json" },
+      body: JSON.stringify({ permissions: [] }),
+    });
+    const deleted = await kobai.request(`/admin/roles/${bookkeeping}`, {
+      method: "DELETE",
+      headers: auditor.headers,
+    });
+    const colleague = await kobai.request(
+      "/admin/merchants",
+      json(
+        { email: "third@example.test", password: COLLEAGUE.password, role: "auditor" },
+        auditor.headers,
+      ),
+    );
+
+    expect([roles.status, role.status, merchants.status]).toEqual([200, 200, 200]);
+    // What they can see is the whole roster and the whole set of Roles, not a redacted one.
+    const listed = (await roles.json()) as { roles: { name: string }[] };
+    expect(listed.roles.map((each) => each.name).sort()).toEqual([
+      "auditor",
+      "bookkeeper",
+      "owner",
+    ]);
+    const roster = (await merchants.json()) as { merchants: { email: string }[] };
+    expect(roster.merchants.map((each) => each.email).sort()).toEqual(
+      [COLLEAGUE.email, TEST_MERCHANT.email].sort(),
+    );
+
+    // And every write is refused, each naming the Permission that administers access.
+    expect([created.status, changed.status, deleted.status, colleague.status]).toEqual([
+      403, 403, 403, 403,
+    ]);
+    for (const [what, response] of [
+      ["creating a Role", created],
+      ["changing a Role", changed],
+      ["deleting a Role", deleted],
+      ["adding a colleague", colleague],
+    ] as const) {
+      await expect(response.json(), what).resolves.toMatchObject({
+        reason: "permission-denied",
+        required: PERMISSIONS.merchantWrite,
+      });
+    }
   });
 });
 
