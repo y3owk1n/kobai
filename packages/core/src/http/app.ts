@@ -4,6 +4,7 @@ import type { SessionPolicy } from "../auth/session.ts";
 import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
+import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
 import type { PlaceOrderWorkflow } from "../order/place-order.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
@@ -17,6 +18,15 @@ import { createStoreRoutes } from "./store.ts";
 
 export type HttpDependencies = {
   readonly db: Database;
+  /**
+   * The Fulfilment Strategies this deployment has — Core's two, with whatever the Project
+   * wired over them (ADR-0052).
+   *
+   * Threaded through rather than imported by the modules that ask, because it is a property of
+   * the instance: the admin surface refuses a Variant pointing at one this deployment does not
+   * have, and `place-order` asks each line's Strategy what it answers.
+   */
+  readonly fulfilment: FulfilmentStrategies;
   readonly migrations: MigrationStateHolder;
   readonly logger: Logger;
   /**
@@ -169,7 +179,14 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
 
   const admin = new OpenAPIHono();
   admin.use("*", requireMigrationsApplied(deps.migrations));
-  admin.route("/", createAdminRoutes({ db: deps.db, sessionPolicy: deps.sessionPolicy }));
+  admin.route(
+    "/",
+    createAdminRoutes({
+      db: deps.db,
+      fulfilment: deps.fulfilment,
+      sessionPolicy: deps.sessionPolicy,
+    }),
+  );
   app.route("/admin", admin);
 
   // The second authenticated surface, and a second gate rather than a second credential for
@@ -181,6 +198,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
     "/",
     createStoreRoutes({
       db: deps.db,
+      fulfilment: deps.fulfilment,
       priceWorkflow: deps.priceWorkflow,
       placeOrderWorkflow: deps.placeOrderWorkflow,
       workflows: deps.workflows,

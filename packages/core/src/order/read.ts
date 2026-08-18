@@ -2,6 +2,7 @@ import { asc, desc, eq, inArray } from "drizzle-orm";
 import type { Queryable } from "../db/client.ts";
 import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { type Fulfilment, readFulfilmentsOf } from "../fulfilment/fulfilment.ts";
 
 /**
  * Reading an Order.
@@ -163,6 +164,19 @@ export type Order = OrderSummary & {
    * them. `total` accounts for both.
    */
   readonly adjustments: readonly OrderAdjustment[];
+  /**
+   * How this Order gets to the Shopper — **one entry per way**, on independent timelines
+   * (ADR-0014).
+   *
+   * A list rather than a status, because a mixed Order ships a poster and emails a PDF and those
+   * do not share a lifecycle. Each says which of the lines above it covers, and what its
+   * Fulfilment Strategy answered at Capture — a snapshot, like everything else here, so
+   * rewiring a Strategy does not rewrite an Order.
+   *
+   * Empty for an Order placed before Fulfilment existed, which is every Order already in a
+   * database kobai has just been upgraded in.
+   */
+  readonly fulfilments: readonly Fulfilment[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -307,6 +321,8 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     .orderBy(asc(orderAdjustment.position), asc(orderAdjustment.id))
     .where(eq(orderAdjustment.orderId, row.id));
 
+  const fulfilments = await readFulfilmentsOf(db, row.id);
+
   // At most one, in DDL — see `core_payment`'s unique index on `order_id`.
   const [paid] = await db
     .select(paymentColumns)
@@ -328,6 +344,7 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     lineItems: lines.map((line) => ({ ...line, adjustments: adjustmentsOf(line.id) })),
     // The Order's own: the ones attached to no line at all.
     adjustments: adjustmentsOf(null),
+    fulfilments,
     metadata: row.metadata,
     payment: paid ? paymentOf(paid) : null,
     createdAt: row.createdAt.toISOString(),

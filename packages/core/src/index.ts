@@ -26,7 +26,13 @@ export type {
  * Project has to import to write one. The absolute cap is Core's and is not on this surface.
  */
 export type { SessionOptions } from "./auth/session.ts";
-export type { Price, Product, ProductDetail, Variant } from "./catalog/read.ts";
+export type {
+  Price,
+  Product,
+  ProductDetail,
+  Variant,
+  VariantFulfilment,
+} from "./catalog/read.ts";
 export {
   type CoreWorkflowOverrides,
   consoleLogger,
@@ -41,6 +47,35 @@ export type { Database } from "./db/client.ts";
  * (ADR-0048).
  */
 export type { DatabaseReadiness, WaitForDatabaseOptions } from "./db/readiness.ts";
+/**
+ * **Fulfilment** — the Strategy interface a Plugin implements, and the entity an Order records.
+ *
+ * `FulfilmentStrategy` is ADR-0003's third Extension Point at its widest: a Plugin exports an
+ * object satisfying it, a Project names that object in `kobai.config.ts` under the key its
+ * Variants point at, and nothing else connects the two (ADR-0017, ADR-0052). `FulfilledVariant`
+ * and `FulfilmentAnswers` are what such an object is handed and what it returns, so both have to
+ * be nameable; `FulfilmentOptions` is the shape of the config key.
+ *
+ * `CORE_FULFILMENT_STRATEGIES` is the one value here, because a Project that wants to answer as
+ * `physical` does but for one extra question should not have to restate answers Core already
+ * gives. The name a Variant defaults to is deliberately **not** exported: it is a property of
+ * the column, said in the API description, and a constant for it would be a way to write code
+ * that depends on which of Core's two it happens to be.
+ *
+ * `AppliedFulfilment` is on the surface because it sits on `CartLineToPlace`, which is what a
+ * replaced `place-order` Step is measured against. `Fulfilment` is what a caller reads off an
+ * Order.
+ */
+export type { Fulfilment } from "./fulfilment/fulfilment.ts";
+export type {
+  AppliedFulfilment,
+  FulfilledVariant,
+  FulfilmentAnswers,
+  FulfilmentOptions,
+  FulfilmentStrategies,
+  FulfilmentStrategy,
+} from "./fulfilment/strategy.ts";
+export { CORE_FULFILMENT_STRATEGIES } from "./fulfilment/strategy.ts";
 export type { HealthBody } from "./http/health.ts";
 /**
  * The OpenAPI description is on the surface because ADR-0002 makes the API the product:

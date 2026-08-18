@@ -421,6 +421,9 @@
           "sku": {
             "type": "string"
           },
+          "fulfilment": {
+            "$ref": "#/components/schemas/VariantFulfilment"
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -440,9 +443,22 @@
         "required": [
           "id",
           "sku",
+          "fulfilment",
           "metadata",
           "prices",
           "inventory"
+        ]
+      },
+      "VariantFulfilment": {
+        "type": "object",
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "description": "The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. What that Strategy answers about shipping, stock and Lead Time is recorded on an Order's Fulfilments, where it is a snapshot rather than a live decision."
+          }
+        },
+        "required": [
+          "strategy"
         ]
       },
       "Price": {
@@ -554,6 +570,16 @@
         "properties": {
           "sku": {
             "type": "string"
+          },
+          "fulfilment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VariantFulfilment"
+              },
+              {
+                "description": "The Fulfilment Strategy this Variant is delivered by. Defaults to `physical`. Naming one this deployment has not wired is refused: a Plugin's Strategy is wired in the Project's `kobai.config.ts`, and installing the Plugin does not do it."
+              }
+            ]
           },
           "metadata": {
             "type": "object",
@@ -760,6 +786,13 @@
                 },
                 "description": "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line."
               },
+              "fulfilments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Fulfilment"
+                },
+                "description": "How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed."
+              },
               "metadata": {
                 "type": "object",
                 "additionalProperties": {},
@@ -769,6 +802,7 @@
             "required": [
               "lineItems",
               "adjustments",
+              "fulfilments",
               "metadata"
             ]
           }
@@ -869,6 +903,47 @@
           "description",
           "amount",
           "metadata"
+        ]
+      },
+      "Fulfilment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "strategy": {
+            "type": "string",
+            "description": "The Fulfilment Strategy that produced this, by the name the deployment wired it under. Not a closed set: `physical` and `digital` are Core's, and a Plugin's is whatever the Project called it."
+          },
+          "requiresShipping": {
+            "type": "boolean",
+            "description": "Whether this part goes anywhere physical, as at Capture."
+          },
+          "tracksInventory": {
+            "type": "boolean",
+            "description": "Whether selling this took something off a shelf, as at Capture. `false` is why a digital line holds no Reservation."
+          },
+          "hasLeadTime": {
+            "type": "boolean",
+            "description": "Whether there is an interval between Capture and delivery. `true` is a made-to-order line; how long is the Plugin's to know, and reaches the Order as an Adjustment."
+          },
+          "lineItemIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The Line Items this Fulfilment covers, in the SKU order the Order reports its lines in. Every line of an Order kobai placed is in exactly one."
+          }
+        },
+        "required": [
+          "id",
+          "strategy",
+          "requiresShipping",
+          "tracksInventory",
+          "hasLeadTime",
+          "lineItemIds"
         ]
       },
       "OrderRefusal": {
@@ -1879,6 +1954,16 @@
           },
           "409": {
             "description": "A Variant already carries one of those SKUs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3544,7 +3629,7 @@
             }
           },
           "409": {
-            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
+            "description": "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or something in the Cart names a Fulfilment Strategy this deployment no longer has wired, or the idempotency key names a different request, or one still in flight.",
             "content": {
               "application/json": {
                 "schema": {

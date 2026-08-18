@@ -2,6 +2,12 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import {
+  DEFAULT_FULFILMENT_STRATEGY,
+  type FulfilmentStrategies,
+  fulfilmentStrategyFor,
+  fulfilmentStrategyNames,
+} from "../fulfilment/strategy.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { readStore } from "../store/read.ts";
 import { type Price, type ProductDetail, readProduct } from "./read.ts";
@@ -35,7 +41,7 @@ export type ProductCreation =
   | { readonly ok: true; readonly product: ProductDetail }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | "sku-taken";
+      readonly reason: "invalid" | "sku-taken" | "unknown-fulfilment-strategy";
       readonly detail: string;
     };
 
@@ -63,6 +69,7 @@ export type PriceCreation =
 export async function createProduct(
   db: Database,
   input: CreateProductInput,
+  strategies: FulfilmentStrategies,
 ): Promise<ProductCreation> {
   const title = trimmed(input.title);
   if (title === undefined) {
@@ -81,6 +88,28 @@ export async function createProduct(
   const variants = parseVariants(input.variants);
   if (!variants.ok) return variants;
 
+  // Refused at the moment of the mistake rather than at the first Order for it. A Variant
+  // pointing at a Strategy this deployment has not wired is one nothing can answer the three
+  // questions about, so it is a Variant that cannot be sold — and creating it anyway would put
+  // the failure a week away from the line that caused it. Installing a Plugin is not what wires
+  // its Strategy; a line of `kobai.config.ts` is (ADR-0017).
+  const unwired = variants.value.find(
+    (row) => !fulfilmentStrategyFor(strategies, row.fulfilmentStrategy),
+  );
+  if (unwired) {
+    return {
+      ok: false,
+      reason: "unknown-fulfilment-strategy",
+      detail: `This deployment has no Fulfilment Strategy called ${JSON.stringify(unwired.fulfilmentStrategy)}. It has ${fulfilmentStrategyNames(
+        strategies,
+      )
+        .map((name) => JSON.stringify(name))
+        .join(
+          ", ",
+        )} — Core ships \`physical\` and \`digital\`, and a Plugin's is wired under \`fulfilment.strategies\` in this Project's \`kobai.config.ts\`.`,
+    };
+  }
+
   let productId: string;
   try {
     productId = await db.transaction(async (tx) => {
@@ -96,6 +125,7 @@ export async function createProduct(
           variants.value.map((row) => ({
             productId: created.id,
             sku: row.sku,
+            fulfilmentStrategy: row.fulfilmentStrategy,
             metadata: row.metadata,
           })),
         )
@@ -247,6 +277,13 @@ class SkuTaken extends Error {
 
 type ParsedVariant = {
   readonly sku: string;
+  /**
+   * The Strategy this Variant is delivered by, **by name** — `physical` unless it said.
+   *
+   * Named for the column rather than for the request's `fulfilment` key, because a bare name and
+   * the `{ strategy }` object the body carries are two different things and this is the first.
+   */
+  readonly fulfilmentStrategy: string;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -288,8 +325,48 @@ function parseVariants(value: unknown): ParsedVariants {
       return invalid(metadataDetail("Each Variant's `metadata`"));
     }
 
-    parsed.push({ sku, metadata });
+    // Read out of the body here; whether this deployment *has* that Strategy is asked once,
+    // against the wired set, by the caller. A name and not an enum, because the set is open
+    // (ADR-0014) — a schema listing Core's two would be exactly the closed set it rules out.
+    const fulfilment = parseFulfilment(entry.fulfilment);
+    if (!fulfilment.ok) return fulfilment;
+
+    parsed.push({ sku, fulfilmentStrategy: fulfilment.value, metadata });
   }
 
   return { ok: true, value: parsed };
+}
+
+type ParsedFulfilment =
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly reason: "invalid"; readonly detail: string };
+
+/**
+ * The Strategy a Variant was created pointing at, or `physical` when it said nothing.
+ *
+ * `{ strategy: … }` rather than a bare name, so that the next thing a Variant needs to say
+ * about how it is fulfilled goes beside it instead of forcing this field's shape after the
+ * fact — the same reason `payments` and `session` are keys holding a subject (ADR-0050).
+ */
+function parseFulfilment(value: unknown): ParsedFulfilment {
+  if (value === undefined) return { ok: true, value: DEFAULT_FULFILMENT_STRATEGY };
+
+  if (!isJsonObject(value)) {
+    return {
+      ok: false,
+      reason: "invalid",
+      detail: `Each Variant's \`fulfilment\` must be an object naming a Strategy, e.g. { "strategy": "digital" }.`,
+    };
+  }
+
+  const strategy = trimmed(value.strategy);
+  if (strategy === undefined) {
+    return {
+      ok: false,
+      reason: "invalid",
+      detail: "Each Variant's `fulfilment.strategy` must be a non-empty string.",
+    };
+  }
+
+  return { ok: true, value: strategy };
 }

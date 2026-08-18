@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { DEFAULT_FULFILMENT_STRATEGY } from "../fulfilment/strategy.ts";
 
 /**
  * Core's tables. Every one of them is prefixed `core_`, which is what this package's
@@ -274,6 +275,27 @@ export const variant = pgTable(
       // which is a sellable thing belonging to no catalog entry.
       .references(() => product.id, { onDelete: "cascade" }),
     sku: text("sku").notNull().unique(),
+    /**
+     * The **Fulfilment Strategy** this Variant is delivered by, **by name** (ADR-0014,
+     * ADR-0052).
+     *
+     * A name and not an enum, and that is the decision rather than a shortcut to one: the set is
+     * open, Core ships `physical` and `digital`, and a Plugin's Strategy is wired by the Project
+     * under whatever key it likes. A `check` constraining this column to Core's two would be the
+     * closed set ADR-0014 rules out, in the one place it would be hardest to remove.
+     *
+     * Nothing about *how* it is fulfilled is stored beside it. Does it ship, does it consume
+     * stock, does it have a Lead Time are questions the Strategy answers when Core asks — see
+     * `fulfilment/strategy.ts` — so a column here would be the flags ADR-0014 exists to avoid.
+     *
+     * The default is `physical` because that is what every Variant written before this column
+     * existed is, and what a Variant created without an opinion should be. It is a real default
+     * rather than a backfill (ADR-0038): it is right for future rows too, which is why one
+     * generated migration adds this column rather than three.
+     */
+    fulfilmentStrategy: text("fulfilment_strategy")
+      .notNull()
+      .default(DEFAULT_FULFILMENT_STRATEGY),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -513,6 +535,56 @@ export const order = pgTable(
 export type OrderRow = typeof order.$inferSelect;
 
 /**
+ * A **Fulfilment** — how one part of an Order gets to the Shopper (ADR-0014).
+ *
+ * **Its own table rather than a column on `core_order`**, and that is the decision this ticket
+ * exists to take. A mixed Order ships a poster, emails a PDF and produces a print job; a
+ * `fulfilment_status` column would force one lifecycle onto three parts that do not share one,
+ * which is cheap today and unfixable once there is order history. One row here per way this
+ * Order is delivered, and the Line Items it covers point at it.
+ *
+ * **Everything about the Strategy is copied, for ADR-0009's reason.** `strategy` is the name it
+ * was wired under and the three booleans are what it answered *at Capture* — not what it would
+ * answer now. A Fulfilment that asked the live Strategy would be rewritten by a Project changing
+ * its config and destroyed by one removing a Plugin, which is exactly what a snapshot is for.
+ * There is deliberately no foreign key to anything about Strategies: a Strategy is an object in
+ * a config file, not a row.
+ *
+ * `updated_at` is here on a table nothing updates **yet**, and unlike `core_order`'s it is not a
+ * tamper detector: fulfilling is its own spec, and when it arrives a Fulfilment is the one part
+ * of an Order that is *expected* to move — dispatched, delivered, cancelled — while the Order
+ * around it never does. The trigger is attached in a `--custom` migration (ADR-0037).
+ */
+export const fulfilment = pgTable(
+  "core_fulfilment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      // An Order's Fulfilments are the Order's, exactly as its Line Items are.
+      .references(() => order.id, { onDelete: "cascade" }),
+    /** The Fulfilment Strategy that produced this, by the name it was wired under. */
+    strategy: text("strategy").notNull(),
+    /** What that Strategy answered about these lines, as at Capture. */
+    requiresShipping: boolean("requires_shipping").notNull(),
+    tracksInventory: boolean("tracks_inventory").notNull(),
+    hasLeadTime: boolean("has_lead_time").notNull(),
+    // No `metadata`, like `core_payment` and `core_reservation` beside it. ADR-0004's escape
+    // hatch is for an entity somebody has something to say about, and nothing may say anything
+    // about a Fulfilment yet — a column no route writes and no shape reports would be a
+    // promise about a feature that has not been designed.
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Reading an Order reads its Fulfilments by `order_id`, which is every view of one.
+    index("core_fulfilment_order_idx").on(table.orderId),
+  ],
+);
+
+export type FulfilmentRow = typeof fulfilment.$inferSelect;
+
+/**
  * A Line Item on an Order — and it holds a **snapshot** (ADR-0009).
  *
  * Title, SKU, unit price and tax as at Capture are columns here rather than a join, which is
@@ -535,6 +607,22 @@ export const orderLineItem = pgTable(
       // An Order's lines are the Order, exactly as a Cart's are the Cart.
       .references(() => order.id, { onDelete: "cascade" }),
     variantId: uuid("variant_id").references(() => variant.id, { onDelete: "set null" }),
+    /**
+     * The **Fulfilment** this line is part of — which of the Order's parcels, mails or print
+     * jobs it belongs to (ADR-0014).
+     *
+     * Nullable, and it says something true: an Order placed before Fulfilment existed has none,
+     * exactly as it has no Payment row. Writing one would have meant inventing a Fulfilment for
+     * an Order nobody recorded one for, which is the guess ADR-0038 says a backfill must never
+     * make. Every Order this version of kobai places has one on every line.
+     *
+     * `set null` rather than `cascade`: a Fulfilment and a Line Item both belong to the Order
+     * and go with it, and deleting a Fulfilment must never take a financial record's line with
+     * it.
+     */
+    fulfilmentId: uuid("fulfilment_id").references(() => fulfilment.id, {
+      onDelete: "set null",
+    }),
     /** The Product's title as at Capture. Renaming the Product does not reach this. */
     title: text("title").notNull(),
     /** The Variant's SKU as at Capture, for the same reason. */

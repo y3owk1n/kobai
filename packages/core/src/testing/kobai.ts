@@ -79,6 +79,11 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
       // every test that places an Order would be a test about not having a Payment Provider.
       // Saying `payments: {}` is how a test asks for the deployment that has none.
       payments: options?.payments ?? { provider: testPaymentProvider },
+      // The Fulfilment Strategies this deployment wired, so a test can boot with a Plugin's
+      // and boot without it — which is the whole of what ADR-0017 promises. Nothing is
+      // defaulted: a deployment that says nothing has Core's `physical` and `digital`, and
+      // that is what almost every test in this repository should be.
+      fulfilment: options?.fulfilment,
       logger: options?.logger ?? silentLogger,
     });
   } catch (cause) {

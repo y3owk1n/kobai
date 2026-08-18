@@ -436,10 +436,31 @@ export const SetInventoryRequest = z
   })
   .openapi("SetInventoryRequest");
 
+/**
+ * How a Variant is delivered — the **name** of the Fulfilment Strategy it points at.
+ *
+ * A string and deliberately not an enum: the set is open (ADR-0014), Core ships `physical` and
+ * `digital`, and a Plugin's Strategy is wired by the Project under whatever key it likes. An
+ * enumeration here would be the closed set that forces a Core change the first time somebody
+ * sells a rental — and would make this description wrong on every deployment that wired one.
+ *
+ * An object holding one key, so that the next thing a Variant needs to say about how it is
+ * fulfilled arrives beside this one rather than by changing its shape.
+ */
+export const VariantFulfilment = z
+  .object({
+    strategy: z.string().meta({
+      description:
+        "The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. What that Strategy answers about shipping, stock and Lead Time is recorded on an Order's Fulfilments, where it is a snapshot rather than a live decision.",
+    }),
+  })
+  .openapi("VariantFulfilment");
+
 export const Variant = z
   .object({
     id: z.uuid(),
     sku: z.string(),
+    fulfilment: VariantFulfilment,
     metadata: Metadata,
     prices: z.array(Price).readonly().meta({
       description:
@@ -472,7 +493,14 @@ export const ProductList = z
   .openapi("ProductList");
 
 export const CreateVariantRequest = z
-  .object({ sku: z.string(), metadata: Metadata.optional() })
+  .object({
+    sku: z.string(),
+    fulfilment: VariantFulfilment.optional().meta({
+      description:
+        "The Fulfilment Strategy this Variant is delivered by. Defaults to `physical`. Naming one this deployment has not wired is refused: a Plugin's Strategy is wired in the Project's `kobai.config.ts`, and installing the Plugin does not do it.",
+    }),
+    metadata: Metadata.optional(),
+  })
   .openapi("CreateVariantRequest");
 
 /**
@@ -837,6 +865,42 @@ export const OrderSummary = z
  * timestamp would be a field whose only honest value is `createdAt` and the first thing
  * anybody would read as permission to write to the record.
  */
+/**
+ * A **Fulfilment** — how one part of an Order gets to the Shopper (ADR-0014).
+ *
+ * One per way this Order is delivered rather than a status on the Order, because a mixed Order
+ * ships a poster and emails a PDF and those do not share a timeline. Nothing here moves yet:
+ * fulfilling is its own spec, and this is the record it will be written against.
+ *
+ * The three booleans are what the Fulfilment Strategy **answered at Capture**, copied rather
+ * than looked up — a Project may rewire a Strategy or remove the Plugin that offered one, and an
+ * Order is immutable.
+ */
+export const Fulfilment = z
+  .object({
+    id: z.uuid(),
+    strategy: z.string().meta({
+      description:
+        "The Fulfilment Strategy that produced this, by the name the deployment wired it under. Not a closed set: `physical` and `digital` are Core's, and a Plugin's is whatever the Project called it.",
+    }),
+    requiresShipping: z.boolean().meta({
+      description: "Whether this part goes anywhere physical, as at Capture.",
+    }),
+    tracksInventory: z.boolean().meta({
+      description:
+        "Whether selling this took something off a shelf, as at Capture. `false` is why a digital line holds no Reservation.",
+    }),
+    hasLeadTime: z.boolean().meta({
+      description:
+        "Whether there is an interval between Capture and delivery. `true` is a made-to-order line; how long is the Plugin's to know, and reaches the Order as an Adjustment.",
+    }),
+    lineItemIds: z.array(z.uuid()).readonly().meta({
+      description:
+        "The Line Items this Fulfilment covers, in the SKU order the Order reports its lines in. Every line of an Order kobai placed is in exactly one.",
+    }),
+  })
+  .openapi("Fulfilment");
+
 export const Order = OrderSummary.extend({
   lineItems: z.array(OrderLineItem).readonly().meta({
     description:
@@ -845,6 +909,10 @@ export const Order = OrderSummary.extend({
   adjustments: z.array(OrderAdjustment).readonly().meta({
     description:
       "The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line.",
+  }),
+  fulfilments: z.array(Fulfilment).readonly().meta({
+    description:
+      "How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed.",
   }),
   metadata: Metadata,
 }).openapi("Order");

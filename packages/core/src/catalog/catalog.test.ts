@@ -332,6 +332,9 @@ describe("GET /admin/products/:id", () => {
       {
         id: product.variants[0]?.id,
         sku: "POSTER-A2",
+        // `physical` because nothing said otherwise, which is what a Variant with no opinion
+        // about how it is delivered is (ADR-0014).
+        fulfilment: { strategy: "physical" },
         metadata: {},
         prices: [],
         inventory: null,

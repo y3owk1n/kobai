@@ -71,6 +71,18 @@ describe("a Cart becomes an Order", () => {
         },
       ],
       adjustments: [],
+      // How this Order gets to the Shopper — one entry, because there is one way, and it says
+      // what `physical` answered at Capture rather than what it would answer now (ADR-0014).
+      fulfilments: [
+        {
+          id: expect.any(String),
+          strategy: "physical",
+          requiresShipping: true,
+          tracksInventory: true,
+          hasLeadTime: false,
+          lineItemIds: [expect.any(String)],
+        },
+      ],
       metadata: {},
       // The money, recorded against the Order — for the total, and by whatever this deployment
       // was wired to take it with. A placed Order is a paid Order (ADR-0053).

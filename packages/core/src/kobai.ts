@@ -11,6 +11,7 @@ import {
   type WaitForDatabaseOptions,
   waitForDatabase,
 } from "./db/readiness.ts";
+import { resolveFulfilmentStrategies } from "./fulfilment/strategy.ts";
 import { createHttpApp, describeHttpApp } from "./http/app.ts";
 import type { OpenApiDocument } from "./http/openapi.ts";
 import { coreMigrationSet } from "./migrations/core-set.ts";
@@ -183,8 +184,14 @@ export function createKobai(options: KobaiOptions): Kobai {
     [placeOrder.name]: placeOrder,
   };
 
+  // Core's two, with whatever this Project wired over them — built once here for the same
+  // reason the Workflow registry is: a second answer to "which Strategies does this deployment
+  // have" is how a Variant becomes creatable in one module and unsellable in another.
+  const fulfilment = resolveFulfilmentStrategies(options.fulfilment);
+
   const app = createHttpApp({
     db: database.db,
+    fulfilment,
     // The one dependency Core names an interface for and implements nowhere (ADR-0053). Absent
     // is a configuration rather than a fault: this boot proceeds exactly as any other, and the
     // deployment refuses to place an Order and nothing else.

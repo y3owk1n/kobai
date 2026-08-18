@@ -1,4 +1,5 @@
 import type { SessionOptions } from "./auth/session.ts";
+import type { FulfilmentOptions } from "./fulfilment/strategy.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import type { placeOrderWorkflow } from "./order/place-order.ts";
 import type { PaymentsOptions } from "./payment/provider.ts";
@@ -79,6 +80,26 @@ export type KobaiProjectConfig = {
    * (ADR-0048).
    */
   readonly payments?: PaymentsOptions;
+  /**
+   * How this Project's Variants are delivered — the Fulfilment Strategies it has wired
+   * (ADR-0014, ADR-0052).
+   *
+   * ```ts
+   * fulfilment: { strategies: { "made-to-order": madeToOrderStrategy } }
+   * ```
+   *
+   * A Plugin **offers** a Strategy and this line is what makes it real: until a Variant can
+   * name it here, no Variant may point at it and nothing in Core has heard of it. Take the line
+   * out and the Plugin is still installed, still importable, and still inert (ADR-0017).
+   *
+   * Core's own `physical` and `digital` are there whether or not this key is, so a deployment
+   * that says nothing has exactly those two — and naming one of them here **replaces** it,
+   * which is what substituting a dependency means and is visible in this one file.
+   *
+   * **A subject, not a scalar**, for `session`'s and `payments`' reason: this is where the next
+   * thing a deployment needs to say about how it fulfils goes.
+   */
+  readonly fulfilment?: FulfilmentOptions;
 };
 
 /**

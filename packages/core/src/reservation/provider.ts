@@ -1,4 +1,5 @@
 import type { Queryable, Transaction } from "../db/client.ts";
+import type { FulfilmentAnswers } from "../fulfilment/strategy.ts";
 
 /**
  * **Reservation** — one interface, and the providers that own the scarce things (ADR-0018).
@@ -38,6 +39,19 @@ export type ReservableLine = {
   readonly quantity: number;
   /** The Line Item's own open data (ADR-0013), carried through untouched. */
   readonly metadata: Record<string, unknown>;
+  /**
+   * What this Variant's Fulfilment Strategy answered about it (ADR-0014, ADR-0052).
+   *
+   * **This is what a provider decides from**, and it is why the interface takes it rather than
+   * leaving `hold-reservations` to filter: Inventory claims for a line whose Strategy says it
+   * consumes stock, and a Capacity provider will claim for one whose Strategy says it has a Lead
+   * Time — two questions, one per provider, and neither is the Step's to ask on the other's
+   * behalf. A filter above this line could only ever express the first.
+   *
+   * A line that no provider claims for produces no claim at all, which is not the same as a
+   * claim of zero: a Store selling downloads takes no row lock and writes no Reservation.
+   */
+  readonly fulfilment: FulfilmentAnswers;
 };
 
 /**
