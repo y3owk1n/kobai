@@ -113,12 +113,33 @@
       // into a script and eats the leading slashes, so such a key becomes the command it
       // meant to document. See AGENTS.md § Development and issue #30.
 
+      // Every script below that runs a binary out of `node_modules` opens with
+      // `sh scripts/require-install.sh <its own name> &&`. A checkout that has never
+      // installed is an ordinary state — a fresh clone, a `git worktree add`, an agent's
+      // worktree — and what those scripts did in it was fail with `Command "biome" not
+      // found`: a message naming a binary, leaving the reader to work out that a package
+      // manager never ran, on the command AGENTS.md tells a reader to reach for first
+      // (#133). `install` and `ci` carry no guard, because they *are* the install, and a
+      // guard on either would refuse the way out of the state it exists to report.
+      //
+      // A guard rather than an install in front of each script: prefixing
+      // `pnpm install --frozen-lockfile` would make the fast commands pay for an install
+      // every time, and would make them refuse whenever the lockfile is stale — so
+      // `devbox run format`, the command you reach for to fix a finding, would stop working
+      // exactly while a dependency change is in flight.
+      //
+      // A file rather than a shell function defined in the `init_hook` above, and that part
+      // is not a preference: devbox skips the hook when a devbox shell is already active, so
+      // a function there is missing from every script run the second way AGENTS.md documents.
+      // `scripts/require-install.sh` says the rest;
+      // tests/a-fresh-checkout-is-told-what-to-run.test.ts holds both halves.
+
       // db:generate builds first because a Plugin's drizzle.config.ts imports
       // defineKobaiDrizzleConfig from @kobai/core/migrations, and that specifier resolves
       // through the package's `exports` to dist — the same path a Plugin author outside
       // this repository takes. Recursive because every package that owns tables generates
       // its own migrations from its own schema, Core included.
-      "db:generate": "pnpm -r build && pnpm -r db:generate",
+      "db:generate": "sh scripts/require-install.sh db:generate && pnpm -r build && pnpm -r db:generate",
 
       // There is deliberately no db:push script. This is the file kobai's commands live
       // in, so it is the file where someone would reach for the convenient one.
@@ -136,7 +157,7 @@
       // in dependency order, so @kobai/core writes openapi.json and @kobai/client then
       // regenerates itself from what Core wrote. Both files are checked in, and their
       // tests fail the gate when either has drifted.
-      "openapi:generate": "pnpm -r openapi:generate",
+      "openapi:generate": "sh scripts/require-install.sh openapi:generate && pnpm -r openapi:generate",
 
       // Rewrites what `create-kobai` generates from the reference Project, which is the
       // source of truth for both. Run it after changing anything under `reference/` — the
@@ -145,7 +166,7 @@
       // and compares it byte for byte with what is checked in. Same arrangement as
       // openapi:generate above, and for the same reason: a generated artifact nobody
       // regenerates is a generated artifact that has quietly stopped being true.
-      "template:generate": "pnpm --filter create-kobai template:generate",
+      "template:generate": "sh scripts/require-install.sh template:generate && pnpm --filter create-kobai template:generate",
 
       // `build` then `up` rather than `up --build`, so the address is printed between the
       // build output and the log stream rather than scrolling away above a cold build. It
@@ -156,8 +177,8 @@
       // the same literal `compose.yaml` does.
       "up": "docker compose build && printf '\\n  kobai is serving on http://localhost:%s — health at /health, the Admin at /admin-ui\\n\\n' \"${PORT:-3000}\" && docker compose up",
       "down": "docker compose down",
-      "build": "pnpm -r build",
-      "dev": "pnpm -r build && pnpm --filter kobai-reference dev",
+      "build": "sh scripts/require-install.sh build && pnpm -r build",
+      "dev": "sh scripts/require-install.sh dev && pnpm -r build && pnpm --filter kobai-reference dev",
 
       // The Admin, with a reload loop, in a second terminal beside `devbox run dev`.
       //
@@ -170,7 +191,7 @@
       //
       // `devbox run dev` already serves the *built* Admin at /admin-ui, because it builds
       // first. This is what to run when the Admin is the thing being edited.
-      "admin:dev": "pnpm --filter kobai-reference-admin dev",
+      "admin:dev": "sh scripts/require-install.sh admin:dev && pnpm --filter kobai-reference-admin dev",
       // `--error-on-warnings` because `biome ci` exits *zero* on warnings without it, and
       // Biome 2 re-tiered most of what Biome 1 called an error down to `warn` or `info`.
       // The flag covers the `warn` tier and every rule Biome adds to it later; `biome.json`
@@ -183,10 +204,10 @@
       //
       // `format` is deliberately the forgiving one: it rewrites rather than reports, so it
       // is where a finding gets fixed rather than tolerated.
-      "lint": "pnpm exec biome ci . --error-on-warnings",
-      "format": "pnpm exec biome check --write .",
-      "typecheck": "pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit",
-      "test": "docker compose up -d --wait db && pnpm -r build && pnpm exec vitest run",
+      "lint": "sh scripts/require-install.sh lint && pnpm exec biome ci . --error-on-warnings",
+      "format": "sh scripts/require-install.sh format && pnpm exec biome check --write .",
+      "typecheck": "sh scripts/require-install.sh typecheck && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit",
+      "test": "sh scripts/require-install.sh test && docker compose up -d --wait db && pnpm -r build && pnpm exec vitest run",
       "ci": "pnpm install --frozen-lockfile && docker compose up -d --wait db && pnpm exec biome ci . --error-on-warnings && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit && pnpm -r build && pnpm exec vitest run"
     }
   }

@@ -1,6 +1,6 @@
 # The lint gate fails on every finding, and `biome.json` says so out loud
 
-`devbox run lint` and the lint step of `devbox run ci` are the **same command** —
+`devbox run lint` and the lint step of `devbox run ci` run the **same invocation** —
 `pnpm exec biome ci . --error-on-warnings` — and `biome.json` lifts every recommended rule
 Biome reports at `info` up to `warn`. Together those mean **nothing Biome reports passes the
 gate**, at any severity. `tests/the-lint-gate-fails-below-error.test.ts` keeps it that way.
@@ -65,6 +65,11 @@ A gate stricter than the command a Developer is told to run is this same bug at 
 `devbox run lint` passes, the pull request goes red, and the difference is written down
 nowhere either place would show it. **`devbox run format` is where leniency belongs** — it
 rewrites rather than reports, so it is where a finding gets fixed instead of tolerated.
+
+Since #133 the `lint` script opens with `sh scripts/require-install.sh lint &&`, which says
+what has to be true before biome can run at all rather than changing what biome is asked to
+do; `ci` carries no such guard because it opens with the install itself. So what the test
+holds identical is the **biome invocation**, and it still holds it exactly.
 
 ## Why a test, and not just a config
 

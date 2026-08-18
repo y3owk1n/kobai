@@ -112,6 +112,19 @@ beforeAll(async () => {
 });
 
 /**
+ * The `lint` script with its fresh-checkout guard taken off the front (#133).
+ *
+ * `sh scripts/require-install.sh lint &&` says what has to be true before biome can run at
+ * all; it is not part of what biome is asked to do, and `ci` does not carry it because `ci`
+ * opens with the install itself. So the identity below is between the two *biome
+ * invocations*, and it stays exact — the pattern is anchored and names the guard, so
+ * anything else in front of `pnpm exec` fails the assertion rather than being stripped out
+ * of it. `tests/a-fresh-checkout-is-told-what-to-run.test.ts` owns the guard itself.
+ */
+const lintCommand = () =>
+  (scripts.lint ?? "").replace(/^sh scripts\/require-install\.sh \S+ && /, "");
+
+/**
  * The flags the gate lints with, read out of `devbox.json` rather than hard-coded *here*.
  *
  * The two fixture tests below would otherwise prove something about a command nobody runs,
@@ -120,7 +133,7 @@ beforeAll(async () => {
  * the whole script out, deliberately — pinning its exact text is that test's subject.
  */
 function lintFlags(): string[] {
-  const script = scripts.lint;
+  const script = lintCommand();
   const match = /^pnpm exec biome ci \.(?<flags>.*)$/.exec(script ?? "");
   if (!match?.groups) {
     throw new Error(
@@ -194,8 +207,8 @@ describe("the lint gate", () => {
    * rather than reports.
    */
   it("lints identically locally and in the gate", () => {
-    expect(scripts.lint).toBe("pnpm exec biome ci . --error-on-warnings");
-    expect(scripts.ci).toContain(scripts.lint);
+    expect(lintCommand()).toBe("pnpm exec biome ci . --error-on-warnings");
+    expect(scripts.ci).toContain(lintCommand());
   });
 
   /**
