@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -10,6 +9,7 @@ import {
 } from "../fulfilment/strategy.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { readStore } from "../store/read.ts";
+import { lockVariant } from "./lock.ts";
 import { type Price, type ProductDetail, readProduct } from "./read.ts";
 
 /**
@@ -221,17 +221,12 @@ export async function setPrice(
     // more fundamental answer — a caller told only that the currency is wrong would fix it
     // and then be told the Variant does not exist.
     //
-    // `for share` holds the row for the length of the transaction, so a Variant deleted
-    // concurrently cannot vanish between this read and the insert below. Without it the
-    // race surfaces as a foreign-key violation and a 500, which reports a broken server for
-    // something that is only a Variant that is no longer there.
-    const [found] = await tx
-      .select({ id: variant.id })
-      .from(variant)
-      .where(eq(variant.id, variantId))
-      .for("share")
-      .limit(1);
-    if (!found) return notThatVariant(variantId);
+    // **Held**, not merely read: the Price inserted below references this Variant, and one
+    // deleted in between would make that a foreign-key violation and a 500 — a broken server
+    // reported for something that is only a Variant no longer there. `lock.ts` is what the
+    // lock is and what order these rows are taken in; this is the only Variant row `setPrice`
+    // touches, and it takes no other lock at all.
+    if (!(await lockVariant(tx, variantId))) return notThatVariant(variantId);
 
     const currency = asked ?? store.defaultCurrency;
     if (currency !== store.defaultCurrency) {
@@ -244,7 +239,7 @@ export async function setPrice(
 
     const [created] = await tx
       .insert(price)
-      .values({ variantId: found.id, amount, currency, metadata })
+      .values({ variantId, amount, currency, metadata })
       .returning({
         id: price.id,
         amount: price.amount,

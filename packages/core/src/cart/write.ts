@@ -1,7 +1,8 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { ApiKeyKind } from "../auth/api-key.ts";
+import { lockVariant } from "../catalog/lock.ts";
 import type { Database, Queryable, Transaction } from "../db/client.ts";
-import { cart, cartLineItem, price, variant } from "../db/schema.ts";
+import { cart, cartLineItem, price } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { type Cart, cartHasBeenPlaced, cartHasExpired, readCart } from "./read.ts";
@@ -201,17 +202,12 @@ export async function addLineItem(
   return mutate<"variant-not-found" | "variant-not-priced">(db, cartId, async (tx) => {
     if (!isUuid(variantId)) return noSuchVariant(variantId);
 
-    // `for share` holds the Variant for the length of the transaction, so one deleted
-    // concurrently cannot vanish between this and the insert below — that race would
-    // otherwise surface as a foreign-key violation and a 500, which reports a broken server
-    // for a Variant that is simply no longer there.
-    const [sellable] = await tx
-      .select({ id: variant.id })
-      .from(variant)
-      .where(eq(variant.id, variantId))
-      .for("share")
-      .limit(1);
-    if (!sellable) return noSuchVariant(variantId);
+    // **Held**, not merely read: the Line Item written below references this Variant, and one
+    // deleted in between would make that a foreign-key violation and a 500 — a broken server
+    // reported for a Variant that is simply no longer there. `catalog/lock.ts` is what the
+    // lock is and what order these rows are taken in; a Cart write holds no Product row and
+    // no Inventory row, so this is the only one this transaction takes.
+    if (!(await lockVariant(tx, variantId))) return noSuchVariant(variantId);
 
     // Asked after the Variant is known to exist and separately from it, because "there is no
     // such Variant" is the more fundamental answer — a caller told only that it is unpriced
@@ -219,7 +215,7 @@ export async function addLineItem(
     const [priced] = await tx
       .select({ id: price.id })
       .from(price)
-      .where(eq(price.variantId, sellable.id))
+      .where(eq(price.variantId, variantId))
       .limit(1);
     if (!priced) {
       return {
@@ -232,7 +228,7 @@ export async function addLineItem(
 
     await tx
       .insert(cartLineItem)
-      .values({ cartId, variantId: sellable.id, quantity: quantity.value, metadata })
+      .values({ cartId, variantId, quantity: quantity.value, metadata })
       .onConflictDoUpdate({
         target: [cartLineItem.cartId, cartLineItem.variantId],
         set: {
