@@ -6,6 +6,10 @@ import {
   inspectSchema,
   type TestDatabase,
 } from "@kobai/core/testing";
+import {
+  LEAD_TIME_DAYS_KEY,
+  LEAD_TIME_SURCHARGE_CODE,
+} from "@kobai/plugin-made-to-order";
 import { scaffold } from "create-kobai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -25,11 +29,19 @@ import { bootProject, runInProject } from "./support/project.ts";
  * honest, so what it does and does not prove is written down rather than implied:
  *
  * **What it proves.** A Project that has replaced a Step of Core's price-resolution
- * Workflow, wired a Plugin's migration set, wired a Step that Plugin offers, and owns tables
- * of its own is moved across a Core major by the command kobai ships — and afterwards it
- * builds, boots, applies every migration set, serves a request against a real Postgres, the
- * replaced Step still decides the price, and the Plugin's tables, rows and migration
- * tracking are exactly as they were. Every step is the one a Developer performs.
+ * Workflow, wired a Plugin's migration set, wired a Step that Plugin offers, supplies its own
+ * Payment Provider, sells something a Plugin's Fulfilment Strategy answers for, and owns
+ * tables of its own is moved across a Core major by the command kobai ships — and afterwards
+ * it builds, boots, applies every migration set, serves a request against a real Postgres, the
+ * replaced Step still decides the price, the Plugin's Strategy still answers, the Project's
+ * Provider still takes payment, an Order placed before the upgrade reads back byte for byte,
+ * and the Plugin's tables, rows and migration tracking are exactly as they were. Every step
+ * is the one a Developer performs.
+ *
+ * **Two of those are dependency substitution, from each of the two places it can come from** —
+ * a Project's own source and a Plugin's package (ADR-0052, ADR-0053) — which is the standard
+ * #72 sets for the mechanism being credible. The third is ADR-0009: an Order is never edited,
+ * and this is the only place in the repository that asks whether that survives a Core major.
  *
  * **What it does not prove.** That a codemod transforms anything. `1.0.0` here is `0.1.0`'s
  * code under another number, so there is no breaking change to migrate and the set the new
@@ -351,6 +363,122 @@ describe("a customised Project taken across a Core major", () => {
       "The Project's own tables did not survive the upgrade. A Project owns its repository and its schema; Core may not reach into either (ADR-0004, ADR-0001).",
     ).resolves.toEqual(["project_variant_note"]);
   });
+
+  it("still fulfils by the Plugin's Strategy, and charges what the Plugin's Step decides", () => {
+    // **Dependency substitution, with the implementation coming from a Plugin** (ADR-0052,
+    // ADR-0014). Core ships `physical` and `digital` and knows nothing else, so
+    // `made-to-order` is on this Order only because `reference/kobai.config.ts` names the
+    // Strategy `@kobai/plugin-made-to-order` offers. Were Core to answer here instead, a Store
+    // that makes things to order would quietly begin claiming stock it does not keep.
+    expect(
+      fulfilmentAnswers(after.justPlaced),
+      `The Plugin's Fulfilment Strategy stopped answering across the upgrade: an Order for ${MADE_TO_ORDER_SKU} came back fulfilled as ${JSON.stringify(fulfilmentAnswers(after.justPlaced))}. See \`fulfilment\` in reference/kobai.config.ts and ADR-0052.`,
+    ).toEqual([
+      {
+        strategy: MADE_TO_ORDER_STRATEGY,
+        requiresShipping: true,
+        tracksInventory: false,
+        hasLeadTime: true,
+      },
+    ]);
+
+    expect(
+      fulfilmentAnswers(after.justPlaced),
+      "The Strategy answered one thing before the upgrade and another after it. What it answers is copied onto every Fulfilment at Capture (ADR-0009), so two Orders for the same Variant either side of a major have to record the same answers.",
+    ).toEqual(fulfilmentAnswers(before.justPlaced));
+
+    // ...and the answer reached something a Merchant can see. The Plugin's Step decides which
+    // lines to surcharge from `hasLeadTime` rather than from the Strategy's name, so an
+    // Adjustment on the Order is that answer carried end to end rather than merely reported —
+    // and it is a value Core has never modelled, arriving from the open context (ADR-0013,
+    // ADR-0022). Core's own `apply-adjustments` attaches nothing at all, so the slot silently
+    // reverting to it is what this catches.
+    expect(
+      adjustmentsOn(after.justPlaced).map((adjustment) => adjustment.code),
+      "The Lead Time surcharge stopped reaching the Order across the upgrade, so either the Step this Project put in `place-order`'s `apply-adjustments` slot stopped running or the Strategy stopped saying this line has a Lead Time. See `workflows` in reference/kobai.config.ts.",
+    ).toEqual([LEAD_TIME_SURCHARGE_CODE]);
+
+    // Two assertions rather than one, and the first is why the second cannot pass by
+    // comparing two empty lists.
+    expect(
+      adjustmentsOn(after.justPlaced),
+      `The Lead Time surcharge changed across the upgrade: the same Cart, asking for the same ${LEAD_TIME_DAYS}-day Lead Time, was charged differently either side of the major.`,
+    ).toEqual(adjustmentsOn(before.justPlaced));
+  });
+
+  it("still takes payment through the Payment Provider this Project supplies", () => {
+    // **Dependency substitution again, and this time out of the Project's own source**
+    // (ADR-0053). Core defines `PaymentProvider` and implements it nowhere, so an Order
+    // existing at all means this Project's `manual` one was reached — a deployment with none
+    // refuses `place-order` with `no-payment-provider`, and `placeOrder` above would have
+    // failed at 409 rather than getting here. What is left to say is that the record on the
+    // Order is the answer *that* provider gives.
+    expect(
+      after.justPlaced.payment,
+      "The Order placed after the upgrade carries no Payment record, so nothing took the money for it. Core ships no Payment Provider (ADR-0053) — see `payments` in reference/kobai.config.ts and reference/src/payments/manual.ts.",
+    ).not.toBeNull();
+
+    expect(
+      after.justPlaced.payment,
+      `The Payment on the Order does not read as this Project's own \`manual\` provider's work: it says provider ${JSON.stringify(after.justPlaced.payment?.provider)} and received ${JSON.stringify(after.justPlaced.payment?.received)}. \`received: false\` is what makes that provider honest — the money was arranged for out of band and has not arrived (reference/src/payments/manual.ts).`,
+    ).toMatchObject({
+      provider: "manual",
+      received: false,
+      amount: after.justPlaced.total,
+      currency: after.justPlaced.currency,
+    });
+  });
+
+  /**
+   * **The strongest clause here, and the one nothing else in this repository asks.**
+   *
+   * ADR-0009 makes an Order the immutable financial record of a completed purchase: it is
+   * never edited, so nothing — a migration, a rewritten read path, a column whose type moved
+   * — may change what it says afterwards. This is that promise crossing a Core major.
+   *
+   * **What "byte-identical" means here: the whole response body of `GET /store/orders/{id}`,
+   * compared as text.** Not a field-by-field match with the awkward parts excused — every
+   * byte, so key order, number formatting and timestamp rendering are all in scope. That is
+   * stricter than ADR-0009 by itself requires, and it is affordable for a reason peculiar to
+   * this gate: the two versions are the same code under two version numbers (see "What it
+   * does not prove" above), so those bytes have no legitimate way to differ. Anything that
+   * moves them is a defect, and a Developer's storefront would have seen it.
+   *
+   * **What is deliberately excluded, and why.** The 201 body `POST /store/orders` answers
+   * with carries `workflow` — an account of which Steps ran, which is a fact about one
+   * request rather than about the record, and is why Core leaves it off the read route in the
+   * first place. It also cannot be asked twice, because a Cart becomes exactly one Order. So
+   * the subject is the read route, whose declared answer is "the Order, exactly as Capture
+   * reported it". The Admin's view of the same Order is not compared either: that is one
+   * record through a second projection, and a surface repeating what another already said is
+   * not a second proof.
+   */
+  it("reads an Order placed before the upgrade back byte for byte", () => {
+    // The guards first, because two identical nothings compare equal. What is compared below
+    // has to be a real Order — the one that was arranged, numbered, paid for, with something
+    // in it — before its bytes prove anything at all.
+    expect(
+      before.readBack.parsed.id,
+      "The Order read back before the upgrade is not the one this gate arranged, so the comparison below is about the wrong record.",
+    ).toBe(before.store.orderId);
+    expect(
+      before.readBack.parsed.number,
+      "The Order this gate carries across the major has no Order number, so what is compared below is not an Order.",
+    ).toBeGreaterThan(0);
+    expect(
+      before.readBack.parsed.payment,
+      "The Order this gate carries across the major records no Payment, so half of what immutability is worth proving is not in these bytes.",
+    ).not.toBeNull();
+    expect(
+      before.readBack.parsed.lineItems.length,
+      "The Order this gate carries across the major has no Line Items, so its bytes hold no snapshot to be immutable about.",
+    ).toBeGreaterThan(0);
+
+    expect(
+      after.readBack.bytes,
+      `An Order was edited across the upgrade. ADR-0009 says an Order is never edited — it is the record a Merchant's books, a refund and a tax figure are all derived from — and \`GET /store/orders/${before.store.orderId}\` answered different bytes before and after the major, against the same database. The difference below is the edit.`,
+    ).toBe(before.readBack.bytes);
+  });
 });
 
 type PriceBody = {
@@ -364,11 +492,68 @@ type PriceBody = {
 
 type PriceLogRow = { variant_id: string; amount: number; currency: string };
 
+/** An Adjustment as an Order reports it, less the parts that are new on every Order. */
+type AdjustmentBody = {
+  readonly code: string;
+  readonly description: string;
+  readonly amount: number;
+};
+
+/** What the Fulfilment Strategy answered at Capture, snapshotted onto the Order. */
+type FulfilmentBody = {
+  readonly strategy: string;
+  readonly requiresShipping: boolean;
+  readonly tracksInventory: boolean;
+  readonly hasLeadTime: boolean;
+};
+
+type OrderBody = {
+  readonly id: string;
+  readonly number: number;
+  readonly currency: string;
+  readonly total: number;
+  readonly payment: {
+    readonly provider: string;
+    readonly reference: string;
+    readonly amount: number;
+    readonly currency: string;
+    readonly received: boolean;
+  } | null;
+  readonly lineItems: readonly {
+    readonly adjustments: readonly AdjustmentBody[];
+  }[];
+  readonly fulfilments: readonly FulfilmentBody[];
+};
+
+/** An Order read back, and the bytes it was read back as. */
+type ReadOrder = {
+  /** The response body, untouched — what the byte-for-byte comparison is made of. */
+  readonly bytes: string;
+  /** The same thing parsed, for the assertions that guard that comparison from vacuity. */
+  readonly parsed: OrderBody;
+};
+
 type StoreKeys = {
   /** The Variant a storefront asks the price of. */
   readonly variantId: string;
+  /**
+   * The Variant this Store makes to order — the one a Plugin's Fulfilment Strategy answers
+   * for, and the only one either half of this gate ever buys.
+   *
+   * Made to order rather than stocked because that Strategy answers `tracksInventory: false`,
+   * so buying it claims no Reservation and needs no Inventory row. The subject here is the
+   * Strategy and the Provider surviving a major, and counting stock is a different test.
+   */
+  readonly madeToOrderVariantId: string;
   /** A secret API key's headers, for the store surface. */
   readonly headers: Record<string, string>;
+  /**
+   * The Order placed **before** the upgrade, and the one both halves read back.
+   *
+   * It is arranged rather than snapshotted, because ADR-0009's promise is about a record that
+   * already existed when the new major arrived. See the byte-for-byte assertion below.
+   */
+  readonly orderId: string;
 };
 
 type Snapshot = {
@@ -378,17 +563,22 @@ type Snapshot = {
     readonly migrations: { readonly sets: readonly { name: string }[] };
   };
   readonly price: PriceBody;
+  /** An Order this boot placed, so both halves answer the same question with fresh work. */
+  readonly justPlaced: OrderBody;
+  /** `store.orderId` — the Order arranged before the upgrade — read back by this boot. */
+  readonly readBack: ReadOrder;
   readonly priceLog: readonly PriceLogRow[];
   readonly logs: string;
 };
 
 /**
- * Boots the Project, asks it the same three questions, and stops it.
+ * Boots the Project, asks it the same questions, and stops it.
  *
  * `reach` is what differs between the two halves: the first arranges a Store and hands back
  * the keys to it, the second hands the same keys straight back. Everything after that —
- * health, the resolved price, the Plugin's rows — is asked identically, which is what makes
- * the two snapshots comparable at all.
+ * health, the resolved price, an Order placed, the Order arranged before the upgrade read
+ * back, the Plugin's rows — is asked identically, which is what makes the two snapshots
+ * comparable at all.
  */
 async function serve(
   directory: string,
@@ -413,6 +603,14 @@ async function serve(
     store,
     health,
     price: await resolvedPrice(booted.origin, store),
+    // **Placed by this boot**, so that what the Plugin's Fulfilment Strategy and the Project's
+    // Payment Provider answer is asked again on the far side of the upgrade rather than
+    // remembered. A Cart becomes exactly one Order, so each half builds its own.
+    justPlaced: await placeOrder(booted.origin, store),
+    // ...and the Order arranged *before* the upgrade, read back the way a storefront reloading
+    // a confirmation page reads one. The same Order and the same request in both halves, which
+    // is the whole of what makes comparing the bytes mean anything.
+    readBack: await readOrder(booted.origin, store),
     // Read in the order the Plugin wrote them, so the two snapshots compare row for row.
     priceLog: await database.query<PriceLogRow>(
       "select variant_id, amount, currency from price_log_entry order by resolved_at, id",
@@ -438,7 +636,84 @@ const MERCHANT = {
 };
 
 /**
- * A Store with one priced Variant, arranged through the public API.
+ * A Product, the one Variant that makes it sellable, and a Price on that Variant.
+ *
+ * Two of these are arranged and they differ in one field, so this is a helper rather than a
+ * second copy of the shape. `fulfilmentStrategy` is spelled out rather than passed as
+ * `fulfilment`, because the request body's `fulfilment` is an object and a caller here should
+ * be naming a Strategy rather than assembling one.
+ */
+async function pricedVariant(
+  origin: string,
+  merchant: Record<string, string>,
+  product: {
+    readonly title: string;
+    readonly sku: string;
+    readonly fulfilmentStrategy?: string;
+  },
+): Promise<string> {
+  const created = (await expectStatus(
+    await fetch(`${origin}/admin/products`, {
+      method: "POST",
+      headers: merchant,
+      body: JSON.stringify({
+        title: product.title,
+        variants: [
+          {
+            sku: product.sku,
+            ...(product.fulfilmentStrategy === undefined
+              ? {}
+              : { fulfilment: { strategy: product.fulfilmentStrategy } }),
+          },
+        ],
+      }),
+    }),
+    201,
+    `creating the Product ${product.title}`,
+  )) as { variants: { id: string }[] };
+
+  const variantId = created.variants[0]?.id;
+  if (variantId === undefined) {
+    throw new Error(
+      `The gate could not get past creating ${product.sku}: the Product came back with no Variants at all.`,
+    );
+  }
+
+  await expectStatus(
+    await fetch(`${origin}/admin/variants/${variantId}/prices`, {
+      method: "POST",
+      headers: merchant,
+      body: JSON.stringify({ amount: PRICED_AT }),
+    }),
+    201,
+    `setting a Price on ${product.sku}`,
+  );
+
+  return variantId;
+}
+
+/**
+ * The Lead Time this gate's storefront asks for, in days.
+ *
+ * Shorter than the interval `@kobai/plugin-made-to-order` treats as ordinary, which is what
+ * makes its Step attach an Adjustment at all. *How much* shorter costs *how much* is that
+ * Plugin's terms, asserted in that Plugin's own tests; what this gate needs is that the same
+ * question gets the same answer on both sides of the major.
+ *
+ * The key it is sent under and the code the resulting Adjustment carries are **the Plugin's**,
+ * imported from it rather than copied here — Core has never heard of either, which is the whole
+ * point (ADR-0013), and the Plugin exports them saying a test should not have to guess. So a
+ * rename in the Plugin reaches this gate as a compile error rather than as a red assertion
+ * about surcharges.
+ */
+const LEAD_TIME_DAYS = 3;
+
+/** The name this Project wired the Plugin's Strategy under, and the Variant pointing at it. */
+const MADE_TO_ORDER_STRATEGY = "made-to-order";
+const MADE_TO_ORDER_SKU = "PRINT-COMMISSION";
+
+/**
+ * A Store with two priced Variants, arranged through the public API.
  *
  * Through the API rather than by writing rows, because that is all a storefront or a Merchant
  * can do — and because the arrangement itself is part of what has to keep working across the
@@ -457,26 +732,27 @@ async function arrange(origin: string): Promise<StoreKeys> {
   const cookie = (signedIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
   const merchant = { cookie, ...json };
 
-  const product = (await expectStatus(
-    await fetch(`${origin}/admin/products`, {
-      method: "POST",
-      headers: merchant,
-      body: JSON.stringify({ title: "A poster", variants: [{ sku: "POSTER-A2" }] }),
-    }),
-    201,
-    "creating a Product",
-  )) as { variants: { id: string; sku: string }[] };
+  const variantId = await pricedVariant(origin, merchant, {
+    title: "A poster",
+    sku: "POSTER-A2",
+  });
 
-  const variantId = product.variants[0]?.id ?? "";
-  await expectStatus(
-    await fetch(`${origin}/admin/variants/${variantId}/prices`, {
-      method: "POST",
-      headers: merchant,
-      body: JSON.stringify({ amount: PRICED_AT }),
-    }),
-    201,
-    "setting a Price",
-  );
+  // **The second Variant, and the one both halves of this gate actually buy.** It points at a
+  // Fulfilment Strategy no build of Core ships: `made-to-order` exists only because
+  // `reference/kobai.config.ts` wires the one `@kobai/plugin-made-to-order` offers (ADR-0052),
+  // and a Variant may not point at a name this deployment has not wired — so creating it at
+  // all is already half of what this gate is here to watch survive.
+  //
+  // It is bought rather than the poster because three customisations meet on it and on
+  // nothing else: that Strategy, the Step the same Plugin offers in `place-order`'s
+  // `apply-adjustments` slot, and the Payment Provider this Project supplies. The Strategy
+  // also answers `tracksInventory: false`, so buying one claims no Reservation and needs no
+  // Inventory row — scarcity is a different test's subject (ADR-0018).
+  const madeToOrderVariantId = await pricedVariant(origin, merchant, {
+    title: "A commissioned print",
+    sku: MADE_TO_ORDER_SKU,
+    fulfilmentStrategy: MADE_TO_ORDER_STRATEGY,
+  });
 
   const key = (await expectStatus(
     await fetch(`${origin}/admin/api-keys`, {
@@ -488,7 +764,102 @@ async function arrange(origin: string): Promise<StoreKeys> {
     "minting an API key",
   )) as { key: string };
 
-  return { variantId, headers: { authorization: `Bearer ${key.key}` } };
+  const storefront = {
+    madeToOrderVariantId,
+    headers: { authorization: `Bearer ${key.key}` },
+  };
+
+  // **The Order this gate carries across the major.** Placed while the Store is still being
+  // arranged, so that it is unambiguously older than the upgrade: every read of it from here
+  // on is a read of a record that already existed when the new Core arrived (ADR-0009).
+  const placed = await placeOrder(origin, storefront);
+
+  return { variantId, ...storefront, orderId: placed.id };
+}
+
+/**
+ * A storefront's whole purchase: a Cart, one made-to-order line, and the Order it becomes.
+ *
+ * Asked identically in both halves, and with fresh work each time — a Cart becomes exactly one
+ * Order, so neither half can reuse the other's. What comes back is therefore what this build
+ * of the Project decided just now, rather than what some earlier one recorded.
+ *
+ * The 201 carries an account of the Workflow run beside the Order, and this deliberately reads
+ * none of it: which Steps ran is a fact about one request rather than about the record, and the
+ * record is what these assertions are about.
+ */
+async function placeOrder(
+  origin: string,
+  storefront: Pick<StoreKeys, "headers" | "madeToOrderVariantId">,
+): Promise<OrderBody> {
+  const headers = { ...storefront.headers, "content-type": "application/json" };
+
+  const cart = (await expectStatus(
+    await fetch(`${origin}/store/carts`, { method: "POST", headers, body: "{}" }),
+    201,
+    "starting a Cart",
+  )) as { id: string };
+
+  await expectStatus(
+    await fetch(`${origin}/store/carts/${cart.id}/line-items`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ variantId: storefront.madeToOrderVariantId, quantity: 1 }),
+    }),
+    200,
+    "adding the made-to-order Variant to a Cart",
+  );
+
+  return (await expectStatus(
+    await fetch(`${origin}/store/orders?${LEAD_TIME_DAYS_KEY}=${LEAD_TIME_DAYS}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ cartId: cart.id }),
+    }),
+    201,
+    "placing an Order",
+  )) as OrderBody;
+}
+
+/**
+ * One Order, read back over the store surface — and the bytes it came back as.
+ *
+ * `expectStatus` is deliberately not used: it parses, and what the byte-for-byte assertion
+ * compares is the response body itself. The failure it reports says the same things.
+ */
+async function readOrder(origin: string, store: StoreKeys): Promise<ReadOrder> {
+  const response = await fetch(`${origin}/store/orders/${store.orderId}`, {
+    headers: store.headers,
+  });
+  const bytes = await response.text();
+
+  if (response.status !== 200) {
+    throw new Error(
+      `The gate could not get past reading Order ${store.orderId} back: answered ${response.status}, expected 200. Body: ${bytes}`,
+    );
+  }
+  return { bytes, parsed: JSON.parse(bytes) as OrderBody };
+}
+
+/** What the Fulfilment Strategy answered, less the identifiers new on every Order. */
+function fulfilmentAnswers(order: OrderBody): readonly FulfilmentBody[] {
+  return order.fulfilments.map((fulfilment) => ({
+    strategy: fulfilment.strategy,
+    requiresShipping: fulfilment.requiresShipping,
+    tracksInventory: fulfilment.tracksInventory,
+    hasLeadTime: fulfilment.hasLeadTime,
+  }));
+}
+
+/** Every Adjustment on every line, less the identifiers new on every Order. */
+function adjustmentsOn(order: OrderBody): readonly AdjustmentBody[] {
+  return order.lineItems.flatMap((line) =>
+    line.adjustments.map((adjustment) => ({
+      code: adjustment.code,
+      description: adjustment.description,
+      amount: adjustment.amount,
+    })),
+  );
 }
 
 /** The storefront's one question, asked identically before and after the upgrade. */
