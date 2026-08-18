@@ -4,6 +4,7 @@ import {
   createTestKobai,
   seedTestCart,
   seedTestCatalog,
+  seedTestOrder,
   signInTestMerchant,
   type TestCatalog,
   type TestKobai,
@@ -39,6 +40,14 @@ type PlacedOrderBody = {
     readonly lineItemIds: readonly string[];
   }[];
 };
+
+/**
+ * The nil uuid, and the only id in these tests that is chosen rather than generated.
+ *
+ * Smaller than every uuid `gen_random_uuid()` will ever hand out, so a row given it sorts first
+ * deterministically — without any other row having to be read to know that.
+ */
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 /** The line for this SKU, by SKU rather than by position — an Order reports its lines in SKU order. */
 function lineIdFor(order: PlacedOrderBody, sku: string): string {
@@ -222,6 +231,62 @@ describe("an Order's Fulfilments", () => {
     });
 
     await expect(read.json()).resolves.toMatchObject({ fulfilments: order.fulfilments });
+  });
+
+  it("come back in one order even when two of them say the same thing", async () => {
+    // **The tie, arranged rather than placed.** Capture groups a Fulfilment *by* its answers
+    // (`writeFulfilments`), so no Order it writes today can hold two rows agreeing on all four
+    // — which is why the second one is written straight into the database, which is what
+    // `TestDatabase.query` is for. It is the state the day that grouping rule changes, and on
+    // that day the four answer columns stop being a total order.
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai, {
+      variants: [{ sku: "POSTER-A2" }, { sku: "POSTER-A3" }],
+    });
+    const order = await seedTestOrder(kobai, {
+      catalog,
+      lines: [{ sku: "POSTER-A2" }, { sku: "POSTER-A3" }],
+    });
+    const readOrder = async () => {
+      const response = await kobai.request(`/store/orders/${order.id}`, {
+        headers: order.apiKey.headers,
+      });
+      return response.text();
+    };
+
+    const placed = JSON.parse(await readOrder()) as PlacedOrderBody;
+    expect(placed.fulfilments).toHaveLength(1); // both posters, one parcel — the row to split
+    const captured = placed.fulfilments[0];
+    if (!captured) throw new Error("this Order has no Fulfilment to split in two");
+
+    // A second Fulfilment answering identically, taking one of the two lines with it. Written
+    // second, so the order the rows sit in is the order they were written in — and given the
+    // nil uuid, so that id order and write order disagree. A random id would disagree only half
+    // the time, and a test that catches the bug half the time is not one that catches it.
+    await kobai.database.query(
+      `insert into core_fulfilment
+         (id, order_id, strategy, requires_shipping, tracks_inventory, has_lead_time)
+       select $1, order_id, strategy, requires_shipping, tracks_inventory, has_lead_time
+         from core_fulfilment where id = $2`,
+      [NIL_UUID, captured.id],
+    );
+    await kobai.database.query(
+      "update core_order_line_item set fulfilment_id = $1 where id = $2",
+      [NIL_UUID, order.lineItem("POSTER-A3").id],
+    );
+
+    const [firstBody, secondBody] = [await readOrder(), await readOrder()];
+
+    // Both reads are held to the order the query *specifies* — ascending id — rather than only
+    // to each other, because that is the assertion with something to disagree with: two reads a
+    // millisecond apart agree about a two-row table whether or not anything promises they will.
+    // The bytes are compared as well, because byte equality is what
+    // `tests/the-upgrade-gate.test.ts` rests on, and there the two reads are a Core major apart.
+    for (const body of [firstBody, secondBody]) {
+      const read = JSON.parse(body) as PlacedOrderBody;
+      expect(read.fulfilments.map((one) => one.id)).toEqual([NIL_UUID, captured.id]);
+    }
+    expect(firstBody).toBe(secondBody);
   });
 
   it("say what a Plugin's Strategy answered, in the Order's own record of it", async () => {
