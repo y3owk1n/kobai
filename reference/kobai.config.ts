@@ -1,4 +1,9 @@
 import { defineKobaiConfig } from "@kobai/core";
+import {
+  leadTimeSurcharge,
+  madeToOrder,
+  madeToOrderMigrationSet,
+} from "@kobai/plugin-made-to-order";
 import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
 import { projectMigrationSet } from "./src/migration-set.ts";
 import { manualPaymentProvider } from "./src/payments/manual.ts";
@@ -8,29 +13,40 @@ import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.
  * Everything this Project has customised, in one file.
  *
  * A Developer should be able to read this and know what their deployment does differently from
- * stock kobai. Four things, and nothing else: one Plugin's tables are wired, one Step of Core's
- * price-resolution Workflow is somebody else's now, one Step the same Plugin offers watches what
- * that Workflow decided, and this Project supplies the Payment Provider — because kobai ships
- * none.
+ * stock kobai. **Five things, and nothing else**: two Plugins' tables are wired, one Step of
+ * Core's price-resolution Workflow is somebody else's now, one Step a Plugin offers watches what
+ * that Workflow decided, this Project supplies the Payment Provider — because kobai ships none —
+ * and this Store makes some of what it sells to order, which takes a Fulfilment Strategy and a
+ * Step from a second Plugin.
  *
- * The last of those is a different *kind* of customisation from the three before it, and the
- * distinction is worth reading for. A replaced Step changes a decision Core would otherwise have
- * made; a supplied Payment Provider fills a hole Core deliberately left, and without it this
- * deployment would serve its catalog and its Admin and refuse to place an Order (ADR-0053).
+ * They are not all the same *kind* of customisation, and the distinctions are worth reading for:
+ *
+ * - **A replaced Step** changes a decision Core would otherwise have made — `select-price` below,
+ *   and `apply-adjustments`.
+ * - **An inserted Step** watches one without being able to change it.
+ * - **A supplied dependency** fills a hole Core deliberately left: without a Payment Provider this
+ *   deployment would serve its catalog and its Admin and refuse to place an Order (ADR-0053), and
+ *   without the Fulfilment Strategy no Variant could point at `made-to-order` at all (ADR-0052).
  *
  * `@kobai/core` is an ordinary versioned dependency in this Project's `package.json`, at the
- * same version it would be without either line. There is no fork, no copied service and no
- * patch — the customisation and the upstream never share a file (ADR-0001), which is what
+ * same version it would be without any of these lines. There is no fork, no copied service and
+ * no patch — the customisation and the upstream never share a file (ADR-0001), which is what
  * makes upgrading a version bump rather than a merge.
  */
 export default defineKobaiConfig({
   /**
-   * Two migration sets, and they are here for different reasons.
+   * Three migration sets, and they are here for different reasons.
    *
    * `@kobai/plugin-price-log` is an ordinary dependency in this Project's `package.json` —
    * there is no bespoke installation mechanism, and installing it did nothing on its own. The
    * line below is what makes its table appear. Delete it and the Plugin is still installed,
    * still importable, and still inert (ADR-0017).
+   *
+   * `@kobai/plugin-made-to-order` is the same story a second time, which is the point of it
+   * being here: nothing about the mechanism got bigger for there being two Plugins, and neither
+   * of them has heard of the other. Its table exists because this line names its set, and it
+   * holds what this Store's Shoppers asked for — see `fulfilment` and `place-order` below for
+   * the two other lines that Plugin needs before it does anything at all.
    *
    * `projectMigrationSet` is this Project's **own**, covering the tables in `src/db/schema.ts`
    * that neither Core nor any Plugin has heard of. It is the same kind of object, applied by
@@ -39,7 +55,7 @@ export default defineKobaiConfig({
    * those tables whenever it likes: `devbox run db:generate` and nothing else. Core's tables
    * stay closed to both (ADR-0004).
    */
-  migrationSets: [priceLogMigrationSet, projectMigrationSet],
+  migrationSets: [priceLogMigrationSet, madeToOrderMigrationSet, projectMigrationSet],
 
   /**
    * The flagship (ADR-0003), exercised for real.
@@ -60,11 +76,22 @@ export default defineKobaiConfig({
    * still imported by this file's neighbour above, and still writes nothing (ADR-0017). It
    * cannot change the price it watches — an inserted Step takes and gives the same type, so
    * observation cannot quietly become mutation.
+   *
+   * **`place-order` is the second Workflow this Project has an opinion about**, and the opinion
+   * is a Plugin's. Core's own `apply-adjustments` attaches no Adjustment — there is no discount
+   * or surcharge Core could invent that would be right for anybody's Store — so this Store hands
+   * the slot to `@kobai/plugin-made-to-order`, which charges for a short Lead Time. That Step
+   * reads the lead time out of the **open** half of the Workflow context: a number Core has
+   * never modelled, sent by the storefront, turned into an Adjustment on the Order (ADR-0013,
+   * ADR-0022). Take this line out and a Shopper in a hurry pays the ordinary price.
    */
   workflows: {
     "resolve-price": {
       steps: { "select-price": everythingCostsOneCent },
       after: { "select-price": [recordPriceResolution] },
+    },
+    "place-order": {
+      steps: { "apply-adjustments": leadTimeSurcharge },
     },
   },
 
@@ -87,4 +114,25 @@ export default defineKobaiConfig({
    * stops a boot (ADR-0048).
    */
   payments: { provider: manualPaymentProvider },
+
+  /**
+   * Dependency substitution again, and this time the implementation comes from a **Plugin**
+   * rather than from this Project's own source (ADR-0014, ADR-0052).
+   *
+   * Core ships `physical` and `digital` and knows nothing else about how a thing reaches a
+   * Shopper. This Store also makes things to order — they ship, nothing is on a shelf to take
+   * off, and there is an interval before delivery — so it wires the Strategy
+   * `@kobai/plugin-made-to-order` offers, under the name its Variants point at. **The key is the
+   * name**: the Strategy itself has none, exactly as a replaced Step is named by the slot it
+   * fills, so what a Variant is fulfilled by is visible here rather than buried in a Plugin.
+   *
+   * Take this line out and two things happen, in this order: no Variant may be created pointing
+   * at `made-to-order` any more, and any that already do can no longer be placed — `place-order`
+   * refuses `unknown-fulfilment-strategy` rather than guessing that they are ordinary stock. The
+   * Plugin is still installed and still importable throughout (ADR-0017).
+   *
+   * Core's own two are here whether or not this key is, so `physical` — which every other
+   * Variant in this Store uses — is untouched by any of it.
+   */
+  fulfilment: { strategies: { "made-to-order": madeToOrder } },
 });

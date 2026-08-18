@@ -171,8 +171,8 @@ describe("the image the repository ships", () => {
       };
       expect(body).toMatchObject({ status: "ok" });
 
-      // Not merely that the three sets are listed: that each of them applied something. A
-      // set whose `migrations/` directory the prune removed reports zero and is otherwise
+      // Not merely that every set is listed: that each of them applied something. A set
+      // whose `migrations/` directory the prune removed reports zero and is otherwise
       // silent, which is the quietest way for a Plugin's tables to never exist.
       expect(
         body.migrations.sets.map((set) => [set.name, set.applied > 0]),
@@ -180,6 +180,7 @@ describe("the image the repository ships", () => {
       ).toEqual([
         ["core", true],
         ["plugin-price-log", true],
+        ["plugin-made-to-order", true],
         ["project", true],
       ]);
 

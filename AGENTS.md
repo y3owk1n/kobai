@@ -302,6 +302,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/core/src/upgrade` | `kobai-upgrade` — the command that moves a Project across a kobai version, and the codemod set it consults (ADR-0035). |
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
+| `packages/plugin-made-to-order` | `@kobai/plugin-made-to-order` — the proof ADR-0014 asked for, at its thinnest. One Fulfilment Strategy, one offered Step that charges for a Lead Time, one table. |
 | `packages/create-kobai` | `create-kobai` — the scaffolder. Generates a Project a Developer owns (ADR-0001, ADR-0034). |
 | `packages/create-kobai/template/` | What it generates. **Generated** from `reference/`, checked in, never hand-edited. |
 | `packages/create-kobai/standalone/` | The few files a generated Project has and `reference/` does not. **Authored here**, not generated. |
@@ -468,6 +469,21 @@ answers are **copied onto the row** at Capture (ADR-0009): rewiring a Strategy, 
 Plugin that offered one, must not rewrite an Order. Fulfilling anything is a later spec; what
 exists is the shape.
 
+**The Strategy from outside Core is `@kobai/plugin-made-to-order`**, and it is the proof
+ADR-0014 asked for rather than a feature — *if made-to-order cannot be expressed as a strategy
+Plugin, the strategy interface is wrong.* It offers three things and the reference Project wires
+all three: a migration set, the Strategy (`requiresShipping`, no Inventory, a Lead Time), and a
+Step that fills `place-order`'s `apply-adjustments` slot and turns a requested lead time into an
+**Adjustment** on the Order (ADR-0022). That Step reads the lead time out of the **open**
+Workflow context — a number Core has never modelled — which closes ADR-0013's scenario end to
+end for the first time. Two things about it are worth knowing before extending it: it decides
+which lines to surcharge from `line.fulfilment.hasLeadTime` and **never from the Strategy's
+name**, because a Strategy is named by the key a Project wired it under and so does not know its
+own name; and the open context is reachable only through the **query string** today
+(`openMetadata` is `Object.fromEntries(url.searchParams)`, #121), which is why its tests place
+Orders at `POST /store/orders?leadTimeDays=3`. **Capacity is still out of scope** — the Strategy
+says only *that* there is a Lead Time, never that a date can be met (ADR-0012).
+
 ### The API contract
 
 **A route is a declaration, and the description is generated from it.** Core's HTTP surface
@@ -599,9 +615,16 @@ need a new entry, check first whether it belongs in the reference Project instea
 shared should live where it is booted and tested, not in a template nobody runs.
 
 **kobai's packages are published** (ADR-0034). `@kobai/core`, `@kobai/plugin-price-log`,
-`@kobai/client` and `create-kobai` are at `0.1.0` and are no longer `private`, because a
-generated Project depends on them as ordinary versioned dependencies and `workspace:*`
-resolves nowhere outside this workspace. Nothing has actually been released; choosing a
+`@kobai/plugin-made-to-order`, `@kobai/client` and `create-kobai` are at `0.1.0` and are no
+longer `private`, because a generated Project depends on them as ordinary versioned
+dependencies and `workspace:*` resolves nowhere outside this workspace. **A package the
+reference Project depends on has to be published**, and in three more places than its own
+manifest: `PUBLISHED_KOBAI_PACKAGES` in `packages/create-kobai/src/adaptations.ts`, so a
+generated Project asks a registry for a version rather than for `workspace:*`, and the
+`publishPackages` list in each acceptance test that stands a registry up
+(`tests/a-generated-project-boots.test.ts`, `tests/a-project-boots-from-its-own-compose-file.test.ts`,
+`tests/the-upgrade-gate.test.ts`) — a package missing from one of those fails deep inside an
+install with a 404 naming the registry rather than the list. Nothing has actually been released; choosing a
 release process is a separate decision.
 
 What stands where `private: true` stood is `publishConfig.registry`, pinned at a loopback

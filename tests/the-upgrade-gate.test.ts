@@ -84,7 +84,12 @@ let SYNTHETIC_MAJOR: string;
 const GATE_TIMEOUT = 1_800_000;
 
 /** Every kobai package a generated Project resolves from a registry. */
-const PUBLISHED = ["packages/core", "packages/client", "packages/plugin-price-log"];
+const PUBLISHED = [
+  "packages/core",
+  "packages/client",
+  "packages/plugin-price-log",
+  "packages/plugin-made-to-order",
+];
 
 let registry: LocalRegistry;
 let workspace: string;
@@ -238,6 +243,9 @@ describe("a customised Project taken across a Core major", () => {
 
     expect(manifest.dependencies["@kobai/core"]).toBe(`^${SYNTHETIC_MAJOR}`);
     expect(manifest.dependencies["@kobai/plugin-price-log"]).toBe(`^${SYNTHETIC_MAJOR}`);
+    expect(manifest.dependencies["@kobai/plugin-made-to-order"]).toBe(
+      `^${SYNTHETIC_MAJOR}`,
+    );
 
     const installed = JSON.parse(
       await readFile(join(project, "node_modules/@kobai/core/package.json"), "utf8"),
@@ -278,8 +286,8 @@ describe("a customised Project taken across a Core major", () => {
 
     expect(
       after.health.migrations.sets.map((set) => set.name),
-      "A migration set went missing across the upgrade. Core's, the Plugin's and the Project's own are all applied by the same runner, so a set that vanished is a set the new version stopped wiring.",
-    ).toEqual(["core", "plugin-price-log", "project"]);
+      "A migration set went missing across the upgrade. Core's, each Plugin's and the Project's own are all applied by the same runner, so a set that vanished is a set the new version stopped wiring.",
+    ).toEqual(["core", "plugin-price-log", "plugin-made-to-order", "project"]);
   });
 
   it("still serves the price the Project's own Step decided, not Core's", () => {
@@ -317,9 +325,10 @@ describe("a customised Project taken across a Core major", () => {
     const tracking = await inspectSchema(database).migrationTracking();
     expect(
       tracking.map((fact) => fact.table).sort(),
-      "A migration set's tracking table went missing, so the runner can no longer tell what it has applied. Core, the Plugin and the Project each track their own (ADR-0030).",
+      "A migration set's tracking table went missing, so the runner can no longer tell what it has applied. Core, each Plugin and the Project each track their own (ADR-0030).",
     ).toEqual([
       "__drizzle_migrations_core",
+      "__drizzle_migrations_plugin_made_to_order",
       "__drizzle_migrations_plugin_price_log",
       "__drizzle_migrations_project",
     ]);

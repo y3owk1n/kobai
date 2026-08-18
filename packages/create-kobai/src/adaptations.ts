@@ -23,6 +23,7 @@ import { REFERENCE_PROJECT_NAME, TEMPLATE_PROJECT_NAME } from "./naming.ts";
 export const PUBLISHED_KOBAI_PACKAGES = [
   "@kobai/core",
   "@kobai/plugin-price-log",
+  "@kobai/plugin-made-to-order",
   "@kobai/client",
 ] as const;
 

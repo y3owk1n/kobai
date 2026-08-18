@@ -81,6 +81,19 @@ importers:
         specifier: ^3.3.1
         version: 3.3.1
 
+  packages/plugin-made-to-order:
+    dependencies:
+      '@kobai/core':
+        specifier: workspace:*
+        version: link:../core
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/pg@8.21.0)(pg@8.23.0)
+    devDependencies:
+      drizzle-kit:
+        specifier: ^0.31.5
+        version: 0.31.10
+
   packages/plugin-price-log:
     dependencies:
       '@kobai/core':
@@ -102,6 +115,9 @@ importers:
       '@kobai/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@kobai/plugin-made-to-order':
+        specifier: workspace:*
+        version: link:../packages/plugin-made-to-order
       '@kobai/plugin-price-log':
         specifier: workspace:*
         version: link:../packages/plugin-price-log

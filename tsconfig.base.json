@@ -30,6 +30,7 @@
       "@kobai/client": ["./packages/client/src/index.ts"],
       "@kobai/core": ["./packages/core/src/index.ts"],
       "@kobai/core/*": ["./packages/core/src/*/index.ts"],
+      "@kobai/plugin-made-to-order": ["./packages/plugin-made-to-order/src/index.ts"],
       "@kobai/plugin-price-log": ["./packages/plugin-price-log/src/index.ts"],
       "create-kobai": ["./packages/create-kobai/src/index.ts"],
       "create-kobai/authoring": ["./packages/create-kobai/src/authoring.ts"]

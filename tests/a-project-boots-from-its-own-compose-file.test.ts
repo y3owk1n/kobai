@@ -57,6 +57,7 @@ beforeAll(async () => {
     "packages/core",
     "packages/client",
     "packages/plugin-price-log",
+    "packages/plugin-made-to-order",
   ]);
 
   workspace = await mkdtemp(join(tmpdir(), "kobai-containerised-"));
@@ -141,6 +142,7 @@ describe("a generated Project, brought up by its own compose file", () => {
       ).toEqual([
         ["core", true],
         ["plugin-price-log", true],
+        ["plugin-made-to-order", true],
         ["project", true],
       ]);
 

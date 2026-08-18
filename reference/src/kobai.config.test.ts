@@ -25,7 +25,7 @@ import config from "../kobai.config.ts";
  * `kobai.config.ts` a Developer would edit, booted through the same `createKobai` the
  * entrypoint calls.
  */
-describe("installing the Plugin", () => {
+describe("installing the Plugins", () => {
   it("is an ordinary npm dependency and nothing more", async () => {
     const manifest = JSON.parse(
       await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
@@ -33,20 +33,23 @@ describe("installing the Plugin", () => {
 
     // No installer, no registry of its own, no postinstall step: a Plugin arrives the way
     // every other package does, and the only other thing kobai asks of a Developer is the
-    // one line in `kobai.config.ts` below.
+    // one line in `kobai.config.ts` below. Two of them now, and the second cost the
+    // mechanism nothing — which is the claim two Plugins are here to check.
     expect(manifest.dependencies?.["@kobai/plugin-price-log"]).toBeDefined();
+    expect(manifest.dependencies?.["@kobai/plugin-made-to-order"]).toBeDefined();
   });
 });
 
 describe("the reference Project's configuration", () => {
-  it("wires the Plugin's migration set beside its own, and that is the whole of the wiring", () => {
-    // Two sets, and the pair is the point. `plugin-price-log` arrived as a dependency and
-    // does nothing until this file names it (ADR-0017); `project` is this Project's own,
-    // covering tables neither Core nor any Plugin has heard of. They are the same kind of
-    // object applied by the same runner, which is what makes "a Project owns tables on the
-    // same terms a Plugin does" a fact about the code rather than a claim in a document.
+  it("wires each Plugin's migration set beside its own, and that is the whole of the wiring", () => {
+    // Three sets, and the grouping is the point. Two arrived as dependencies and do nothing
+    // until this file names them (ADR-0017); `project` is this Project's own, covering tables
+    // neither Core nor any Plugin has heard of. They are the same kind of object applied by
+    // the same runner, which is what makes "a Project owns tables on the same terms a Plugin
+    // does" a fact about the code rather than a claim in a document.
     expect(config.migrationSets?.map((set) => set.name)).toEqual([
       "plugin-price-log",
+      "plugin-made-to-order",
       "project",
     ]);
   });
@@ -60,12 +63,13 @@ describe("the reference Project's configuration", () => {
       "project_variant_note",
     ]);
 
-    // ...and it is tracked separately from Core's and the Plugin's, so none of the three
+    // ...and it is tracked separately from Core's and from each Plugin's, so none of the four
     // can race or re-apply another's work.
     const tracking = (await schema.migrationTracking()).map((fact) => fact.table);
     expect(tracking).toContain("__drizzle_migrations_project");
     expect(tracking).toContain("__drizzle_migrations_core");
     expect(tracking).toContain("__drizzle_migrations_plugin_price_log");
+    expect(tracking).toContain("__drizzle_migrations_plugin_made_to_order");
   });
 
   it("puts no foreign key from its own tables into Core's", async () => {
@@ -336,6 +340,101 @@ describe("the Payment Provider this Project supplies", () => {
     });
 
     expect(response.status).toBe(200);
+  });
+});
+
+/**
+ * The Plugin this Project wired in all three ways a Plugin can be wired.
+ *
+ * `@kobai/plugin-made-to-order` offers a migration set, a Fulfilment Strategy and a Step, and
+ * this Project names all three. It is the deepest use of the extension surface in this
+ * repository — dependency substitution from *outside* Core (ADR-0052), a replaced Step in
+ * `place-order`, and an input Core has never modelled reaching that Step through the open
+ * Workflow context (ADR-0013) — so this is where it is checked that all of it survives being
+ * assembled by a Project rather than by a test.
+ */
+describe("the Plugin this Project makes its commissions with", () => {
+  /** Something this Store makes rather than stocks. Nobody counts it; nobody has to. */
+  async function aCommission(kobai: TestKobai) {
+    const catalog = await seedTestCatalog(kobai, {
+      variants: [{ sku: "COMMISSION", fulfilmentStrategy: "made-to-order" }],
+    });
+    return { catalog, cart: await seedTestCart(kobai, { catalog }) };
+  }
+
+  it("sells a Variant that is made rather than stocked, and charges for the hurry", async () => {
+    await using kobai = await createTestKobai(config);
+    const { cart } = await aCommission(kobai);
+
+    // The lead time travels in the query string, which is the whole of how the open context is
+    // filled today (#121) — and it is a key Core has never heard of, which is the point.
+    const response = await kobai.request("/store/orders?leadTimeDays=3", {
+      method: "POST",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ cartId: cart.id }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      // A penny for the goods, because this Project also replaced the pricing rule, and 3500
+      // for seven days saved. Both customisations are on this one Order, and neither knows
+      // about the other.
+      total: 3501,
+      lineItems: [
+        {
+          sku: "COMMISSION",
+          unitAmount: 1,
+          adjustments: [{ code: "lead-time-surcharge", amount: 3500 }],
+        },
+      ],
+      // What the Plugin's Strategy answered, snapshotted by Core because it asked rather than
+      // because it knows what made-to-order is.
+      fulfilments: [
+        { strategy: "made-to-order", tracksInventory: false, hasLeadTime: true },
+      ],
+    });
+  });
+
+  it("charges nothing extra when the same Project boots without the Step", async () => {
+    // One entry out of one file. The Strategy stays wired, so the commission still sells — it
+    // simply costs what it costs (ADR-0017).
+    await using kobai = await createTestKobai({
+      ...config,
+      workflows: { "resolve-price": config.workflows?.["resolve-price"] },
+    });
+    const { cart } = await aCommission(kobai);
+
+    const response = await kobai.request("/store/orders?leadTimeDays=3", {
+      method: "POST",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ cartId: cart.id }),
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      total: 1,
+      lineItems: [{ adjustments: [] }],
+    });
+  });
+
+  it("has no such Variant to sell when the same Project boots without the Strategy", async () => {
+    // The other line, taken out on its own: a Variant may point only at a Strategy this
+    // deployment has wired, so this Store no longer has anything it makes to order.
+    await using kobai = await createTestKobai({ ...config, fulfilment: {} });
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "A commission",
+        variants: [{ sku: "COMMISSION", fulfilment: { strategy: "made-to-order" } }],
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "unknown-fulfilment-strategy",
+    });
   });
 });
 
