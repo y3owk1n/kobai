@@ -372,8 +372,9 @@ describe("the Plugin this Project makes its commissions with", () => {
     await using kobai = await createTestKobai(config);
     const { cart } = await aCommission(kobai);
 
-    // The lead time travels in the query string, which is the whole of how the open context is
-    // filled today (#121) — and it is a key Core has never heard of, which is the point.
+    // The lead time travels in the query string, which is one of the two halves the open
+    // context is filled from (#121) and the one a Lead Time belongs in — it is not a
+    // credential. It is a key Core has never heard of either way, which is the point.
     const response = await kobai.request("/store/orders?leadTimeDays=3", {
       method: "POST",
       headers: { ...cart.apiKey.headers, "content-type": "application/json" },

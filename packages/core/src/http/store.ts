@@ -21,7 +21,11 @@ import type {
   PriceResolutionRefusal,
   PriceResolutionWorkflow,
 } from "../pricing/resolve-price.ts";
-import { openMetadata, type WorkflowRegistry } from "../workflow/context.ts";
+import {
+  openMetadata,
+  openMetadataWithBody,
+  type WorkflowRegistry,
+} from "../workflow/context.ts";
 import type { WorkflowRun } from "../workflow/run.ts";
 import * as contract from "./contract.ts";
 import { API_KEY, invalidRequestHook, json, REFUSALS } from "./openapi.ts";
@@ -347,10 +351,13 @@ const placeOrderRoute = createRoute({
       contract.Order,
     ),
     201: json("The Order, and the Steps that produced it.", contract.PlacedOrder),
-    // The shared one, unlike a Cart route's: every refusal past the schema on this route comes
-    // from a Step, so `invalid` is the only reason a body can be turned back with here and
-    // there is nothing narrower to say.
-    400: REFUSALS.invalid,
+    // Its own schema rather than the shared one, and a closed `reason` because both of these
+    // are Core's own: everything past them comes from a Step and is answered further down, so
+    // these are the only two ways a body is turned back here and a client can tell them apart.
+    400: json(
+      "The request does not fit this endpoint's schema, or a key arrived in both the query string and `metadata`.",
+      contract.PlaceOrderRequestRefusal,
+    ),
     401: REFUSALS.noApiKey,
     402: json(
       "The Payment Provider declined. No Order exists — money is taken before Capture precisely so that a refused card leaves nothing in the Merchant's books — and `error` carries whatever the provider said for itself.",
@@ -399,14 +406,16 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
    * The context a Workflow this surface runs is given.
    *
    * `metadata` is everything the caller sent that Core does not model, carried through
-   * untouched — ADR-0013's open context, at the edge where it is filled. `workflows` is the
-   * deployment's registry, so a Step that invokes another Workflow reaches *this* deployment's
-   * declaration of it rather than Core's (ADR-0054); it is put here rather than at each call
-   * site because a route that forgot it would silently ignore a Project's override (#113).
+   * untouched — ADR-0013's open context, already assembled by the route from the halves the
+   * request carried, because a route that takes a body has one more of them and a refusal to
+   * make (#121). `workflows` is the deployment's registry, so a Step that invokes another
+   * Workflow reaches *this* deployment's declaration of it rather than Core's (ADR-0054); it is
+   * put here rather than at each call site because a route that forgot it would silently ignore
+   * a Project's override (#113).
    */
-  const contextFor = (c: Context<StoreEnv>) => ({
+  const contextFor = (metadata: Readonly<Record<string, unknown>>) => ({
     db: deps.db,
-    metadata: openMetadata(new URL(c.req.url)),
+    metadata,
     workflows: deps.workflows,
     paymentProvider: deps.paymentProvider,
     fulfilment: deps.fulfilment,
@@ -415,7 +424,9 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   store.openapi(resolvePriceRoute, async (c) => {
     const run = await deps.priceWorkflow.run(
       { variantId: c.req.valid("param").id },
-      contextFor(c),
+      // The query string is the whole of it: this route takes no body, so there is no second
+      // half to merge and nothing that could arrive in both.
+      contextFor(openMetadata(new URL(c.req.url))),
     );
 
     if (!run.ok)
@@ -493,6 +504,22 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
 
   store.openapi(placeOrderRoute, async (c) => {
     const body = c.req.valid("json");
+
+    // Both halves of the open context, or the keys that arrived in both (#121). Asked first of
+    // all, ahead of the idempotency key: this is a malformed request rather than an attempt at
+    // a purchase, and claiming a key for it would spend the storefront's one safe retry on a
+    // request that never reached the Cart.
+    const open = openMetadataWithBody(new URL(c.req.url), body.metadata);
+    if (!open.ok) {
+      return c.json(
+        {
+          error: `${open.collided.map((key) => JSON.stringify(key)).join(", ")} arrived in both the query string and \`metadata\`, and kobai reads no key out of either — so it cannot know which one this deployment's Steps meant. Send each key in one place.`,
+          reason: "metadata-in-both" as const,
+        },
+        400,
+      );
+    }
+
     // Claimed before the Workflow runs, so a retry of a request that is still being served
     // never reaches the Cart at all — and released below unless an Order comes of it, because
     // a key standing for a purchase that never happened would refuse the retry that fixes it.
@@ -521,7 +548,10 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
 
     let run: WorkflowRun<Order>;
     try {
-      run = await deps.placeOrderWorkflow.run({ cartId: body.cartId }, contextFor(c));
+      run = await deps.placeOrderWorkflow.run(
+        { cartId: body.cartId },
+        contextFor(open.metadata),
+      );
     } catch (bug) {
       // A Step threw. The key goes back for the same reason a refusal returns it — nothing was
       // placed — and the bug travels on as the 500 it is.

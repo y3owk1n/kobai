@@ -549,6 +549,11 @@ describe("a deployment with no Payment Provider", () => {
  * needs on the request that places the Order, and it arrives verbatim through ADR-0013's open
  * context. Neither needs a change to Core, which is the claim being asserted here rather than
  * described.
+ *
+ * **In the body, not the query string** (#121). Both halves of the open context reach a Step
+ * identically and the query string is asserted elsewhere; what these two send is a credential,
+ * and a query parameter is written to access logs, to proxy logs and into the `Referer` of
+ * anything the confirmation page loads. So this is the shape a real storefront should copy.
  */
 describe("what a storefront can send a provider", () => {
   it("hands a card token to a provider that charges directly", async () => {
@@ -559,10 +564,13 @@ describe("what a storefront can send a provider", () => {
     await using kobai = await createTestKobai({ payments: { provider: cards.provider } });
     const cart = await seedTestCart(kobai);
 
-    const response = await kobai.request("/store/orders?card_token=tok_visa_4242", {
+    const response = await kobai.request("/store/orders", {
       method: "POST",
       headers: { ...cart.apiKey.headers, "content-type": "application/json" },
-      body: JSON.stringify({ cartId: cart.id }),
+      body: JSON.stringify({
+        cartId: cart.id,
+        metadata: { card_token: "tok_visa_4242" },
+      }),
     });
 
     expect(response.status).toBe(201);
@@ -589,10 +597,13 @@ describe("what a storefront can send a provider", () => {
     const catalog = await seedTestCatalog(kobai, { prices: [1250] });
     const cart = await seedTestCart(kobai, { catalog });
 
-    const response = await kobai.request("/store/orders?fpx_transaction=FPX1700000001", {
+    const response = await kobai.request("/store/orders", {
       method: "POST",
       headers: { ...cart.apiKey.headers, "content-type": "application/json" },
-      body: JSON.stringify({ cartId: cart.id }),
+      body: JSON.stringify({
+        cartId: cart.id,
+        metadata: { fpx_transaction: "FPX1700000001" },
+      }),
     });
 
     expect(response.status).toBe(201);
