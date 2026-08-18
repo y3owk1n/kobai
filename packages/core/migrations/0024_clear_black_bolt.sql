@@ -1,0 +1,1 @@
+ALTER TABLE "core_variant" ADD COLUMN "fulfilment_strategy" text DEFAULT 'physical' NOT NULL;

@@ -429,6 +429,45 @@ spec will have to migrate this (#98). `packages/core/src/sweep.ts` releases laps
 fifteen-minute hold — the way `packages/core/src/sweep.test.ts` does; the one test that waits is
 the one whose subject is the timer itself.
 
+### A Variant points at a Fulfilment Strategy, and never carries a flag
+
+**`requires_shipping` and `tracks_inventory` are questions a Strategy answers, never columns on
+a Variant** (ADR-0014). `core_variant.fulfilment_strategy` holds a **name** — `physical`,
+`digital`, or whatever a Project wired a Plugin's under — and `packages/core/src/fulfilment/`
+holds the interface Core asks. A `check` constraining that column, or an enum in `contract.ts`
+listing Core's two, would be the closed set the ADR exists to rule out, in the place it is
+hardest to remove.
+
+**It is dependency substitution, not a sixth Extension Point** (ADR-0052). A Plugin *offers* a
+Strategy and the Project wires it as `fulfilment: { strategies: { "made-to-order": … } }`, keyed
+by the name its Variants point at — so a Strategy has no `name` of its own, exactly as a replaced
+Workflow Step is named by the slot it fills. **The key is the name, and there is one of it.**
+Building this as anything a Plugin can register into is how the list of five quietly becomes six.
+
+Three things follow, and each is a decision rather than an implementation detail:
+
+- **A Variant may only point at a Strategy the deployment has wired.** `POST /admin/products`
+  refuses `unknown-fulfilment-strategy` at 422, naming the ones it does have; `place-order`
+  refuses the same reason at 409, which is only reachable by *unwiring* a Strategy Variants
+  already point at. Guessing `physical` for an unknown name would claim stock nobody asked to
+  claim and record an Order as shipping something that does not ship.
+- **The answers are asked once per placement and carried.** `load-cart` resolves each line's
+  `AppliedFulfilment`; `hold-reservations` reads `tracksInventory` off it and `capture-order`
+  snapshots it. A Step that asked again could get a different answer, because a Strategy is asked
+  *about a Variant* and may read its `metadata` (ADR-0013).
+- **Not tracking Inventory means no claim, not a claim of zero.** The filter lives in
+  `inventoryProvider.claimsFor` rather than in the Step, because deciding *which* lines are its
+  business is what a provider is for — Capacity will read `hasLeadTime` there in the same place.
+  A digital Variant therefore needs no Inventory row, and sells freely even if somebody counted
+  it: the Strategy says whether stock is involved and the row only says how many.
+
+**Fulfilment is its own entity** — `core_fulfilment`, one row per way an Order is delivered,
+with `core_order_line_item.fulfilment_id` pointing at it — because one Order has many on
+independent timelines and a status column would force one lifecycle onto all of them. The three
+answers are **copied onto the row** at Capture (ADR-0009): rewiring a Strategy, or removing the
+Plugin that offered one, must not rewrite an Order. Fulfilling anything is a later spec; what
+exists is the shape.
+
 ### The API contract
 
 **A route is a declaration, and the description is generated from it.** Core's HTTP surface
@@ -761,6 +800,18 @@ await seedTestCatalog(kobai, { merchant });              // one already signed i
 a Variant by SKU — `catalog.variant("MUG").id` — never by position: a Product reports its
 Variants in **SKU order**, not in the order they were asked for. `catalog.variantId` is the
 first one asked for, for the common case that has only one.
+
+**Everything it seeds is `physical`, and a test that cares says so.** A Variant's Fulfilment
+Strategy decides whether it consumes stock at all (ADR-0014), so a test about that names the one
+it means — and a name this deployment has not wired is refused by the route, exactly as it would
+be for a Merchant:
+
+```ts
+await seedTestCatalog(kobai, { variants: [{ sku: "PDF", fulfilmentStrategy: "digital" }] });
+await using kobai = await createTestKobai({          // a Plugin's, wired (ADR-0017)
+  fulfilment: { strategies: { "made-to-order": madeToOrder } },
+});
+```
 
 **A Cart is the arrangement every ticket in the commerce spine starts from**, and
 `seedTestCart` is the one line that produces one. It seeds a catalog if it is not given one,

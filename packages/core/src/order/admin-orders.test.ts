@@ -153,6 +153,18 @@ describe("a Merchant opens one Order", () => {
         },
       ],
       adjustments: [],
+      // One, because one poster gets to the Shopper one way — and it says what `physical`
+      // answered at Capture rather than asking the Strategy again (ADR-0014).
+      fulfilments: [
+        {
+          id: expect.any(String),
+          strategy: "physical",
+          requiresShipping: true,
+          tracksInventory: true,
+          hasLeadTime: false,
+          lineItemIds: [expect.any(String)],
+        },
+      ],
       metadata: {},
       payment: {
         id: expect.any(String),

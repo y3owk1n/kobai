@@ -12,6 +12,7 @@ import {
   updateLineItem,
 } from "../cart/write.ts";
 import type { Database } from "../db/client.ts";
+import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
 import { type Order, readOrder, readOrderPlacedFrom } from "../order/read.ts";
@@ -44,6 +45,15 @@ import { API_KEY, invalidRequestHook, json, REFUSALS } from "./openapi.ts";
 
 export type StoreDependencies = {
   readonly db: Database;
+  /**
+   * The Fulfilment Strategies this deployment has (ADR-0052), for the Steps that ask a
+   * Variant's Strategy what it answers.
+   *
+   * It goes on the context of every Workflow this surface runs, exactly as `workflows` does and
+   * for the same reason: a route that built its context without it would run against Core's two
+   * whatever the Project had wired, and that failure is silent.
+   */
+  readonly fulfilment: FulfilmentStrategies;
   /**
    * The `resolve-price` declaration this deployment runs — Core's, or the one the Project's
    * config rebuilt by replacing a Step (ADR-0017). Handed in rather than imported, because a
@@ -349,7 +359,7 @@ const placeOrderRoute = createRoute({
     403: REFUSALS.secretKeyRequired,
     404: json("A Step refused: there is no such Cart.", contract.PlaceOrderRefusal),
     409: json(
-      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight.",
+      "Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or something in the Cart names a Fulfilment Strategy this deployment no longer has wired, or the idempotency key names a different request, or one still in flight.",
       contract.PlaceOrderRefusal,
     ),
     422: json(
@@ -399,6 +409,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     metadata: openMetadata(new URL(c.req.url)),
     workflows: deps.workflows,
     paymentProvider: deps.paymentProvider,
+    fulfilment: deps.fulfilment,
   });
 
   store.openapi(resolvePriceRoute, async (c) => {
@@ -740,6 +751,10 @@ const PLACE_ORDER_REFUSAL_STATUS = {
   // a 503: everything else here is serving, and kobai ships no provider by decision (ADR-0053),
   // so this is a deployment that has not finished being configured rather than one that is down.
   "no-payment-provider": 409,
+  // 409 beside it, and for the same reason: a Variant whose Fulfilment Strategy this deployment
+  // no longer has is a Store that has been reconfigured out from under its own catalog, and
+  // retrying changes nothing until somebody wires it back (ADR-0052).
+  "unknown-fulfilment-strategy": 409,
 } as const satisfies Record<
   PlaceOrderRefusal | PriceResolutionRefusal,
   PlaceOrderRefusalStatus

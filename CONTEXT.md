@@ -219,10 +219,12 @@ and produce a print job. Never a status column on Order. See ADR-0014.
 _Avoid_: shipment, delivery, dispatch, fulfilment status
 
 **Fulfilment Strategy**:
-A named, registered answer to "how is this Variant delivered" — does it ship, does it
-consume stock, does it have a Lead Time. An **open set**: Core ships `physical` and
-`digital`, and made-to-order is a Plugin.
-_Avoid_: product type, fulfilment type, variant type, delivery method
+A named answer to "how is this Variant delivered" — does it ship, does it consume stock,
+does it have a Lead Time. An **open set**: Core ships `physical` and `digital`, and
+made-to-order is a Plugin. **Not a registry** — it is dependency substitution behind a named
+interface, wired by the Project under `fulfilment.strategies` (ADR-0052). A Variant points at
+one by name and stores none of the answers.
+_Avoid_: product type, fulfilment type, variant type, delivery method, registering a strategy
 
 **Lead Time**:
 The interval between order capture and a requested delivery date. Input to pricing for

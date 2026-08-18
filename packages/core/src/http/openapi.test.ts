@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSION_POLICY } from "../auth/session.ts";
+import { CORE_FULFILMENT_STRATEGIES } from "../fulfilment/strategy.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
 import { placeOrderWorkflow } from "../order/place-order.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
@@ -41,6 +42,10 @@ function describeCore() {
     // deployment that wired a provider serves exactly these routes and answers exactly these
     // statuses — 402 among them, whether or not anything is there to decline.
     paymentProvider: undefined,
+    // Core's own two, because a description does not move with a wired Strategy either: the set
+    // is open (ADR-0014), so no schema here enumerates it and a deployment that wired a Plugin's
+    // serves exactly these routes.
+    fulfilment: CORE_FULFILMENT_STRATEGIES,
     // The default, because `packages/core/openapi.json` is the description of stock kobai.
     // What a *configured* window does to it is asserted through the running application, in
     // `auth/auth.test.ts`.

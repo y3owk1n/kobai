@@ -324,6 +324,12 @@ export interface paths {
             "application/json": components["schemas"]["Refusal"];
           };
         };
+        /** @description A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["Refusal"];
+          };
+        };
         /** @description Something failed inside kobai. */
         500: {
           content: {
@@ -1254,7 +1260,7 @@ export interface paths {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
           };
         };
-        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or the idempotency key names a different request, or one still in flight. */
+        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the Store has not got enough of something in it left to sell, or this deployment has no Payment Provider configured, or something in the Cart names a Fulfilment Strategy this deployment no longer has wired, or the idempotency key names a different request, or one still in flight. */
         409: {
           content: {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
@@ -1451,6 +1457,7 @@ export interface components {
       /** Format: uuid */
       id: string;
       sku: string;
+      fulfilment: components["schemas"]["VariantFulfilment"];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -1458,6 +1465,10 @@ export interface components {
       /** @description Every Price set on this Variant. A Price is a row, so there may be several. */
       prices: components["schemas"]["Price"][];
       inventory: components["schemas"]["Inventory"];
+    };
+    VariantFulfilment: {
+      /** @description The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. What that Strategy answers about shipping, stock and Lead Time is recorded on an Order's Fulfilments, where it is a snapshot rather than a live decision. */
+      strategy: string;
     };
     Price: {
       /** Format: uuid */
@@ -1500,6 +1511,7 @@ export interface components {
     };
     CreateVariantRequest: {
       sku: string;
+      fulfilment?: components["schemas"]["VariantFulfilment"];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -1571,6 +1583,8 @@ export interface components {
       lineItems: components["schemas"]["OrderLineItem"][];
       /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
       adjustments: components["schemas"]["OrderAdjustment"][];
+      /** @description How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed. */
+      fulfilments: components["schemas"]["Fulfilment"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -1615,6 +1629,20 @@ export interface components {
       metadata: {
         [key: string]: unknown;
       };
+    };
+    Fulfilment: {
+      /** Format: uuid */
+      id: string;
+      /** @description The Fulfilment Strategy that produced this, by the name the deployment wired it under. Not a closed set: `physical` and `digital` are Core's, and a Plugin's is whatever the Project called it. */
+      strategy: string;
+      /** @description Whether this part goes anywhere physical, as at Capture. */
+      requiresShipping: boolean;
+      /** @description Whether selling this took something off a shelf, as at Capture. `false` is why a digital line holds no Reservation. */
+      tracksInventory: boolean;
+      /** @description Whether there is an interval between Capture and delivery. `true` is a made-to-order line; how long is the Plugin's to know, and reaches the Order as an Adjustment. */
+      hasLeadTime: boolean;
+      /** @description The Line Items this Fulfilment covers, in the SKU order the Order reports its lines in. Every line of an Order kobai placed is in exactly one. */
+      lineItemIds: string[];
     };
     OrderRefusal: {
       error: string;

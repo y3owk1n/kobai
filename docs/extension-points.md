@@ -12,7 +12,7 @@ Read the status column before you build on a row.
 |---|---|---|---|
 | 1 | **Configuration** | One file where everything your Project has changed is declared | **Proven** — `reference/kobai.config.ts`, exercised on every commit |
 | 2 | **Workflow Step override** | Replace one named Step of a declared process; watch one without owning it | **Proven** — a replaced Step changes what the API serves, under test |
-| 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Partial** — exactly one interface exists (`Logger`) |
+| 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Partial** — three interfaces you can supply (`Logger`, `PaymentProvider`, `FulfilmentStrategy`) |
 | 4 | **Events** | React to something happening, without being in the path of it | **Promised only** — nothing to attach to; no bus, no emitter, no subscriber |
 | 5 | **Admin UI slots** | Put your own UI inside the Admin at a declared position | **Promised only** — no slot mechanism exists |
 
@@ -306,11 +306,14 @@ paid deliberately.
 
 ## 3. Dependency substitution behind named interfaces — **partial**
 
-**Status: partially present.** The mechanism works and there is exactly **one** interface to
-use it on.
+**Status: partially present.** The mechanism works, and there are **three** interfaces you can
+use it on: `Logger`, `PaymentProvider` and `FulfilmentStrategy`. One of them already takes an
+implementation that is not Core's own — the reference Project supplies the Payment Provider
+kobai ships none of (ADR-0053). (Core names a fourth, `ReservationProvider`, and deliberately
+does not export it: ADR-0018 promises one interface with two providers and both are Core's.)
 
-The idea is that where Core needs a collaborator, it names an interface and takes yours.
-Today that is `Logger`:
+The idea is that where Core needs a collaborator, it names an interface and takes yours. The
+oldest is `Logger`:
 
 ```ts
 import { createKobai, type Logger } from "@kobai/core";
@@ -321,8 +324,39 @@ const kobai = createKobai({ ...config, databaseUrl, logger });
 
 Two methods, and anything that does them is acceptable. The substitution point is real and
 exercised — the reference Project passes a console logger and the test harness passes a
-silent one — though both of those implementations are still Core's own, so what is proven
-is that the seam works, not yet that anybody has put something of their own through it.
+silent one — though both of those implementations are still Core's own.
+
+**`PaymentProvider` is the second, and Core implements it nowhere on purpose** (ADR-0053): a
+deployment with none wired boots, serves its catalog and its Admin, and refuses only the
+placing of an Order. You wire it as `payments: { provider }`, and the reference Project's own
+`manual` provider — its source, in its repository — is the worked example.
+
+**A Fulfilment Strategy is one of these, and not a sixth Extension Point.** ADR-0014 says a
+Variant points at a named Strategy that answers three questions about it — does it ship, does
+it consume stock, does it have a Lead Time — and that reads like a registry. It is not:
+[ADR-0052](./adr/0052-a-fulfilment-strategy-is-dependency-substitution.md) settles it as this
+mechanism, reached through the one above it. Core ships `physical` and `digital`; anything else
+— a rental, a subscription, made-to-order — is a Strategy a Plugin *offers* or you write
+yourself, and your Project *wires* it under the name your Variants point at. (No Plugin in this
+repository offers one yet; the made-to-order Plugin ADR-0014 names is the one that will.)
+
+```ts
+import { defineKobaiConfig, type FulfilmentStrategy } from "@kobai/core";
+
+const madeToOrder: FulfilmentStrategy = {
+  answersFor: () => ({ requiresShipping: true, tracksInventory: false, hasLeadTime: true }),
+};
+
+export default defineKobaiConfig({
+  fulfilment: { strategies: { "made-to-order": madeToOrder } },
+});
+```
+
+Until that line exists, a Variant may not point at `made-to-order` at all — creating one is
+refused, naming the Strategies this deployment does have (ADR-0017). What the Strategy answers
+is what Core acts on: a Variant whose Strategy says it consumes no stock holds no Reservation,
+and every Order records what its Strategies answered *at Capture*, as a snapshot that a later
+rewiring cannot rewrite.
 
 **What is not here yet.** ADR-0026 names Media storage as the archetypal case: a pluggable
 driver defaulting to local disk, with an S3-compatible one shipped. It also names a
@@ -335,7 +369,7 @@ The database is not substitutable either, and is not meant to be: `createKobai` 
 connection string, not a handle. Postgres is a decision, not a driver
 ([ADR-0011](./adr/0011-postgres-and-drizzle.md)).
 
-So: if you need to substitute something that is not the logger, there is nothing to attach
+So: if you need to substitute something none of the three names, there is nothing to attach
 to, and that is a gap to report rather than a mechanism to discover.
 
 ## 4. Events — **promised only**

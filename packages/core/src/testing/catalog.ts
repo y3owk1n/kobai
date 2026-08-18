@@ -13,6 +13,18 @@ export type TestVariantSpec = {
   /** Defaults to `POSTER-A2`, `POSTER-A3`, `POSTER-A4` — by position, so two need no names. */
   readonly sku?: string;
   /**
+   * The Fulfilment Strategy this Variant points at, **by name**. Defaults to `physical`.
+   *
+   * Named by a test whose subject is what a Strategy answers — that a `digital` Variant needs
+   * no Inventory row, that a Plugin's Strategy is only reachable once the Project wired it. A
+   * name this deployment has not wired is refused by the route, and this helper fails saying
+   * so, which is the same answer a Merchant would get.
+   *
+   * Spelled out rather than `fulfilment`, because the request body's `fulfilment` is the object
+   * `{ strategy }` and this is the name inside it.
+   */
+  readonly fulfilmentStrategy?: string;
+  /**
    * Minor units, in the Store's default currency. `1250` is USD 12.50.
    *
    * Several, because a Price is a row rather than a column (ADR-0008) — the arrangement a
@@ -132,7 +144,14 @@ export async function seedTestCatalog(
       headers: json,
       body: JSON.stringify({
         title: options?.title ?? DEFAULT_TITLE,
-        variants: asked.map(({ sku }) => ({ sku })),
+        variants: asked.map(({ sku, fulfilmentStrategy }) => ({
+          sku,
+          // Left out entirely unless a test asked, so what the route does with a Variant that
+          // says nothing is exercised by every other test in this repository.
+          ...(fulfilmentStrategy === undefined
+            ? {}
+            : { fulfilment: { strategy: fulfilmentStrategy } }),
+        })),
       }),
     }),
     201,

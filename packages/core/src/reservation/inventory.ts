@@ -18,10 +18,12 @@ import type {
  * Store has and reads back what is left; the Workflow claims units, takes them and gives them
  * back. Splitting them across two files would put the arithmetic that must agree in two places.
  *
- * **A Variant with no row here is not tracked**, and that is a different thing from one with
- * none left: it sells freely, and no Reservation is held for it. That is what makes this
- * provider safe to ask about every line of every Cart — a digital Variant simply produces no
- * claim.
+ * **Two things have to be true before a unit is claimed**, and they answer different questions.
+ * The Variant's Fulfilment Strategy says whether selling one takes anything off a shelf at all
+ * (ADR-0014) — a digital Variant is skipped here whether or not somebody has counted it — and a
+ * row in this table says how many there are. **A Variant with no row is not tracked**, which is a
+ * different thing from one with none left: it sells freely, and no Reservation is held for it.
+ * That is what makes this provider safe to ask about every line of every Cart.
  */
 
 /** What Inventory reports about one Variant, and the shape a Merchant reads. */
@@ -134,7 +136,11 @@ export const inventoryProvider: ReservationProvider = {
   name: "inventory",
 
   async claimsFor(db, lines) {
-    const wanted = combined(lines);
+    // The Strategy decides *whether* this provider is in play at all, and the row decides how
+    // many there are. A line whose Strategy says it consumes no stock is skipped here — not
+    // claimed for zero — so a Store selling downloads takes no lock and writes no Reservation
+    // (ADR-0014, ADR-0052).
+    const wanted = combined(lines.filter((line) => line.fulfilment.tracksInventory));
     const tracked = await readInventoryOf(db, [...wanted.keys()]);
 
     // Only the Variants this provider is counting. A line for an untracked Variant produces no

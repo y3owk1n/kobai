@@ -117,6 +117,48 @@ describe("seeding a catalog", () => {
     expect(product.status).toBe(200);
   });
 
+  it("points every Variant it seeds at `physical` unless told otherwise", async () => {
+    // The default a test that is not about fulfilment should inherit — and the one every other
+    // test in this repository is quietly relying on (ADR-0014).
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai);
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(product.json()).resolves.toMatchObject({
+      variants: [{ sku: "POSTER-A2", fulfilment: { strategy: "physical" } }],
+    });
+  });
+
+  it("points one at the Strategy a test names", async () => {
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai, {
+      variants: [{ sku: "PDF", fulfilmentStrategy: "digital" }],
+    });
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(product.json()).resolves.toMatchObject({
+      variants: [{ sku: "PDF", fulfilment: { strategy: "digital" } }],
+    });
+  });
+
+  it("fails saying so when the deployment has not wired that Strategy", async () => {
+    // The same answer a Merchant gets, rather than a helper quietly seeding something else:
+    // a Plugin's Strategy is only reachable once the Project wired it (ADR-0017).
+    await using kobai = await createTestKobai();
+
+    await expect(
+      seedTestCatalog(kobai, {
+        variants: [{ sku: "COMMISSION", fulfilmentStrategy: "made-to-order" }],
+      }),
+    ).rejects.toThrow(/unknown-fulfilment-strategy/);
+  });
+
   it("refuses to be told the same thing twice", () => {
     const seed = async () => {
       await using kobai = await createTestKobai();

@@ -13,6 +13,13 @@ import {
   variant,
 } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { keyOf, writeFulfilments } from "../fulfilment/fulfilment.ts";
+import {
+  type AppliedFulfilment,
+  CORE_FULFILMENT_STRATEGIES,
+  type FulfilmentStrategies,
+  fulfilmentAnswersFor,
+} from "../fulfilment/strategy.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import type { ReservationRefusal } from "../reservation/provider.ts";
@@ -48,7 +55,9 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  * Seven slots today:
  *
  * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired,
- *   already placed or empty. It applies no pricing rule; it hands over what was selected.
+ *   already placed or empty. It applies no pricing rule; it hands over what was selected, with
+ *   each line's Fulfilment Strategy already asked about it (ADR-0052) — once, here, so that
+ *   nothing later in the run can get a different answer.
  * - **`price-lines`** invokes `resolve-price` for each line, through the deployment's own
  *   declaration (ADR-0054) — so a Project that replaced `select-price` charges its own prices
  *   at Capture without wiring the same customisation twice.
@@ -58,13 +67,13 @@ import { type Order, type OrderShopper, readOrder } from "./read.ts";
  * - **`calculate-tax`** works out the tax on each line, and Core's own implementation returns
  *   **zero** — see {@link calculateTax}.
  * - **`hold-reservations`** claims everything scarce in the Cart, atomically, and **its
- *   compensation releases** — see {@link holdReservations}. A Cart of untracked Variants claims
- *   nothing.
+ *   compensation releases** — see {@link holdReservations}. A Cart of lines whose Strategies
+ *   consume nothing scarce claims nothing at all.
  * - **`take-payment`** asks the deployment's Payment Provider for what the Order comes to, and
  *   **its compensation refunds** — see {@link takePayment}. Core implements no provider
  *   (ADR-0053), so a deployment wired with none refuses here and nowhere else.
  * - **`capture-order`** consumes those Reservations and writes the Order, its snapshot Line
- *   Items, its Adjustments and the Payment — in one transaction.
+ *   Items, its Adjustments, its Fulfilments and the Payment — in one transaction.
  *
  * **`apply-adjustments` runs before `calculate-tax`, and that is arithmetic rather than
  * ordering taste.** ADR-0022 says an Adjustment changes what a line total means in every Order
@@ -97,6 +106,7 @@ export type PlaceOrderRefusal =
   | "cart-empty"
   | "no-payment-provider"
   | "payment-declined"
+  | "unknown-fulfilment-strategy"
   // Every way a Reservation provider can say the Store has not got it, folded in rather than
   // spelled out: a second provider adds a member to that union and this one grows with it, so
   // the store surface's status map goes red naming the new reason instead of answering it 422.
@@ -110,6 +120,17 @@ export type CartLineToPlace = {
   readonly title: string;
   readonly sku: string;
   readonly quantity: number;
+  /**
+   * How this line is delivered — its Variant's Fulfilment Strategy, asked here and carried
+   * (ADR-0014, ADR-0052).
+   *
+   * Resolved by `load-cart` rather than by each Step that wants it, so one placement gets one
+   * answer: it is what `hold-reservations` reads to decide whether anything is claimed, and what
+   * `capture-order` snapshots onto the Order's Fulfilments. A Step in between may read it and a
+   * replacement may decide differently about a line, which is the same latitude every other
+   * field here carries.
+   */
+  readonly fulfilment: AppliedFulfilment;
   /**
    * The Line Item's own open data (ADR-0004), carried through to the Order's snapshot.
    *
@@ -318,7 +339,7 @@ export const loadCart = defineStep(
     // of requests that get past this check at the same instant. See {@link captureOrder}.
     if (found.placed) throw alreadyPlaced(input.cartId);
 
-    const lines = await context.db
+    const selected = await context.db
       .select({
         id: cartLineItem.id,
         variantId: variant.id,
@@ -326,12 +347,30 @@ export const loadCart = defineStep(
         sku: variant.sku,
         quantity: cartLineItem.quantity,
         metadata: cartLineItem.metadata,
+        fulfilmentStrategy: variant.fulfilmentStrategy,
+        // The Variant's own open data, for the Strategy rather than for the snapshot — a
+        // made-to-order Strategy reads its own key out of it (ADR-0013), and Core reads none.
+        variantMetadata: variant.metadata,
       })
       .from(cartLineItem)
       .innerJoin(variant, eq(variant.id, cartLineItem.variantId))
       .innerJoin(product, eq(product.id, variant.productId))
       .orderBy(asc(cartLineItem.createdAt), asc(cartLineItem.id))
       .where(eq(cartLineItem.cartId, found.id));
+
+    // Asked once per line, here, and carried from here on: the answers decide what is claimed
+    // and become the Order's Fulfilment snapshot, and a placement that asked twice could get
+    // two answers (ADR-0052).
+    const lines = selected.map(
+      ({ fulfilmentStrategy, variantMetadata, ...line }): CartLineToPlace => ({
+        ...line,
+        fulfilment: fulfilmentOf(context.fulfilment, fulfilmentStrategy, {
+          id: line.variantId,
+          sku: line.sku,
+          metadata: variantMetadata,
+        }),
+      }),
+    );
 
     if (lines.length === 0) {
       throw refuse(
@@ -512,13 +551,15 @@ export const holdReservations = defineStep(
   async (input: TaxedLines, context): Promise<ReservedLines> => {
     const held = await holdReservationsFor(
       context.db,
-      // The three things a provider may see, and no more: what was selected, how much of it,
-      // and the Line Item's own open data — which is where a Capacity provider will find the
-      // date a Shopper asked for (ADR-0013).
+      // The four things a provider may see, and no more: what was selected, how much of it,
+      // the Line Item's own open data — which is where a Capacity provider will find the date a
+      // Shopper asked for (ADR-0013) — and what this Variant's Fulfilment Strategy answered,
+      // which is what tells each provider whether the line is its business at all (ADR-0052).
       input.lines.map((line) => ({
         variantId: line.variantId,
         quantity: line.quantity,
         metadata: line.metadata,
+        fulfilment: line.fulfilment,
       })),
     );
     // A provider's refusal is a refusal of the Order, with the provider's own reason — so a
@@ -680,6 +721,7 @@ export const captureOrder = defineStep(
       total: totalOf(line),
       metadata: line.metadata,
       adjustments: line.adjustments,
+      fulfilment: line.fulfilment,
     }));
     const total = orderTotalOf(input);
 
@@ -698,12 +740,18 @@ export const captureOrder = defineStep(
           .returning({ id: order.id });
         if (!written) throw new Error("Writing an Order returned no row.");
 
+        // Before the lines, because a line names the Fulfilment it belongs to. One row per way
+        // this Order is delivered, carrying what each Strategy answered — a snapshot, like
+        // everything else about an Order (ADR-0009, ADR-0014).
+        const fulfilmentIds = await writeFulfilments(tx, written.id, lines);
+
         const insertedLines = await tx
           .insert(orderLineItem)
           .values(
-            lines.map(({ adjustments: _adjustments, ...line }) => ({
+            lines.map(({ adjustments: _adjustments, fulfilment: applied, ...line }) => ({
               ...line,
               orderId: written.id,
+              fulfilmentId: fulfilmentIdOf(fulfilmentIds, applied),
             })),
           )
           // By SKU rather than by the order the rows came back in: a Cart holds one line per
@@ -760,6 +808,44 @@ export const captureOrder = defineStep(
     }
   },
 );
+
+/**
+ * What this line's Fulfilment Strategy answers about it, or a refusal saying there is no such
+ * Strategy here.
+ *
+ * A Variant may only be created pointing at a Strategy the deployment has wired, so the only way
+ * to reach the refusal is for a Project to *unwire* one its Variants already point at. That is a
+ * configuration change rather than a fault in anybody's request, and it is answered the way
+ * `no-payment-provider` is: this Store cannot sell this thing until somebody changes the Store.
+ * Refusing beats guessing — a Variant Core silently treated as `physical` would be one whose
+ * stock it claimed and whose Order it recorded as shipping, neither of which anybody asked for.
+ *
+ * The context's Strategies are Core's own two when nothing was threaded, because that is what a
+ * deployment which wired nothing has — not an empty set in which no Variant can be fulfilled.
+ */
+function fulfilmentOf(
+  strategies: FulfilmentStrategies | undefined,
+  strategy: string,
+  variant: {
+    readonly id: string;
+    readonly sku: string;
+    readonly metadata: Record<string, unknown>;
+  },
+): AppliedFulfilment {
+  const answers = fulfilmentAnswersFor(
+    strategies ?? CORE_FULFILMENT_STRATEGIES,
+    strategy,
+    variant,
+  );
+  if (!answers) {
+    throw refuse(
+      "unknown-fulfilment-strategy",
+      `Variant ${JSON.stringify(variant.sku)} is fulfilled by ${JSON.stringify(strategy)}, and this deployment has no Fulfilment Strategy of that name. It was wired under \`fulfilment.strategies\` in this Project's \`kobai.config.ts\` when the Variant was created, and is not now.`,
+    );
+  }
+
+  return { strategy, ...answers };
+}
 
 /** The unique index that makes a Cart become exactly one Order — see `db/schema.ts`. */
 const ONE_ORDER_PER_CART = "core_order_cart_idx";
@@ -818,6 +904,24 @@ function lineIdsBySku(rows: readonly { id: string; sku: string }[]): Map<string,
     );
   }
   return bySku;
+}
+
+/**
+ * The Fulfilment this line is part of. Absent is impossible and therefore worth saying out loud.
+ *
+ * The rows were written from these very lines a statement ago, so a miss would mean the key two
+ * of them are grouped by had changed between the write and the read. Left to the column it would
+ * be a `null` — the value that means "placed before Fulfilment existed" — and an Order would
+ * quietly claim to be older than it is.
+ */
+function fulfilmentIdOf(ids: Map<string, string>, applied: AppliedFulfilment): string {
+  const id = ids.get(keyOf(applied));
+  if (id === undefined) {
+    throw new Error(
+      `An Order's Fulfilment for ${JSON.stringify(applied.strategy)} was not written back.`,
+    );
+  }
+  return id;
 }
 
 /** The line a SKU names. Absent is impossible and therefore worth saying out loud. */

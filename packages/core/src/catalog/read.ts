@@ -30,10 +30,27 @@ export type Price = {
   readonly metadata: Record<string, unknown>;
 };
 
+/** How this Variant is delivered — the Strategy it points at, by name (ADR-0014). */
+export type VariantFulfilment = {
+  /**
+   * The name the deployment wired this Strategy under: `physical`, `digital`, or a Plugin's.
+   *
+   * The name and not the answers. Does it ship, does it consume stock, does it have a Lead
+   * Time are questions the Strategy answers when Core asks — reporting them here would put a
+   * cached copy of a live decision in a catalog read, and a Project that rewired the Strategy
+   * would have to be trusted to remember this one too. Where the answers are recorded is on
+   * the Fulfilments of an Order, because there they are a snapshot of what was true at Capture
+   * and must never move again (ADR-0009).
+   */
+  readonly strategy: string;
+};
+
 /** The sellable thing, with every Price that has been set on it. */
 export type Variant = {
   readonly id: string;
   readonly sku: string;
+  /** The Fulfilment Strategy this Variant points at — `physical` unless it was created saying. */
+  readonly fulfilment: VariantFulfilment;
   readonly metadata: Record<string, unknown>;
   readonly prices: readonly Price[];
   /**
@@ -107,7 +124,12 @@ export async function readProduct(
  */
 export async function readVariants(db: Database, productId: string): Promise<Variant[]> {
   const variants = await db
-    .select({ id: variant.id, sku: variant.sku, metadata: variant.metadata })
+    .select({
+      id: variant.id,
+      sku: variant.sku,
+      fulfilmentStrategy: variant.fulfilmentStrategy,
+      metadata: variant.metadata,
+    })
     .from(variant)
     .where(eq(variant.productId, productId))
     // By SKU: it is unique, so the order is total and stable, and it is the only column here
@@ -148,8 +170,9 @@ export async function readVariants(db: Database, productId: string): Promise<Var
     variants.map((row) => row.id),
   );
 
-  return variants.map((row) => ({
+  return variants.map(({ fulfilmentStrategy, ...row }) => ({
     ...row,
+    fulfilment: { strategy: fulfilmentStrategy },
     prices: byVariant.get(row.id) ?? [],
     inventory: stock.get(row.id) ?? null,
   }));

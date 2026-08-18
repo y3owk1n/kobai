@@ -1,4 +1,5 @@
 import type { Database } from "../db/client.ts";
+import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import type { AnyWorkflow } from "./workflow.ts";
 
@@ -56,6 +57,19 @@ export type WorkflowContext = {
    * rather than raising — see `order/place-order.ts`.
    */
   readonly paymentProvider?: PaymentProvider;
+  /**
+   * The Fulfilment Strategies this deployment was wired with, for the Step that asks each line
+   * what it is (ADR-0052).
+   *
+   * It reaches a Step the way the database and the Payment Provider do, and for the same
+   * reason: a Step is a module-level declaration a Project may replace, so there is nothing to
+   * hand a dependency to at construction time.
+   *
+   * **Optional, and absent means Core's own two** rather than none — `physical` and `digital`
+   * are what a deployment that wired nothing has, so a context assembled without this key
+   * behaves as that deployment does rather than as one where no Variant can be fulfilled.
+   */
+  readonly fulfilment?: FulfilmentStrategies;
 };
 
 /**

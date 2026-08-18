@@ -35,6 +35,7 @@ import {
   setPrice,
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
+import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
@@ -70,6 +71,11 @@ import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.
 
 export type AdminDependencies = {
   readonly db: Database;
+  /**
+   * The Fulfilment Strategies this deployment has (ADR-0052), for the one route that creates
+   * Variants — a Variant may only point at a Strategy the Project actually wired.
+   */
+  readonly fulfilment: FulfilmentStrategies;
   /**
    * How long this deployment's sessions live (ADR-0050). The gate below enforces it, and the
    * two routes that answer with a `Session` describe it — which is why those two are declared
@@ -224,6 +230,10 @@ const createProductRoute = createRoute({
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     409: json("A Variant already carries one of those SKUs.", contract.Refusal),
+    422: json(
+      "A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
+      contract.Refusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -544,7 +554,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(createProductRoute, async (c) => {
-    const created = await createProduct(deps.db, c.req.valid("json"));
+    const created = await createProduct(deps.db, c.req.valid("json"), deps.fulfilment);
     if (!created.ok) return refused(c, created, PRODUCT_STATUS);
     return c.json(created.product, 201);
   });
@@ -625,11 +635,23 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   return admin;
 }
 
-/** 400 for a request that is wrong, 409 for one another row already answered. */
+/**
+ * 400 for a request that is wrong, 409 for one another row already answered, and 422 for a
+ * Fulfilment Strategy this deployment has not wired.
+ *
+ * The last is `unsupported-currency`'s distinction rather than `invalid`'s: the body is well
+ * formed and names a Strategy that could perfectly well exist — it is *this* deployment that
+ * has not wired it, which is a fact about the Store and is fixed in `kobai.config.ts` rather
+ * than in the request.
+ */
 const PRODUCT_STATUS = {
   invalid: 400,
   "sku-taken": 409,
-} as const satisfies Record<Exclude<ProductCreation, { ok: true }>["reason"], 400 | 409>;
+  "unknown-fulfilment-strategy": 422,
+} as const satisfies Record<
+  Exclude<ProductCreation, { ok: true }>["reason"],
+  400 | 409 | 422
+>;
 
 /** Only one way to get a key wrong, and it is the request's fault. */
 const API_KEY_STATUS = {
