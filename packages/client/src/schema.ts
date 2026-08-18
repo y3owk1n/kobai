@@ -810,7 +810,7 @@ export interface paths {
             "application/json": components["schemas"]["CartRefusal"];
           };
         };
-        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        /** @description This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way. */
         409: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
@@ -877,7 +877,7 @@ export interface paths {
             "application/json": components["schemas"]["CartRefusal"];
           };
         };
-        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        /** @description This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way. */
         409: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
@@ -941,7 +941,7 @@ export interface paths {
             "application/json": components["schemas"]["CartRefusal"];
           };
         };
-        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        /** @description This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way. */
         409: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
@@ -1008,7 +1008,7 @@ export interface paths {
             "application/json": components["schemas"]["CartRefusal"];
           };
         };
-        /** @description This Cart has expired. It still reads, and it can no longer be changed. */
+        /** @description This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way. */
         409: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
@@ -1032,15 +1032,27 @@ export interface paths {
   "/store/orders": {
     /**
      * Turn a Cart into an Order
-     * @description Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards.
+     * @description Requires a **secret** key: this is where money and stock move, and a publishable key is shipped to a browser (ADR-0055). Prices are resolved now rather than read off the Cart, through the same `resolve-price` Workflow a storefront quotes with — so a Project that replaced a pricing Step charges its own prices here without wiring anything twice. The Order's Line Items hold a snapshot, so the catalog stays freely editable afterwards. Send an `Idempotency-Key` so that retrying after a timeout answers with the Order already placed rather than placing a second one; a Cart becomes exactly one Order either way.
      */
     post: {
+      parameters: {
+        header?: {
+          /** @description A value of your own choosing, unique to this purchase. Send the same one on every retry of the same request and at most one Order is placed; the retry answers 200 with that Order instead of 201. Reusing one for a different body is refused. Optional, and a request without one is not protected against a retry after a timeout. */
+          "idempotency-key"?: string;
+        };
+      };
       requestBody: {
         content: {
           "application/json": components["schemas"]["PlaceOrderRequest"];
         };
       };
       responses: {
+        /** @description This idempotency key has already placed an Order, and this is that Order — nothing was placed again. There is no `workflow` here, because which Steps ran is a fact about the request that placed it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Order"];
+          };
+        };
         /** @description The Order, and the Steps that produced it. */
         201: {
           content: {
@@ -1075,7 +1087,7 @@ export interface paths {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
           };
         };
-        /** @description A Step refused: this Cart has expired and can no longer be placed. */
+        /** @description Nothing was placed, and this request is not the way to place it. Either the Cart can no longer produce an Order — it has expired, or it has already been placed, and a Cart becomes exactly one Order — or the idempotency key names a different request, or one still in flight. */
         409: {
           content: {
             "application/json": components["schemas"]["PlaceOrderRefusal"];
@@ -1418,6 +1430,8 @@ export interface components {
       expiresAt: string;
       /** @description Whether that moment has passed, as the server judges it. Branch on this rather than comparing `expiresAt` against a browser's clock. An expired Cart still reads and refuses every change. */
       expired: boolean;
+      /** @description Whether this Cart has already become an Order. A Cart becomes exactly one, so this is final: a placed Cart still reads, and refuses every change and every further placement. Distinct from `expired` — an expired Cart ran out of time, and a placed one has already been bought. */
+      placed: boolean;
       /** Format: date-time */
       createdAt: string;
       /** Format: date-time */
@@ -1443,7 +1457,7 @@ export interface components {
     CartRefusal: {
       error: string;
       /** @enum {string} */
-      reason: "invalid" | "secret-key-required" | "cart-not-found" | "cart-expired" | "line-item-not-found" | "variant-not-found" | "variant-not-priced";
+      reason: "invalid" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced";
     };
     CreateCartRequest: {
       /** @description Needs a secret key. A publishable one is refused (ADR-0020). */
@@ -1484,11 +1498,29 @@ export interface components {
         [key: string]: unknown;
       };
     };
-    PlacedOrder: components["schemas"]["Order"] & {
-      workflow: {
-        name: string;
-        steps: components["schemas"]["StepReport"][];
+    Order: {
+      /** Format: uuid */
+      id: string;
+      /** @description The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's. */
+      number: number;
+      shopper: components["schemas"]["CartShopper"];
+      /** @description ISO 4217. Every amount here is in it. */
+      currency: string;
+      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments. */
+      total: number;
+      /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
+      lineItems: components["schemas"]["OrderLineItem"][];
+      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
+      adjustments: components["schemas"]["OrderAdjustment"][];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
       };
+      /**
+       * Format: date-time
+       * @description The moment of Capture, when this Order became immutable.
+       */
+      createdAt: string;
     };
     OrderLineItem: {
       /** Format: uuid */
@@ -1530,29 +1562,11 @@ export interface components {
         [key: string]: unknown;
       };
     };
-    Order: {
-      /** Format: uuid */
-      id: string;
-      /** @description The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's. */
-      number: number;
-      shopper: components["schemas"]["CartShopper"];
-      /** @description ISO 4217. Every amount here is in it. */
-      currency: string;
-      /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments. */
-      total: number;
-      /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
-      lineItems: components["schemas"]["OrderLineItem"][];
-      /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher. A line's own are on the line. */
-      adjustments: components["schemas"]["OrderAdjustment"][];
-      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
-      metadata: {
-        [key: string]: unknown;
+    PlacedOrder: components["schemas"]["Order"] & {
+      workflow: {
+        name: string;
+        steps: components["schemas"]["StepReport"][];
       };
-      /**
-       * Format: date-time
-       * @description The moment of Capture, when this Order became immutable.
-       */
-      createdAt: string;
     };
     SecretKeyRequired: {
       error: string;
@@ -1562,7 +1576,8 @@ export interface components {
     PlaceOrderRefusal: {
       error: string;
       reason: string;
-      workflow: {
+      /** @description How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this. */
+      workflow?: {
         name: string;
         /** @description The slot that refused. */
         failed: string;

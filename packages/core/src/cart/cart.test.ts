@@ -4,6 +4,7 @@ import {
   createTestKobai,
   seedTestCart,
   seedTestCatalog,
+  type TestCatalog,
   type TestKobai,
 } from "../testing/index.ts";
 
@@ -40,6 +41,8 @@ describe("building a Cart", () => {
       metadata: {},
       expiresAt: expect.any(String),
       expired: false,
+      // Nothing has been bought from it, which is what a Cart a storefront just started says.
+      placed: false,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
@@ -427,35 +430,7 @@ describe("an expired Cart", () => {
 
     await expire(kobai, cart.id);
 
-    const changes: [string, RequestInit][] = [
-      [
-        `/store/carts/${cart.id}`,
-        {
-          method: "PATCH",
-          headers: jsonHeaders(headers),
-          body: JSON.stringify({ metadata: { late: true } }),
-        },
-      ],
-      [
-        `/store/carts/${cart.id}/line-items`,
-        {
-          method: "POST",
-          headers: jsonHeaders(headers),
-          body: JSON.stringify({ variantId: cart.catalog.variantId }),
-        },
-      ],
-      [
-        `/store/carts/${cart.id}/line-items/${line.id}`,
-        {
-          method: "PATCH",
-          headers: jsonHeaders(headers),
-          body: JSON.stringify({ quantity: 9 }),
-        },
-      ],
-      [`/store/carts/${cart.id}/line-items/${line.id}`, { method: "DELETE", headers }],
-    ];
-
-    for (const [path, init] of changes) {
+    for (const [path, init] of changesTo(cart.id, line.id, headers, cart.catalog)) {
       const response = await kobai.request(path, init);
       expect(response.status, `${init.method} ${path}`).toBe(409);
       await expect(response.json()).resolves.toMatchObject({ reason: "cart-expired" });
@@ -463,6 +438,68 @@ describe("an expired Cart", () => {
 
     const read = await kobai.request(`/store/carts/${cart.id}`, { headers });
     expect(lineOf((await read.json()) as CartBody, "POSTER-A2").quantity).toBe(1);
+  });
+});
+
+/**
+ * A Cart that has already become an Order — **spent**, and the same kind of row an expired one
+ * is (#102).
+ *
+ * The decision this ticket had to make: a placed Cart is consumed rather than left mutable. A
+ * Cart is one Shopper's one selection and it becomes exactly one Order, so once it has there is
+ * nothing left it could honestly do — changing it would change nothing about the Order, and
+ * placing it again is the second charge idempotency exists to prevent. It reads, like an expired
+ * one, so a storefront can say what happened.
+ */
+describe("a Cart that has been placed", () => {
+  it("still reads, and says so", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai, { quantity: 3 });
+
+    await placeCart(kobai, cart.id, cart.apiKey.headers);
+
+    const response = await kobai.request(`/store/carts/${cart.id}`, {
+      headers: cart.apiKey.headers,
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as CartBody;
+    expect(body.placed).toBe(true);
+    // Not expired: the two are different facts about a Cart and a storefront says different
+    // things about them — one is "this one ran out of time", the other is "you have already
+    // bought it".
+    expect(body.expired).toBe(false);
+    expect(lineOf(body, "POSTER-A2").quantity).toBe(3);
+  });
+
+  it("refuses every change, and changes nothing in refusing", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+    const headers = cart.apiKey.headers;
+    const line = cart.lineItem("POSTER-A2");
+
+    await placeCart(kobai, cart.id, headers);
+
+    for (const [path, init] of changesTo(cart.id, line.id, headers, cart.catalog)) {
+      const response = await kobai.request(path, init);
+      expect(response.status, `${init.method} ${path}`).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ reason: "cart-placed" });
+    }
+
+    const read = await kobai.request(`/store/carts/${cart.id}`, { headers });
+    expect(lineOf((await read.json()) as CartBody, "POSTER-A2").quantity).toBe(1);
+  });
+
+  it("is not what a Cart nobody has placed says", async () => {
+    // The emptiness half: a flag that read `true` on every Cart would pass both tests above.
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+
+    const response = await kobai.request(`/store/carts/${cart.id}`, {
+      headers: cart.apiKey.headers,
+    });
+
+    expect(((await response.json()) as CartBody).placed).toBe(false);
   });
 });
 
@@ -542,10 +579,69 @@ type CartBody = {
   }[];
   readonly metadata: Record<string, unknown>;
   readonly expired: boolean;
+  readonly placed: boolean;
 };
 
 function jsonHeaders(headers: Record<string, string>): Record<string, string> {
   return { ...headers, "content-type": "application/json" };
+}
+
+/**
+ * Every request that changes a Cart, so a rule about "every change" is asserted against all of
+ * them rather than against whichever three somebody remembered.
+ *
+ * Both the states that refuse a change — expired, and placed — read this same list, which is
+ * what keeps them from drifting apart.
+ */
+function changesTo(
+  cartId: string,
+  lineItemId: string,
+  headers: Record<string, string>,
+  catalog: TestCatalog,
+): [string, RequestInit][] {
+  return [
+    [
+      `/store/carts/${cartId}`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders(headers),
+        body: JSON.stringify({ metadata: { late: true } }),
+      },
+    ],
+    [
+      `/store/carts/${cartId}/line-items`,
+      {
+        method: "POST",
+        headers: jsonHeaders(headers),
+        body: JSON.stringify({ variantId: catalog.variantId }),
+      },
+    ],
+    [
+      `/store/carts/${cartId}/line-items/${lineItemId}`,
+      {
+        method: "PATCH",
+        headers: jsonHeaders(headers),
+        body: JSON.stringify({ quantity: 9 }),
+      },
+    ],
+    [`/store/carts/${cartId}/line-items/${lineItemId}`, { method: "DELETE", headers }],
+  ];
+}
+
+/** The Cart, turned into the Order it becomes — over the secret key placing one needs. */
+async function placeCart(
+  kobai: TestKobai,
+  cartId: string,
+  headers: Record<string, string>,
+): Promise<void> {
+  const response = await kobai.request("/store/orders", {
+    method: "POST",
+    headers: jsonHeaders(headers),
+    body: JSON.stringify({ cartId }),
+  });
+  if (response.status !== 201) {
+    throw new Error(`placing the Cart answered ${response.status}`);
+  }
 }
 
 /** The Cart's identifier, which is the whole of what a storefront then holds. */

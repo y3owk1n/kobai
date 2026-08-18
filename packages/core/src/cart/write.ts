@@ -4,7 +4,7 @@ import type { Database, Queryable, Transaction } from "../db/client.ts";
 import { cart, cartLineItem, price, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
-import { type Cart, cartHasExpired, readCart } from "./read.ts";
+import { type Cart, cartHasBeenPlaced, cartHasExpired, readCart } from "./read.ts";
 
 /**
  * Changing a Cart: creating one, attaching a Shopper to it, and its Line Items.
@@ -23,6 +23,10 @@ import { type Cart, cartHasExpired, readCart } from "./read.ts";
  * - **An expired Cart refuses every change.** It still reads, so a storefront can say what
  *   happened; and its rows survive, because ADR-0028 makes abandoned cart a Plugin and a
  *   Plugin cannot recover what Core has deleted.
+ * - **A Cart that has been placed refuses every change too**, and for a different reason: it is
+ *   spent rather than stale. A Cart becomes exactly one Order (#102), and that Order is
+ *   immutable — so a change here would change nothing about what was bought, while leaving a
+ *   storefront looking at a Cart that appears to still be live.
  *
  * Each function's `reason` is narrowed to the refusals it can actually make, which is what
  * lets each route in `http/store.ts` declare exactly those statuses and no others.
@@ -59,6 +63,7 @@ export type CartRefusal =
   | "secret-key-required"
   | "cart-not-found"
   | "cart-expired"
+  | "cart-placed"
   | "line-item-not-found"
   | "variant-not-found"
   | "variant-not-priced";
@@ -78,7 +83,7 @@ export type CartResult<Reason extends CartRefusal> =
 type BadRequest = CartRefused<"invalid">;
 
 /** Refused by {@link mutate}, whatever the operation behind it was. */
-type NotChangeable = "cart-not-found" | "cart-expired";
+type NotChangeable = "cart-not-found" | "cart-expired" | "cart-placed";
 
 /** Unvalidated: it arrives as a JSON body, and everything below narrows it in one place. */
 export type CartInput = {
@@ -326,7 +331,7 @@ async function mutate<Reason extends CartRefusal>(
     if (!isUuid(cartId)) return noSuchCart(cartId);
 
     const [found] = await tx
-      .select({ id: cart.id, expired: cartHasExpired })
+      .select({ id: cart.id, expired: cartHasExpired, placed: cartHasBeenPlaced })
       .from(cart)
       .where(eq(cart.id, cartId))
       .for("update")
@@ -338,6 +343,14 @@ async function mutate<Reason extends CartRefusal>(
         reason: "cart-expired",
         detail:
           "This Cart has expired, so it can no longer be changed or placed. It is still readable and its Line Items are still there — start a new Cart.",
+      };
+    }
+    if (found.placed) {
+      return {
+        ok: false,
+        reason: "cart-placed",
+        detail:
+          "This Cart has already been placed, and a Cart becomes exactly one Order. Changing it now would change nothing about what was bought — start a new Cart.",
       };
     }
 

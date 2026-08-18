@@ -146,7 +146,10 @@ _Avoid_: localisation, i18n, locale (that is the key, not the content)
 
 **Cart**:
 A Shopper's mutable, disposable, unauthoritative selection before purchase. Expected to
-change and to be thrown away.
+change and to be thrown away. A Cart becomes **exactly one** Order, and is **spent** once it
+has: it still reads, and it refuses every change and every further placement, the way an
+expired one does. Enforced in DDL rather than by a check, so two simultaneous placements
+cannot both succeed.
 _Avoid_: basket, bag, session, checkout, order (never)
 
 **Order**:
@@ -166,6 +169,14 @@ are consumed — one database transaction, and the last thing in `place-order` t
 Nothing that happens after it can be compensated, because an Order is never edited.
 _Avoid_: checkout, place (the Workflow is `place-order`; the moment is Capture), confirm,
 submit, payment capture (that is money, and is always written in full)
+
+**Idempotency key**:
+A value the caller chooses and sends with `place-order`, saying which attempt at one purchase
+this request is. A repeat carrying it answers with the Order the first attempt placed rather
+than placing another; a repeat carrying it with a *different* request is refused, because a key
+stands for one intention. It authorises nothing and identifies nobody — the Cart's own
+identifier is the authority (ADR-0020).
+_Avoid_: request ID, transaction ID, nonce, deduplication key
 
 **Payment**:
 The record that money was received against an Order. Core's, because without it an Order

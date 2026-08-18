@@ -586,6 +586,10 @@ export const Cart = z
       description:
         "Whether that moment has passed, as the server judges it. Branch on this rather than comparing `expiresAt` against a browser's clock. An expired Cart still reads and refuses every change.",
     }),
+    placed: z.boolean().meta({
+      description:
+        "Whether this Cart has already become an Order. A Cart becomes exactly one, so this is final: a placed Cart still reads, and refuses every change and every further placement. Distinct from `expired` — an expired Cart ran out of time, and a placed one has already been bought.",
+    }),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
@@ -656,6 +660,7 @@ export const CartRefusal = z
       "secret-key-required",
       "cart-not-found",
       "cart-expired",
+      "cart-placed",
       "line-item-not-found",
       "variant-not-found",
       "variant-not-priced",
@@ -791,6 +796,21 @@ export const PlaceOrderRequest = z
   .openapi("PlaceOrderRequest");
 
 /**
+ * The key a storefront names so that retrying is safe — Stripe's header, and Stripe's name for
+ * it, because kobai already follows Stripe for the publishable/secret split (ADR-0020).
+ *
+ * A header rather than a field of the body, and that is what makes "the same key with a
+ * different body" a question there is an answer to: the body is the request, and the key is what
+ * says which attempt at it this is.
+ */
+export const IdempotencyKeyHeader = z.object({
+  "idempotency-key": z.string().min(1).max(255).optional().meta({
+    description:
+      "A value of your own choosing, unique to this purchase. Send the same one on every retry of the same request and at most one Order is placed; the retry answers 200 with that Order instead of 201. Reusing one for a different body is refused. Optional, and a request without one is not protected against a retry after a timeout.",
+  }),
+});
+
+/**
  * A Workflow declining to place an Order, and how far it got.
  *
  * `reason` is a string rather than a closed set, exactly as `PriceRefusal`'s is: Core's own
@@ -803,11 +823,17 @@ export const PlaceOrderRefusal = z
   .object({
     error: z.string(),
     reason: z.string(),
-    workflow: z.object({
-      name: z.string(),
-      failed: z.string().meta({ description: "The slot that refused." }),
-      steps: z.array(StepReport).readonly(),
-    }),
+    workflow: z
+      .object({
+        name: z.string(),
+        failed: z.string().meta({ description: "The slot that refused." }),
+        steps: z.array(StepReport).readonly(),
+      })
+      .optional()
+      .meta({
+        description:
+          "How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this.",
+      }),
   })
   .openapi("PlaceOrderRefusal");
 

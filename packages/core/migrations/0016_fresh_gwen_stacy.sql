@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "core_order_cart_idx" ON "core_order" USING btree ("cart_id");
