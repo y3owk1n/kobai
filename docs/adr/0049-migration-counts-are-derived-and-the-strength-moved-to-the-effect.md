@@ -124,3 +124,38 @@ its absence changed a number.
   Plugin author asserting their own set applied needs the same seam.
 - The digest is a coupling to Drizzle, and a loud one. It is the coupling the migrator
   already has with itself.
+
+## Applied again, to the admin surface's size (#188)
+
+Three counts named the admin surface by hand: `OPERATIONS = 39` in
+`packages/core/src/http/openapi.test.ts`, used twice, and `toHaveLength(28)` in
+`packages/core/src/auth/auth.test.ts`. #171, #172 and #173 each bumped all three, in two
+files, which is the tax above arriving one level sideways.
+
+**No second record was written, and that is the finding rather than an omission.** This ADR
+did not decide something about migrations that happens to generalise; it decided that a count
+maintained by hand is a tax, that the answer is to derive it from a source the assertion is
+not already reading, and that the emptiness guard has to survive the derivation. Every clause
+reached the admin counts unchanged. A second ADR restating them for routes would be the same
+decision with a different noun, and the next surface to grow a count would then face two
+records to reconcile. What #188 owed was the *application*, and a note here saying it
+happened.
+
+Two things it settles for whoever applies this next:
+
+- **The independent source is usually already in the room.** For migrations it was the
+  journal against the database. For the description's counts it is Hono's own route table,
+  which the file next door was already comparing against; for the sweep in `auth.test.ts` it
+  is `packages/core/openapi.json`, the checked-in artifact, deliberately *not* the
+  `harness.openapi()` the sweep itself walks. Look for the other side of a comparison the
+  suite already makes before concluding there is none.
+- **A count that encodes a sentence should become the sentence.** The gated-route count was
+  documented as "every admin route but the three that manage the session"; it is now that
+  set difference, with the three named. A fourth ungated admin route fails it, where
+  `toHaveLength(26)` would have been bumped to 27 by whoever added one.
+
+All three derivations were watched failing before they were trusted: an admin operation
+removed from the checked-in artifact, a route dropped from the router table, and a route
+wrongly added to the excused list. That discipline is the one this ADR already asks for and
+is worth repeating here, because a derived count is exactly the kind of assertion that can
+quietly stop asserting.

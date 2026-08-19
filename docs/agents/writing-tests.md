@@ -347,6 +347,30 @@ no set applied nothing, and as many sets applied as the workspace ships packages
 one. Keeping the config out of that module's import graph is what makes the boundary
 something other than a comment, so **do not merge the two files back together.**
 
+**And never write down how big the admin surface is** (#188, ADR-0049 § Applied again). That
+was the same tax on a different noun: `OPERATIONS = 39` in
+`packages/core/src/http/openapi.test.ts` and `toHaveLength(28)` in
+`packages/core/src/auth/auth.test.ts`, three numbers across two files, bumped together by
+#171, #172 and #173. **Adding a route now edits no count anywhere.** Each is asked instead,
+and the rule that makes the asking worth anything is the one to carry to the next surface
+that grows one:
+
+- **Ask the side the assertion is not reading.** A scan of the description is held to the
+  length of **Hono's route table**; the sweep in `auth.test.ts`, which walks the *runtime*
+  description, is held to **`packages/core/openapi.json`**, the checked-in artifact. A count
+  taken from the side under test agrees with itself, so an empty scan would satisfy an empty
+  expectation — which is the whole failure the count exists to prevent.
+- **Keep the emptiness guard.** Two empty lists are equal, so each derivation asserts it found
+  something before it is believed, exactly as `declaredMigrations` does.
+- **Where the count was standing in for a sentence, write the sentence.** The gated-route
+  count meant "every admin route but the three that manage the session", and it now *is* that
+  set difference with the three named — so a fourth ungated admin route fails rather than
+  nudging a number along.
+
+The trap ADR-0049 names is the one to check for by hand, because nothing catches it: a
+derivation that reads the same source the assertion checks looks identical to a good one and
+asserts nothing. **Watch each new derivation fail before trusting it.**
+
 Everything derived that way inherits ADR-0049's trap, and the answer is the same shape: a set
 dropped from `reference/kobai.config.ts` shrinks the expectation along with the thing it
 checks. `tests/every-migration-set-is-wired.test.ts` is what cannot agree with itself — it

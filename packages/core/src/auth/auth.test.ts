@@ -1,5 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
+import { OPENAPI_DOCUMENT_PATH } from "../http/openapi.ts";
 import {
   createTestKobai,
   inspectSchema,
@@ -395,6 +397,35 @@ describe("the admin surface has no unauthenticated write path", () => {
 
   const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 
+  /**
+   * How many admin operations the checked-in description carries, minus the one this sweep
+   * excuses.
+   *
+   * The second source the sweep above is held to, read off disk rather than off the harness —
+   * see the assertion for why the distinction is the whole point. `POST /admin/session` is
+   * subtracted here because `adminOperations` filters it out there: it is the route that mints
+   * a session, so it is the one admin operation that answers a request carrying none.
+   */
+  async function adminOperationsOnDisk(): Promise<number> {
+    const document = JSON.parse(await readFile(OPENAPI_DOCUMENT_PATH, "utf8")) as {
+      paths?: Record<string, object>;
+    };
+    const admin = Object.entries(document.paths ?? {})
+      .filter(([path]) => path.startsWith("/admin"))
+      .flatMap(([path, item]) =>
+        Object.keys(item as object)
+          .filter((method) => METHODS.includes(method))
+          .map((method) => `${method} ${path}`),
+      );
+
+    // Two empty lists are equal, and this one is read from a file that could be anything.
+    expect(
+      admin.length,
+      `${OPENAPI_DOCUMENT_PATH} carries no admin operations`,
+    ).toBeGreaterThan(1);
+    return admin.filter((operation) => operation !== "post /admin/session").length;
+  }
+
   it("refuses every operation it serves to a request carrying no session", async () => {
     kobai = await createTestKobai();
     const operations = adminOperations(kobai);
@@ -412,10 +443,15 @@ describe("the admin surface has no unauthenticated write path", () => {
       });
     }
 
-    // A sweep that found nothing would pass every assertion made over it. Twenty-eight is every
-    // admin operation but `POST /admin/session`; the number moving is a route being added or
-    // removed, which is exactly when somebody should look at this file.
-    expect(operations).toHaveLength(28);
+    // A sweep that found nothing would pass every assertion made over it, so it is held to a
+    // length — but the length is asked rather than remembered (#188, applying ADR-0049).
+    //
+    // It is asked of `packages/core/openapi.json`, the checked-in artifact, and deliberately
+    // not of `harness.openapi()`, which is the very thing the sweep above walked: a count taken
+    // from the side under test agrees with itself, and a runtime description that came back
+    // empty would then satisfy an empty sweep. The file on disk is generated, byte-compared by
+    // `http/openapi.test.ts`, and cannot go quiet in sympathy with a booted app that has.
+    expect(operations).toHaveLength(await adminOperationsOnDisk());
     // …and every one of them is refused on a deployment that has no Merchant at all, which
     // is the state the old anonymous path existed for.
     const [row] = await kobai.database.query<{ count: string }>(
