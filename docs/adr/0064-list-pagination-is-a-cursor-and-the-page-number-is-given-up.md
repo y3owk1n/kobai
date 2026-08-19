@@ -18,6 +18,14 @@
 > deep link into page three has no trail, so it offers **"First page"** rather than a
 > "Previous" that would silently mean something else. Everything else here stands.
 
+> **Amended in the building (#183): a cursor names the list that issued it, and is deliberately
+> not signed.** What shipped in #171 carried a position and nothing else, so a cursor cut from
+> `GET /admin/products` decoded on `GET /admin/orders` and was answered with a page of the wrong
+> list. It now carries the list too and is refused anywhere else — as the existing `invalid` at
+> 400, argued below. The *other* half of "opaque" was settled at the same time and the answer
+> was no: see [A cursor names its own list, and is not signed](#a-cursor-names-its-own-list-and-is-not-signed).
+> Everything else here stands.
+
 Every list route on kobai's HTTP surface takes `?limit=` and `?after=`, and answers with an
 **opaque** `nextCursor` beside its items. No route takes `?offset=`, and no route reports a
 total. There are therefore no numbered pages anywhere in kobai, in the Admin or in anything a
@@ -32,8 +40,9 @@ from [ADR-0063](./0063-the-admins-frame-is-conventional-because-a-developer-inhe
 - **`?limit=`** — how many, with a default and a ceiling Core chooses. A request over the
   ceiling is refused rather than silently clamped, because a client that asked for 5,000 and got
   100 will read the short page as the end of the list.
-- **`?after=`** — an opaque cursor from a previous response. Not an id, not a timestamp, and not
-  documented as either.
+- **`?after=`** — an opaque cursor from a previous response **of the same list**. Not an id, not
+  a timestamp, and not documented as either. One from another list is refused rather than
+  answered (#183, below).
 - **`nextCursor`** in the envelope, absent when there is no further page. Its absence is the
   end-of-list signal; a short page is not, because a filtered page can be short and not last.
 - **Every list route**, uniformly — `GET /admin/products`, `GET /admin/orders`,
@@ -115,6 +124,64 @@ that licence expires at the first publish.
 
 After it, moving from offset to cursor is a **major** — a new parameter, a changed envelope, and
 every client's paging loop rewritten. Taking it now costs a schema and an index.
+
+## A cursor names its own list, and is not signed
+
+Added by #183, which is where the sentence above — "not an id, not a timestamp, and not
+documented as either" — was read back and found to be two claims rather than one.
+
+### It names its own list
+
+The payload is the list's name, then the position. `contract.pageQuery(<list>)` is what a route
+names its list in, and that one call decides both ends: it is the schema that will *read* a
+cursor and the name that reaches the reader, which is what `takePage` writes the *next* one
+under. There is no second place to keep in step, so the two ends cannot come apart.
+
+**The refusal is the existing `invalid` at 400, and that is the decision rather than the
+default.** A `reason` of its own was weighed and declined. Under
+[ADR-0060](./0060-the-http-surface-is-promised-and-a-refusals-reason-is-part-of-it.md) a new
+`reason` is permanent, and an addition turns an exhaustive `switch` over a regenerated
+`@kobai/client` into an incomplete one — a real cost, paid by every consumer. What it would buy
+is a distinction no client can act on: "this is not a cursor" and "this is not *your* cursor"
+both mean *stop sending this value*, and neither is recoverable by retrying. `invalid` is
+already the word for a query parameter that does not fit the endpoint, and a cursor another list
+issued is exactly that. The diagnosis a person needs is in the refusal's `error` string, which
+names the list that would have had to issue it and is promised to nobody.
+
+**What this is worth is narrow and worth stating.** It catches a client bug — a cursor kept in
+the wrong variable, a URL pasted from another tab — and turns it from a 200 into a refusal. It
+is not a security boundary and is not doing security work; see below.
+
+### It is not signed
+
+The other half of ADR-0064's claim is that base64url reverses in one command, so a client
+*could* read the sort key and the tiebreaker this record exists to keep private. Signing the
+cursor was considered and **declined**. Three reasons, and the first is the one that decides it:
+
+- **A signature would defend nothing.** A cursor names a position, and every position it can
+  name is inside a list the caller's credential already opens whole: these routes sit behind a
+  Merchant session and a `…:read` Permission, and the answer to `after=<any position at all>` is
+  a page of a list they were already reading. There is no row a forged cursor reaches that
+  `?limit=` does not.
+- **It would be kobai's first secret.** `kobai.config.ts` holds no key of any kind today. A
+  signature means a new config surface and an ADR of its own, a decision about rotation, every
+  instance behind a load balancer having to agree, and a Merchant's open page breaking the
+  moment the key moves. That is a large, permanent obligation for the benefit above.
+- **Obfuscating without a key would be worse than either.** It reads as protection, is none, and
+  would still have to be undone the day a real key is wanted.
+
+**What is genuinely at risk is coupling**, not disclosure: a client that unpicks a cursor starts
+depending on the ordering. That is answered by saying so rather than by hiding it — the `after`
+parameter's own description promises nothing about the contents and says to send it back as
+received — and a client that reads past that is relying on internals kobai may change without a
+major. The same bargain every undocumented shape offers.
+
+**What would reopen this.** A cursor that carried something the caller must not choose for
+themselves — a filter, a scope, a Store — because that is the first version of this where
+forging one reaches a row rather than a position. Reopening it is a **wire-format change**, and
+therefore a major once anything is published (ADR-0060,
+[ADR-0061](./0061-what-the-first-publish-owes.md)); it is free before then, which is why #183
+settled it now rather than leaving it to be rediscovered.
 
 ## Consequences
 
