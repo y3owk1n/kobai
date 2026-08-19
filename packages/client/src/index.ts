@@ -108,6 +108,13 @@ export function createKobaiClient(options: KobaiClientOptions): KobaiClient {
  *
  * Re-exported one by one rather than as a bag, so that a name disappearing from the API is
  * a build failure here rather than a `never` somewhere downstream.
+ *
+ * One by one is also how the list goes stale, and it did: five of twelve refusal families
+ * were named here while the rest were reached through `components`, which works and is the
+ * indirection these lines exist to remove (#196). So the refusal half is no longer kept by
+ * hand — `refusals.test.ts` reads every family out of the description and fails naming any
+ * that is missing or exported under some other name. **Adding a refusal family to Core means
+ * adding a line here**, and the build says so.
  */
 export type Health = components["schemas"]["Health"];
 export type MigrationState = components["schemas"]["MigrationState"];
@@ -134,15 +141,49 @@ export type StepReport = components["schemas"]["StepReport"];
 // the word it branches on rather than on `string`. The comment above is what caught the
 // removal: a name leaving the API is a build failure here, which is the behaviour to keep.
 export type InvalidRequest = components["schemas"]["InvalidRequest"];
+export type InvalidCredentials = components["schemas"]["InvalidCredentials"];
 export type MerchantRefusal = components["schemas"]["MerchantRefusal"];
 export type RoleRefusal = components["schemas"]["RoleRefusal"];
 export type StoreRefusal = components["schemas"]["StoreRefusal"];
 export type CatalogRefusal = components["schemas"]["CatalogRefusal"];
+export type CartRefusal = components["schemas"]["CartRefusal"];
+export type OrderRefusal = components["schemas"]["OrderRefusal"];
+export type PlaceOrderRequestRefusal = components["schemas"]["PlaceOrderRequestRefusal"];
 export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];
 export type SessionRefusal = components["schemas"]["SessionRefusal"];
 export type ApiKeyRefusal = components["schemas"]["ApiKeyRefusal"];
 export type PermissionDenied = components["schemas"]["PermissionDenied"];
+export type SecretKeyRequired = components["schemas"]["SecretKeyRequired"];
+// The last two are the ones that cannot be narrowed exhaustively, and each says so itself
+// because a consumer meets the name rather than this comment. The shared argument, once:
+// resolving a price and placing an Order both run a Workflow, and a Step a Project or a
+// Plugin supplied is Extension Point 2 (ADR-0003) — it may refuse with a word Core has never
+// heard of, which Core answers 422 because it cannot say what the word means. Closing either
+// set here would close that Extension Point, so ADR-0060 leaves `reason` a bare `string` for
+// exactly these two and closes every other family above.
+
+/**
+ * Why resolving a price was refused.
+ *
+ * **`reason` is an open string.** Core's own are `variant-not-found` and `price-not-set`,
+ * listed in the field's own description; a Step this deployment supplied may refuse with
+ * anything else. So a `switch` over it can never be exhaustive — write the arms for the words
+ * you know and a default that shows `error`, which is prose, always present, and the only
+ * thing that can be right about a word this build has never seen.
+ */
 export type PriceRefusal = components["schemas"]["PriceRefusal"];
+/**
+ * Why placing an Order was refused, with the account of the Workflow run beside it.
+ *
+ * **`reason` is an open string**, for the same reason {@link PriceRefusal}'s is. Core's own
+ * are listed in the field's own description — `cart-expired`, `insufficient-inventory`,
+ * `payment-declined` and the rest, which is where to read them rather than here, because a
+ * count written down in prose is one more thing to keep in step. A Step this deployment
+ * supplied may refuse with anything else. So this is the one refusal family a storefront
+ * cannot exhaustively narrow, and the default arm showing `error` is not laziness: it is the
+ * only correct answer for a refusal a Project wrote after this client was generated.
+ */
+export type PlaceOrderRefusal = components["schemas"]["PlaceOrderRefusal"];
 
 /**
  * The generated surface itself, for anything the helpers above do not reach.

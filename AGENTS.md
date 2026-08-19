@@ -738,6 +738,22 @@ enumerated different paths per deployment is not a contract.
 `devbox run ci`. Regenerate with `devbox run openapi:generate` — Core first, then the client,
 because pnpm walks the workspace in dependency order.
 
+**A third check covers the one file in `@kobai/client` nothing generates** (#196).
+`packages/client/src/index.ts` re-exports each schema by name so that a name leaving the API
+is a build failure there rather than a `never` downstream — and being hand-written, it went
+stale in the other direction, twice over: **#196 found five of twelve refusal families named,
+and by the time it was answered six of sixteen were unnamed** — the rest reached through
+`components["schemas"][…]`, which works, narrows identically, and is exactly the indirection
+the by-name exports exist to remove. Neither drift check above can see that,
+because `components` carries every schema whether or not a name is taken off it. So
+`packages/client/src/refusals.test.ts` reads every **refusal family** out of the description —
+structurally, as any schema requiring both `error` and `reason`, never as a list of names —
+and fails naming any the client omits or exports under some other name. **Adding a refusal
+family to Core is therefore one line in `index.ts` too**, and the build says so. The two
+families whose `reason` is an **open string** are still exported like the rest and carry the
+reason they cannot be narrowed exhaustively in their own doc comments, because a consumer
+meets the name and not this file.
+
 **A version bump in `packages/core/package.json` drifts the description too** (#158). `info.version`
 is `coreVersion()` in `http/app.ts`, read from Core's own manifest when the document is built,
 because ADR-0060 makes the surface's version the package's — one fact, not a second copy kept by
