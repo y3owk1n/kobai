@@ -46,6 +46,10 @@ export const PERMISSIONS = {
   orderRead: "order:read",
   apiKeyRead: "api-key:read",
   apiKeyWrite: "api-key:write",
+  merchantRead: "merchant:read",
+  merchantWrite: "merchant:write",
+  storeRead: "store:read",
+  storeWrite: "store:write",
 } as const satisfies Record<string, string>;
 
 /**
@@ -86,4 +90,40 @@ export function useUnavailable(permission: string, action: string): string | nul
   return useMay(permission)
     ? null
     : `Your Role cannot ${action}: it does not hold "${permission}". A Merchant who administers access can add it.`;
+}
+
+/**
+ * The Permissions a Role editor offers as a list, given the ones that Role already holds.
+ *
+ * **The set of Permissions is open and no route enumerates it**, so this is a question with no
+ * authoritative answer — and the two obvious ways to fake one are both wrong. A list of Core's
+ * own words written down here would be the closed vocabulary the API deliberately does not
+ * have, going stale the day Core adds one and blind to a Plugin's for ever. Offering nothing
+ * and demanding every Permission be typed would make the ordinary case — the seven or eight
+ * words this deployment actually uses — an exercise in spelling.
+ *
+ * So the offer is built out of what kobai has already said, in this deployment, on responses
+ * the Admin is holding anyway:
+ *
+ * - **What the signed-in Merchant's own Role holds.** A deployment's first Merchant is seeded
+ *   against `owner` (ADR-0041), and `owner` holds every Permission this build of Core defines
+ *   plus anything a migration has added to it — so on the deployment where somebody is
+ *   actually administering access, this is Core's whole vocabulary, read from kobai rather
+ *   than copied out of it.
+ * - **What the Role being edited holds**, which is what makes a word Core has never heard of
+ *   *visible* rather than quietly dropped on the next save (#173, ADR-0066). A Permission the
+ *   API preserved and an editor hid would come back missing, which is data loss spelled as a
+ *   form.
+ *
+ * What it cannot reach is a Permission nobody holds yet — a Plugin's, on the day it ships. That
+ * is why the editor keeps a field for typing one, and why this is named *offered* rather than
+ * *known*: it is a list of suggestions, and the authority on which strings are acceptable is
+ * `POST /admin/roles`, which accepts every non-empty one.
+ *
+ * Sorted, so the same Role does not draw its checkboxes in a different order on two screens,
+ * and deduplicated, because the two sources overlap almost entirely.
+ */
+export function useOfferedPermissions(held: readonly string[]): readonly string[] {
+  const mine = usePermissions();
+  return [...new Set([...mine, ...held])].sort();
 }

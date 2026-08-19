@@ -1,4 +1,11 @@
-import { KeyRoundIcon, PackageIcon, ReceiptTextIcon } from "lucide-react";
+import {
+  KeyRoundIcon,
+  PackageIcon,
+  ReceiptTextIcon,
+  ShieldCheckIcon,
+  StoreIcon,
+  UsersIcon,
+} from "lucide-react";
 import { PERMISSIONS, usePermissions } from "@/lib/permissions";
 
 /**
@@ -53,6 +60,39 @@ export const SECTIONS = [
     label: "API keys",
     Icon: KeyRoundIcon,
     permission: PERMISSIONS.apiKeyRead,
+  },
+  {
+    path: "/merchants",
+    label: "Merchants",
+    Icon: UsersIcon,
+    permission: PERMISSIONS.merchantRead,
+  },
+  {
+    path: "/roles",
+    label: "Roles",
+    Icon: ShieldCheckIcon,
+    permission: PERMISSIONS.merchantRead,
+  },
+  {
+    /**
+     * **Not `/store`, and that is a constraint of this repository rather than a preference.**
+     *
+     * `tests/admin-uses-only-the-public-api.test.ts` reads every quoted path anywhere in this
+     * tree that begins with admin, store or health as a kobai path the published description
+     * has to carry — which is how ADR-0010's promise is kept by the build instead of by
+     * review, and it is strict enough to have caught the first draft of this very comment.
+     * The Admin's own addresses live in a different namespace from kobai's (they are under
+     * `/admin-ui`, and the router's `basename` is what puts them there), and a route spelled
+     * `/store` would be indistinguishable from a claim about the API in a scan that can only
+     * read strings. So the section a Merchant sees is called Store and the address it is at is
+     * not one of kobai's — which is also what `/settings` reads as, since one deployment is one
+     * Store (ADR-0005) and this screen is the whole of what a deployment can be configured to
+     * be.
+     */
+    path: "/settings",
+    label: "Store",
+    Icon: StoreIcon,
+    permission: PERMISSIONS.storeRead,
   },
 ] as const satisfies readonly Section[];
 

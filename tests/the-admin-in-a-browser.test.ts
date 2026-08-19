@@ -769,7 +769,7 @@ describe("the command palette", () => {
     // what makes it a way *round* the sidebar rather than a search of it.
     await expect
       .poll(() => paletteOptions(page).allInnerTexts())
-      .toEqual(["Products", "Orders", "API keys"]);
+      .toEqual(["Products", "Orders", "API keys", "Merchants", "Roles", "Store"]);
     await expect.poll(() => selected(page)).toEqual(["Products"]);
 
     await page.keyboard.press("ArrowDown");
@@ -1778,5 +1778,451 @@ describe("the catalog screens", () => {
     await expect(page.getByRole("alertdialog").count()).resolves.toBe(0);
     await expect(watching.settled()).resolves.toEqual([]);
     await auditAccessibility(page, "the Product screen on a read-only Role");
+  });
+});
+
+/**
+ * Merchants, Roles and the Store — the settings half of the Admin (#180, ADR-0066, ADR-0065).
+ *
+ * Everything these screens do to a record is asserted through the API, in
+ * `packages/core/src/auth/` and `packages/core/src/store/`. What is here is the handful of
+ * promises a request cannot ask, and each of them is a thing this ticket exists for:
+ *
+ * - that a **Permission Core has never heard of** is shown in the Role editor, ticked, and is
+ *   still on the Role after a save — the API preserves it (#173), and an editor that hid it
+ *   would put it back missing, which is data loss spelled as a form;
+ * - that the **lockout is legible before it is attempted** and kobai's refusal still renders
+ *   where it was attempted, which is the one place in this Admin anything is said about a
+ *   refusal in advance;
+ * - that a Role a Merchant cannot administer is **offered and explained** rather than hidden;
+ * - and that the Store's **default currency is shown and not offered**, which is the honest
+ *   reflection of #172's decision that a form could very easily have got wrong.
+ *
+ * **No case here creates a Merchant holding `merchant:write`**, and that is load-bearing rather
+ * than incidental: the lockout case below attempts a change that is only refused while `owner`
+ * is the last Role any Merchant holds carrying it, and a colleague on an administering Role
+ * would make that attempt *succeed* — taking the seam's own Merchant's access away and failing
+ * every case after it for a reason naming none of this. The case guards the invariant itself
+ * before it attempts anything, so breaking it is a red build with a sentence rather than a
+ * cascade.
+ */
+describe("Merchants, Roles and the Store", () => {
+  /** The seeded `owner` Role, which is the only one that exists before a case makes another. */
+  async function ownerRole(): Promise<{ id: string; permissions: string[] }> {
+    const listed = await seam.api<{
+      roles: { id: string; name: string; permissions: string[] }[];
+    }>("GET", "/admin/roles?limit=100");
+    const owner = listed.roles.find((role) => role.name === "owner");
+    if (owner === undefined) {
+      throw new Error("This deployment has no `owner` Role, so it was never seeded.");
+    }
+    return owner;
+  }
+
+  /** A Role made through the API, for a case whose subject is what the Admin does with one. */
+  async function createRole(role: {
+    name: string;
+    permissions: readonly string[];
+  }): Promise<{ id: string }> {
+    return seam.api<{ id: string }>("POST", "/admin/roles", role);
+  }
+
+  /** The sections this ticket adds, as the sidebar and the palette spell them. */
+  const SETTINGS_SECTIONS = ["Merchants", "Roles", "Store"];
+
+  /** What the sidebar offers, which are links rather than buttons (`LinkButton`, #175). */
+  function sidebarSections(page: Page): Promise<string[]> {
+    return page
+      .getByRole("complementary", { name: "Sections and account" })
+      .getByRole("link")
+      .allInnerTexts();
+  }
+
+  it("offers the three settings sections in the sidebar and in the palette", async () => {
+    const page = await seam.signedIn("/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    // Containment rather than the whole list, deliberately: what this case is about is that
+    // the three screens this ticket adds are reachable from both affordances, and the
+    // exhaustive list is already the subject of the palette's own case above — two copies of it
+    // would be two edits every time a section is added, which is the tax `lib/sections.ts`
+    // exists to stop one level down.
+    await expect
+      .poll(() => sidebarSections(page))
+      .toEqual(expect.arrayContaining(SETTINGS_SECTIONS));
+
+    // The palette reads the *same* list, which is why `lib/sections.ts` is a module rather
+    // than markup in the sidebar: a screen added to one and not the other is how the two come
+    // to disagree about what this Admin has.
+    await page.keyboard.press("Meta+k");
+    await shows(
+      page.getByRole("combobox", { name: "Search sections" }),
+      "the command palette",
+    );
+    await expect
+      .poll(() => page.getByRole("option").allInnerTexts())
+      .toEqual(expect.arrayContaining(SETTINGS_SECTIONS));
+
+    await auditAccessibility(page, "the Admin's palette with the settings sections");
+  });
+
+  it("shows a Permission Core has never heard of, and keeps it across a save", async () => {
+    // A word no build of Core defines. `POST /admin/roles` stores it because the set of
+    // Permissions is open by design (ADR-0066) — and an Admin that offered only the words it
+    // knew would drop it on the next save without anybody being told.
+    const unknown = `reports:read-${Date.now()}`;
+    const role = await createRole({
+      name: `a Role with a word Core does not know ${Date.now()}`,
+      permissions: ["catalog:read", unknown],
+    });
+
+    const page = await seam.signedIn(`/roles/${role.id}`);
+    const held = page.getByRole("checkbox", { name: unknown });
+    // **Watched failing** against a `useOfferedPermissions` built from the signed-in Merchant's
+    // own Role alone — which is the shape an editor takes when nobody has thought about the
+    // open set — and it failed here, on the checkbox never appearing, rather than three lines
+    // down on the Permission having gone. That is the only reason to believe this case can
+    // catch the thing it is about.
+    await shows(held, "the unknown Permission's checkbox");
+    // Ticked, not merely listed: it is a Permission this Role *holds*.
+    await expect(held.getAttribute("aria-checked")).resolves.toBe("true");
+
+    await auditAccessibility(page, "the Role editor holding an unknown Permission");
+
+    // A change that has nothing to do with the unknown word, which is the point: what is
+    // asserted is that saving something *else* does not quietly take it away.
+    await page.getByRole("checkbox", { name: "order:read" }).click();
+    await page.getByRole("button", { name: "Save Role" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          (
+            await seam.api<{ permissions: string[] }>("GET", `/admin/roles/${role.id}`)
+          ).permissions
+            .slice()
+            .sort(),
+        {
+          timeout: LOCATOR_TIMEOUT,
+          message: "The saved Role never settled at what the editor was showing.",
+        },
+      )
+      .toEqual(["catalog:read", "order:read", unknown].sort());
+  });
+
+  it("adds a Permission this deployment has never used, typed rather than chosen", async () => {
+    // The other half of an open set: a Permission **nobody holds** cannot be in a list built
+    // out of what kobai has already said, so the only way it is ever reachable is by typing.
+    const role = await createRole({
+      name: `a Role about to learn a new word ${Date.now()}`,
+      permissions: [],
+    });
+    const invented = `shipping:label-${Date.now()}`;
+
+    const page = await seam.signedIn(`/roles/${role.id}`);
+    await shows(page.getByRole("heading", { level: 2 }), "the Role's name");
+
+    await page.getByLabel("Add another Permission").fill(invented);
+    // With the keyboard, because Enter in that box would otherwise submit the form around it
+    // and save the Role *without* the word just typed — which is the whole reason the field
+    // has a key handler at all.
+    await page.getByLabel("Add another Permission").press("Enter");
+
+    const added = page.getByRole("checkbox", { name: invented });
+    await shows(added, "the typed Permission's checkbox");
+    await expect(added.getAttribute("aria-checked")).resolves.toBe("true");
+
+    // Unticking it leaves it on screen rather than making it disappear. The list is built out
+    // of what the Role holds, so a word nothing else in the deployment uses would otherwise be
+    // gone the moment it was unticked — and a Merchant who mis-clicked would have to remember
+    // it and type it again.
+    await added.click();
+    await expect(added.getAttribute("aria-checked")).resolves.toBe("false");
+    await added.click();
+    await expect(added.getAttribute("aria-checked")).resolves.toBe("true");
+    // And Enter added it rather than saving: the Role has not moved yet.
+    await expect(
+      seam.api<{ permissions: string[] }>("GET", `/admin/roles/${role.id}`),
+    ).resolves.toMatchObject({ permissions: [] });
+
+    await page.getByRole("button", { name: "Save Role" }).click();
+    await expect
+      .poll(
+        async () =>
+          (await seam.api<{ permissions: string[] }>("GET", `/admin/roles/${role.id}`))
+            .permissions,
+        {
+          timeout: LOCATOR_TIMEOUT,
+          message: "The typed Permission never reached kobai.",
+        },
+      )
+      .toEqual([invented]);
+  });
+
+  it("says the lockout rule before it is attempted, and renders kobai's refusal where it was", async () => {
+    const owner = await ownerRole();
+
+    /**
+     * The invariant this case rests on, checked before anything is attempted.
+     *
+     * Stripping `merchant:write` from `owner` is refused **only** while no Merchant anywhere
+     * holds it through another Role. If some earlier case has created an administering
+     * colleague, the attempt below succeeds instead — and the seeded Merchant, which is how
+     * every other case arranges anything, loses the power to administer access for the rest
+     * of the run. So this fails loudly here rather than there.
+     */
+    const roster = await seam.api<{
+      merchants: { email: string; role: { name: string; permissions: string[] } }[];
+    }>("GET", "/admin/merchants?limit=100");
+    expect(
+      roster.merchants
+        .filter((merchant) => merchant.role.permissions.includes("merchant:write"))
+        .map((merchant) => merchant.role.name),
+      "some case created a Merchant on an administering Role, so stripping `owner` would succeed rather than be refused — and would lock this seam out of its own deployment.",
+    ).toEqual(["owner"]);
+
+    const page = await seam.signedIn(`/roles/${owner.id}`);
+    const administers = page.getByRole("checkbox", { name: "merchant:write" });
+    await shows(administers, "the merchant:write checkbox");
+    await administers.click();
+
+    // **Said before the attempt, and it is a rule rather than a verdict.** Whether any Merchant
+    // would be left holding the Permission is a question about rows this browser has not read,
+    // and `GET /admin/merchants` pages — so the Admin states what kobai will do and does not
+    // claim to know the answer. Nothing is disabled by it.
+    await shows(
+      page.getByText(/This Role is losing the power to administer access/),
+      "the lockout warning",
+    );
+    const save = page.getByRole("button", { name: "Save Role" });
+    await expect(save.getAttribute("aria-disabled")).resolves.toBeNull();
+    await auditAccessibility(page, "the Role editor warning about a lockout");
+
+    await save.click();
+
+    // And the answer is kobai's, rendered in the form the change was attempted in — the same
+    // rule as a refused deletion rendering in its dialog (ADR-0059, ADR-0063).
+    await shows(
+      page.getByText(/would leave nobody who could put it back/),
+      "the last-administrator refusal",
+    );
+    await auditAccessibility(page, "the Role editor showing a refused change");
+
+    // Nothing moved, which is the other half of "it was refused" — and, here, the reason the
+    // rest of this file still works.
+    await expect(
+      seam.api<{ permissions: string[] }>("GET", `/admin/roles/${owner.id}`),
+    ).resolves.toMatchObject({ permissions: owner.permissions });
+  });
+
+  it("creates a Role through the Admin and lists it", async () => {
+    const name = `made in the Admin ${Date.now()}`;
+    const page = await seam.signedIn("/roles");
+    await shows(page.getByText("What a colleague can be given"), "the Roles screen");
+
+    const form = page.locator("form").filter({ hasText: "Create Role" });
+    await form.getByLabel("Name").fill(name);
+    await form.getByRole("checkbox", { name: "catalog:read" }).click();
+    await form.getByRole("button", { name: "Create Role" }).click();
+
+    // Read back rather than patched in: newest first, so the Role kobai made is at the head of
+    // the list it answers (ADR-0063, ADR-0064).
+    const row = page.getByRole("row").filter({ hasText: name });
+    await shows(row, "the new Role's row");
+    await shows(row.getByText("catalog:read"), "the Permission it was given");
+    await auditAccessibility(page, "the Roles list after a Role was created");
+  });
+
+  it("refuses a Role whose name is taken, in the form it was attempted in", async () => {
+    const name = `taken twice ${Date.now()}`;
+    await createRole({ name, permissions: [] });
+
+    const page = await seam.signedIn("/roles");
+    const form = page.locator("form").filter({ hasText: "Create Role" });
+    await form.getByLabel("Name").fill(name);
+    await form.getByRole("button", { name: "Create Role" }).click();
+
+    await shows(
+      form.getByText(/A Role already carries that name/),
+      "the role-name-taken refusal, in the form it was attempted in",
+    );
+    await auditAccessibility(page, "the Roles screen showing a refused creation");
+  });
+
+  it("refuses to delete a Role Merchants hold, and stays in the dialog saying so", async () => {
+    // A Role somebody actually holds, which is the state `role-in-use` exists for: kobai
+    // refuses rather than cascading onto the Merchant or moving them somewhere it chose.
+    const holder = await seam.merchantOnARole(["catalog:read"]);
+
+    const page = await seam.signedIn(`/roles/${holder.roleId}`);
+    const trigger = page.getByRole("button", { name: "Delete Role" });
+    // Nothing is predicted: whether a Merchant holds this Role is a fact in Core, so the
+    // control is offered and the answer is rendered (ADR-0059).
+    await expect(trigger.getAttribute("aria-disabled")).resolves.toBeNull();
+    await trigger.click();
+
+    const dialog = page.getByRole("alertdialog");
+    await shows(dialog, "the Delete Role confirmation");
+    await dialog.getByRole("button", { name: "Delete Role" }).click();
+
+    await shows(
+      dialog.getByText(/Merchants hold this Role/),
+      "the refusal, inside the dialog it was attempted from",
+    );
+    // The audit is also what waits for the closing animation that never comes, which is what
+    // makes the assertion after it mean something rather than catching a dialog mid-fade.
+    await auditAccessibility(page, "the Delete Role dialog showing a refusal");
+    expect(
+      await dialog.isVisible(),
+      "The dialog closed on a refusal, which puts the explanation where the Merchant is not.",
+    ).toBe(true);
+  });
+
+  it("deletes a Role nobody holds, and leaves the address that no longer resolves", async () => {
+    const role = await createRole({
+      name: `nobody wants this Role ${Date.now()}`,
+      permissions: [],
+    });
+    const page = await seam.signedIn(`/roles/${role.id}`);
+
+    await page.getByRole("button", { name: "Delete Role" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await shows(dialog, "the Delete Role confirmation");
+    await dialog.getByRole("button", { name: "Delete Role" }).click();
+
+    await expect
+      .poll(() => where(page), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "Deleting the Role left the browser on the Role's own address.",
+      })
+      .toBe("/roles");
+    await shows(page.getByRole("heading", { name: "Roles" }), "the Roles list");
+  });
+
+  it("says there is no such Role, rather than reporting a refusal", async () => {
+    const page = await seam.signedIn("/roles/8f3c0f4e-0000-4000-8000-000000000000");
+
+    await shows(page.getByText("No such Role"), "the no-such-Role screen");
+    await shows(page.getByRole("link", { name: "Go to Roles" }), "the way back");
+    await auditAccessibility(page, "the Role screen for an address with no Role");
+  });
+
+  it("adds a colleague against a narrower Role, and shows what they may do", async () => {
+    const roleName = `a colleague's Role ${Date.now()}`;
+    await createRole({ name: roleName, permissions: ["catalog:read"] });
+    const email = `colleague-${Date.now()}@kobai.test`;
+
+    const page = await seam.signedIn("/merchants");
+    await shows(page.getByText("Everybody who can sign in"), "the Merchants screen");
+
+    const form = page.locator("form").filter({ hasText: "Add Merchant" });
+    await form.getByLabel("Email").fill(email);
+    await form.getByLabel("Password").fill("this-colleague-signs-in-with-this");
+
+    // The picker is fed by `GET /admin/roles` rather than by anything written down here: which
+    // Roles a deployment has is kobai's answer, and a Role renamed between this read and the
+    // submit is still attempted and still refused with `unknown-role`.
+    const picker = form.getByRole("combobox", { name: "Role" });
+    // Named before anything is chosen rather than blank: the form starts on no Role at all,
+    // because `owner` — the Role `POST /admin/merchants` applies when none is named — is every
+    // Permission Core defines, and is not a thing to hand out by not choosing.
+    await expect
+      .poll(async () => (await picker.innerText()).trim())
+      .toBe("Choose a Role");
+    await picker.click();
+    await shows(
+      page.getByRole("option", { name: roleName, exact: true }),
+      "the Role this colleague is to be created against",
+    );
+    // Audited with the list open, because an overlay is a screen — and this is what
+    // `lib/portal.tsx` exists for: at a portal's default target the list is content outside
+    // every landmark, which axe reports as `region`.
+    await auditAccessibility(page, "the Merchants screen with the Role list open");
+    await page.getByRole("option", { name: roleName, exact: true }).click();
+
+    await form.getByRole("button", { name: "Add Merchant" }).click();
+
+    const row = page.getByRole("row").filter({ hasText: email });
+    await shows(row, "the new Merchant's row");
+    await shows(row.getByText(roleName), "the Role they were created against");
+    await shows(row.getByText("catalog:read"), "what that Role may do");
+    await auditAccessibility(page, "the Merchants list after a colleague was added");
+  });
+
+  it("offers the roster to a Role that may read it, and explains the actions it may not", async () => {
+    // `merchant:read` without `merchant:write`: the split ADR-0066 draws, because seeing who
+    // has access escalates to nothing while adding a colleague confers everything.
+    const reader = await seam.merchantOnARole(["merchant:read"]);
+    const page = await seam.signedInAs(reader, "/merchants");
+    await shows(page.getByText("Everybody who can sign in"), "the Merchants screen");
+
+    // Both sections this Permission opens, and nothing else.
+    await expect.poll(() => sidebarSections(page)).toEqual(["Merchants", "Roles"]);
+
+    const add = page.getByRole("button", { name: "Add Merchant" });
+    // Shown rather than hidden, so a Merchant can learn the Permission is a thing to ask for,
+    // and `aria-disabled` rather than `disabled`, so the sentence can be reached (ADR-0063).
+    await expect(add.getAttribute("aria-disabled")).resolves.toBe("true");
+    await expect(add.getAttribute("disabled")).resolves.toBeNull();
+    await tabTo(page, add, "the unavailable Add Merchant button");
+
+    const watching = watchForWrites(page);
+    await add.click({ force: true });
+    await add.press("Enter");
+    // `aria-disabled` does not prevent activation, so the handler has to genuinely no-op —
+    // the half a scanner cannot see.
+    await expect(watching.settled()).resolves.toEqual([]);
+    await auditAccessibility(page, "the Merchants screen on a read-only Role");
+  });
+
+  it("reads the Store, edits its name and metadata, and never offers to move the currency", async () => {
+    const page = await seam.signedIn("/settings");
+    await shows(page.getByRole("heading", { level: 1 }), "the Store screen");
+
+    // Readable and not editable, which is #172's decision reflected honestly rather than an
+    // input that was always going to be refused (ADR-0065).
+    const currency = page.getByLabel("Default currency");
+    await shows(currency, "the default currency");
+    await expect(currency.getAttribute("readonly")).resolves.not.toBeNull();
+    await shows(page.getByText(/Fixed\./), "the reason the currency does not move");
+
+    const name = `The browser seam's Store ${Date.now()}`;
+    await page.getByLabel("Name").fill(name);
+    await page.getByLabel("Metadata").fill('{\n  "tone": "brisk"\n}');
+    await page.getByRole("button", { name: "Save Store" }).click();
+
+    await expect
+      .poll(
+        () =>
+          seam.api<{ name: string; metadata: Record<string, unknown> }>(
+            "GET",
+            "/admin/store",
+          ),
+        {
+          timeout: LOCATOR_TIMEOUT,
+          message: "The Store never settled at what was entered.",
+        },
+      )
+      .toMatchObject({ name, metadata: { tone: "brisk" } });
+    await auditAccessibility(page, "the Store screen after a change");
+  });
+
+  it("checks that metadata is JSON without asking kobai", async () => {
+    const page = await seam.signedIn("/settings");
+    await shows(page.getByLabel("Metadata"), "the metadata field");
+
+    const watching = watchForWrites(page);
+    await page.getByLabel("Metadata").fill("not json at all");
+    await page.getByRole("button", { name: "Save Store" }).click();
+
+    // The *shape* of the field, which is what a schema in this Admin is for — whether the body
+    // is an object at all is structure, and what is in it is nobody's business here
+    // (ADR-0063). Nothing was sent.
+    await shows(
+      page.getByText(/this is not JSON kobai could read/),
+      "the metadata shape message",
+    );
+    await expect(watching.settled()).resolves.toEqual([]);
+    await auditAccessibility(page, "the Store screen with an unreadable metadata field");
   });
 });

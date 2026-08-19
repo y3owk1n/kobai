@@ -1,0 +1,450 @@
+import { zodResolver } from "@hookform/resolvers/zod";
+import type { Role } from "@kobai/client";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { UsersIcon } from "lucide-react";
+import {
+  type Control,
+  type FieldValues,
+  type Path,
+  useController,
+  useForm,
+} from "react-hook-form";
+import { z } from "zod";
+import { ActionButton } from "@/components/action-button";
+import { FormField } from "@/components/form-field";
+import { Pager, usePageCursor } from "@/components/pager";
+import { Problem } from "@/components/problem";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
+import { merchantReasonOf, orThrow, problemOf } from "@/lib/refusal";
+import { useKobaiClient } from "@/lib/session";
+
+/**
+ * Who has access to this deployment, and the way to add a colleague (#173, ADR-0066).
+ *
+ * **Merchants were write-only until the route this list reads.** One could be created and never
+ * seen again, so "who has access" was a question this API could not answer about itself — and
+ * the Admin never called the one route there was, which left onboarding a colleague to raw SQL
+ * or to the boot-time seed.
+ *
+ * The two halves sit behind **different Permissions and that is deliberate**: reading the roster
+ * is `merchant:read` and everything that changes it is `merchant:write`, because adding a
+ * colleague confers everything — they can be added against `owner` — while seeing who has
+ * access confers nothing. Gating the list on the write would have meant granting the power to
+ * change who has access in order to let somebody look.
+ *
+ * There is no way to remove a Merchant here, because there is no route that does. That is the
+ * API's gap rather than this screen's omission, and the honest thing is to offer nothing for it
+ * (ADR-0010): what an Admin needs and the API cannot do is a finding about the API.
+ */
+const MERCHANTS = "merchants";
+
+export function Merchants() {
+  const client = useKobaiClient();
+  const after = usePageCursor();
+
+  const page = useQuery({
+    queryKey: [MERCHANTS, after ?? null],
+    queryFn: async () =>
+      orThrow(
+        await client.GET("/admin/merchants", {
+          params: { query: after === undefined ? {} : { after } },
+        }),
+      ),
+    placeholderData: keepPreviousData,
+  });
+
+  const merchants = page.data?.merchants;
+
+  return (
+    <div className="grid gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Merchants
+            {page.isFetching && !page.isPending ? <Spinner /> : null}
+          </CardTitle>
+          <CardDescription>
+            Everybody who can sign in to this Admin, newest first, and the Role each of
+            them holds. A Role is read on every request they make, so changing one reaches
+            them without their signing out.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Problem
+            problem={
+              page.isError
+                ? problemOf(page.error, "The Merchants could not be read.")
+                : null
+            }
+          />
+
+          {page.isPending ? <MerchantsLoading /> : null}
+
+          {merchants !== undefined && merchants.length === 0 ? (
+            <Empty className="border">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <UsersIcon />
+                </EmptyMedia>
+                <EmptyTitle>No Merchants on this page</EmptyTitle>
+                <EmptyDescription>
+                  A deployment seeds its first Merchant at boot, so an empty list here
+                  means this page of it is past the end.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : null}
+
+          {merchants !== undefined && merchants.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>What they may do</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {merchants.map((merchant) => (
+                  <TableRow key={merchant.id}>
+                    <TableCell className="font-medium">
+                      {merchant.email}
+                      <div className="text-muted-foreground text-xs">
+                        <code>{merchant.id}</code>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{merchant.role.name}</Badge>
+                    </TableCell>
+                    {/* `whitespace-normal` overrides the cell's own `nowrap`, and it is an
+                        accessibility fix rather than a layout preference: a Role holding every
+                        Permission Core defines is one long unbreakable line, which makes the
+                        table's container scroll sideways — and a scrollable region that cannot
+                        be reached by keyboard is what axe reports as
+                        `scrollable-region-focusable`. Watched failing exactly that way in
+                        `tests/the-admin-in-a-browser.test.ts`, which is the only seam here that
+                        could see it. */}
+                    <TableCell className="whitespace-normal text-muted-foreground text-xs">
+                      {/* Spelled out rather than counted, because the question this column
+                          answers is "can this colleague do the thing I am about to ask them
+                          to" — and because it is where a Merchant sees who else holds
+                          `merchant:write` before taking it off a Role. */}
+                      {merchant.role.permissions.length === 0
+                        ? "nothing — this Role holds no Permissions"
+                        : merchant.role.permissions.join(", ")}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : null}
+
+          <Pager nextCursor={page.data?.nextCursor} label="Merchants" />
+        </CardContent>
+      </Card>
+
+      <NewMerchant />
+    </div>
+  );
+}
+
+/** A page of Merchants, before there is one. */
+function MerchantsLoading() {
+  return (
+    <div className="grid gap-3" role="status" aria-label="Reading the Merchants">
+      {["first", "second"].map((row) => (
+        <Skeleton key={row} className="h-9 w-full" />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The shape of the form, and only the shape (ADR-0063).
+ *
+ * Whether the address is already a Merchant's, whether the password is long enough, whether the
+ * Role still exists: each of those is a rule in Core that may change there, and each arrives as
+ * a refusal rather than as a second copy of the rule in a browser.
+ *
+ * **The Role is required here although the API defaults it**, and that is the one departure
+ * worth arguing. `CreateMerchantRequest` says "Defaults to `owner`" — the same kind of
+ * documented default the Fulfilment Strategy picker deliberately agrees with — but `owner` is
+ * every Permission Core defines, so a form that quietly submitted it would make the most
+ * powerful Role in the deployment the one a Merchant gets by not choosing. A default that hands
+ * out everything is one to make somebody type.
+ */
+const NewMerchantForm = z.object({
+  email: z.string().min(1, "A Merchant signs in with an email address, so it needs one."),
+  password: z.string().min(1, "A Merchant signs in with a password, so it needs one."),
+  role: z.string().min(1, "Choose the Role this colleague is created against."),
+});
+
+type NewMerchantValues = z.infer<typeof NewMerchantForm>;
+
+/**
+ * A colleague, created against a Role.
+ *
+ * There is no way to set a Merchant's password from here afterwards and no route that would
+ * let one — so what this creates is an account somebody is handed, which is worth saying on the
+ * screen rather than leaving to be discovered.
+ */
+function NewMerchant() {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.merchantWrite, "add a Merchant");
+
+  const form = useForm<NewMerchantValues>({
+    resolver: zodResolver(NewMerchantForm),
+    defaultValues: { email: "", password: "", role: "" },
+  });
+
+  const create = useMutation({
+    mutationFn: async (values: NewMerchantValues) =>
+      orThrow(await client.POST("/admin/merchants", { body: values })),
+    onSuccess: () => form.reset(),
+    onSettled: () => queries.invalidateQueries({ queryKey: [MERCHANTS] }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Add a Merchant</CardTitle>
+        <CardDescription>
+          A colleague signs in with what is entered here — nothing sends it to them, and
+          no route changes it afterwards, so this is a password to hand over rather than
+          one they choose.
+        </CardDescription>
+      </CardHeader>
+      <form onSubmit={form.handleSubmit((values) => create.mutate(values))}>
+        <CardContent className="grid gap-4 sm:grid-cols-3">
+          <Problem
+            className="sm:col-span-3"
+            problem={create.isError ? whyNotCreated(create.error) : null}
+            title="The Merchant was not created."
+          />
+          <FormField
+            id="new-merchant-email"
+            label="Email"
+            type="email"
+            // Not `username`: the browser would otherwise offer the Merchant filling this in
+            // their *own* address, which is the one colleague they cannot be adding.
+            autoComplete="off"
+            error={form.formState.errors.email}
+            {...form.register("email")}
+          />
+          <FormField
+            id="new-merchant-password"
+            label="Password"
+            type="password"
+            autoComplete="new-password"
+            error={form.formState.errors.password}
+            {...form.register("password")}
+          />
+          <RoleField id="new-merchant-role" control={form.control} name="role" />
+        </CardContent>
+        <CardFooter className="mt-4">
+          <ActionButton
+            type="submit"
+            unavailable={unavailable}
+            disabled={create.isPending}
+          >
+            {create.isPending ? <Spinner /> : null}
+            Add Merchant
+          </ActionButton>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * How many pages of Roles the picker below will read before it stops.
+ *
+ * A cursor-paged list has no "give me all of it", so a picker over one either walks it or lies
+ * about the set — and a walk with no bound is a screen that hangs on a deployment somebody has
+ * scripted ten thousand Roles into. This is the bound, and **the field says so when it is
+ * reached**: a truncated list that looked complete would be a Merchant unable to find a Role
+ * that exists, with nothing on screen to explain it.
+ */
+const MOST_ROLE_PAGES = 10;
+
+/** Every Role this deployment has, and whether that is really all of them. */
+const EVERY_ROLE = "every-role";
+
+function useEveryRole() {
+  const client = useKobaiClient();
+
+  return useQuery({
+    queryKey: [EVERY_ROLE],
+    queryFn: async (): Promise<{ roles: Role[]; complete: boolean }> => {
+      const roles: Role[] = [];
+      let after: string | undefined;
+
+      for (let page = 0; page < MOST_ROLE_PAGES; page += 1) {
+        const answered = orThrow(
+          await client.GET("/admin/roles", {
+            params: { query: after === undefined ? {} : { after } },
+          }),
+        );
+        roles.push(...answered.roles);
+        // Absent is the only end-of-list signal there is — a short page is not one (ADR-0064).
+        if (answered.nextCursor === undefined) return { roles, complete: true };
+        after = answered.nextCursor;
+      }
+
+      return { roles, complete: false };
+    },
+  });
+}
+
+/**
+ * Which Role a colleague is created against — a choice among the ones this deployment has.
+ *
+ * **A picker rather than a text field, and only because the API can answer.** It is the same
+ * judgement `FulfilmentStrategyField` makes: whether a name is one of the Roles is not a rule
+ * the Admin is deciding, it is a list kobai handed over, and a Role deleted or renamed between
+ * this read and the submit is still attempted and still refused with `unknown-role`. That is
+ * what keeps it an affordance.
+ *
+ * Driven through `useController`, because a listbox is not an `<input>` and cannot be
+ * `register`ed — the form still owns the value, so its validation and `reset` work here exactly
+ * as they do for the two fields beside it.
+ *
+ * **A failed read blocks nothing that is not already blocked**: the field goes unavailable and
+ * says what kobai said, and there is nothing useful to submit without it, because the Role is
+ * required.
+ */
+function RoleField<T extends FieldValues>({
+  id,
+  control,
+  name,
+}: {
+  readonly id: string;
+  readonly control: Control<T>;
+  readonly name: Path<T>;
+}) {
+  const roles = useEveryRole();
+  const { field, fieldState } = useController({ control, name });
+  const available = roles.data?.roles ?? [];
+  // `""` is the untouched field, which the schema refuses and the `Select` shows its
+  // placeholder for — asserted in the browser, because "no Role is chosen yet" reading as an
+  // empty box would be a control a Merchant cannot name.
+  const chosen = typeof field.value === "string" ? field.value : "";
+
+  return (
+    <Field data-invalid={fieldState.error !== undefined}>
+      <FieldLabel htmlFor={id}>Role</FieldLabel>
+      <Select
+        value={chosen}
+        // Base UI reports `null` for "nothing selected", which this field never wants: a
+        // colleague is created against a Role, and clearing it would submit an empty name.
+        onValueChange={(next) => {
+          if (next !== null) field.onChange(next);
+        }}
+        disabled={roles.isError}
+      >
+        <SelectTrigger
+          id={id}
+          ref={field.ref}
+          onBlur={field.onBlur}
+          aria-invalid={fieldState.error !== undefined}
+        >
+          <SelectValue placeholder="Choose a Role" />
+        </SelectTrigger>
+        <SelectContent>
+          {available.map((role) => (
+            <SelectItem key={role.id} value={role.name}>
+              {role.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <FieldDescription>{roleFieldNote(roles)}</FieldDescription>
+      <FieldError errors={[fieldState.error]} />
+    </Field>
+  );
+}
+
+/** What to say under the picker: what went wrong, what was left out, or what it is for. */
+function roleFieldNote(roles: ReturnType<typeof useEveryRole>): string {
+  if (roles.isError) {
+    return problemOf(roles.error, "kobai did not say which Roles it has.");
+  }
+  if (roles.data?.complete === false) {
+    return `This deployment has more Roles than the first ${MOST_ROLE_PAGES} pages of them, so this list is not all of them. Roles is where the rest are.`;
+  }
+  return "What this colleague may do. Roles is where one is made or changed.";
+}
+
+/**
+ * Why kobai turned the creation back, in words a Merchant can act on.
+ *
+ * Exhaustive over `MerchantRefusal`, and the `never` is what keeps it so: a reason added to
+ * that family in Core has no arm here and reddens this build in the same commit (ADR-0063).
+ */
+function whyNotCreated(thrown: unknown): string {
+  const fallback = "The Merchant could not be created.";
+  const reason = merchantReasonOf(thrown);
+
+  switch (reason) {
+    case "email-taken":
+      return "A Merchant already signs in with that address. An address identifies a Merchant, so this colleague needs their own.";
+
+    case "unknown-role":
+      return "This deployment has no Role by that name any more — it was renamed or deleted since this list was read. Reload, and choose again.";
+
+    case "invalid":
+    case "malformed-body":
+      // kobai's own prose names the field, which is more than this screen knows — the
+      // password's minimum length in particular, which is Core's rule and not this form's.
+      return problemOf(thrown, fallback);
+
+    case undefined:
+      // A 500, which carries no `reason` on purpose, or the network being gone.
+      return fallback;
+
+    default: {
+      const unreached: never = reason;
+      return unreached;
+    }
+  }
+}

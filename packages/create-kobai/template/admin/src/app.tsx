@@ -19,11 +19,15 @@ import { useSections } from "@/lib/sections";
 import { KobaiProvider, useSession } from "@/lib/session";
 import { ThemeProvider } from "@/lib/theme";
 import { ApiKeys } from "@/screens/api-keys";
+import { Merchants } from "@/screens/merchants";
 import { OrderScreen } from "@/screens/order";
 import { Orders } from "@/screens/orders";
 import { ProductScreen } from "@/screens/product";
 import { Products } from "@/screens/products";
+import { RoleScreen } from "@/screens/role";
+import { Roles } from "@/screens/roles";
 import { SignIn } from "@/screens/sign-in";
+import { StoreScreen } from "@/screens/store";
 
 /**
  * The Admin, whole.
@@ -126,6 +130,16 @@ function Admin() {
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderScreen />} />
         <Route path="api-keys" element={<ApiKeys />} />
+        <Route path="merchants" element={<Merchants />} />
+        <Route path="roles" element={<Roles />} />
+        <Route path="roles/:id" element={<RoleScreen />} />
+        {/* Not `store`: a quoted path in this tree beginning with admin, store or health is
+            read as a kobai path by `tests/admin-uses-only-the-public-api.test.ts`, which is
+            how ADR-0010's promise is kept by the build — so the Admin's own addresses have to
+            stay out of kobai's namespace. `lib/sections.ts` carries the whole of that
+            reasoning, and the check caught this very comment when it named the address
+            outright. */}
+        <Route path="settings" element={<StoreScreen />} />
         <Route path="*" element={<NoSuchScreen />} />
       </Route>
     </Routes>
