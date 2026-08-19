@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type TestKobai,
   type TestSession,
 } from "../testing/index.ts";
+import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 
 /**
  * Paging a list route — `?limit=`, `?after=`, and a `nextCursor` beside the items (ADR-0064).
@@ -24,6 +26,14 @@ import {
  * contention to reproduce, produces no error, and is invisible in every test that seeds a fixed
  * number of rows and reads them back — which is every other test in this file.
  */
+
+/** As much of the description as this file reads: which operations take an `after`. */
+type DescribedPaths = {
+  readonly paths: Record<
+    string,
+    { readonly get?: { readonly parameters?: readonly { readonly name: string }[] } }
+  >;
+};
 
 /** What every list answers with, once the item key is set aside. */
 type Paged<Item> = {
@@ -388,6 +398,126 @@ describe("reading a whole list one page at a time", () => {
     const seen = await readToTheEnd(kobai, list, merchant, 1);
 
     expect(seen).toEqual([...seeded].reverse());
+  });
+});
+
+describe("a cursor is bound to the list that issued it", () => {
+  /**
+   * The failure this is written against answered **200**, which is the whole reason it needs a
+   * test: a cursor cut from Products decoded on Orders, satisfied the schema, and came back as
+   * a plausible page of the wrong list. Nothing in the payload said which reader had written
+   * it, so nothing could tell a Merchant paging Orders from a Merchant who pasted a URL from
+   * another tab (#183).
+   *
+   * **Every ordered pair rather than one example**, because the property is about the set: what
+   * makes a cursor unusable elsewhere is that no two lists name themselves the same thing, and
+   * a duplicate name is exactly what a single pair would miss. One deployment for all of them —
+   * the pairs are twenty requests and twenty deployments would be twenty boots.
+   *
+   * **Watched failing before it was made to pass**, against the cursor as #171 shipped it —
+   * `at` and `id` and nothing else. All twenty pairs answered **200**, in the two shapes that
+   * are each worse than the other. Eighteen were a real page of the list that had not issued
+   * the cursor — Roles, Merchants and Orders read through a Product's position, several of them
+   * carrying a `nextCursor` of their own, so paging on from there was an ordinary loop. The
+   * other two came back `{"orders": []}` and `{"apiKeys": []}` with no cursor at all, because
+   * a Product's position was older than every row of those lists: the caller is told the list
+   * has **ended**. Neither answer is distinguishable from a correct one by the client holding
+   * it, which is why nothing but a test from outside was ever going to find this.
+   */
+  it("is refused by every other list rather than answering a page of it", async () => {
+    await using kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const cursors = new Map<string, string>();
+    for (const list of LISTS) {
+      await seedThree(kobai, merchant, list);
+      const page = await fetchPage(kobai, list, merchant, "?limit=1");
+      // The arrangement rather than the subject, so it is asserted rather than assumed: a list
+      // that issued no cursor would make every pair below vacuously green.
+      expect(page.nextCursor, `${list.path} issued no cursor to offer elsewhere`).toEqual(
+        expect.any(String),
+      );
+      cursors.set(list.path, page.nextCursor ?? "");
+    }
+
+    for (const issuer of LISTS) {
+      for (const reader of LISTS) {
+        if (issuer.path === reader.path) continue;
+        const cursor = cursors.get(issuer.path) ?? "";
+
+        const response = await kobai.request(
+          `${reader.path}?limit=1&after=${encodeURIComponent(cursor)}`,
+          { headers: merchant.headers },
+        );
+
+        const where = `${issuer.path}'s cursor offered to ${reader.path}`;
+        expect(response.status, where).toBe(400);
+        // The existing `invalid` rather than a `reason` of its own, which is #183's decision
+        // and is argued in `db/page.ts`: both this and a cursor kobai never wrote mean the
+        // same thing to a client, and a new reason would be permanent under ADR-0060.
+        await expect(response.json(), where).resolves.toMatchObject({
+          reason: "invalid",
+        });
+      }
+    }
+
+    // And the other half of the same fact, over the same deployment: refusing every cursor
+    // everywhere would satisfy every assertion above and be a surface no list can be paged on
+    // at all. The pair is what makes this a binding rather than a wall.
+    for (const list of LISTS) {
+      const own = await fetchPage(
+        kobai,
+        list,
+        merchant,
+        `?limit=1&after=${encodeURIComponent(cursors.get(list.path) ?? "")}`,
+      );
+
+      const here = `${list.path}'s own cursor, on ${list.path}`;
+      expect(own.status, here).toBe(200);
+      expect(own.items, here).toHaveLength(1);
+    }
+  });
+
+  /**
+   * What makes the sweep above a guardrail rather than a snapshot, and what `db/page.ts` is
+   * entitled to claim when it says a **collision** in `PagedList` is caught here.
+   *
+   * That claim rests on `LISTS` being every paged list there is, and `LISTS` is a hand-written
+   * table. A sixth list route added without an entry would be swept by nothing — its cursor
+   * never offered anywhere, its name never held against the other five — and the omission is
+   * the same manual step whoever added it had already missed. So the table is checked against
+   * the description rather than trusted, the way this repository derives such a list rather
+   * than writing one down (ADR-0049).
+   *
+   * **`after` is what identifies a paged route**, because it is what ADR-0064 makes one: a
+   * route that takes a cursor is a route that issues one. `GET /admin/fulfilment-strategies`
+   * takes neither and is ADR-0067's deliberate exception, so it is absent from both sides and
+   * needs no excuse here.
+   *
+   * The checked-in description is the source rather than a freshly built app, because
+   * `openapi.test.ts` already holds that file to being what this build produces — asking the
+   * router again here would be a second answer to a question that has one.
+   */
+  it("is swept for every list the description says pages, and for no others", async () => {
+    const described = JSON.parse(
+      await readFile(OPENAPI_DOCUMENT_PATH, "utf8"),
+    ) as DescribedPaths;
+
+    const paged = Object.entries(described.paths)
+      .filter(([, operations]) =>
+        operations.get?.parameters?.some((parameter) => parameter.name === "after"),
+      )
+      .map(([path]) => path)
+      .sort();
+
+    expect(
+      paged.length,
+      "the description carries no paged list route at all, so every sweep here is vacuous",
+    ).toBeGreaterThan(0);
+    // Both directions: a list route missing from `LISTS` is swept by nothing, and one named
+    // here that no longer exists would leave every case above passing against a path that is
+    // gone.
+    expect(paged).toEqual(LISTS.map((list) => list.path).sort());
   });
 });
 

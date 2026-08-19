@@ -15,7 +15,12 @@ import type {
   ProductCreation,
   VariantCreation,
 } from "../catalog/write.ts";
-import { DEFAULT_PAGE_LIMIT, decodeCursor, MAX_PAGE_LIMIT } from "../db/page.ts";
+import {
+  DEFAULT_PAGE_LIMIT,
+  decodeCursor,
+  MAX_PAGE_LIMIT,
+  type PagedList,
+} from "../db/page.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
@@ -268,10 +273,10 @@ export const ServerError = z.object({ error: z.string() }).openapi("ServerError"
  * What every list route on this surface takes, and it is the same two parameters everywhere
  * (ADR-0064).
  *
- * A surface where some lists page and others do not is one a client has to learn twice, so
- * this is declared once and named by each list route rather than spelled per route. Both
- * parameters are optional: a caller that sends neither gets the first page at the default
- * size, which is why adding this to a list that returned everything breaks nobody.
+ * A surface where some lists page and others do not is one a client has to learn twice, so this
+ * is written once and called by each list route rather than spelled per route. Both parameters
+ * are optional: a caller that sends neither gets the first page at the default size, which is
+ * why adding this to a list that returned everything breaks nobody.
  *
  * There is deliberately **no `offset` and no total**. An offset is evaluated against the
  * table as it is when the page is fetched, so an insert between two pages skips or repeats a
@@ -281,36 +286,59 @@ export const ServerError = z.object({ error: z.string() }).openapi("ServerError"
  * **`after` is decoded here rather than in a handler**, so an unusable cursor is answered
  * `invalid` at 400 by the same hook that answers a body that does not fit — and so what a
  * handler receives is a position rather than a string it would have to check again.
+ *
+ * **A factory rather than a constant, so that the schema knows its own list** (#183). The
+ * parameters are identical for every list and the *cursor* is not: one issued by Products is
+ * refused by Orders, which needs the reading end to know which list is asking. Naming it here
+ * settles the writing end too — the name travels to the reader on its {@link PageRequest} and
+ * is what `takePage` stamps into the next cursor — so one call decides both directions and
+ * there is no second place to keep in step.
+ *
+ * This builds a schema per list where the session schema builds one per instance, and it stays
+ * inside the same boundary: what varies is which list a cursor belongs to, never which
+ * parameters exist or what they mean. A description that enumerated different *paths* per
+ * deployment would not be a contract; five copies of one contract, each bound to its own list,
+ * is the same contract five times.
  */
-export const PageQuery = z.object({
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(MAX_PAGE_LIMIT)
-    .default(DEFAULT_PAGE_LIMIT)
-    .meta({
-      description: `How many to answer with. Between 1 and ${MAX_PAGE_LIMIT}; ${DEFAULT_PAGE_LIMIT} if it is not sent. More than ${MAX_PAGE_LIMIT} is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received ${MAX_PAGE_LIMIT} would read the short page as the end of the list.`,
-    }),
-  after: z
-    .string()
-    .transform((raw, ctx) => {
-      const cursor = decodeCursor(raw);
-      if (cursor === undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message: "not a cursor this API issued",
-        });
-        return z.NEVER;
-      }
-      return cursor;
-    })
-    .optional()
-    .meta({
-      description:
-        "The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page.",
-    }),
-});
+export function pageQuery(list: PagedList) {
+  return (
+    z
+      .object({
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_PAGE_LIMIT)
+          .default(DEFAULT_PAGE_LIMIT)
+          .meta({
+            description: `How many to answer with. Between 1 and ${MAX_PAGE_LIMIT}; ${DEFAULT_PAGE_LIMIT} if it is not sent. More than ${MAX_PAGE_LIMIT} is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received ${MAX_PAGE_LIMIT} would read the short page as the end of the list.`,
+          }),
+        after: z
+          .string()
+          .transform((raw, ctx) => {
+            const cursor = decodeCursor(list, raw);
+            if (cursor === undefined) {
+              ctx.addIssue({
+                code: "custom",
+                message: `not a cursor \`${list}\` issued — an \`after\` has to be a \`nextCursor\` this same list handed back`,
+              });
+              return z.NEVER;
+            }
+            return cursor;
+          })
+          .optional()
+          .meta({
+            description:
+              "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page.",
+          }),
+      })
+      // The list travels with the request rather than beside it, so a reader is handed which
+      // list it is reading and cannot page one under another's name. It is not a parameter and
+      // never appears as one: this transform runs after the query string has been read, so
+      // `?list=orders` reaches nothing.
+      .transform((query) => ({ ...query, list }))
+  );
+}
 
 /**
  * The field every list answers beside its items, and the only end-of-list signal there is.

@@ -157,7 +157,7 @@ export interface paths {
         query?: {
           /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
           limit?: number;
-          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
         };
       };
@@ -168,7 +168,7 @@ export interface paths {
             "application/json": components["schemas"]["MerchantList"];
           };
         };
-        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
         400: {
           content: {
             "application/json": components["schemas"]["InvalidRequest"];
@@ -266,7 +266,7 @@ export interface paths {
         query?: {
           /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
           limit?: number;
-          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
         };
       };
@@ -277,7 +277,7 @@ export interface paths {
             "application/json": components["schemas"]["RoleList"];
           };
         };
-        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
         400: {
           content: {
             "application/json": components["schemas"]["InvalidRequest"];
@@ -689,7 +689,7 @@ export interface paths {
         query?: {
           /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
           limit?: number;
-          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
         };
       };
@@ -700,7 +700,7 @@ export interface paths {
             "application/json": components["schemas"]["ProductList"];
           };
         };
-        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
         400: {
           content: {
             "application/json": components["schemas"]["InvalidRequest"];
@@ -1365,7 +1365,7 @@ export interface paths {
         query?: {
           /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
           limit?: number;
-          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
         };
       };
@@ -1376,7 +1376,7 @@ export interface paths {
             "application/json": components["schemas"]["OrderList"];
           };
         };
-        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
         400: {
           content: {
             "application/json": components["schemas"]["InvalidRequest"];
@@ -1471,7 +1471,7 @@ export interface paths {
         query?: {
           /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
           limit?: number;
-          /** @description The `nextCursor` of the previous page. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised. Send it back exactly as it was received; omit it for the first page. */
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
         };
       };
@@ -1482,7 +1482,7 @@ export interface paths {
             "application/json": components["schemas"]["ApiKeyList"];
           };
         };
-        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor this API issued. A `limit` above the ceiling is refused rather than reduced to it. */
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
         400: {
           content: {
             "application/json": components["schemas"]["InvalidRequest"];

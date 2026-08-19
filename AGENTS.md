@@ -726,10 +726,16 @@ change.
 **One schema and two routes are built per instance, and only these.** `Session`'s description
 carries the deployment's own session lifetimes, which a Project may set (ADR-0050), so
 `contract.sessionSchema(policy)` is a function and `admin.ts`'s two `/admin/session` routes
-take the schema it returns. Everything else on the surface stays a module-level constant —
-reach for this only for a route whose *description* depends on how the deployment was
-configured, and never as a way to make a route's shape conditional: a description that
-enumerated different paths per deployment is not a contract.
+take the schema it returns. Reach for *that* only for a route whose *description* depends on
+how the deployment was configured, and never as a way to make a route's shape conditional: a
+description that enumerated different paths per deployment is not a contract.
+
+**`contract.pageQuery(list)` is the other function on this surface, and it is a different
+thing** (#183): it builds one schema per **list** rather than per deployment, and what varies
+between them is which list's cursors that schema will accept — never which parameters exist or
+what they mean. One contract bound once per list is the same contract each time, which is why
+this is not the shape the paragraph above rules out. Everything else on the surface stays a
+module-level constant.
 
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.
@@ -765,12 +771,12 @@ because `openapi-typescript` emits paths, components and operations and never th
 so a regenerated client is byte-identical across a version bump.
 
 **Every list route pages, and there is one way to do it** (ADR-0064). `?limit=` and `?after=`,
-an **opaque** `nextCursor` beside the items, no offset and no total — on the three lists that
-exist and on every one added after them, because a surface where some lists page and others do
-not is one a client has to learn twice. A new list route therefore takes
-`request: { query: contract.PageQuery }`, declares `400: PAGE_QUERY_INVALID`, answers with
-`{ …items, nextCursor: page.nextCursor }`, and reads its page through
-`packages/core/src/db/page.ts`. Five things about it are decisions rather than implementation:
+an **opaque** `nextCursor` beside the items, no offset and no total — on every list that exists
+and on every one added after them, because a surface where some lists page and others do not is
+one a client has to learn twice. A new list route therefore takes
+`request: { query: contract.pageQuery("<its own list>") }`, declares `400: PAGE_QUERY_INVALID`,
+answers with `{ …items, nextCursor: page.nextCursor }`, and reads its page through
+`packages/core/src/db/page.ts`. Six things about it are decisions rather than implementation:
 
 - **`nextCursor` is absent on the last page and that is the only end-of-list signal.** A short
   page is not one — a filtered page can be short and not last — so a reader fetches `limit + 1`
@@ -788,16 +794,37 @@ not is one a client has to learn twice. A new list route therefore takes
   two readings of one column, because the wire wants an ISO string a person reads and the
   cursor wants what the database is ordering by.
 - **A `limit` over the ceiling is refused, never clamped**, and an `after` that does not decode
-  is refused too — both as the existing `invalid` at 400, from `PageQuery` itself, because an
+  is refused too — both as the existing `invalid` at 400, from `pageQuery` itself, because an
   unusable parameter does not fit the endpoint's schema and needs no `reason` of its own. A
   caller that asked for 5,000 and received a hundred would read the short page as the end.
+- **A cursor names the list that issued it, and no other list will read it** (#183, ADR-0064).
+  That is the whole reason `contract.pageQuery` is a **factory**: the name a route passes it is
+  both what `decodeCursor` will accept and — travelling to the reader on the `PageRequest`
+  itself, never as an argument of its own — what `takePage` stamps into the next cursor, so one
+  call decides both ends and there is no second place to keep in step. `PagedList` in
+  `db/page.ts` is the closed set of those names, and a **collision** in it is the one failure
+  left — two lists sharing a name would trade cursors exactly as an unbound cursor did, and no
+  type can see that, because a union absorbs a repeated member in silence. What sees it is
+  `pagination.test.ts`, in the two cases below that only work together. A cursor from elsewhere is refused as the same `invalid`, deliberately —
+  a new `reason` is permanent under ADR-0060 and buys a distinction no client can act on. **The
+  cursor is also deliberately not signed**, and that half is a *decision* rather than an
+  omission: the argument is beside `encodeCursor` and recorded in ADR-0064, and the short of it
+  is that a forged cursor names a position inside a list the caller's credential already opens
+  whole, while a signature would be kobai's first secret. Do not add one without reopening
+  ADR-0064 — and note that changing what a cursor carries is a wire-format break after the
+  first publish (ADR-0061).
 - **The default and the ceiling are promised** (`DEFAULT_PAGE_LIMIT`, `MAX_PAGE_LIMIT` in
   `db/page.ts`, 20 and 100) and each route's description says so, because changing either
   changes what an existing client receives.
 
-`packages/core/src/http/pagination.test.ts` holds all of it, and holds it **once for the three
-lists**: `LISTS` is a table of path and item key, so a new list added there inherits the whole
-contract rather than a copy of it. Its last case is the one that matters and the one nothing
+`packages/core/src/http/pagination.test.ts` holds all of it, and holds it **once for every
+list**: `LISTS` is a table of path and item key — checked against the routes the description
+says take an `after`, so a list route added without an entry reddens the build rather than
+quietly opting out of every sweep in the file — so a new list added there inherits the whole
+contract rather than a copy of it — including the pass that offers **every** list's cursor to
+**every** other list and expects all of them to refuse, which is what makes a duplicate name a
+red build rather than two lists quietly reading each other's pages. Its last case is the one
+that matters and the one nothing
 else can see — a page fetched across a concurrent insert — and it was watched failing against
 an offset implementation first, which is the discipline the two race tests already use.
 

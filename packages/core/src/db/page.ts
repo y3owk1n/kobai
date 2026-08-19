@@ -22,7 +22,39 @@ import type { PgColumn } from "drizzle-orm/pg-core";
  * key and the tiebreaker an implementation detail, so nothing outside this module reads what is
  * inside one — the routes carry it as a string, and this is the only place that knows it is a
  * timestamp and an id at all.
+ *
+ * **A cursor says which list issued it, and no other list will read it** (#183). One cut from
+ * `GET /admin/products` used to decode on `GET /admin/orders`, satisfy the schema, and answer a
+ * plausible page of the wrong list — a client's mistake arriving as a 200 rather than as a
+ * refusal, which is the class of quiet wrongness ADR-0064 was written against one level up.
+ * {@link PagedList} is the name a list is known by inside its own cursors.
+ *
+ * **A cursor is not signed, and that was decided rather than deferred** (#183) — see
+ * {@link encodeCursor} for the argument and ADR-0064 for the record of it.
  */
+
+/**
+ * The name a list is known by inside the cursors it issues, and the whole of what binds the one
+ * to the other.
+ *
+ * **Spelled once per list, at that route's `contract.pageQuery(…)`.** The same call decides what
+ * {@link decodeCursor} will accept and what {@link takePage} will write — the name reaches a
+ * reader on its {@link PageRequest} rather than as an argument of its own — so the two ends of a
+ * cursor cannot be bound to different lists by anybody forgetting to keep them in step.
+ *
+ * A closed union rather than a `string`, so the set is readable in one line — which matters
+ * because a **collision** is the only way this scheme still fails, and no type can see one: a
+ * union quietly absorbs a repeated member, and two lists sharing a name would trade cursors
+ * exactly as an unbound cursor did. What sees it is `http/pagination.test.ts`, in two cases
+ * that only work together — one offers every list's cursor to every other list and expects all
+ * of them to refuse, and the other holds that test's table of lists against the routes the
+ * OpenAPI description says take an `after`, so a list added without an entry reddens the build
+ * instead of quietly opting out of the sweep.
+ *
+ * **A name carries no space**, because {@link encodeCursor} joins the parts with one. That holds
+ * by inspection of this line, which is the other reason the line is worth being able to read.
+ */
+export type PagedList = "products" | "orders" | "api-keys" | "roles" | "merchants";
 
 /** What a caller asked for: how many, and what they have already seen. */
 export type PageRequest = {
@@ -30,6 +62,15 @@ export type PageRequest = {
   readonly limit: number;
   /** Where to resume from — the last row of the previous page, or nothing for the first. */
   readonly after?: Cursor;
+  /**
+   * Which list this is a page of — what a cursor issued here will name, and what one handed
+   * back has to have named already.
+   *
+   * It comes from the route's own `contract.pageQuery(…)` rather than from the caller, so a
+   * reader cannot page one list under another's name and no reader has to remember to say
+   * which list it is.
+   */
+  readonly list: PagedList;
 };
 
 /**
@@ -80,33 +121,69 @@ export const MAX_PAGE_LIMIT = 100;
 /**
  * The cursor as it travels — base64url, so it carries through a query string untouched.
  *
- * Not encryption and not a signature. It is opaque in the sense that matters: nothing is
- * promised about what is inside it, so kobai may change how a page is located without changing
- * anybody's client. Nothing is protected by it either — a caller who unpicks one and hands back
- * a position of their own choosing gets a page of the same list they were already reading, and
- * every list this opens is one their credential already opens whole.
+ * **The list is inside it, and first.** A space joins the three parts and no {@link PagedList}
+ * holds one, which is what lets {@link decodeCursor} split them back apart without a format to
+ * parse.
  *
- * **A cursor does not say which list it came from**, so one cut from Products is structurally
- * valid on Orders and answers a plausible page of the wrong list rather than a refusal. Binding
- * it would mean a schema per list where ADR-0064 asks for one, and the mistake it would catch
- * is a caller passing a client's own value to the wrong call. Left undone deliberately; the day
- * a list wants a cursor of a different shape, that is where this is reopened.
+ * **Not a signature and not encryption**, and #183 is where that stopped being an omission and
+ * became a decision. base64url reverses in one command, so *opaque* here means nothing is
+ * promised about what is inside — not that nobody can look. Signing was weighed and declined,
+ * on three grounds, and ADR-0064 carries the record:
+ *
+ * - **It would defend nothing.** A forged cursor names a *position*, and every position it can
+ *   name is inside a list the caller's credential already opens whole — these routes are behind
+ *   a Merchant session and a `…:read` Permission, and the answer to `after=<anything>` is a page
+ *   of the list they were already reading. There is no row a cursor reaches that a `limit` does
+ *   not.
+ * - **It would need kobai's first secret.** `kobai.config.ts` holds no key of any kind, so this
+ *   would introduce one — with rotation, with every instance behind a load balancer having to
+ *   agree, and with a Merchant's open page breaking the moment the key moved. That is a config
+ *   surface and an ADR, for the benefit above.
+ * - **Obfuscating without a key would be worse than either.** It reads as protection, is none,
+ *   and would still have to be undone the day a real one is wanted.
+ *
+ * What is genuinely at risk is **coupling**: a client that unpicks a cursor starts depending on
+ * the sort key and the tiebreaker, which is exactly what ADR-0064 keeps private. That is
+ * answered by saying so rather than by hiding it — the `after` parameter's own description
+ * promises nothing about the contents and says to send it back as received — and a client that
+ * reads past it is relying on internals kobai may change without a major.
+ *
+ * **Reopening this is a wire-format change**, and therefore a major once anything is published
+ * (ADR-0060, ADR-0061). The thing that would reopen it is a cursor carrying something a caller
+ * must not be allowed to choose — a filter, a scope, a Store — because that is the first
+ * version of this where forging one reaches a row rather than a position.
  */
-export function encodeCursor(cursor: Cursor): string {
-  return Buffer.from(`${cursor.at} ${cursor.id}`, "utf8").toString("base64url");
+export function encodeCursor(list: PagedList, cursor: Cursor): string {
+  return Buffer.from(`${list} ${cursor.at} ${cursor.id}`, "utf8").toString("base64url");
 }
 
 /**
- * A cursor read back, or `undefined` for anything that is not one this build wrote.
+ * A cursor read back, or `undefined` for anything that is not one **this list** wrote.
  *
  * The route's schema is what asks — an `after` that does not decode does not fit the endpoint,
  * so it is refused at 400 like any other unusable parameter rather than quietly treated as the
  * first page. Starting over would be the worst of the answers available: the caller would page
  * the same rows again and never learn why.
+ *
+ * **A cursor from another list is refused as the same `invalid`, and that is a decision** (#183,
+ * ADR-0060). A new `reason` would be permanent and would turn every exhaustive `switch` over a
+ * regenerated `@kobai/client` into an incomplete one — bought for a distinction no client can
+ * act on differently, since both answers mean *stop sending this value*. `invalid` is already
+ * the word for a query parameter that does not fit this endpoint, and a cursor another list
+ * issued is precisely that. The diagnosis a person needs is in the `error` string, which names
+ * the list that would have had to issue it and is promised to nobody.
  */
-export function decodeCursor(raw: string): Cursor | undefined {
-  const [at, id, ...extra] = Buffer.from(raw, "base64url").toString("utf8").split(" ");
-  if (at === undefined || id === undefined || extra.length > 0) return undefined;
+export function decodeCursor(list: PagedList, raw: string): Cursor | undefined {
+  const [issuer, at, id, ...extra] = Buffer.from(raw, "base64url")
+    .toString("utf8")
+    .split(" ");
+  if (issuer === undefined || at === undefined || id === undefined || extra.length > 0)
+    return undefined;
+
+  // Checked before the pair below, because a cursor from another list is *well formed*: it
+  // decodes, it names a real row, and every check after this one passes. This is the only one
+  // that can tell it apart from the cursor this list handed out.
+  if (issuer !== list) return undefined;
 
   // A timestamp and a uuid are what the pair is made of, and both are checked before either
   // reaches a cast in SQL: `at` is handed to Postgres as a `timestamptz` and a string that is
@@ -209,5 +286,8 @@ export function takePage<Row extends { readonly id: string; readonly cursorAt: s
   // never ends.
   if (last === undefined) return { rows };
 
-  return { rows, nextCursor: encodeCursor({ at: last.cursorAt, id: last.id }) };
+  return {
+    rows,
+    nextCursor: encodeCursor(request.list, { at: last.cursorAt, id: last.id }),
+  };
 }

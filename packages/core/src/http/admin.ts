@@ -171,17 +171,23 @@ const CATALOG_INVALID_REQUEST = json(
  * The 400 every list route answers, and the only one any of them has.
  *
  * `InvalidRequest` rather than the family schema each list otherwise belongs to, because a
- * paging parameter is the whole of what these three routes can refuse: they take no body, so
- * there is no `malformed-body` to reach them and no Merchant's rule for them to break. It is
- * one constant across three families for the same reason `PageQuery` is one schema — the three
- * refuse the identical thing, and a client that learned it once has learned it everywhere.
+ * paging parameter is the whole of what these routes can refuse: they take no body, so there
+ * is no `malformed-body` to reach them and no Merchant's rule for them to break. It is one
+ * constant across every family a list belongs to for the same reason `contract.pageQuery` is
+ * one function — they refuse the identical things, and a client that learned it once has
+ * learned it everywhere.
  *
  * **A `limit` over the ceiling is here rather than clamped**, which is the decision ADR-0064
  * makes and the reason this response exists at all: a caller that asked for 5,000 and received
  * a hundred would read the short page as the end of the list.
+ *
+ * **A cursor from another list is here too, rather than under a `reason` of its own** (#183).
+ * Both mean *this value is not usable on this endpoint*, which is what `invalid` says, and a
+ * new `reason` would be permanent under ADR-0060 for a distinction no client can act on. The
+ * argument is in `db/page.ts`, beside {@link decodeCursor}.
  */
 const PAGE_QUERY_INVALID = json(
-  `\`limit\` is not a whole number between 1 and ${MAX_PAGE_LIMIT}, or \`after\` is not a cursor this API issued. A \`limit\` above the ceiling is refused rather than reduced to it.`,
+  `\`limit\` is not a whole number between 1 and ${MAX_PAGE_LIMIT}, or \`after\` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A \`limit\` above the ceiling is refused rather than reduced to it.`,
   contract.InvalidRequest,
 );
 
@@ -241,7 +247,7 @@ const listMerchantsRoute = createRoute({
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — who has access to this deployment, and what each of them may do. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.merchantRead)] as const,
-  request: { query: contract.PageQuery },
+  request: { query: contract.pageQuery("merchants") },
   responses: {
     200: json("A page of Merchants.", contract.MerchantList),
     400: PAGE_QUERY_INVALID,
@@ -305,7 +311,7 @@ const listRolesRoute = createRoute({
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — what this deployment may assign a colleague. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.merchantRead)] as const,
-  request: { query: contract.PageQuery },
+  request: { query: contract.pageQuery("roles") },
   responses: {
     200: json("A page of Roles.", contract.RoleList),
     400: PAGE_QUERY_INVALID,
@@ -591,7 +597,7 @@ const listProductsRoute = createRoute({
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
-  request: { query: contract.PageQuery },
+  request: { query: contract.pageQuery("products") },
   responses: {
     200: json("A page of Products.", contract.ProductList),
     400: PAGE_QUERY_INVALID,
@@ -983,7 +989,7 @@ const listApiKeysRoute = createRoute({
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time, revoked keys included. It carries no key value and no fragment of one — only a digest is stored, so there is nothing to show a second time. Pages exactly as the other lists do (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.apiKeyRead)] as const,
-  request: { query: contract.PageQuery },
+  request: { query: contract.pageQuery("api-keys") },
   responses: {
     200: json("A page of API keys, and whether each still works.", contract.ApiKeyList),
     400: PAGE_QUERY_INVALID,
@@ -1030,7 +1036,7 @@ const listOrdersRoute = createRoute({
   description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time, and without Line Items — open one for those. Follow \`nextCursor\` for the next page: this is the list that takes an insert from every Order a storefront places, and a cursor is what makes paging it during a busy hour show each Order exactly once (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.orderRead)] as const,
-  request: { query: contract.PageQuery },
+  request: { query: contract.pageQuery("orders") },
   responses: {
     200: json("A page of the Orders this Store has taken.", contract.OrderList),
     400: PAGE_QUERY_INVALID,

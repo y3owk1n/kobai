@@ -43,7 +43,10 @@ describe("the instant inside a cursor", () => {
     expect(rendered?.cast).not.toMatch(ISO_TO_THE_MICROSECOND);
     expect(rendered?.written).toMatch(ISO_TO_THE_MICROSECOND);
     expect(
-      decodeCursor(encodeCursor({ at: rendered?.written ?? "", id: SOME_ID })),
+      decodeCursor(
+        SOME_LIST,
+        encodeCursor(SOME_LIST, { at: rendered?.written ?? "", id: SOME_ID }),
+      ),
     ).toEqual({
       at: rendered?.written,
       id: SOME_ID,
@@ -70,3 +73,10 @@ describe("the instant inside a cursor", () => {
 
 /** Any identifier at all — this file is about the half of a cursor that is a timestamp. */
 const SOME_ID = "00000000-0000-4000-8000-000000000000";
+
+/**
+ * Any list at all, for the same reason — a cursor is written and read under one name and this
+ * file is not about which. That a cursor written under one name is refused under another is
+ * asserted where it can be asked of the routes themselves, in `http/pagination.test.ts`.
+ */
+const SOME_LIST = "products";
