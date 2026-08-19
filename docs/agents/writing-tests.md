@@ -32,6 +32,19 @@ never through `insert into core_role`, and that second Merchant goes through
 `sessionOf(response)` reads the session cookie off their sign-in response the way a browser
 would.
 
+**Neither of those two is a convention any more**, and the reason to hold it is not tidiness:
+a test that builds its Role with SQL is not exercising the surface a Merchant uses, so it
+passes just as well against a route that is broken, missing or gated wrongly — ADR-0010's
+argument for the Admin, applied to a test.
+`tests/a-role-is-made-through-the-route.test.ts` reads every test and every helper under a
+`testing/` or `tests/` directory and fails naming the file and the line that writes
+`core_role` or `core_merchant` with SQL. It bans `insert` alone, so
+`packages/core/src/db/updated-at.test.ts` keeps the `update core_role` that is ADR-0037's
+whole subject without an exemption anywhere — a ban narrow enough to need no allowlist is the
+shape to copy, since the first entry added to an allowlist is usually the one that should have
+made somebody think. `core_store` is deliberately outside it, because `store.test.ts` inserts
+a second Store on purpose and no route could arrange a violation of a singleton constraint.
+
 **`auth.test.ts` sweeps the whole admin surface** — every operation the generated description
 carries, called with no cookie, asserted 401 — so a route registered on the wrong half of
 `admin.ts` fails on the day it is written. Adding an admin route means moving the count that
