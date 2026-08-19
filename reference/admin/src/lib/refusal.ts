@@ -2,8 +2,10 @@ import type {
   ApiKeyNotFound,
   ApiKeyRefusal,
   CatalogRefusal,
-  components,
+  InvalidCredentials,
+  InvalidRequest,
   MerchantRefusal,
+  OrderRefusal,
   RoleRefusal,
   StoreRefusal,
 } from "@kobai/client";
@@ -175,12 +177,8 @@ export const catalogReasonOf = narrowing(CATALOG_REASONS);
  * A family of one is still written as a `Record` rather than compared against the string:
  * the Order screen that will one day have to tell `order-not-found` from whatever
  * `GET /admin/orders/{id}` grows next should hear it from the compiler, not from a Merchant.
- *
- * `OrderRefusal` is reached through `components` because `@kobai/client` does not re-export
- * it by name. That is the escape hatch the client documents for exactly this, and it narrows
- * identically — the union is the generated one either way.
  */
-const ORDER_REASONS: Record<components["schemas"]["OrderRefusal"]["reason"], true> = {
+const ORDER_REASONS: Record<OrderRefusal["reason"], true> = {
   "order-not-found": true,
 };
 
@@ -302,8 +300,7 @@ export function isApiKeyRejected(refusal: unknown): boolean {
  * a reason added to **either** still has no key here and still fails the build.
  */
 const SIGN_IN_REASONS: Record<
-  | components["schemas"]["InvalidCredentials"]["reason"]
-  | components["schemas"]["InvalidRequest"]["reason"],
+  InvalidCredentials["reason"] | InvalidRequest["reason"],
   true
 > = {
   "invalid-credentials": true,
