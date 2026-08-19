@@ -299,7 +299,7 @@ and on every one added after them, because a surface where some lists page and o
 one a client has to learn twice. A new list route therefore takes
 `request: { query: contract.pageQuery("<its own list>") }`, declares `400: PAGE_QUERY_INVALID`,
 answers with `{ …items, nextCursor: page.nextCursor }`, and reads its page through
-`packages/core/src/db/page.ts`. Six things about it are decisions rather than implementation:
+`packages/core/src/db/page.ts`. Seven things about it are decisions rather than implementation:
 
 - **`nextCursor` is absent on the last page and that is the only end-of-list signal.** A short
   page is not one — a filtered page can be short and not last — so a reader fetches `limit + 1`
@@ -307,9 +307,20 @@ answers with `{ …items, nextCursor: page.nextCursor }`, and reads its page thr
   count would be a second query over the whole table to answer a question with two answers.
 - **The ordering ends in `id`, and the cursor is the same pair.** #132 already paid for a tie
   once, where it made the upgrade gate red *sometimes*; at a page boundary a tie skips or
-  repeats a row instead of merely reordering it. `0028` indexes `(created_at, id)` on the three
-  tables — ascending though every reader wants descending, because one ordering reversed whole
-  is a backwards scan of the same index.
+  repeats a row instead of merely reordering it.
+- **Every table a list pages carries a `(created_at, id)` index, and a sweep says so** (#219).
+  Ascending though every reader wants descending, because one ordering reversed whole is a
+  backwards scan of the same index. It used to be a convention: `0028` indexed the three tables
+  that paged when it was written, #173's `roles` and `merchants` then shipped without one from
+  an ordinary declaration and a green gate, and ADR-0064's own argument — that the query stays
+  on an index rather than sorting the table — was the clause nothing checked. `db/schema.test.ts`
+  checks it now, over a `Record<PagedList, …>` so that a list added without one is a **compile
+  error** rather than a silent exemption, and it asks `indexesOf` rather than
+  `indexedColumnsOf` because the flattened answer cannot tell a composite index from two
+  single-column ones that cover the same two names — nor, without the direction and the `where`
+  clause that inspector also reports, from the pair declared `desc` or an index over part of the
+  table. **Declaring the index in `schema.ts` is therefore part of adding a list route**, and
+  a plain `CREATE INDEX` is not ADR-0038's hazard — see [migrations](migrations.md).
 - **The cursor carries the timestamp as Postgres's own text, never a `Date`.** A `Date` holds
   milliseconds and `now()` holds microseconds, so a cursor round-tripped through one would fall
   on the wrong side of its own comparison and hide every row sharing that millisecond. That is

@@ -53,6 +53,7 @@ export { testPaymentProvider } from "./payments.ts";
 export {
   type ColumnFact,
   type ForeignKeyFact,
+  type IndexFact,
   inspectSchema,
   type MigrationTrackingFact,
   type SchemaInspector,

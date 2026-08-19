@@ -1,0 +1,2 @@
+CREATE INDEX "core_merchant_created_at_id_idx" ON "core_merchant" USING btree ("created_at","id");--> statement-breakpoint
+CREATE INDEX "core_role_created_at_id_idx" ON "core_role" USING btree ("created_at","id");

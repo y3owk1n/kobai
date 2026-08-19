@@ -79,19 +79,28 @@ export type StoreRow = typeof store.$inferSelect;
  * There is no Store reference and no store id. A Role belongs to the deployment, and the
  * deployment is one Store (ADR-0005).
  */
-export const role = pgTable("core_role", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  /** Stable and human-meaningful — `owner`. What a Merchant is created against. */
-  name: text("name").notNull().unique(),
-  /**
-   * The permission set. `text[]` rather than a join table, because a set is what it is: it
-   * is read whole on every request and never queried across Roles.
-   */
-  permissions: text("permissions").array().notNull().default(sql`'{}'::text[]`),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const role = pgTable(
+  "core_role",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Stable and human-meaningful — `owner`. What a Merchant is created against. */
+    name: text("name").notNull().unique(),
+    /**
+     * The permission set. `text[]` rather than a join table, because a set is what it is: it
+     * is read whole on every request and never queried across Roles.
+     */
+    permissions: text("permissions").array().notNull().default(sql`'{}'::text[]`),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // `GET /admin/roles` pages by keyset (ADR-0064), and a deployment's Roles being few is not
+    // the reason to skip this: the index is the clause of that contract the query rests on, and
+    // `db/schema.test.ts` sweeps every paged list for it.
+    index("core_role_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
 
 export type RoleRow = typeof role.$inferSelect;
 
@@ -105,25 +114,32 @@ export type RoleRow = typeof role.$inferSelect;
  *
  * No Store reference and no store id, for the same reason as the Role above.
  */
-export const merchant = pgTable("core_merchant", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  /** Normalised to lowercase before it is written, so `unique` means what it appears to. */
-  email: text("email").notNull().unique(),
-  /**
-   * An argon2id digest, and never the password. The column holds a value that cannot be
-   * reversed and is useless replayed against anything else — a database dump discloses no
-   * credential.
-   */
-  passwordHash: text("password_hash").notNull(),
-  roleId: uuid("role_id")
-    .notNull()
-    // `restrict`: deleting a Role out from under the Merchants holding it would leave them
-    // authenticated with no permissions at all, which is a confusing way to lose access.
-    .references(() => role.id, { onDelete: "restrict" }),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const merchant = pgTable(
+  "core_merchant",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Normalised to lowercase before it is written, so `unique` means what it appears to. */
+    email: text("email").notNull().unique(),
+    /**
+     * An argon2id digest, and never the password. The column holds a value that cannot be
+     * reversed and is useless replayed against anything else — a database dump discloses no
+     * credential.
+     */
+    passwordHash: text("password_hash").notNull(),
+    roleId: uuid("role_id")
+      .notNull()
+      // `restrict`: deleting a Role out from under the Merchants holding it would leave them
+      // authenticated with no permissions at all, which is a confusing way to lose access.
+      .references(() => role.id, { onDelete: "restrict" }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // `GET /admin/merchants` pages by keyset, exactly as the Roles above (ADR-0064).
+    index("core_merchant_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
 
 export type MerchantRow = typeof merchant.$inferSelect;
 

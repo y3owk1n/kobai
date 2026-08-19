@@ -239,6 +239,13 @@
       "when": 1787148522134,
       "tag": "0033_seed_cart_read_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787153656203,
+      "tag": "0034_majestic_blob",
+      "breakpoints": true
     }
   ]
 }
