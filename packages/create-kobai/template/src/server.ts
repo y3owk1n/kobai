@@ -1,8 +1,12 @@
 import { serve } from "@hono/node-server";
 import { consoleLogger, createKobai } from "@kobai/core";
-import config from "../kobai.config.ts";
+import { paymentIntentIdOfEvent } from "@kobai/plugin-stripe";
+import config, { bank } from "../kobai.config.ts";
 import { ADMIN_PATH, createAdminAssets } from "./admin-assets.ts";
-import { createProjectFetch } from "./app.ts";
+import { createProjectFetch, type ProjectRoutes } from "./app.ts";
+import { createRedirectPaymentRoutes } from "./payments/redirect.ts";
+import { stripeRedirectPayments } from "./payments/stripe.ts";
+import { createStripeWebhookRoute } from "./payments/stripe-webhook.ts";
 
 /**
  * The reference Project's entrypoint — the whole of what a Project has to write to run
@@ -50,44 +54,69 @@ const kobai = createKobai({
 });
 
 /**
- * One process serves both. The Admin is a directory of built files at `/admin-ui`, and every
- * other path is kobai's — one container, one origin, and so no CORS anywhere (ADR-0010).
+ * One process serves all of it. The Admin is a directory of built files at `/admin-ui`, this
+ * deployment's payment routes are at `/payments/…` and `/webhooks/…`, and every other path is
+ * kobai's — one container, one origin, and so no CORS anywhere (ADR-0010).
  *
- * **No redirect payment routes, because this deployment takes no redirect payments.** It
- * settles out of band — see `payments` in `kobai.config.ts` and `src/payments/manual.ts` — so
- * there is no bank to send a Shopper to and nothing for `src/payments/redirect.ts` to start a
- * payment with. Mounting the routes against a provider this deployment has not got would be a
- * route that answers for a bank that does not exist, which is the same judgement Core makes
- * about a deployment with no Payment Provider (ADR-0053): it boots, it serves, and the thing
- * it cannot do is simply not there.
+ * **The payment routes are mounted only on a deployment that takes payments at a bank**, which
+ * is the one that was given Stripe's settings — see `bank` in `kobai.config.ts`. A deployment
+ * given none settles out of band through `src/payments/manual.ts` and mounts nothing, so there
+ * is no route standing ready to answer for a provider that does not exist and `/payments/…`
+ * is kobai's 404 like any other path kobai does not serve. It boots, it serves its catalog and
+ * its Admin, and the thing it cannot do is simply not there — the same judgement Core makes
+ * about a deployment with no Payment Provider at all (ADR-0053).
  *
- * A deployment that *does* take them passes them here, and does it in one place:
+ * **They are two routes because they are two things**, both this Project's own (ADR-0070):
  *
- * ```ts
- * const bank = stripePayments({ secretKey: process.env.STRIPE_SECRET_KEY ?? "" });
- * const fetch = createProjectFetch(
- *   kobai,
- *   createAdminAssets(),
- *   createRedirectPaymentRoutes({
- *     kobai,
- *     apiKey: process.env.KOBAI_STORE_API_KEY ?? "",
- *     payments: {
- *       startPayment: bank.startPayment,
- *       paymentOfCallback: (event) => …,
- *       refundUnplacedPayment: (asked) =>
- *         bank.refundUnplacedPayment({ ...asked, db: kobai.db }).then(() => undefined),
- *     },
- *   }),
- * );
- * ```
+ * - `src/payments/redirect.ts` is what a storefront and a returning Shopper call. It quotes the
+ *   Cart, starts the payment for kobai's own figure, and settles by calling
+ *   `POST /store/orders` like any other client.
+ * - `src/payments/stripe-webhook.ts` is what Stripe calls, whether or not the Shopper ever comes
+ *   back — the ordinary case. It verifies the signature before it does anything else, and then
+ *   settles through *the same call*, under the same `Idempotency-Key`, so the two race into one
+ *   Order and neither has to know about the other. A Plugin could not have mounted either:
+ *   routes are not one of ADR-0003's five Extension Points, and signature verification and
+ *   logging are a deployment's own.
  *
- * — with the same object in `kobai.config.ts`'s `payments.provider`, because a bank that starts
- * a payment and a Payment Provider that confirms it have to be the same system or `charge` is
- * confirming somebody else's money. The gate boots this Project exactly that way with the fake
- * bank in `src/payments/fake-bank.ts`, which is what makes ADR-0070's abandonment and
- * lapsed-hold paths testable at all.
+ * `kobai.db` is passed to the Plugin's refund here rather than carried around, because the
+ * handle does not exist until `createKobai` has run and `kobai.config.ts` is read before that.
  */
-const fetch = createProjectFetch(kobai, createAdminAssets());
+if (bank !== null && (process.env.KOBAI_STORE_API_KEY ?? "") === "") {
+  // A boot that says so, because the alternative is a Shopper's money at the bank and a
+  // settlement that answers 503. It is not a reason to exit: the catalog and the Admin are
+  // unaffected, and the key can be minted in the Admin and the container restarted.
+  consoleLogger.error("this deployment cannot settle the payments it takes", {
+    reason:
+      "Stripe is configured and KOBAI_STORE_API_KEY is not, so nothing can place the Orders these routes settle",
+    set: "KOBAI_STORE_API_KEY, to a secret store API key from the Admin, then restart",
+  });
+}
+
+const paymentRoutes: ProjectRoutes[] = [];
+if (bank !== null) {
+  const payments = createRedirectPaymentRoutes({
+    kobai,
+    apiKey: process.env.KOBAI_STORE_API_KEY ?? "",
+    payments: stripeRedirectPayments({
+      stripe: bank.provider,
+      db: kobai.db,
+      paymentPageUrl: bank.configuration.paymentPageUrl,
+    }),
+  });
+
+  paymentRoutes.push(
+    payments,
+    createStripeWebhookRoute({
+      secret: bank.configuration.webhookSecret,
+      referenceOf: paymentIntentIdOfEvent,
+      // The same call, handed over rather than reimplemented — which is what makes the
+      // Shopper's return and Stripe's webhook one intention under one `Idempotency-Key`.
+      settle: payments.settle,
+    }),
+  );
+}
+
+const fetch = createProjectFetch(kobai, createAdminAssets(), ...paymentRoutes);
 
 let boundPort = port;
 const server = serve({ fetch, port }, (address) => {

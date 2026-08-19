@@ -94,6 +94,13 @@ export function createFakeBank(): FakeBank {
     name: "fake-bank",
 
     /**
+     * The key this bank reads its own reference back under — this Project's own, because this
+     * bank is this Project's own source. A provider from a Plugin names the key that Plugin
+     * reads: `@kobai/plugin-stripe`'s is `stripePaymentIntent`.
+     */
+    referenceKey: PAYMENT_REFERENCE_KEY,
+
+    /**
      * **Confirms that the money left, and never takes it.** That is what a redirect method is:
      * by the time kobai asks, the Shopper has authorised at their bank and the funds are gone,
      * so this reports what happened rather than making it happen — which is exactly why

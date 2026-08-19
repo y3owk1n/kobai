@@ -1,5 +1,17 @@
 # Core owns the Payment record and ships no provider
 
+> **Amended by [ADR-0070](./0070-a-payment-the-shopper-completes-at-their-bank.md).** Core still
+> ships no provider and still implements the interface nowhere; what has changed is the sentence
+> below saying "a Stripe provider is a later spec". That spec shipped as `@kobai/plugin-stripe`,
+> so the reference Project now has **two** and picks between them from its own environment: given
+> Stripe's settings it takes payments a Shopper completes at their bank, and given none it settles
+> out of band through `reference/src/payments/manual.ts` as it always has. **Both are working
+> deployments**, which is this record's own rule applied one level out — misconfiguring payments
+> must not take a Store down any more than not configuring them at all does. `manual` is not
+> superseded: it is what a deployment with no bank uses, it is what a Developer's scaffolded
+> Project starts life with, and it is the implementation from a Project's **own source** that the
+> upgrade gate carries across a Core major.
+
 Payment had no decision recorded anywhere. It appears in ADR-0028's Core list and in its
 Plugin list **neither** time, and its only mentions in the whole repository are as an example
 — "payment capture timing" in ADR-0003, "capturing a payment" in `CONTEXT.md`'s definition of

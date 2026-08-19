@@ -11,6 +11,10 @@ import {
   createRedirectPaymentRoutes,
   REDIRECT_RETURN_PATH,
 } from "./payments/redirect.ts";
+import {
+  createStripeWebhookRoute,
+  STRIPE_WEBHOOK_PATH,
+} from "./payments/stripe-webhook.ts";
 
 /**
  * One process serving the Admin and the API, dispatched in-process like everything else.
@@ -108,19 +112,55 @@ describe("the Project's one origin", () => {
     expect(admin.status).toBe(401);
   });
 
-  it("leaves `/payments` to kobai when this deployment takes no redirect payments", async () => {
+  it("serves its provider's webhook, and refuses one nobody signed", async () => {
+    // The second route this Project mounts for payments, and it is mounted here rather than
+    // by the Plugin because a Plugin cannot add one — which is the right shape: the signature
+    // is a deployment's own trust decision (ADR-0070). What `app.ts` decides is only that the
+    // path is this Project's; the route itself answers for it.
+    await using kobai = await createTestKobai();
+    const fetch = createProjectFetch(
+      kobai,
+      await built({ "index.html": INDEX }),
+      undefined,
+      createStripeWebhookRoute({
+        secret: "whsec_test_123",
+        referenceOf: () => null,
+        settle: async () => new Response(null, { status: 500 }),
+      }),
+    );
+
+    const unsigned = await fetch(
+      new Request(`http://kobai.test${STRIPE_WEBHOOK_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({ type: "payment_intent.succeeded" }),
+      }),
+    );
+    const store = await fetch(new Request("http://kobai.test/store/carts"));
+
+    expect(unsigned.status).toBe(400);
+    await expect(unsigned.json()).resolves.toMatchObject({ reason: "signature-invalid" });
+    // And kobai's own surface is untouched by a Project having mounted a second path.
+    expect(store.status).toBe(401);
+  });
+
+  it("leaves `/payments` and `/webhooks` to kobai when this deployment takes no redirect payments", async () => {
     // A deployment with no bank to redirect to mounts nothing, so there is no route standing
-    // ready to answer for a provider that does not exist — and the path is kobai's 404 like any
-    // other path kobai does not serve.
+    // ready to answer for a provider that does not exist — and the paths are kobai's 404 like
+    // any other path kobai does not serve.
     await using kobai = await createTestKobai();
     const fetch = createProjectFetch(kobai, await built({ "index.html": INDEX }));
 
     const response = await fetch(
       new Request(`http://kobai.test${REDIRECT_RETURN_PATH}`, { method: "POST" }),
     );
+    const webhook = await fetch(
+      new Request(`http://kobai.test${STRIPE_WEBHOOK_PATH}`, { method: "POST" }),
+    );
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({ reason: "not-found" });
+    expect(webhook.status).toBe(404);
+    await expect(webhook.json()).resolves.toMatchObject({ reason: "not-found" });
   });
 
   it("sends no CORS header, because there is no second origin to send one about", async () => {

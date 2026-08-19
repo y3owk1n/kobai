@@ -5,10 +5,35 @@ import {
   madeToOrderMigrationSet,
 } from "@kobai/plugin-made-to-order";
 import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
-import { stripeMigrationSet } from "@kobai/plugin-stripe";
+import { stripeMigrationSet, stripePayments } from "@kobai/plugin-stripe";
 import { projectMigrationSet } from "./src/migration-set.ts";
 import { manualPaymentProvider } from "./src/payments/manual.ts";
+import { stripeConfiguration } from "./src/payments/stripe.ts";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
+
+/**
+ * **Stripe, if this deployment has been given it.**
+ *
+ * All three of its settings or none — see `stripeConfiguration`, and `.env.example` for what
+ * they are. A deployment given none is the ordinary one: it settles out of band through
+ * `src/payments/manual.ts`, mounts no redirect routes and no webhook, and is a working Store
+ * rather than a broken one. That is the same judgement Core makes about a deployment with no
+ * Payment Provider at all (ADR-0053), and it is what lets kobai's own gate — which has no
+ * Stripe secret and must never acquire one — run against this Project unchanged.
+ *
+ * Exported because `src/server.ts` needs the *same object*, not another one: the thing that
+ * starts a payment before the redirect and the Payment Provider that confirms it afterwards
+ * have to be one system, or `charge` is confirming somebody else's money (ADR-0070).
+ */
+const stripe = stripeConfiguration(process.env);
+
+export const bank =
+  stripe === null
+    ? null
+    : {
+        configuration: stripe,
+        provider: stripePayments({ secretKey: stripe.secretKey }),
+      };
 
 /**
  * Everything this Project has customised, in one file.
@@ -49,14 +74,13 @@ export default defineKobaiConfig({
    * holds what this Store's Shoppers asked for — see `fulfilment` and `place-order` below for
    * the two other lines that Plugin needs before it does anything at all.
    *
-   * `@kobai/plugin-stripe` is the one whose set is wired here **without** its provider being
-   * wired below, and that is not an oversight. This Store settles out of band — see `payments`
-   * — so nothing in this repository charges a card, and a Plugin's tables are still the
-   * Project's to create: the migration set is what a deployment applies, and applying it is
-   * how a Project's database is ready for the day somebody swaps `manual` for
-   * `stripePayments({ … })` and nothing else. It is also the difference between a Plugin whose
-   * schema is exercised by kobai's own gate and one whose tables no deployment here ever
-   * creates (ADR-0029).
+   * `@kobai/plugin-stripe` is the one whose set is wired here **whether or not its provider is
+   * wired below**, and that is not an oversight. Whether this deployment takes cards is a
+   * question about its environment — see `payments` — and a Plugin's tables are the Project's
+   * to create either way: the migration set is what a deployment applies, and applying it is
+   * how a database is ready for the day somebody fills in `STRIPE_SECRET_KEY` and restarts.
+   * It is also the difference between a Plugin whose schema is exercised by kobai's own gate
+   * and one whose tables no deployment here ever creates (ADR-0029).
    *
    * `projectMigrationSet` is this Project's **own**, covering the tables in `src/db/schema.ts`
    * that neither Core nor any Plugin has heard of. It is the same kind of object, applied by
@@ -128,15 +152,20 @@ export default defineKobaiConfig({
    * be bought from is still a Store worth reading, and only a database that cannot be migrated
    * stops a boot (ADR-0048).
    *
-   * **This is also the line that decides whether this Store can take a bank redirect, and today
-   * it says no.** A payment the Shopper completes at their bank is started by the *Project*
-   * before the redirect and confirmed by the Payment Provider afterwards (ADR-0070), so the two
-   * have to be one object: `manual` starts nothing, so `src/server.ts` mounts no redirect
-   * routes. `src/payments/fake-bank.ts` is an object that does both, and the gate boots this
-   * Project with it in place of `manual` — which is how abandonment and a lapsed hold are
-   * staged at all, and how `stripePayments({ … })` will arrive here.
+   * **This is also the line that decides whether this Store can take a bank redirect**, and the
+   * answer is a deployment's rather than this file's. A payment the Shopper completes at their
+   * bank is started by the *Project* before the redirect and confirmed by the Payment Provider
+   * afterwards (ADR-0070), so the two have to be one object — which is exactly what `bank`
+   * above is. Given Stripe's settings this Store takes cards, FPX and GrabPay through one
+   * integration, and `src/server.ts` mounts the routes that settle them; given none it settles
+   * out of band, as it always has, and mounts nothing. **Both are working deployments**, which
+   * is the whole of story 17: misconfiguring payments must not take a Store down.
+   *
+   * `src/payments/fake-bank.ts` is a third object of the same shape, and it is why the two
+   * interesting paths are testable at all: the gate boots this Project with it in place of
+   * either, because Stripe's sandbox cannot be told to abandon or to let a hold lapse.
    */
-  payments: { provider: manualPaymentProvider },
+  payments: { provider: bank?.provider ?? manualPaymentProvider },
 
   /**
    * Dependency substitution again, and this time the implementation comes from a **Plugin**

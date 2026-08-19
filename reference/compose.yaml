@@ -61,6 +61,15 @@ services:
       # nobody can administer it. Set both in `.env`; see `.env.example`.
       - KOBAI_INITIAL_MERCHANT_EMAIL
       - KOBAI_INITIAL_MERCHANT_PASSWORD
+      # What this deployment takes payments a Shopper completes at their bank with, and the
+      # key its own routes place the resulting Orders with. Bare names for the same reason as
+      # the two above: unset has to reach the application as unset, because "this deployment
+      # takes no payments at a bank" is an answer it reports rather than a blank it has to
+      # interpret. Set them in `.env`; see `.env.example`, which is the whole list.
+      - KOBAI_STORE_API_KEY
+      - STRIPE_SECRET_KEY
+      - STRIPE_WEBHOOK_SECRET
+      - STRIPE_PAYMENT_PAGE_URL
     ports:
       - "${PORT:-3000}:3000"
     depends_on:

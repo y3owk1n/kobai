@@ -29,13 +29,20 @@ import type { ProjectFetch } from "../app.ts";
  */
 
 /**
- * The key the provider's reference travels under, in the **body** half of ADR-0013's open
- * context.
+ * The key this Project's **own** providers read their reference back under, in the **body**
+ * half of ADR-0013's open context — `src/payments/fake-bank.ts` is the one that does.
  *
  * Never the query string, and that is a decision rather than a style (#138). A reference is what
  * `charge` confirms a payment with, so it is a credential — and a query string is written to
  * access logs, to proxy logs, and to the `Referer` of every image a confirmation page loads. The
  * body half exists for exactly this, and `POST /store/orders` refuses a key that arrives in both.
+ *
+ * **Which key it is, though, is the provider's to say** — see {@link RedirectPayments.referenceKey}.
+ * The open context reaches a Payment Provider verbatim (ADR-0013), so a Plugin that ships a
+ * provider ships the key it reads: `@kobai/plugin-stripe` reads `stripePaymentIntent`. A Project
+ * that made this constant the answer for everybody would be settling every payment with a key
+ * half its providers have never heard of, which reads as `payment-declined` on a purchase whose
+ * money has already left the Shopper's bank.
  */
 export const PAYMENT_REFERENCE_KEY = "redirectPaymentReference";
 
@@ -101,6 +108,18 @@ export type SettlingPayment = {
  * is a closure where this Project mounts the routes rather than an argument it carries around.
  */
 export type RedirectPayments = {
+  /**
+   * The key this provider reads its own reference back under, on `POST /store/orders`.
+   *
+   * **A provider names it, because a provider is what reads it.** kobai passes the open
+   * context to a Payment Provider verbatim and interprets none of it (ADR-0013), so the key is
+   * a matter between the thing that starts a payment and the thing that confirms it — and for
+   * a provider from a Plugin, that Plugin has already chosen: `@kobai/plugin-stripe` reads
+   * `stripePaymentIntent`. Sending anything else would place the Order without a reference on
+   * it, which arrives as `payment-declined` for a payment that has *already* taken the
+   * Shopper's money at their bank.
+   */
+  readonly referenceKey: string;
   /**
    * Start a payment for what the Cart comes to, and say where to send the Shopper.
    *
@@ -174,6 +193,20 @@ export type RedirectPaymentOptions = {
 export type RedirectPaymentRoutes = {
   claims(pathname: string): boolean;
   fetch(request: Request): Promise<Response>;
+  /**
+   * **Settle a payment by its reference — the one call, reached from anywhere.**
+   *
+   * The Shopper's return and this provider's callback both end here, and so does a route a
+   * deployment mounts for a provider that signs its own webhooks — `/webhooks/stripe` is that
+   * route in this Project (ADR-0070). What differs between them is how the *reference* is
+   * read out of a request, which is the only thing they may decide for themselves: everything
+   * the placement then names is read back from the provider, and the `Idempotency-Key` is
+   * derived from the reference, so however many of them arrive there is exactly one Order.
+   *
+   * The `Request` is only ever a base for the URLs kobai is called on; nothing is read out of
+   * it, because a caller that could add to the placement would be a second body under one key.
+   */
+  settle(reference: string, request: Request): Promise<Response>;
 };
 
 export function createRedirectPaymentRoutes(
@@ -196,13 +229,7 @@ export function createRedirectPaymentRoutes(
           "Every route here is a POST: each carries a payment reference, and a reference belongs on a body rather than in a query string.",
         );
       }
-      if (options.apiKey === "") {
-        return refuse(
-          503,
-          "no-store-key",
-          "This deployment was given no store API key, so it cannot place the Orders it settles. Pass a secret key from the Admin as `apiKey` where these routes are mounted — see src/server.ts.",
-        );
-      }
+      if (options.apiKey === "") return noStoreKey();
 
       const body = await readJson(request);
       if (body === undefined) {
@@ -213,7 +240,24 @@ export function createRedirectPaymentRoutes(
       if (pathname === REDIRECT_START_PATH) return start(options, request, body);
       return settleRequest(options, request, body, pathname);
     },
+
+    async settle(reference, request) {
+      // The same refusal `fetch` makes, because this entry is reached without it: a route
+      // mounted elsewhere in this Project settles through here, and a deployment with no
+      // store key can no more place an Order for that caller than for a returning browser.
+      if (options.apiKey === "") return noStoreKey();
+      return settleByReference(options, request, reference);
+    },
   };
+}
+
+/** This deployment was given no store API key, so it cannot place the Orders it settles. */
+function noStoreKey(): Response {
+  return refuse(
+    503,
+    "no-store-key",
+    "This deployment was given no store API key, so it cannot place the Orders it settles. Pass a secret key from the Admin as `apiKey` where these routes are mounted — see src/server.ts.",
+  );
 }
 
 /**
@@ -279,12 +323,27 @@ async function start(
     });
   }
 
-  const started = await options.payments.startPayment({
-    cartId,
-    metadata,
-    amount: quote.total,
-    currency: quote.currency,
-  });
+  let started: StartedRedirectPayment;
+  try {
+    started = await options.payments.startPayment({
+      cartId,
+      metadata,
+      amount: quote.total,
+      currency: quote.currency,
+    });
+  } catch (cause) {
+    // **A provider that will not start a payment is answered, not thrown out of.** It is the
+    // one call here that reaches somebody else's system, so it fails for reasons that are
+    // ordinary — an unreachable API, a key that has been revoked, a context too large for the
+    // provider to carry back (`@kobai/plugin-stripe` refuses that outright rather than
+    // truncating it, since a payment quoted with a context and placed without one is two
+    // figures for one purchase). No money has moved and no Order exists, so what the
+    // storefront needs is the reason; a bare 500 from this Project would name nothing at all.
+    return json(502, {
+      error: `No payment was started for this Cart: ${cause instanceof Error ? cause.message : String(cause)}`,
+      reason: "payment-not-started",
+    });
+  }
 
   return json(200, {
     cartId,
@@ -338,6 +397,23 @@ async function settleRequest(
         );
   }
 
+  return settleByReference(options, request, reference);
+}
+
+/**
+ * A reference, and everything else asked of the provider — what every caller ends up in.
+ *
+ * Separate from {@link settleRequest} because reading a reference out of a request is the
+ * *only* thing a caller decides. A route mounted elsewhere in this Project — one that verifies
+ * a provider's own signature, say — reaches this through
+ * {@link RedirectPaymentRoutes.settle} and gets the identical call, which is what makes it the
+ * same intention rather than a second implementation of one.
+ */
+async function settleByReference(
+  options: RedirectPaymentOptions,
+  request: Request,
+  reference: string,
+): Promise<Response> {
   const settling = await options.payments.paymentOf(reference);
   if (settling === null) {
     return refuse(
@@ -391,10 +467,11 @@ async function settleRedirectPayment(
       },
       // The reference on the **body** half of the open context, never the query string (#138),
       // beside the context the payment was quoted with — so a Step that priced on a lead time
-      // when the figure was worked out prices on the same one now (ADR-0077).
+      // when the figure was worked out prices on the same one now (ADR-0077). Under the key
+      // the *provider* reads it back by, which is the provider's to name and not this route's.
       body: JSON.stringify({
         cartId,
-        metadata: { ...metadata, [PAYMENT_REFERENCE_KEY]: reference },
+        metadata: { ...metadata, [options.payments.referenceKey]: reference },
       }),
     }),
   );

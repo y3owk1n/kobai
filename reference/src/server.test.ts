@@ -166,6 +166,67 @@ describe("the reference Project's entrypoint", () => {
     expect(admin.status).toBe(401);
   });
 
+  it("serves no payment routes at all when nobody has configured a bank", async () => {
+    // Story 17 of the redirect spec, at the seam that can actually answer it: the *process*,
+    // booted with an environment that says nothing about Stripe — which is every checkout and
+    // every CI run. It boots, it serves, and the routes that would settle a bank redirect are
+    // simply not there, so `/payments/…` is kobai's own 404 like any other path kobai does not
+    // serve. Nothing was asked of Stripe, because nothing was wired to ask.
+    database = await createTestDatabase();
+    child = start(database.url);
+    const output = capture(child);
+
+    const listening = await waitForLog(child, output, "listening");
+    await waitForLog(child, output, "ready");
+
+    const catalog = await fetch(`http://127.0.0.1:${listening.port}/store/products`);
+    const settle = await fetch(`http://127.0.0.1:${listening.port}/payments/redirect`, {
+      method: "POST",
+    });
+    const webhook = await fetch(`http://127.0.0.1:${listening.port}/webhooks/stripe`, {
+      method: "POST",
+    });
+
+    // The catalog is closed by a key rather than missing — a Store nobody can buy from is
+    // still a Store worth reading (ADR-0053), and this is it serving.
+    expect(catalog.status).toBe(401);
+    expect(settle.status).toBe(404);
+    expect(webhook.status).toBe(404);
+    expect(output()).not.toContain("half configured");
+  });
+
+  it("boots and serves with Stripe configured, and still calls nothing", async () => {
+    // The other half: given all three settings this deployment mounts both payment routes and
+    // takes cards, FPX and GrabPay through one integration — and *booting* asks Stripe
+    // nothing, which is what makes it safe for a deployment to be configured before its first
+    // purchase. The key here is not a real one, and nothing in this test would work if it had
+    // to be.
+    database = await createTestDatabase();
+    child = start(database.url, {
+      STRIPE_SECRET_KEY: "sk_test_not_a_real_key",
+      STRIPE_WEBHOOK_SECRET: "whsec_test_not_a_real_secret",
+      STRIPE_PAYMENT_PAGE_URL: "https://storefront.test/checkout/pay",
+    });
+    const output = capture(child);
+
+    const listening = await waitForLog(child, output, "listening");
+    await waitForLog(child, output, "ready");
+
+    const health = await fetch(`http://127.0.0.1:${listening.port}/health`);
+    const webhook = await fetch(`http://127.0.0.1:${listening.port}/webhooks/stripe`, {
+      method: "POST",
+      body: JSON.stringify({ type: "payment_intent.succeeded" }),
+    });
+
+    expect(health.status).toBe(200);
+    // Mounted, and refusing an unsigned request before it reads anything out of it.
+    expect(webhook.status).toBe(400);
+    await expect(webhook.json()).resolves.toMatchObject({ reason: "signature-invalid" });
+    // And it says, once, that it cannot place what it settles: this deployment was given a
+    // bank and no store key, which is a real half-configuration and not a crash.
+    expect(output()).toContain("cannot settle the payments it takes");
+  });
+
   it("reports a database that is not up yet as booting, not as a failed migration", async () => {
     // The other half of the test below, and the one #80 was about. A Postgres that has not
     // finished starting used to reach `migrate()` and come back as *Core's migration set
