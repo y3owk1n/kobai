@@ -196,11 +196,19 @@ the invalid state has to be set twice (`Field` reads `data-invalid`, the `Input`
 are conventions rather than one screen's choice, and are deliberately not numbered here — the
 list grows with every screen, and a count in prose is the tax ADR-0049 removed from the tests:
 
-- **Every list pages through the cursor, with the cursor in the URL** — Products, Orders and
-  API keys alike, through the one `components/pager.tsx`. A list route that took no page would
+- **Every list pages through the cursor, with the cursor in the URL** — Products, Orders, Carts
+  and API keys alike, through the one `components/pager.tsx`. A list route that took no page would
   be a screen on which the older half of a Store cannot be reached, and API keys is the
   non-obvious one: the storefront price preview mints a publishable key per browser session
   that has none, so they accumulate without anybody minting one on purpose.
+  **A list that narrows keeps its narrowing across a page** (#228). The pager moves the cursor
+  and carries the rest of the query string over untouched, because one that rebuilt the search
+  out of the cursor alone answers the second page of the *whole* table — which looks exactly
+  like paging working, and is a different question being answered. Carts is the list that has a
+  narrowing today (`?state=live|expired|spent`, ADR-0071), and the filter is a set of **links**
+  rather than a control with a value, for the reason the cursor is in the URL at all: each state
+  is an address a Merchant can send and a refresh lands on. Choosing one **drops** the cursor,
+  since a cursor locates a page of the list that issued it.
 - **A closed refusal family is narrowed, never matched on prose.** `lib/refusal.ts` holds one
   `Record` per family keyed by that family's own union and a `narrowing()` built from it, so a
   `reason` added in Core has no key, does not compile, and reddens the Admin in the same commit

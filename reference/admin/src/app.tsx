@@ -19,6 +19,8 @@ import { useSections } from "@/lib/sections";
 import { KobaiProvider, useSession } from "@/lib/session";
 import { ThemeProvider } from "@/lib/theme";
 import { ApiKeys } from "@/screens/api-keys";
+import { CartScreen } from "@/screens/cart";
+import { Carts } from "@/screens/carts";
 import { Merchants } from "@/screens/merchants";
 import { OrderScreen } from "@/screens/order";
 import { Orders } from "@/screens/orders";
@@ -129,6 +131,8 @@ function Admin() {
         <Route path="products/:id" element={<ProductScreen />} />
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderScreen />} />
+        <Route path="carts" element={<Carts />} />
+        <Route path="carts/:id" element={<CartScreen />} />
         <Route path="api-keys" element={<ApiKeys />} />
         <Route path="merchants" element={<Merchants />} />
         <Route path="roles" element={<Roles />} />

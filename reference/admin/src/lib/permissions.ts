@@ -44,6 +44,7 @@ export const PERMISSIONS = {
   catalogRead: "catalog:read",
   catalogWrite: "catalog:write",
   orderRead: "order:read",
+  cartRead: "cart:read",
   apiKeyRead: "api-key:read",
   apiKeyWrite: "api-key:write",
   merchantRead: "merchant:read",

@@ -855,13 +855,21 @@ describe("the command palette", () => {
     // what makes it a way *round* the sidebar rather than a search of it.
     await expect
       .poll(() => paletteOptions(page).allInnerTexts())
-      .toEqual(["Products", "Orders", "API keys", "Merchants", "Roles", "Store"]);
+      .toEqual([
+        "Products",
+        "Orders",
+        "Carts",
+        "API keys",
+        "Merchants",
+        "Roles",
+        "Store",
+      ]);
     await expect.poll(() => selected(page)).toEqual(["Products"]);
 
     await page.keyboard.press("ArrowDown");
     await expect.poll(() => selected(page)).toEqual(["Orders"]);
     await page.keyboard.press("ArrowDown");
-    await expect.poll(() => selected(page)).toEqual(["API keys"]);
+    await expect.poll(() => selected(page)).toEqual(["Carts"]);
     // Both directions, because a list that only walks one way is one a Merchant who overshoots
     // has to close and reopen.
     await page.keyboard.press("ArrowUp");
@@ -1064,6 +1072,272 @@ describe("paging through the Orders", () => {
   });
 });
 
+/**
+ * The Carts a Store is holding, which is the one list whose rows are a **credential**.
+ *
+ * `GET /admin/carts` exists to answer a question a Merchant genuinely cannot ask otherwise —
+ * *why is that stock unavailable?* — and once a Cart can hold stock while a Shopper is at
+ * their bank the answer is usually a live Cart (ADR-0070, ADR-0071). So the identifier is on
+ * screen on purpose: it is the whole of the authority to act on a Cart, and a Merchant may
+ * enumerate these where the public may not.
+ *
+ * **Read-only, all the way to the screen.** There is no route that releases a hold and there
+ * must not be one, so there is nothing here to click that changes anything.
+ */
+describe("Carts", () => {
+  /**
+   * Time passed, for one Cart, by winding the row back rather than by waiting.
+   *
+   * A Cart's lifetime is measured in days and there is no route that shortens one — the Admin's
+   * Cart surface is read-only and the store surface has no such call either — so this is the
+   * arrangement `admin-carts.test.ts` and `cart.test.ts` both make, in the one place this seam
+   * is allowed to reach past the API for something the API cannot express.
+   */
+  async function expireTheCart(id: string): Promise<void> {
+    await seam.database.query(
+      "update core_cart set expires_at = now() - interval '1 second' where id = $1",
+      [id],
+    );
+  }
+
+  it("lists the Carts a storefront is holding, and opens one at an address of its own", async () => {
+    const [cart] = await seam.startCarts();
+    if (!cart) throw new Error("The seam started no Cart for this case to open.");
+
+    const page = await seam.signedIn("/carts");
+    const row = page.getByRole("row", { name: new RegExp(cart.id) });
+    await shows(row, "the Cart in the list");
+    await auditAccessibility(page, "the Carts screen");
+
+    await row.getByRole("link", { name: "Open" }).click();
+
+    expect(where(page)).toBe(`/carts/${cart.id}`);
+    // The identifier is the record's name here, in a way an Order's never is: an Order has a
+    // number a Shopper quotes and a Cart has only this, which is also what makes it worth
+    // showing (ADR-0071).
+    await shows(
+      page.getByRole("heading", { name: new RegExp(cart.id) }),
+      "the Cart's own heading",
+    );
+    await shows(
+      page.getByRole("row", { name: new RegExp(cart.sku) }),
+      "the Cart's Line Item",
+    );
+    await auditAccessibility(page, "the Cart screen");
+  });
+
+  /**
+   * The filter, which is the part of this screen worth making reachable (ADR-0071).
+   *
+   * The three states **partition** the table, so one Cart of each is the whole fixture: what is
+   * asserted is that each filter shows its own and hides the other two, which no two of them
+   * being right by accident can satisfy. Unfiltered is mostly history on any real Store, which
+   * is why the filter exists at all.
+   */
+  it("narrows to the live Carts, the expired and the spent, each at an address of its own", async () => {
+    const [live] = await seam.startCarts();
+    const [lapsed] = await seam.startCarts();
+    const [placed] = await seam.placeOrders();
+    if (!live || !lapsed || !placed) throw new Error("The seam arranged no Carts.");
+    await expireTheCart(lapsed.id);
+
+    const page = await seam.signedIn("/carts");
+    // All three, before anything is narrowed — so the filter below is shown to be narrowing
+    // this list rather than being the only way to read it.
+    await settlesOn(
+      page,
+      (ids) => [live.id, lapsed.id, placed.cartId].every((id) => ids.includes(id)),
+      "The unfiltered list never held all three Carts.",
+    );
+
+    const only = async (name: string, shown: string, hidden: readonly string[]) => {
+      await page.getByRole("link", { name, exact: true }).click();
+      await settlesOn(
+        page,
+        (ids) => ids.includes(shown) && hidden.every((id) => !ids.includes(id)),
+        `The ${name} filter never settled on the Cart it is about.`,
+      );
+    };
+
+    await only("Live", live.id, [lapsed.id, placed.cartId]);
+    // The address is what a Merchant can send, which is the whole reason the filter is a link
+    // rather than a control with a value nothing outside this tab can see.
+    expect(where(page)).toBe("/carts?state=live");
+    await auditAccessibility(page, "the Carts screen filtered to the live ones");
+
+    await only("Expired", lapsed.id, [live.id, placed.cartId]);
+    expect(where(page)).toBe("/carts?state=expired");
+
+    await only("Spent", placed.cartId, [live.id, lapsed.id]);
+    expect(where(page)).toBe("/carts?state=spent");
+
+    // And a refresh lands on the filtered list rather than on the whole table, because the
+    // filter is in the address and not in this tab's memory.
+    await page.reload();
+    expect(where(page)).toBe("/carts?state=spent");
+    await settlesOn(
+      page,
+      (ids) => ids.includes(placed.cartId) && !ids.includes(live.id),
+      "The filtered list did not survive a refresh.",
+    );
+  });
+
+  /**
+   * The filter reached the way a Merchant without a mouse reaches it.
+   *
+   * A scanner sees none of this: `axe-core` reads the links' names and their `aria-current` and
+   * has no opinion about whether the keyboard can get to one. The filter is a set of **links**
+   * rather than a control with a value partly for this — Tab reaches them and Enter follows
+   * them, with no widget's own key handling in between.
+   */
+  it("reaches the filter with the keyboard, and Enter narrows the list", async () => {
+    const [live] = await seam.startCarts();
+    if (!live) throw new Error("The seam started no Cart for this case to find.");
+
+    const page = await seam.signedIn("/carts");
+    const spent = page.getByRole("link", { name: "Spent", exact: true });
+    await shows(spent, "the Spent filter");
+
+    await tabTo(page, spent, "the Spent filter");
+    await page.keyboard.press("Enter");
+
+    expect(where(page)).toBe("/carts?state=spent");
+    await settlesOn(
+      page,
+      (ids) => !ids.includes(live.id),
+      "The live Cart was still listed under the spent filter.",
+    );
+    // What a screen reader is told about which of the four is in force — the filled recipe is
+    // the visual half, and a colour on its own says nothing to anybody listening.
+    await expect(spent.getAttribute("aria-current")).resolves.toBe("page");
+  });
+
+  it("says there is no such Cart, rather than reporting a refusal", async () => {
+    // A UUID this Store has certainly never issued. Unlike an Order, a Cart really can stop
+    // being there — the sweeper takes lapsed ones away (ADR-0057) — so the screen says that
+    // rather than insisting the address was always wrong.
+    const page = await seam.signedIn(`/carts/${crypto.randomUUID()}`);
+
+    await shows(page.getByText("No such Cart"), "the no-such-Cart screen");
+    await shows(
+      page.getByRole("link", { name: "Go to Carts" }),
+      "the way back to the Carts list",
+    );
+    await auditAccessibility(page, "the Cart screen for a Cart that is not there");
+  });
+
+  /**
+   * An address naming a state kobai does not have, which is a filter that cannot be applied.
+   *
+   * The failure this rules out is the quiet one: dropping the word and answering with the whole
+   * table is a *different question* answered under a heading claiming otherwise, and a Merchant
+   * reading it would have no way to know. kobai refuses the word too, with `invalid` — this
+   * screen is what stops a round trip being needed to find out, so the case also watches that
+   * no request is made.
+   */
+  it("says so when the address names a state kobai has never heard of", async () => {
+    // A live Cart of this case's own, so that the good filter it walks through below really
+    // has a page to leave in the cache — which is the whole subject of its second half.
+    await seam.startCarts();
+
+    const page = await seam.signedIn("/carts");
+    await shows(page.getByRole("link", { name: "Live", exact: true }), "the filter");
+
+    // Attached once the good screen is up, so that what follows counts only what the bad
+    // address asked for.
+    const watching = watchForWrites(page);
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "GET") asked.push(new URL(request.url()).pathname);
+    });
+
+    await page.goto(`${ADMIN_PATH}/carts?state=abandoned`);
+
+    await shows(page.getByText("No such Cart state"), "the no-such-state screen");
+    // The three that do exist are still offered, because the way out of a bad address is to
+    // pick a good one.
+    await shows(page.getByRole("link", { name: "Spent", exact: true }), "the filter");
+    // …and none of the four is announced as being in force. "All" is the one that would have
+    // been, since an unknown word narrows to nothing — which would tell a screen reader a
+    // filter is applied on the one screen that is saying there is none.
+    await expect(
+      page.getByRole("link", { name: "All", exact: true }).getAttribute("aria-current"),
+    ).resolves.toBeNull();
+    // Nothing was asked of kobai about a word it would only have refused — and nothing was
+    // written either, which is true of every screen in this section (ADR-0071).
+    await expect(watching.settled()).resolves.toEqual([]);
+    // The boot asks kobai who this Merchant is whatever the address says, so an empty list here
+    // would mean nothing was being watched at all rather than that nothing was asked.
+    expect(
+      asked,
+      "no request was seen, so this case would pass against anything",
+    ).not.toEqual([]);
+    expect(asked.filter((path) => path === "/admin/carts")).toEqual([]);
+    await auditAccessibility(page, "the Carts screen at a state that does not exist");
+
+    // …and it is still the answer when the address is reached with a page of Carts already in
+    // the cache, which is the way a Merchant actually gets here: pick a real filter, then walk
+    // back. A screen that said "no such Cart state" over a table left behind by the query
+    // before it would be the quiet failure above wearing the honest answer's clothes, and a
+    // cold load — the only way this case reached the address until #228 was reviewed — cannot
+    // see it, because there is nothing in the cache to leave behind.
+    await page.getByRole("link", { name: "Live", exact: true }).click();
+    await shows(listRows(page).first(), "a page of live Carts");
+
+    await page.goBack();
+
+    expect(where(page)).toBe("/carts?state=abandoned");
+    await shows(page.getByText("No such Cart state"), "the no-such-state screen again");
+    await expect(listRows(page).count()).resolves.toBe(0);
+  });
+});
+
+describe("paging through the Carts", () => {
+  /**
+   * A page of live Carts and one more, so that there is a second page to reach **within a
+   * filter**.
+   *
+   * That is the whole subject: a cursor and a filter are two things in one query string, and a
+   * pager that carried only the cursor would answer the second page of the *unfiltered* list —
+   * which looks like paging working and is a different question being answered. Nothing here
+   * empties anything first; every assertion is about which Carts are on a page rather than how
+   * many, so the Carts other cases left behind cannot decide it.
+   */
+  let aPage = 0;
+
+  beforeAll(async () => {
+    aPage = await defaultPageLimit("/admin/carts");
+    await seam.startCarts(aPage + 1);
+  }, BROWSER_SEAM_TIMEOUT);
+
+  it("keeps the filter in the address while it pages through it", async () => {
+    const page = await seam.signedIn("/carts?state=live");
+    await shows(page.getByRole("link", { name: "Next" }), "the Next control");
+    await holdsRows(page, aPage);
+    const first = await firstCells(page);
+
+    await page.getByRole("link", { name: "Next" }).click();
+
+    // The cursor is opaque, so there is nothing to assert about its value (ADR-0064) — but the
+    // filter is not, and it has to still be there.
+    expect(where(page)).toMatch(/^\/carts\?/);
+    expect(new URL(page.url()).searchParams.get("state")).toBe("live");
+    expect(new URL(page.url()).searchParams.get("after")).toBeTruthy();
+
+    await settlesOn(page, (ids) => ids.join() !== first.join());
+    const beyond = await firstCells(page);
+    expect(beyond.length).toBeGreaterThan(0);
+    // Every Cart exactly once, which is the whole argument for a cursor over an offset.
+    expect(beyond.filter((id) => first.includes(id))).toEqual([]);
+    await auditAccessibility(page, "a second page of live Carts");
+
+    // …and back to the first page of the same filter, rather than to the whole table.
+    await page.getByRole("link", { name: "Previous" }).click();
+    expect(where(page)).toBe("/carts?state=live");
+    await settlesOn(page, (ids) => ids.join() === first.join());
+  });
+});
+
 describe("API keys", () => {
   /**
    * Two frame promises, on the one screen where they are both visible at once.
@@ -1260,6 +1534,7 @@ describe("what a Role may do", () => {
   const CATALOG_READ = "catalog:read";
   const CATALOG_WRITE = "catalog:write";
   const ORDER_READ = "order:read";
+  const CART_READ = "cart:read";
   const API_KEY_READ = "api-key:read";
   const API_KEY_WRITE = "api-key:write";
 
@@ -1308,6 +1583,54 @@ describe("what a Role may do", () => {
       .toEqual(["Products"]);
 
     await auditAccessibility(page, "the Admin's palette on a narrow Role");
+  });
+
+  /**
+   * The Carts section, hidden and offered — the affordance ADR-0071 asks for by name.
+   *
+   * Both directions in one case, because either alone proves half of it: a section absent for
+   * everybody would satisfy the first, and a section shown to everybody would satisfy the
+   * second. `cart:read` is its own Permission precisely so that it can be granted on its own —
+   * reusing `order:read` was considered and rejected, since a Cart and an Order are governed by
+   * opposite rules — and the Role holding **only** it is what shows that.
+   *
+   * It is an affordance and never a boundary: `requirePermission` in Core is what actually
+   * refuses `GET /admin/carts`, and `admin-carts.test.ts` is where that is asserted.
+   */
+  it("hides Carts from a Role without cart:read, and offers it to one that holds only it", async () => {
+    const without = await seam.merchantOnARole([ORDER_READ]);
+    const blind = await seam.signedInAs(without, "/orders");
+    await shows(blind.getByText("Every Order this Store has taken"), "the Orders screen");
+
+    await expect.poll(() => sections(blind)).toEqual(["Orders"]);
+    await blind.keyboard.press("Meta+k");
+    await shows(
+      blind.getByRole("combobox", { name: "Search sections" }),
+      "the command palette",
+    );
+    await expect
+      .poll(() => blind.getByRole("option").allInnerTexts())
+      .toEqual(["Orders"]);
+
+    const holder = await seam.merchantOnARole([CART_READ]);
+    const seeing = await seam.signedInAs(holder, "/");
+
+    // The front door is the head of the same list, so a Role holding nothing but this one
+    // lands on the Carts rather than on a Products screen it would be refused.
+    await expect.poll(() => where(seeing)).toBe("/carts");
+    await expect.poll(() => sections(seeing)).toEqual(["Carts"]);
+    await seeing.keyboard.press("Meta+k");
+    await shows(
+      seeing.getByRole("combobox", { name: "Search sections" }),
+      "the command palette",
+    );
+    await expect
+      .poll(() => seeing.getByRole("option").allInnerTexts())
+      .toEqual(["Carts"]);
+    await auditAccessibility(
+      seeing,
+      "the palette on a Role that may read only the Carts",
+    );
   });
 
   it("sends the front door to a section the Role can actually read", async () => {

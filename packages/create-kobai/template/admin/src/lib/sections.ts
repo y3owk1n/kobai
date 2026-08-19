@@ -3,6 +3,7 @@ import {
   PackageIcon,
   ReceiptTextIcon,
   ShieldCheckIcon,
+  ShoppingCartIcon,
   StoreIcon,
   UsersIcon,
 } from "lucide-react";
@@ -54,6 +55,17 @@ export const SECTIONS = [
     label: "Orders",
     Icon: ReceiptTextIcon,
     permission: PERMISSIONS.orderRead,
+  },
+  {
+    /**
+     * Beside Orders, because that is the pair a Merchant actually reasons about: a Cart is what
+     * an Order was before it was bought, and the question this section answers — *why is that
+     * stock unavailable?* — is asked while looking at what has and has not sold (ADR-0071).
+     */
+    path: "/carts",
+    label: "Carts",
+    Icon: ShoppingCartIcon,
+    permission: PERMISSIONS.cartRead,
   },
   {
     path: "/api-keys",
