@@ -658,15 +658,39 @@ Admin's components, which are shadcn's own styling hooks and have nothing to do 
 
 What exists instead — and it is a different thing, so do not mistake one for the other — is
 that **the Admin's source is vendored into your Project.** It arrives as a directory of
-ordinary files — `reference/admin/` in this repository — React on Vite, with shadcn/ui
-components that are source rather than a dependency, because that is what `shadcn add` does
-([ADR-0033](./adr/0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md)). Your formatter
-formats them and your typechecker checks them. To change the Admin today, **edit the file.**
+ordinary files — `reference/admin/` in this repository — and what is in that directory is
+deliberately unremarkable: **React on Vite, react-router, TanStack Query, react-hook-form with
+zod, and shadcn/ui components on Base UI that are source rather than a dependency**, because
+that is what `shadcn add` does
+([ADR-0033](./adr/0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md),
+[ADR-0063](./adr/0063-the-admins-frame-is-conventional-because-a-developer-inherits-it.md)).
+Your formatter formats them and your typechecker checks them. To change the Admin today,
+**edit the file.**
 
-That is not an Extension Point and Core makes you no promise about it, because it is not
-Core's code any more — it is yours, from the moment it lands, and Core will never ask for it
-back (ADR-0001, ADR-0010). The upgrade consequence is the shadcn one: you keep
-your changes forever and you pick up improvements by hand.
+Not one of those is kobai's own invention, and the reason is you: **no `kobai-upgrade` codemod
+will ever reach this source.** It gets `node:fs` and a directory, and TypeScript 7 ships no
+compiler API, so a framework of kobai's own devising would be one you could neither look up nor
+upgrade away from. All of it lands in your Project's `devDependencies`, because `vite build`
+inlines the tree and none of it is needed by the process at runtime.
+
+So the honest statement of what vendoring gives you is: **you can build anything the Admin
+itself can, by the same means it uses.** A screen is a `<Route>` in the Admin's `src/app.tsx`
+and a component in `src/screens/` that takes no props and reads its own data. Putting that
+screen in the sidebar and in the ⌘K command palette at once is one entry in
+`src/lib/sections.ts`, which is the single list both are drawn from. Restyling is the token
+layer in `src/index.css` rather than edits to the vendored components, which is what keeps the
+next `shadcn add` producing something that matches what is already there.
+
+None of that is an Extension Point and Core makes you no promise about any of it, because it is
+not Core's code any more — it is yours, from the moment it lands, and Core will never ask for
+it back (ADR-0001, ADR-0010). The upgrade consequence is the shadcn one: you keep your changes
+forever and you pick up improvements by hand.
+
+**What is still missing is exactly what this row names**, and the difference is worth being
+precise about: editing your own source is not a mechanism a *package* can use. A Plugin you
+install still cannot put anything in your Admin, and nothing above changes that. What has
+changed is that the question now has candidates — a router, a sidebar, a palette and a list of
+sections that is data rather than markup — where before it had none.
 
 The Admin does have one constraint worth knowing, because it constrains what you can build
 into it: **the Admin uses only the public API**, through the generated `@kobai/client`, and

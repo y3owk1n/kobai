@@ -6,6 +6,18 @@
 > only `GET /admin/fulfilment-strategies` — answers in full and does not page, because nothing
 > can be inserted into it between one page and the next, which is this record's entire argument.
 
+> **Amended in the building (#176): "the Admin gets next/prev" understated what a cursor
+> costs.** *Previous* cannot be built from a cursor either — an opaque cursor says what comes
+> after a record and can say nothing about what came before it, which is not a gap in the
+> implementation but the price of the opacity this record chose. `reference/admin/`'s
+> `components/pager.tsx` therefore carries the cursors this browser has already been given in
+> the **history entry's own state**, so following next three times and pressing back three
+> times walks the same three pages in reverse. It is deliberately not in the URL beside the
+> cursor: a link a Merchant sends would then carry a trail of somebody else's browsing, and it
+> would grow without bound down a long list. The consequence is visible rather than hidden — a
+> deep link into page three has no trail, so it offers **"First page"** rather than a
+> "Previous" that would silently mean something else. Everything else here stands.
+
 Every list route on kobai's HTTP surface takes `?limit=` and `?after=`, and answers with an
 **opaque** `nextCursor` beside its items. No route takes `?offset=`, and no route reports a
 total. There are therefore no numbered pages anywhere in kobai, in the Admin or in anything a

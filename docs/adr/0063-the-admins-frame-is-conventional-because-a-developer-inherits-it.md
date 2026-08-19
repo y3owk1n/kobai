@@ -1,5 +1,33 @@
 # The Admin's frame is conventional, because a Developer inherits it
 
+> **Amended in the building (#175–#181).** Three things below are not quite what got built.
+> The decisions all stand; these are the corrections, and they belong in front of the record
+> rather than behind it.
+>
+> - **"the reason in a tooltip" was not enough**, and the gap was the announcement rather than
+>   the picture. Base UI's `Tooltip` in this distribution gives its popup no `role="tooltip"`
+>   and sets no `aria-describedby` on the trigger — checked in the installed package — so a
+>   tooltip alone is a **visual** affordance, and a Merchant reading the screen with a screen
+>   reader would have heard an unavailable control and no reason at all: precisely the thing
+>   the decision exists to prevent. `src/components/action-button.tsx` therefore renders the
+>   sentence a second time where only a screen reader finds it and describes the control by it,
+>   whether the tooltip is open or not, and `tests/the-admin-in-a-browser.test.ts` asserts the
+>   two halves separately.
+> - **The list of deliberate departures has a home and a name**:
+>   `reference/admin/src/components/ui/README.md`. It holds one change to what a component
+>   *does* — `select.tsx` and `dropdown-menu.tsx` portal into a container the frame renders
+>   inside `main`, because at `<body>` a popup is content outside every landmark and `axe-core`
+>   reports it — and a table of Biome suppressions upstream is not written against. That one
+>   change *is* held by a test, which this record did not expect: the browser seam audits
+>   screens with an overlay open, so reverting it goes red.
+> - **The narrowing moved out of `src/lib/kobai.ts`.** "`SessionRefusal` … is already narrowed
+>   by hand" describes the Admin as it was: `src/lib/refusal.ts` now holds one `Record` per
+>   closed family and a `narrowing()` built from it, so an added `reason` has no key and does
+>   not compile.
+>
+> The last consequence below is discharged — #181 rewrote `AGENTS.md`'s Admin section, which is
+> where each of these conventions now sits beside the assertion that holds it.
+
 The Admin gets a **router, a query cache, a form library and a design system, all of them the
 ones a React developer has already used** — react-router, TanStack Query, react-hook-form with
 zod, and shadcn on Base UI. Nothing here is kobai's own invention, and that is the decision
