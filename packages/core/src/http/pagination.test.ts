@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type TestKobai,
   type TestSession,
 } from "../testing/index.ts";
+import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 
 /**
  * Paging a list route — `?limit=`, `?after=`, and a `nextCursor` beside the items (ADR-0064).
@@ -24,6 +26,14 @@ import {
  * contention to reproduce, produces no error, and is invisible in every test that seeds a fixed
  * number of rows and reads them back — which is every other test in this file.
  */
+
+/** As much of the description as this file reads: which operations take an `after`. */
+type DescribedPaths = {
+  readonly paths: Record<
+    string,
+    { readonly get?: { readonly parameters?: readonly { readonly name: string }[] } }
+  >;
+};
 
 /** What every list answers with, once the item key is set aside. */
 type Paged<Item> = {
@@ -450,25 +460,64 @@ describe("a cursor is bound to the list that issued it", () => {
         });
       }
     }
+
+    // And the other half of the same fact, over the same deployment: refusing every cursor
+    // everywhere would satisfy every assertion above and be a surface no list can be paged on
+    // at all. The pair is what makes this a binding rather than a wall.
+    for (const list of LISTS) {
+      const own = await fetchPage(
+        kobai,
+        list,
+        merchant,
+        `?limit=1&after=${encodeURIComponent(cursors.get(list.path) ?? "")}`,
+      );
+
+      const here = `${list.path}'s own cursor, on ${list.path}`;
+      expect(own.status, here).toBe(200);
+      expect(own.items, here).toHaveLength(1);
+    }
   });
 
-  it("still opens the list that did issue it, which is what makes the refusal a binding", async () => {
-    await using kobai = await createTestKobai();
-    const merchant = await signInTestMerchant(kobai);
-    const seeded = await seedProducts(kobai, merchant, 3);
+  /**
+   * What makes the sweep above a guardrail rather than a snapshot, and what `db/page.ts` is
+   * entitled to claim when it says a **collision** in `PagedList` is caught here.
+   *
+   * That claim rests on `LISTS` being every paged list there is, and `LISTS` is a hand-written
+   * table. A sixth list route added without an entry would be swept by nothing — its cursor
+   * never offered anywhere, its name never held against the other five — and the omission is
+   * the same manual step whoever added it had already missed. So the table is checked against
+   * the description rather than trusted, the way this repository derives such a list rather
+   * than writing one down (ADR-0049).
+   *
+   * **`after` is what identifies a paged route**, because it is what ADR-0064 makes one: a
+   * route that takes a cursor is a route that issues one. `GET /admin/fulfilment-strategies`
+   * takes neither and is ADR-0067's deliberate exception, so it is absent from both sides and
+   * needs no excuse here.
+   *
+   * The checked-in description is the source rather than a freshly built app, because
+   * `openapi.test.ts` already holds that file to being what this build produces — asking the
+   * router again here would be a second answer to a question that has one.
+   */
+  it("is swept for every list the description says pages, and for no others", async () => {
+    const described = JSON.parse(
+      await readFile(OPENAPI_DOCUMENT_PATH, "utf8"),
+    ) as DescribedPaths;
 
-    const first = await fetchPage(kobai, LISTS[0], merchant, "?limit=2");
-    const rest = await fetchPage(
-      kobai,
-      LISTS[0],
-      merchant,
-      `?limit=2&after=${encodeURIComponent(first.nextCursor ?? "")}`,
-    );
+    const paged = Object.entries(described.paths)
+      .filter(([, operations]) =>
+        operations.get?.parameters?.some((parameter) => parameter.name === "after"),
+      )
+      .map(([path]) => path)
+      .sort();
 
-    // Refusing everything everywhere would pass the test above and be a list that cannot be
-    // paged at all, so the pair is what says the binding is a binding rather than a wall.
-    expect(rest.status).toBe(200);
-    expect(rest.items.map((one) => one.id)).toEqual([seeded[0]]);
+    expect(
+      paged.length,
+      "the description carries no paged list route at all, so every sweep here is vacuous",
+    ).toBeGreaterThan(0);
+    // Both directions: a list route missing from `LISTS` is swept by nothing, and one named
+    // here that no longer exists would leave every case above passing against a path that is
+    // gone.
+    expect(paged).toEqual(LISTS.map((list) => list.path).sort());
   });
 });
 

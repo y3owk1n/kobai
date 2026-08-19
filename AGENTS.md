@@ -732,9 +732,10 @@ description that enumerated different paths per deployment is not a contract.
 
 **`contract.pageQuery(list)` is the other function on this surface, and it is a different
 thing** (#183): it builds one schema per **list** rather than per deployment, and what varies
-between the five is which list's cursors that schema will accept — never which parameters exist
-or what they mean. Five copies of one contract, each bound to its own list, is the same contract
-five times. Everything else on the surface stays a module-level constant.
+between them is which list's cursors that schema will accept — never which parameters exist or
+what they mean. One contract bound once per list is the same contract each time, which is why
+this is not the shape the paragraph above rules out. Everything else on the surface stays a
+module-level constant.
 
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.
@@ -800,10 +801,11 @@ answers with `{ …items, nextCursor: page.nextCursor }`, and reads its page thr
   That is the whole reason `contract.pageQuery` is a **factory**: the name a route passes it is
   both what `decodeCursor` will accept and — travelling to the reader on the `PageRequest`
   itself, never as an argument of its own — what `takePage` stamps into the next cursor, so one
-  call decides both ends and there is no second place to keep in step. `PageList` in
-  `db/page.ts` is the closed set of those names, and reading it is how a **collision** is
-  caught: two lists sharing a name would trade cursors exactly as an unbound cursor did, and no
-  type can see that. A cursor from elsewhere is refused as the same `invalid`, deliberately —
+  call decides both ends and there is no second place to keep in step. `PagedList` in
+  `db/page.ts` is the closed set of those names, and a **collision** in it is the one failure
+  left — two lists sharing a name would trade cursors exactly as an unbound cursor did, and no
+  type can see that, because a union absorbs a repeated member in silence. What sees it is
+  `pagination.test.ts`, in the two cases below that only work together. A cursor from elsewhere is refused as the same `invalid`, deliberately —
   a new `reason` is permanent under ADR-0060 and buys a distinction no client can act on. **The
   cursor is also deliberately not signed**, and that half is a *decision* rather than an
   omission: the argument is beside `encodeCursor` and recorded in ADR-0064, and the short of it
@@ -816,7 +818,9 @@ answers with `{ …items, nextCursor: page.nextCursor }`, and reads its page thr
   changes what an existing client receives.
 
 `packages/core/src/http/pagination.test.ts` holds all of it, and holds it **once for every
-list**: `LISTS` is a table of path and item key, so a new list added there inherits the whole
+list**: `LISTS` is a table of path and item key — checked against the routes the description
+says take an `after`, so a list route added without an entry reddens the build rather than
+quietly opting out of every sweep in the file — so a new list added there inherits the whole
 contract rather than a copy of it — including the pass that offers **every** list's cursor to
 **every** other list and expects all of them to refuse, which is what makes a duplicate name a
 red build rather than two lists quietly reading each other's pages. Its last case is the one

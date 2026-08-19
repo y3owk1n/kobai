@@ -27,7 +27,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
  * `GET /admin/products` used to decode on `GET /admin/orders`, satisfy the schema, and answer a
  * plausible page of the wrong list — a client's mistake arriving as a 200 rather than as a
  * refusal, which is the class of quiet wrongness ADR-0064 was written against one level up.
- * {@link PageList} is the name a list is known by inside its own cursors.
+ * {@link PagedList} is the name a list is known by inside its own cursors.
  *
  * **A cursor is not signed, and that was decided rather than deferred** (#183) — see
  * {@link encodeCursor} for the argument and ADR-0064 for the record of it.
@@ -42,16 +42,19 @@ import type { PgColumn } from "drizzle-orm/pg-core";
  * reader on its {@link PageRequest} rather than as an argument of its own — so the two ends of a
  * cursor cannot be bound to different lists by anybody forgetting to keep them in step.
  *
- * A closed union rather than a `string`, so the set is readable in one line. That line is where
- * a **collision** is caught, and a collision is the only way this scheme still fails: two lists
- * sharing a name would trade cursors exactly as an unbound cursor did, and no type can see it.
- * What does see it is `http/pagination.test.ts`, which offers every list's cursor to every other
- * list and expects all of them to refuse.
+ * A closed union rather than a `string`, so the set is readable in one line — which matters
+ * because a **collision** is the only way this scheme still fails, and no type can see one: a
+ * union quietly absorbs a repeated member, and two lists sharing a name would trade cursors
+ * exactly as an unbound cursor did. What sees it is `http/pagination.test.ts`, in two cases
+ * that only work together — one offers every list's cursor to every other list and expects all
+ * of them to refuse, and the other holds that test's table of lists against the routes the
+ * OpenAPI description says take an `after`, so a list added without an entry reddens the build
+ * instead of quietly opting out of the sweep.
  *
  * **A name carries no space**, because {@link encodeCursor} joins the parts with one. That holds
  * by inspection of this line, which is the other reason the line is worth being able to read.
  */
-export type PageList = "products" | "orders" | "api-keys" | "roles" | "merchants";
+export type PagedList = "products" | "orders" | "api-keys" | "roles" | "merchants";
 
 /** What a caller asked for: how many, and what they have already seen. */
 export type PageRequest = {
@@ -67,7 +70,7 @@ export type PageRequest = {
    * reader cannot page one list under another's name and no reader has to remember to say
    * which list it is.
    */
-  readonly list: PageList;
+  readonly list: PagedList;
 };
 
 /**
@@ -118,7 +121,7 @@ export const MAX_PAGE_LIMIT = 100;
 /**
  * The cursor as it travels — base64url, so it carries through a query string untouched.
  *
- * **The list is inside it, and first.** A space joins the three parts and no {@link PageList}
+ * **The list is inside it, and first.** A space joins the three parts and no {@link PagedList}
  * holds one, which is what lets {@link decodeCursor} split them back apart without a format to
  * parse.
  *
@@ -150,7 +153,7 @@ export const MAX_PAGE_LIMIT = 100;
  * must not be allowed to choose — a filter, a scope, a Store — because that is the first
  * version of this where forging one reaches a row rather than a position.
  */
-export function encodeCursor(list: PageList, cursor: Cursor): string {
+export function encodeCursor(list: PagedList, cursor: Cursor): string {
   return Buffer.from(`${list} ${cursor.at} ${cursor.id}`, "utf8").toString("base64url");
 }
 
@@ -170,7 +173,7 @@ export function encodeCursor(list: PageList, cursor: Cursor): string {
  * issued is precisely that. The diagnosis a person needs is in the `error` string, which names
  * the list that would have had to issue it and is promised to nobody.
  */
-export function decodeCursor(list: PageList, raw: string): Cursor | undefined {
+export function decodeCursor(list: PagedList, raw: string): Cursor | undefined {
   const [issuer, at, id, ...extra] = Buffer.from(raw, "base64url")
     .toString("utf8")
     .split(" ");

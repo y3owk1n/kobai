@@ -19,7 +19,7 @@ import {
   DEFAULT_PAGE_LIMIT,
   decodeCursor,
   MAX_PAGE_LIMIT,
-  type PageList,
+  type PagedList,
 } from "../db/page.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
@@ -300,7 +300,7 @@ export const ServerError = z.object({ error: z.string() }).openapi("ServerError"
  * deployment would not be a contract; five copies of one contract, each bound to its own list,
  * is the same contract five times.
  */
-export function pageQuery(list: PageList) {
+export function pageQuery(list: PagedList) {
   return (
     z
       .object({
