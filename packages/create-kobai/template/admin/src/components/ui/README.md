@@ -21,7 +21,9 @@ is the cheap half of that, and its value is that a departure had to be typed out
 
 ## What has actually been changed
 
-### One change to what a component does: where its popup is portaled
+### Two changes to what a component does
+
+#### Where a popup is portaled — `select.tsx`, `dropdown-menu.tsx`
 
 `select.tsx` and `dropdown-menu.tsx` each take a `container` prop and default it to the frame's,
 through `usePortalContainer()` from `src/lib/portal.tsx`. Upstream portals to `<body>`.
@@ -42,6 +44,34 @@ hides its popup from the accessibility tree, so there is no content there to be 
 
 **If `shadcn add select --overwrite` or `--overwrite` on the menu reverts this, the browser seam
 goes red**, naming the screen and the rule. That is the intended way to find out.
+
+#### Where the Sidebar puts what it is given — `sidebar.tsx`
+
+`Sidebar`'s narrow branch spreads `{...props}` onto the `<div>` wrapping its children, inside
+`SheetContent`. Upstream spreads it onto `Sheet` itself.
+
+**`Sheet` is a Base UI dialog *root*, which renders no element at all**, so everything a caller
+gave `Sidebar` was swallowed there — while the two branches either side of it spread onto a real
+`<div>`. `components/app-layout.tsx` passes `role="complementary"` and an `aria-label` so the
+sidebar's contents sit in a named landmark, which is one of the four accessibility faults #175
+found and fixed on the frame; below `md` that pair reached nothing, so **this Admin had no
+sidebar landmark on a phone at all** (#193). No token can express which element a component
+spreads its props onto, which is the bar this file sets for an edit.
+
+Both edited lines carry a `CHANGED FROM UPSTREAM` comment. **A `shadcn add sidebar --overwrite`
+reverts this silently as far as any scanner is concerned** — `axe-core` excludes a
+`role="dialog"` subtree from the `region` rule, so the missing landmark is not a violation it
+reports, and the seam's own audits stayed quiet on it in both directions. What goes red is
+`tests/the-admin-in-a-browser.test.ts`'s narrow-window cases, which ask for the landmark **by
+name** for exactly that reason.
+
+**Nothing else in this directory has this shape, and that was checked rather than assumed.**
+`hooks/use-mobile.ts` is read by `sidebar.tsx` and by no other file, and `sidebar.tsx`'s is the
+only component here that renders a different element per branch. The five other wrappers around a
+state container — `dialog.tsx`, `alert-dialog.tsx`, `sheet.tsx`, `dropdown-menu.tsx` and
+`tooltip.tsx` — each declare their primitive's own props rather than an element's, so handing one
+a `role` is a **compile error** instead of silence. `Sidebar` was reachable only because it
+declares `React.ComponentProps<"div">` and then spreads the rest somewhere that is not a `div`.
 
 ### The rest are suppression comments
 

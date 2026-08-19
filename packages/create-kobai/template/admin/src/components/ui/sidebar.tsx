@@ -174,7 +174,11 @@ function Sidebar({
 
   if (isMobile) {
     return (
-      <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
+      // CHANGED FROM UPSTREAM: `{...props}` is not spread here — see README.md. `Sheet` is a
+      // Base UI dialog root, which renders nothing, so anything given to `Sidebar` reached no
+      // element at all below `md` (#193). It lands on the element wrapping `children` instead,
+      // which is the same place the two branches either side of this one put it.
+      <Sheet open={openMobile} onOpenChange={setOpenMobile}>
         <SheetContent
           dir={dir}
           data-sidebar="sidebar"
@@ -192,7 +196,10 @@ function Sidebar({
             <SheetTitle>Sidebar</SheetTitle>
             <SheetDescription>Displays the mobile sidebar.</SheetDescription>
           </SheetHeader>
-          <div className="flex h-full w-full flex-col">{children}</div>
+          {/* CHANGED FROM UPSTREAM: `{...props}` — see README.md and the comment above. */}
+          <div className="flex h-full w-full flex-col" {...props}>
+            {children}
+          </div>
         </SheetContent>
       </Sheet>
     );

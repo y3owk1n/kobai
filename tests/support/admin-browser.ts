@@ -59,6 +59,14 @@ export { ADMIN_PATH };
  * - **The catalog is shared**, because booting a Project per case is not affordable. Give
  *   anything you create a title of its own and assert on that; call
  *   {@link AdminSeam.emptyTheCatalog} first if the case's subject is a list with nothing in it.
+ * - **A window is 1280×720 unless the case names another**, and a case that wants the narrow
+ *   layout passes {@link A_NARROW_WINDOW}. This seam proves what it visits **at the viewport it
+ *   visits it**, which is worth knowing about every assertion in this file rather than only
+ *   about the one that found it out: #175 audited five screens and could not see that the
+ *   sidebar's landmark was lost below `md`, because no window was ever narrow enough for that
+ *   branch to render (#193). **Ask for a narrow window only where the *document* differs** —
+ *   today that is `useIsMobile` and nothing else — because everything else narrows in CSS, and
+ *   a case run twice over one DOM doubles what the file costs to prove the same thing.
  *
  * A later ticket wanting a file of its own takes one line — `await using seam = await
  * startAdminSeam()` in a `beforeAll` — and pays another boot, which is a few seconds. Adding a
@@ -76,6 +84,20 @@ export { ADMIN_PATH };
  */
 
 const repoRoot = new URL("../../", import.meta.url);
+
+/** How big a window a case opens, when it is not the 1280×720 Playwright opens by default. */
+export type Viewport = { readonly width: number; readonly height: number };
+
+/**
+ * A window narrow enough that the Admin renders its narrow self.
+ *
+ * The number that matters is the width: `hooks/use-mobile.ts` calls anything under 768 mobile,
+ * and Tailwind's `md` — which every `md:` class in this Admin turns on at — is the same
+ * boundary. So this is a phone held upright, comfortably the other side of it, rather than a
+ * width chosen to sit just inside it: a case running at 767 would be asserting about where the
+ * breakpoint is rather than about the layout it selects.
+ */
+export const A_NARROW_WINDOW: Viewport = { width: 390, height: 844 };
 
 /** The devbox script that downloads the browser, and what a refusal here tells a reader to run. */
 export const BROWSERS_SCRIPT = "browsers";
@@ -141,11 +163,11 @@ export type AdminSeam = {
   readonly database: TestDatabase;
 
   /** A browser with no cookie at all, at a path inside the Admin. */
-  anonymous(path?: string): Promise<Page>;
+  anonymous(path?: string, viewport?: Viewport): Promise<Page>;
   /** A browser already carrying a Merchant session, at a path inside the Admin. */
-  signedIn(path?: string): Promise<Page>;
+  signedIn(path?: string, viewport?: Viewport): Promise<Page>;
   /** The same, as somebody other than the seeded Merchant — see {@link AdminSeam.merchantOnARole}. */
-  signedInAs(who: Credentials, path?: string): Promise<Page>;
+  signedInAs(who: Credentials, path?: string, viewport?: Viewport): Promise<Page>;
 
   /**
    * A colleague on a Role holding exactly the Permissions named, created through the API.
@@ -263,8 +285,18 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     return arranging;
   };
 
-  const openWindow = async (path: string, as: Credentials | null): Promise<Page> => {
-    const context = await started.newContext({ baseURL: origin });
+  const openWindow = async (
+    path: string,
+    as: Credentials | null,
+    viewport?: Viewport,
+  ): Promise<Page> => {
+    // Spread rather than handed straight on: Playwright reads an explicit `viewport` of
+    // `undefined` as "no fixed viewport at all", which is a window sized by whatever is
+    // driving it rather than the 1280×720 every other case in this file was written at.
+    const context = await started.newContext({
+      baseURL: origin,
+      ...(viewport === undefined ? {} : { viewport: { ...viewport } }),
+    });
     context.setDefaultTimeout(LOCATOR_TIMEOUT);
     windows.push(context);
 
@@ -329,9 +361,9 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     merchant: MERCHANT,
     database,
 
-    anonymous: (path = "/") => openWindow(path, null),
-    signedIn: (path = "/") => openWindow(path, MERCHANT),
-    signedInAs: (who, path = "/") => openWindow(path, who),
+    anonymous: (path = "/", viewport) => openWindow(path, null, viewport),
+    signedIn: (path = "/", viewport) => openWindow(path, MERCHANT, viewport),
+    signedInAs: (who, path = "/", viewport) => openWindow(path, who, viewport),
 
     async merchantOnARole(permissions) {
       const suffix = randomSuffix();
@@ -557,12 +589,16 @@ export async function hides(locator: Locator, what: string): Promise<void> {
 /** The two globals the focus callback below reaches for, declared for `document`'s reason. */
 declare const window: { dispatchEvent(event: object): boolean };
 declare const Event: new (type: string) => object;
+/** What {@link animationsFinished} waits a frame with. */
+declare const requestAnimationFrame: (callback: () => void) => number;
 
 declare const document: {
   readonly activeElement: unknown;
   readonly documentElement: { readonly className: string };
+  querySelector(selectors: string): unknown;
   getAnimations(): {
     readonly finished: Promise<unknown>;
+    readonly playState: string;
     readonly effect: { getComputedTiming(): { readonly iterations?: number } } | null;
   }[];
 };
@@ -724,20 +760,66 @@ export async function auditAccessibility(page: Page, where: string): Promise<voi
  * `animate-spin`, the boot gate audits a screen whose only content is one, and its `finished`
  * resolves never — so waiting on that would arrive as a hung test rather than as anything a
  * reader could act on.
+ *
+ * **It waits for the page to go quiet, rather than asking once**, and that is not defensiveness —
+ * it is the difference between the failure above happening always and happening *sometimes*.
+ * #193 is where that got caught: an overlay that opens on `data-starting-style` is mounted at its
+ * starting value and its transition does not exist for a frame or two afterwards, so a
+ * `getAnimations()` taken the moment the element became visible can find **nothing to wait for**
+ * and hand the audit the un-settled first paint. The mobile sidebar's group label measured
+ * `serious` on `color-contrast` about one open in twelve that way, on colours the same sidebar
+ * passes with every time at a wider window — red *sometimes*, which this comment already said is
+ * the worst of the three outcomes. So quiet means **three frames in a row with nothing ending and
+ * nothing holding a starting or ending style**, which no transition that has been asked for can
+ * hide inside.
+ *
+ * The bound is frames rather than seconds and it is generous: a page that is genuinely still
+ * animating after it has run out is one this returns on rather than hangs on, and the audit after
+ * it then says what it saw. Nothing in this Admin animates for longer than `duration-200`.
  */
 async function animationsFinished(page: Page): Promise<void> {
   await page.evaluate(async () => {
-    const ending = document
-      .getAnimations()
-      .filter(
-        (animation) => animation.effect?.getComputedTiming().iterations !== Infinity,
+    const frame = () =>
+      new Promise<void>((settle) => requestAnimationFrame(() => settle()));
+
+    let quiet = 0;
+    for (let frames = 0; frames < 40 && quiet < 3; frames += 1) {
+      await frame();
+
+      // The half no animation can report: Base UI mounts an overlay carrying
+      // `data-starting-style`, holds it at its starting value for a frame, and only creates the
+      // transition when it takes the attribute off again. While it is there, there is nothing
+      // ending and nothing to wait for, and the audit measures an overlay at opacity 0 over the
+      // screen behind it. This is what closes that window, and it is the one #193 could still
+      // reach through about one open in thirty-five with only the loop below.
+      if (document.querySelector("[data-starting-style], [data-ending-style]") !== null) {
+        quiet = 0;
+        continue;
+      }
+
+      const ending = document.getAnimations().filter(
+        (animation) =>
+          animation.effect?.getComputedTiming().iterations !== Infinity &&
+          // One that has already ended is still **listed**, because this Admin's overlays
+          // animate with `fill-mode: both` and a filled animation stays relevant for as long
+          // as its element does. Waiting on those is free and asking about them is not: they
+          // never go away, so a loop that counted them as movement would run its whole bound
+          // on every settled screen — which is a third again on the file, for nothing.
+          animation.playState !== "finished",
       );
 
-    // Cancelled rather than finished is still "no longer animating", and is what a closing
-    // overlay leaves behind.
-    await Promise.all(
-      ending.map((animation) => animation.finished.catch(() => undefined)),
-    );
+      if (ending.length === 0) {
+        quiet += 1;
+        continue;
+      }
+      quiet = 0;
+
+      // Cancelled rather than finished is still "no longer animating", and is what a closing
+      // overlay leaves behind.
+      await Promise.all(
+        ending.map((animation) => animation.finished.catch(() => undefined)),
+      );
+    }
   });
 }
 

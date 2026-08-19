@@ -74,7 +74,10 @@ export function AppLayout({ session }: { readonly session: Session }) {
           `region` — caught by `tests/the-admin-in-a-browser.test.ts` and invisible to
           everything else in this repository. It is passed here rather than baked into
           `components/ui/sidebar.tsx`, because what a deployment's sidebar *is* belongs to the
-          application composing it and not to the vendored primitive (ADR-0063). */}
+          application composing it and not to the vendored primitive (ADR-0063) — and what that
+          primitive owes in return is putting these on an *element* whichever of its three
+          branches renders, which upstream did not below `md` and this repository's copy now
+          does (#193, `components/ui/README.md`). */}
         <Sidebar
           collapsible="icon"
           role="complementary"
