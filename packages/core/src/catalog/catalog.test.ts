@@ -25,6 +25,7 @@ type CreatedProduct = {
   id: string;
   title: string;
   description: string | null;
+  handle: string;
   metadata: Record<string, unknown>;
   variants: {
     id: string;
@@ -141,6 +142,135 @@ describe("POST /admin/products", () => {
     await expect(kobai.database.query("select id from core_product")).resolves.toEqual(
       [],
     );
+  });
+
+  it("proposes a handle from the title, and takes one that is given", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const proposed = await createProduct(kobai, headers, {
+      title: "Blue Poster (A2)",
+      variants: [{ sku: "POSTER-A2" }],
+    });
+    const chosen = await createProduct(kobai, headers, {
+      title: "Blue Poster (A3)",
+      handle: "the-big-one",
+      variants: [{ sku: "POSTER-A3" }],
+    });
+
+    // Story 3: a Merchant does not invent an address for every Product. Story 2: one who wants
+    // their own says so and gets exactly it, with no normalising in between.
+    expect(proposed.handle).toBe("blue-poster-a2");
+    expect(chosen.handle).toBe("the-big-one");
+
+    // Read back through the route a Merchant opens a Product with, and through the list, for
+    // the reason the description is: a create that assembled its own answer would report a
+    // field the readers had never learned to select.
+    const opened = await kobai.request(`/admin/products/${chosen.id}`, { headers });
+    await expect(opened.json()).resolves.toMatchObject({ handle: "the-big-one" });
+
+    const listed = await kobai.request("/admin/products", { headers });
+    const page = (await listed.json()) as { products: CreatedProduct[] };
+    expect(page.products.map((one) => one.handle)).toEqual([
+      "the-big-one",
+      "blue-poster-a2",
+    ]);
+  });
+
+  it("refuses a handle another Product already answers to, and stores nothing", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    await createProduct(kobai, headers, {
+      title: "Blue poster",
+      variants: [{ sku: "POSTER-A2" }],
+    });
+
+    // The second Product's title proposes the address the first one already holds, which is
+    // the collision a Merchant meets without asking for anything unusual.
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Blue poster", variants: [{ sku: "POSTER-A3" }] }),
+    });
+
+    // Refused rather than silently suffixed: two Products must not fight over one address, and
+    // a Merchant who asked for one should be told they cannot have it (story 4).
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ reason: "handle-taken" });
+    // The whole request goes back, Variants included — the same property a refused SKU has,
+    // because a half-created Product is the zero-Variant state creation exists to prevent.
+    await expect(
+      kobai.database.query("select sku from core_variant order by sku"),
+    ).resolves.toEqual([{ sku: "POSTER-A2" }]);
+  });
+
+  it("refuses a handle that reads as an identifier", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "A2 poster",
+        handle: "9f8a1c0e-3b6d-4a2f-9c11-5d7e2b8a4f36",
+        variants: [{ sku: "POSTER-A2" }],
+      }),
+    });
+
+    // What makes `GET /store/products/{idOrHandle}` statable: a UUID is read as an id there, so
+    // a Product whose handle were one could never be reached by its own address.
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
+    await expect(kobai.database.query("select id from core_product")).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("refuses a handle that is not the shape of an address", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "A2 poster",
+        // A slash is the case with teeth: the route resolving it would never see the second
+        // half, so the Product would be unreachable exactly as a UUID-shaped one is.
+        handle: "posters/blue",
+        variants: [{ sku: "POSTER-A2" }],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
+  });
+
+  it("refuses a title that proposes no handle rather than inventing one", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      // Nothing addressable survives it, so kobai has nothing to propose — and a Merchant is
+      // right here to be asked, which is the difference from the backfill in `0037`, where
+      // there is nobody to ask and a fallback is the only honest answer.
+      body: JSON.stringify({ title: "★", variants: [{ sku: "POSTER-A2" }] }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
+
+    // And the remedy the refusal names really works: the same title, with an address.
+    const named = await createProduct(kobai, headers, {
+      title: "★",
+      handle: "the-star",
+      variants: [{ sku: "POSTER-A2" }],
+    });
+    expect(named.handle).toBe("the-star");
   });
 
   it("refuses a Product with no Variant, and stores nothing", async () => {

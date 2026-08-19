@@ -979,12 +979,31 @@ export const ProductDescription = z.string().nullable().meta({
     "What this Product says for itself, in a Merchant's own words, or `null` where none has been written. Never an empty string: a Product nobody has written copy for has no description rather than a blank one.",
 });
 
+/**
+ * The address a Product is known by — `blue-poster`, so a storefront's URL can be
+ * `/products/blue-poster`.
+ *
+ * **Always present and never empty.** Unlike the description above there is no state of having
+ * none: a create that names no handle is given one proposed from its title, and no route takes
+ * one back off. So a client renders it without asking, which is the point of a `NOT NULL`
+ * column reaching the wire as a required field.
+ *
+ * **Shared by {@link Product} and {@link StoreProduct} for {@link ProductDescription}'s
+ * reason** — a leaf cannot grow a field, so sharing one costs nothing the split between those
+ * two shapes is defending, and each surface still names this one itself.
+ */
+export const ProductHandle = z.string().meta({
+  description:
+    "The address this Product is known by, unique across the Store — `blue-poster`, so a storefront's URL can be `/products/blue-poster` rather than a UUID. `GET /store/products/{idOrHandle}` accepts it in place of the identifier.",
+});
+
 /** As a list reports it: no Variants, because a list is not a detail view. */
 export const Product = z
   .object({
     id: z.uuid(),
     title: z.string(),
     description: ProductDescription,
+    handle: ProductHandle,
     metadata: Metadata,
   })
   .openapi("Product");
@@ -1070,6 +1089,10 @@ export const CreateProductRequest = z
       description:
         "What this Product says for itself, in a Merchant's own words. Left out, the Product has no description — `null` rather than an empty string, because a Product nobody has written copy for is a different thing from one described as nothing at all. Correct it later with `PATCH /admin/products/{id}`.",
     }),
+    handle: z.string().optional().meta({
+      description:
+        'The address this Product is to be known by — lower-case letters and digits in groups separated by single hyphens, e.g. "blue-poster". **Left out, kobai proposes one from the title**, so a Merchant need not invent one for every Product. Either way a handle another Product already answers to is refused at 409 rather than quietly suffixed, and one that reads as a UUID is refused at 400: `GET /store/products/{idOrHandle}` resolves a UUID as an identifier, so a Product whose handle were one could not be reached by it.',
+    }),
     metadata: Metadata.optional(),
     variants: z.array(CreateVariantRequest).min(1),
   })
@@ -1099,6 +1122,10 @@ export const UpdateProductRequest = z
     description: z.string().nullable().optional().meta({
       description:
         "New copy for this Product, or `null` to take what is there back off — which is the state a Product created without one is already in. Absent leaves whatever is stored, exactly as every other field here does.",
+    }),
+    handle: z.string().optional().meta({
+      description:
+        "A new address for this Product — the storefront URL it is reached at moves with it, so anything already linking to the old one stops resolving. There is no `null` here as there is for the description: a Product with no address is not a state that exists. One another Product answers to is refused at 409.",
     }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
@@ -1182,6 +1209,7 @@ const CATALOG_REASONS = {
   "variant-not-found": "variant-not-found",
   "price-not-found": "price-not-found",
   "sku-taken": "sku-taken",
+  "handle-taken": "handle-taken",
   "last-variant": "last-variant",
   "stock-is-reserved": "stock-is-reserved",
   "unsupported-currency": "unsupported-currency",
@@ -1271,6 +1299,12 @@ export const StoreProduct = z
      * section's whole argument requires: a field is public because somebody said so here.
      */
     description: ProductDescription,
+    /**
+     * **Published because it is the only reason this column exists.** A handle is an address a
+     * storefront builds its own URL out of, so a `/store` shape that dropped it would leave
+     * every storefront back on the UUID — and this is the route that reads one back.
+     */
+    handle: ProductHandle,
     metadata: Metadata,
   })
   .openapi("StoreProduct");
@@ -1286,6 +1320,28 @@ export const StoreProductDetail = StoreProduct.extend({
   variants: z.array(StoreVariant).readonly(),
 }).openapi("StoreProductDetail");
 
+/**
+ * How a storefront addresses a Product: its identifier, or its handle.
+ *
+ * **A plain string, for {@link IdParam}'s reason and one more.** Anything that is neither is a
+ * 404 rather than a 400 — a handle nothing answers to and an identifier nothing carries are the
+ * same answer to the caller. And there is nothing narrower to declare that would be true: the
+ * parameter's whole point is that two spaces of string are accepted here, so a schema saying
+ * which would have to say `uuid` or *the shape a handle happens to have today*, and the second
+ * is a rule `catalog/handle.ts` may relax.
+ *
+ * **Named `idOrHandle` rather than `id`**, so a Developer reads what the route does off the
+ * description instead of finding out that a handle works. Renaming a path parameter is a break
+ * under ADR-0060 and free under ADR-0058's licence until the first publish, which is why it
+ * happens now rather than later.
+ */
+export const IdOrHandleParam = z.object({
+  idOrHandle: z.string().meta({
+    description:
+      "A Product's identifier, or its handle. A UUID is read as an identifier and anything else as a handle; neither being found is the same 404.",
+  }),
+});
+
 /** The list, in an envelope — the same shape, and the same reason, as {@link ProductList}. */
 export const StoreProductList = z
   .object({ products: z.array(StoreProduct).readonly(), nextCursor: NextCursor })
@@ -1294,7 +1350,7 @@ export const StoreProductList = z
 /**
  * Reading a Product or a Variant that is not there.
  *
- * Two words, and **not** {@link CatalogRefusal}'s two of the same spelling. That set is nine
+ * Two words, and **not** {@link CatalogRefusal}'s two of the same spelling. That set is ten
  * reasons wide because it covers nine admin routes, and a storefront branching on it would be
  * handed `sku-taken` and `last-variant` as things a catalog read might answer — which it never
  * can. Each module owns its own vocabulary (ADR-0060), and the mapped `satisfies` below is what

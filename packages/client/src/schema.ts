@@ -803,7 +803,7 @@ export interface paths {
     };
     /**
      * Create a Product
-     * @description A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce.
+     * @description A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed.
      */
     post: {
       requestBody: {
@@ -836,7 +836,7 @@ export interface paths {
             "application/json": components["schemas"]["PermissionDenied"];
           };
         };
-        /** @description A Variant already carries one of those SKUs. */
+        /** @description Another Product already answers to that handle, or a Variant already carries one of those SKUs. */
         409: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -970,7 +970,7 @@ export interface paths {
     };
     /**
      * Correct a Product
-     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.
      */
     patch: {
       parameters: {
@@ -1011,6 +1011,12 @@ export interface paths {
         };
         /** @description No such Product exists. */
         404: {
+          content: {
+            "application/json": components["schemas"]["CatalogRefusal"];
+          };
+        };
+        /** @description Another Product already answers to that handle. */
+        409: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
@@ -1843,16 +1849,16 @@ export interface paths {
       };
     };
   };
-  "/store/products/{id}": {
+  "/store/products/{idOrHandle}": {
     /**
      * Read a Product
-     * @description One Product with its Variants, so a product page is one request rather than one per Variant. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.
+     * @description One Product with its Variants, so a product page is one request rather than one per Variant. **Addressed by its identifier or by its handle** — a UUID is read as the first and anything else as the second, so `/store/products/blue-poster` is the request behind a readable storefront URL. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.
      */
     get: {
       parameters: {
         path: {
-          /** @description An identifier. Anything that is not one is not found. */
-          id: string;
+          /** @description A Product's identifier, or its handle. A UUID is read as an identifier and anything else as a handle; neither being found is the same 404. */
+          idOrHandle: string;
         };
       };
       responses: {
@@ -2909,6 +2915,8 @@ export interface components {
       title: string;
       /** @description What this Product says for itself, in a Merchant's own words, or `null` where none has been written. Never an empty string: a Product nobody has written copy for has no description rather than a blank one. */
       description: string | null;
+      /** @description The address this Product is known by, unique across the Store — `blue-poster`, so a storefront's URL can be `/products/blue-poster` rather than a UUID. `GET /store/products/{idOrHandle}` accepts it in place of the identifier. */
+      handle: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -2921,12 +2929,14 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy";
+      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy";
     };
     CreateProductRequest: {
       title: string;
       /** @description What this Product says for itself, in a Merchant's own words. Left out, the Product has no description — `null` rather than an empty string, because a Product nobody has written copy for is a different thing from one described as nothing at all. Correct it later with `PATCH /admin/products/{id}`. */
       description?: string;
+      /** @description The address this Product is to be known by — lower-case letters and digits in groups separated by single hyphens, e.g. "blue-poster". **Left out, kobai proposes one from the title**, so a Merchant need not invent one for every Product. Either way a handle another Product already answers to is refused at 409 rather than quietly suffixed, and one that reads as a UUID is refused at 400: `GET /store/products/{idOrHandle}` resolves a UUID as an identifier, so a Product whose handle were one could not be reached by it. */
+      handle?: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -2951,6 +2961,8 @@ export interface components {
       title?: string;
       /** @description New copy for this Product, or `null` to take what is there back off — which is the state a Product created without one is already in. Absent leaves whatever is stored, exactly as every other field here does. */
       description?: string | null;
+      /** @description A new address for this Product — the storefront URL it is reached at moves with it, so anything already linking to the old one stops resolving. There is no `null` here as there is for the description: a Product with no address is not a state that exists. One another Product answers to is refused at 409. */
+      handle?: string;
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
@@ -3217,6 +3229,8 @@ export interface components {
       title: string;
       /** @description What this Product says for itself, in a Merchant's own words, or `null` where none has been written. Never an empty string: a Product nobody has written copy for has no description rather than a blank one. */
       description: string | null;
+      /** @description The address this Product is known by, unique across the Store — `blue-poster`, so a storefront's URL can be `/products/blue-poster` rather than a UUID. `GET /store/products/{idOrHandle}` accepts it in place of the identifier. */
+      handle: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;

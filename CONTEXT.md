@@ -137,6 +137,13 @@ A catalog entry a Merchant manages and a Shopper browses. **Never sellable in it
 see ADR-0008.
 _Avoid_: item, article, listing, SKU (that belongs to a Variant)
 
+**Handle**:
+The **address** a Product is known by — `blue-poster`, so a storefront's URL can be
+`/products/blue-poster` rather than a UUID. Unique across the Store, proposed from the title
+when a Merchant names none, and correctable afterwards. Never an identifier: a handle that
+parses as one is refused, because `GET /store/products/{idOrHandle}` reads a UUID as the id.
+_Avoid_: slug, permalink, key, alias, code (that is a currency's or a discount's)
+
 **Variant**:
 The sellable thing, carrying the SKU. Every Product has at least one, including a Product
 with no options at all.

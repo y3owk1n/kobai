@@ -111,6 +111,14 @@ const product = await kobai.request(`/admin/products/${catalog.productId}`, {
 Store's default, which since #5 is the only currency a Price may carry. So the helper takes
 no currency at all: the correct thing is the only thing.
 
+**Two catalogs in one deployment each need their own `title` as well as their own SKUs**
+(#251). A Product's handle is unique across the Store and is proposed from its title when a
+create names none, so the second `seedTestCatalog(kobai)` is refused `handle-taken` — one door
+along from the `sku-taken` two default catalogs were already refused with. The helper passes no
+handle of its own on purpose: that way every test in this repository that seeds a catalog is
+also exercising what `POST /admin/products` does when a Merchant names no handle, which is the
+case they meet first.
+
 **Nothing it seeds is counted**, and there is deliberately no option that counts it. A Variant
 with no Inventory row sells freely and holds no Reservation (ADR-0018), which is what every test
 that is not about stock wants; a test that *is* about stock says so with

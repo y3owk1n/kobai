@@ -348,6 +348,88 @@ describe("PATCH /admin/products/{id}", () => {
     await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
   });
 
+  it("moves the handle, and the storefront address moves with it", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+
+    const corrected = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ handle: "the-blue-one" }),
+    });
+
+    expect(corrected.status).toBe(200);
+    await expect(corrected.json()).resolves.toMatchObject({ handle: "the-blue-one" });
+
+    // The point of correcting one, asserted where it can be seen: the Product answers at its
+    // new address on the store surface, and at the old one it answers to nothing. That second
+    // half is what makes a handle change a thing to warn a Merchant about rather than a typo
+    // fix like the title beside it.
+    const moved = await kobai.request("/store/products/the-blue-one", {
+      headers: catalog.apiKey.headers,
+    });
+    expect(moved.status).toBe(200);
+    const gone = await kobai.request("/store/products/a-poster", {
+      headers: catalog.apiKey.headers,
+    });
+    expect(gone.status).toBe(404);
+  });
+
+  it("refuses a handle another Product answers to, and leaves both alone", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+    const second = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "A mug", variants: [{ sku: "MUG" }] }),
+    });
+    const other = (await second.json()) as { id: string; handle: string };
+
+    const response = await kobai.request(`/admin/products/${other.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ handle: "a-poster" }),
+    });
+
+    // Creation's own word, at creation's own status, because it is one fact about the Store
+    // rather than about the route (ADR-0060) — the same thing `sku-taken` does for a Variant.
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ reason: "handle-taken" });
+
+    const unchanged = await kobai.request(`/admin/products/${other.id}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(unchanged.json()).resolves.toMatchObject({ handle: "a-mug" });
+  });
+
+  it("refuses a handle that reads as an identifier, and takes back the one it holds", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+
+    // The correction is read by the very narrowing a create is read by, so what a Merchant
+    // could not have created a Product with is what they cannot correct one to.
+    const asIdentifier = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ handle: catalog.productId }),
+    });
+    expect(asIdentifier.status).toBe(400);
+    await expect(asIdentifier.json()).resolves.toMatchObject({ reason: "invalid" });
+
+    // And there is no `null` here as there is for the description: a Product with no address
+    // is not a state that exists, so asking for one is the ordinary refusal rather than the
+    // removal that spelling means one field along.
+    const removed = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ handle: null }),
+    });
+    expect(removed.status).toBe(400);
+  });
+
   it("refuses a body that names nothing it could change", async () => {
     kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);

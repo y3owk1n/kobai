@@ -8,6 +8,7 @@ import {
   fulfilmentStrategyFor,
 } from "../fulfilment/strategy.ts";
 import { changesFrom, changesNothing, type Field, openData, text } from "../patch.ts";
+import { handleField, handleTaken } from "./handle.ts";
 import { type ProductDetail, readVariants, type Variant } from "./read.ts";
 import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 
@@ -42,21 +43,28 @@ import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 export type UpdateProductInput = {
   readonly title?: unknown;
   readonly description?: unknown;
+  readonly handle?: unknown;
   readonly metadata?: unknown;
 };
 
 /**
- * Correcting a Product refuses in two ways, and neither is new.
+ * Correcting a Product refuses in three ways, and only the third is about a *rule*.
  *
  * There is no `title-taken` and there is not going to be one: a title is what a Product is
- * called, not what identifies it, and two Products may perfectly well share one. The SKU on
- * the Variant below is the identifying string, and it is the one with an index behind it.
+ * called, not what identifies it, and two Products may perfectly well share one. The **handle**
+ * is the Product's identifying string, and it is the one with a unique constraint behind it —
+ * which is why `handle-taken` is here and is creation's own word, exactly as `sku-taken` is the
+ * Variant's on both routes (ADR-0060).
+ *
+ * A handle is corrected rather than fixed for ever, because a Merchant who accepted a proposed
+ * one and then thought better of it has nowhere else to go — and it is the remedy the backfill
+ * in `0037` points at for a Product it had to number.
  */
 export type ProductUpdate =
   | { readonly ok: true; readonly product: ProductDetail }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | "product-not-found";
+      readonly reason: "invalid" | "product-not-found" | "handle-taken";
       readonly detail: string;
     };
 
@@ -116,10 +124,10 @@ const clearableDescription: Field<string | null> = (value) =>
  * Changes what this Product says about itself, and leaves its Variants alone.
  *
  * **One statement decides everything, so this takes no lock either** — `updateVariant`'s
- * argument one table up: existence is what the `update` answers, there is no uniqueness to
- * defend, and nothing here is asked of a second row. The transaction is for the read back, so
- * what this answers is the Product this write left rather than whatever the next request
- * leaves between the two statements.
+ * argument one table up: existence is what the `update` answers, uniqueness is what the
+ * constraint on `handle` answers, and nothing here is asked of a second row. The transaction is
+ * for the read back, so what this answers is the Product this write left rather than whatever
+ * the next request leaves between the two statements.
  *
  * **Its Variants are not this route's business**, in either direction: it neither creates one
  * (`POST /admin/products/{id}/variants` does) nor touches the ones that are there. A `variants`
@@ -132,10 +140,19 @@ export async function updateProduct(
   input: UpdateProductInput,
 ): Promise<ProductUpdate> {
   const usable = changesFrom(
-    { title: input.title, description: input.description, metadata: input.metadata },
+    {
+      title: input.title,
+      description: input.description,
+      handle: input.handle,
+      metadata: input.metadata,
+    },
     {
       title: text("title"),
       description: clearableDescription,
+      // Creation's own narrowing, so a handle a Merchant could have created this Product with
+      // is one they can correct it to. There is deliberately no `null` here as there is for the
+      // description beside it: a Product with no address is not a state that exists.
+      handle: handleField,
       metadata: openData("metadata"),
     },
     // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
@@ -143,7 +160,7 @@ export async function updateProduct(
     // does not carry, so a body naming `variants` is this body, and the refusal is where a
     // Merchant who tried to add one is told which route adds one.
     changesNothing(
-      "a `title`, a `description`, a `metadata`, or any of them",
+      "a `title`, a `description`, a `handle`, a `metadata`, or any of them",
       "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
     ),
   );
@@ -152,30 +169,56 @@ export async function updateProduct(
 
   if (!isUuid(productId)) return noSuchProduct(productId);
 
-  return db.transaction(async (tx) => {
-    const [updated] = await tx
-      .update(product)
-      .set(changes)
-      .where(eq(product.id, productId))
-      .returning({
-        id: product.id,
-        title: product.title,
-        description: product.description,
-        metadata: product.metadata,
-      });
-    if (!updated) return noSuchProduct(productId);
+  try {
+    return await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(product)
+        .set(changes)
+        .where(eq(product.id, productId))
+        .returning({
+          id: product.id,
+          title: product.title,
+          description: product.description,
+          handle: product.handle,
+          metadata: product.metadata,
+        });
+      if (!updated) return noSuchProduct(productId);
 
-    // The Variants are read back rather than left out, so this answers what
-    // `GET /admin/products/{id}` answers — one shape for a Product opened, whether it was just
-    // corrected or merely looked at. `readProduct` is not called because the row is already
-    // here, and asking for it again inside the same transaction would be a second read of what
-    // this statement just returned.
-    return {
-      ok: true,
-      product: { ...updated, variants: await readVariants(tx, productId) },
-    } as const;
-  });
+      // The Variants are read back rather than left out, so this answers what
+      // `GET /admin/products/{id}` answers — one shape for a Product opened, whether it was just
+      // corrected or merely looked at. `readProduct` is not called because the row is already
+      // here, and asking for it again inside the same transaction would be a second read of what
+      // this statement just returned.
+      return {
+        ok: true,
+        product: { ...updated, variants: await readVariants(tx, productId) },
+      } as const;
+    });
+  } catch (cause) {
+    // The unique constraint is the check, and this is how its answer is read — `updateVariant`'s
+    // mechanism one table up, in the one form an `update` has: Postgres offers no `on conflict`
+    // here, so the loser of two simultaneous corrections finds out by being thrown at. A
+    // select-then-update would let both pass and surface as a 500 rather than as the conflict it
+    // is (ADR-0018).
+    //
+    // Read out here rather than inside the transaction: a statement Postgres refused has already
+    // aborted it, so a refusal decided in there would be returned from a transaction that can no
+    // longer run anything.
+    // `changes.handle` is asked first to narrow it rather than to condition the refusal: this
+    // constraint is the only one on the table, so a body that named no handle cannot have
+    // violated it, and if one somehow did the error travels as itself.
+    if (
+      changes.handle !== undefined &&
+      violatesUniqueIndex(cause, ONE_PRODUCT_PER_HANDLE)
+    ) {
+      return handleTaken(changes.handle);
+    }
+    throw cause;
+  }
 }
+
+/** The unique constraint that makes a handle name one Product — see `db/schema.ts`. */
+const ONE_PRODUCT_PER_HANDLE = "core_product_handle_unique";
 
 function noSuchProduct(productId: string): ProductUpdate {
   return {

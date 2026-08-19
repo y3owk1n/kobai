@@ -105,6 +105,21 @@ something to solve in SQL. A **plain** `CREATE INDEX` is not this: no row can re
 cost on a populated table is a lock, and the remedy for that is `CONCURRENTLY`, which cannot
 run inside the transaction a migration is applied in.
 
+**`core_product.handle` is the worked example, and it deduplicates by *never producing* a
+duplicate** (#251). `0036`–`0038` is the three-step shape with the uniqueness hazard on top of
+it: nullable column, a `--custom` backfill, then `SET NOT NULL` and the constraint. Three things
+about the middle one carry to the next uniqueness requirement. It is a **loop rather than one
+statement**, because what was wanted was a guarantee: each Product, oldest first by
+`(created_at, id)`, takes the slug of its own title, and where that address is already taken it
+takes the first free `-2`, `-3`, … after it — checked against **the handles actually written**,
+never against a count of duplicate titles, since `Blue poster` twice and a third Product really
+called `Blue poster 2` all want `blue-poster-2` and only the first spelling notices. Nothing is
+deleted or merged, which is how it sidesteps the paragraph above: two Products are never the
+same fact, so keeping the newest was never available. And it is **watched failing** —
+`packages/core/src/catalog/two-products-one-handle.test.ts` seeds a catalog through the
+pre-handle set and applies the rest onto it, and the run against a backfill with the
+disambiguation taken out is what says the arrangement reaches the hazard at all.
+
 **Uniqueness arrives in two spellings and the check reads both** (#153). `ALTER TABLE … ADD
 CONSTRAINT … UNIQUE` is what a `.unique()` on a column generates — eight of those in
 `packages/core/src/db/schema.ts` against three `uniqueIndex()`, so it is the *likelier* way a

@@ -84,6 +84,15 @@ export type Product = {
    * a storefront handed an empty string draws an empty paragraph under every such title.
    */
   readonly description: string | null;
+  /**
+   * The address this Product is known by — `blue-poster` — unique across the Store.
+   *
+   * Always there and never empty: it is `NOT NULL` on the column, proposed from the title when
+   * a create named none, and there is no way to take one back off. A Merchant reads it here
+   * because it is what a storefront's URL will say, and correcting it is
+   * `PATCH /admin/products/{id}`.
+   */
+  readonly handle: string;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -108,6 +117,7 @@ export async function listProducts(
       id: product.id,
       title: product.title,
       description: product.description,
+      handle: product.handle,
       metadata: product.metadata,
       cursorAt: cursorAt(product.createdAt),
     })
@@ -123,12 +133,13 @@ export async function listProducts(
 
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
   // response by being forgotten about — the same reason a Payment is rebuilt rather than
-  // spread. A Product reports four fields, and these are them.
+  // spread. A Product reports five fields, and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
       title: row.title,
       description: row.description,
+      handle: row.handle,
       metadata: row.metadata,
     })),
     nextCursor,
@@ -151,6 +162,7 @@ export async function readProduct(
       id: product.id,
       title: product.title,
       description: product.description,
+      handle: product.handle,
       metadata: product.metadata,
     })
     .from(product)

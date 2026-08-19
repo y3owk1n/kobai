@@ -156,6 +156,7 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
   "variant-not-found": true,
   "price-not-found": true,
   "sku-taken": true,
+  "handle-taken": true,
   "last-variant": true,
   "stock-is-reserved": true,
   "unsupported-currency": true,

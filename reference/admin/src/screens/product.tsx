@@ -146,6 +146,7 @@ export function ProductScreen() {
         id={id}
         title={product.data.title}
         description={product.data.description}
+        handle={product.data.handle}
       />
 
       {product.data.variants.map((variant) => (
@@ -172,15 +173,24 @@ export function ProductScreen() {
  * `""` would be refused rather than stored. It is also why the box shows `""` for a Product
  * with no description: a `null` in a text field is React's uncontrolled-input warning, and
  * what a Merchant sees either way is an empty box.
+ *
+ * **The handle has no such spelling and is sent as it stands.** There is no `null` for it in
+ * the route, because a Product with no address is not a state kobai has — so an emptied box is
+ * a request kobai refuses at the field, exactly as an address somebody else holds is. Nothing
+ * proposes one here either: a proposal belongs where a Product is being *named*, and rewriting
+ * a live address because a Merchant fixed a typo in the title is the last thing this screen
+ * should do.
  */
 function ProductIdentity({
   id,
   title,
   description,
+  handle,
 }: {
   readonly id: string;
   readonly title: string;
   readonly description: string | null;
+  readonly handle: string;
 }) {
   const client = useKobaiClient();
   // Both, because deleting a Product invalidates more than the Product: the list behind it is
@@ -194,11 +204,11 @@ function ProductIdentity({
     resolver: zodResolver(ProductForm),
     // Keyed by the values it was opened with, so a change that landed leaves the fields showing
     // what kobai now holds rather than what was typed.
-    values: { title, description: description ?? "" },
+    values: { title, description: description ?? "", handle },
   });
 
   const save = useMutation({
-    mutationFn: async (values: { title: string; description: string }) =>
+    mutationFn: async (values: { title: string; description: string; handle: string }) =>
       orThrow(
         await client.PATCH("/admin/products/{id}", {
           params: { path: { id } },
@@ -207,6 +217,7 @@ function ProductIdentity({
             // Emptied means removed, and `null` is the only way to say it: an absent field
             // means "leave it" on every `PATCH` in kobai (ADR-0062).
             description: values.description.trim() === "" ? null : values.description,
+            handle: values.handle,
           },
         }),
       ),
@@ -256,6 +267,13 @@ function ProductIdentity({
             error={form.formState.errors.title}
             {...form.register("title")}
           />
+          <FormField
+            id="product-handle"
+            label="Handle"
+            error={form.formState.errors.handle}
+            description="The address a storefront reaches this Product at — /products/blue-poster. Changing it moves that address: anything already linking to the old one stops resolving."
+            {...form.register("handle")}
+          />
           <TextareaField
             id="product-description"
             label="Description"
@@ -287,6 +305,10 @@ function ProductIdentity({
 const ProductForm = z.object({
   title: z.string().min(1, "A Product needs a title."),
   description: z.string(),
+  // `min(1)` is the field being required, and it is required because there is no way to say
+  // "remove the handle": kobai has no state for a Product with no address. What a handle may
+  // *look* like stays kobai's rule, and arrives here as a refusal.
+  handle: z.string().min(1, "A Product is reached at a handle, so it needs one."),
 });
 
 /**
@@ -997,6 +1019,7 @@ function isNoSuchProduct(thrown: unknown): boolean {
     case "variant-not-found":
     case "price-not-found":
     case "sku-taken":
+    case "handle-taken":
     case "last-variant":
     case "stock-is-reserved":
     case "unsupported-currency":
@@ -1019,7 +1042,7 @@ function isNoSuchProduct(thrown: unknown): boolean {
 /**
  * Why kobai refused a **deletion**, in words a Merchant can act on.
  *
- * `CatalogRefusal` is the busiest closed family the Admin touches — ten reasons — and this is
+ * `CatalogRefusal` is the busiest closed family the Admin touches — eleven reasons — and this is
  * where #174's exhaustive narrowing earns its keep: **a reason added to it in Core has no arm
  * here and reddens this build in the same commit** (ADR-0063). That is the value of the
  * `never` at the bottom; it is not that every reason deserves its own copy.
@@ -1047,9 +1070,10 @@ function whyNotDeleted(thrown: unknown, fallback: string): string {
     case "invalid":
     case "malformed-body":
     case "sku-taken":
+    case "handle-taken":
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
-      // Not reachable from a delete, which sends no body and names no SKU, currency or
+      // Not reachable from a delete, which sends no body and names no SKU, handle, currency or
       // Strategy. Reported as kobai said it rather than as a sentence written for a case
       // nobody has seen.
       return problemOf(thrown, fallback);
@@ -1082,6 +1106,9 @@ function whyNotChanged(thrown: unknown): string {
   switch (reason) {
     case "sku-taken":
       return "Another Variant already carries that SKU. A SKU is what identifies a Variant, so this one needs its own.";
+
+    case "handle-taken":
+      return "Another Product is already reached at that handle. A handle is the address a storefront links to, so it cannot name two — give this one its own.";
 
     case "unknown-fulfilment-strategy":
       // kobai's prose lists the ones it *does* have, which is exactly what is wanted here and

@@ -605,7 +605,7 @@ const createProductRoute = createRoute({
   path: "/products",
   summary: "Create a Product",
   description:
-    "A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce.",
+    "A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -619,7 +619,10 @@ const createProductRoute = createRoute({
     400: CATALOG_INVALID_REQUEST,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
-    409: json("A Variant already carries one of those SKUs.", contract.CatalogRefusal),
+    409: json(
+      "Another Product already answers to that handle, or a Variant already carries one of those SKUs.",
+      contract.CatalogRefusal,
+    ),
     422: json(
       "A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
       contract.CatalogRefusal,
@@ -683,7 +686,7 @@ const updateProductRoute = createRoute({
   path: "/products/{id}",
   summary: "Correct a Product",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -699,6 +702,9 @@ const updateProductRoute = createRoute({
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     404: json("No such Product exists.", contract.CatalogRefusal),
+    // The one status this route gained with the handle, and it is creation's own: an address
+    // two Products share addresses neither, whichever route asked for it (ADR-0060).
+    409: json("Another Product already answers to that handle.", contract.CatalogRefusal),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -1488,6 +1494,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
  */
 const PRODUCT_STATUS = {
   invalid: 400,
+  "handle-taken": 409,
   "sku-taken": 409,
   "unknown-fulfilment-strategy": 422,
 } as const satisfies Record<
@@ -1508,14 +1515,22 @@ const STORE_UPDATE_STATUS = {
 } as const satisfies Record<Exclude<StoreUpdate, { ok: true }>["reason"], 400 | 422>;
 
 /**
- * Correcting a Product answers two ways, and there is no 409 among them: a title identifies
- * nothing, so there is no row that could already have taken it (ADR-0062's Variant is the one
- * with a unique index behind it).
+ * Correcting a Product answers three ways, and the 409 is about the **handle** and never the
+ * title: a title identifies nothing, so there is no row that could already have taken one, while
+ * a handle is the address a Product is reached at and exactly one Product may hold it.
+ *
+ * 409 rather than 422, on `sku-taken`'s distinction and for its reason: the body is well formed,
+ * the Store is what refuses it, and it becomes possible again by itself the moment the Product
+ * holding that address is renamed or removed.
  */
 const PRODUCT_UPDATE_STATUS = {
   invalid: 400,
   "product-not-found": 404,
-} as const satisfies Record<Exclude<ProductUpdate, { ok: true }>["reason"], 400 | 404>;
+  "handle-taken": 409,
+} as const satisfies Record<
+  Exclude<ProductUpdate, { ok: true }>["reason"],
+  400 | 404 | 409
+>;
 
 /**
  * Adding a Variant answers at creation's statuses, plus the one refusal creating a Product

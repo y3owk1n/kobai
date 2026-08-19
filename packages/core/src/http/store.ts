@@ -136,7 +136,7 @@ const STORE_CATALOG_REFUSALS = {
 const STORE_CATALOG_NOT_FOUND = {
   product: {
     error:
-      "No such Product exists. A Product is addressed by the identifier `GET /store/products` reports, and one taken out of the catalog is gone from here too.",
+      "No such Product exists. A Product is addressed by either the identifier or the handle `GET /store/products` reports for it, and one taken out of the catalog is gone from here too.",
     reason: "product-not-found",
   },
   variant: {
@@ -176,14 +176,28 @@ const listStoreProductsRoute = createRoute({
   },
 });
 
+/**
+ * One Product, addressed by its identifier **or by its handle**.
+ *
+ * The path parameter is `{idOrHandle}` and not `{id}` because both really are accepted, and a
+ * storefront whose routes are `/products/blue-poster` is what the handle exists for (story 23).
+ * The rule is stated where it is implemented — `catalog/store-read.ts` reads a UUID as an
+ * identifier and anything else as a handle — and what keeps it a rule rather than a guess is
+ * that a handle which parses as a UUID is refused at creation.
+ *
+ * **The refusal is unchanged, deliberately.** A handle that resolves to nothing is the same
+ * `product-not-found` a bad identifier already answers: it is one question — "is there such a
+ * Product" — asked two ways, and a second `reason` would be permanent under ADR-0060 and buy a
+ * storefront a distinction it cannot act on.
+ */
 const readStoreProductRoute = createRoute({
   method: "get",
-  path: "/products/{id}",
+  path: "/products/{idOrHandle}",
   summary: "Read a Product",
   description:
-    "One Product with its Variants, so a product page is one request rather than one per Variant. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.",
+    "One Product with its Variants, so a product page is one request rather than one per Variant. **Addressed by its identifier or by its handle** — a UUID is read as the first and anything else as the second, so `/store/products/blue-poster` is the request behind a readable storefront URL. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.",
   security: API_KEY,
-  request: { params: contract.IdParam },
+  request: { params: contract.IdOrHandleParam },
   responses: {
     200: json(
       "The Product, with the Variants a Shopper chooses between.",
@@ -682,7 +696,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   });
 
   store.openapi(readStoreProductRoute, async (c) => {
-    const found = await readStoreProduct(deps.db, c.req.valid("param").id);
+    const found = await readStoreProduct(deps.db, c.req.valid("param").idOrHandle);
     if (!found) return c.json(STORE_CATALOG_NOT_FOUND.product, 404);
     return c.json(found, 200);
   });

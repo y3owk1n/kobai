@@ -40,6 +40,16 @@ export type TestVariantSpec = {
  * type error rather than a precedence rule nobody would remember.
  */
 export type TestCatalogOptions = {
+  /**
+   * What the Product is called. Defaults to `A poster`.
+   *
+   * **A second catalog in one deployment needs its own, exactly as it needs its own SKUs.** A
+   * handle is proposed from the title and is unique across the Store, so two default catalogs
+   * are refused `handle-taken` — one door along from the `sku-taken` two of them were already
+   * refused with. Nothing is passed for the handle itself, deliberately: every test in this
+   * repository that seeds a catalog is then exercising what the route does when a create names
+   * no handle at all, which is the case a Merchant meets first.
+   */
   readonly title?: string;
   /**
    * A Merchant who is already signed in.
@@ -101,11 +111,15 @@ const DEFAULT_AMOUNT = 1250;
  * });
  * ```
  *
- * That is one Product titled `A poster`, one Variant `POSTER-A2`, one Price of `1250` in the
- * Store's default currency, a signed-in Merchant and a secret API key. **Amounts are integer
- * minor units** and a Price's currency is the Store's default, which since #5 is the only
- * currency a Price may carry — so the helper never takes one, and the correct thing is the
- * only thing.
+ * That is one Product titled `A poster`, reachable at the handle `a-poster`, one Variant
+ * `POSTER-A2`, one Price of `1250` in the Store's default currency, a signed-in Merchant and a
+ * secret API key. **Amounts are integer minor units** and a Price's currency is the Store's
+ * default, which since #5 is the only currency a Price may carry — so the helper never takes
+ * one, and the correct thing is the only thing.
+ *
+ * **Two catalogs in one deployment each need their own `title` as well as their own SKUs.** A
+ * handle is unique across the Store and is proposed from the title, so the second default one
+ * is refused `handle-taken`.
  *
  * The interesting cases stay expressible, because a helper must hide the arrangement a test
  * does not care about and never the thing the test is about:

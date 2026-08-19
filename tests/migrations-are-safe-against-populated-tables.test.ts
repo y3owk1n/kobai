@@ -511,6 +511,40 @@ const ACKNOWLEDGED: readonly Acknowledgement[] = [
     recordedIn: join("docs", "adr", "0061-what-the-first-publish-owes.md"),
     under: "`0016` adds a unique index to a table that already exists",
   },
+  /**
+   * `0038` is the **correct** shape producing the identical finding, which is the case #161
+   * built the `because` field for: the reading above is per-file and ADR-0038 puts the work
+   * that makes a uniqueness claim survivable in a `--custom` migration of its own, so the
+   * generated migration that adds the constraint holds the constraint and nothing else and
+   * cannot look any different from the dangerous version of itself.
+   *
+   * `core_product` is created by `0001`, so a Store with a catalog meets this constraint with
+   * rows already in it — and two Products sharing a title is the ordinary case rather than the
+   * edge one, so hoping the slugs differ was never available. `0037` is what makes it
+   * satisfiable, and it runs ahead of this in the same set, which is the claim `deduplicatedBy`
+   * makes and the check tests.
+   *
+   * **What the check cannot read is whether `0037` assigned the right handles, and that stays
+   * argued in prose beside it** — at length, in the migration itself. The short of it: it walks
+   * every Product oldest first, hands each the slug of its own title, and where that address is
+   * already taken gives it the first free `-2`, `-3`, … after it, checking against the handles
+   * actually written rather than counting duplicate titles. Nothing is deleted and nothing is
+   * merged, which is the half ADR-0038 warns about — keeping the newest of a set of duplicates
+   * is right only where the others are genuinely the same fact, and two Products are never that.
+   * So this is a debt that expires at nothing and needs revisiting only if `0037` changes.
+   */
+  {
+    migration: join("packages", "core", "migrations", "0038_stiff_fenris.sql"),
+    statement:
+      'ALTER TABLE "core_product" ADD CONSTRAINT "core_product_handle_unique" UNIQUE("handle")',
+    because: "deduplicated-ahead-of-it",
+    deduplicatedBy: join(
+      "packages",
+      "core",
+      "migrations",
+      "0037_backfill_product_handles.sql",
+    ),
+  },
 ];
 
 /** Every migration this repository would apply, in journal order within each set. */
