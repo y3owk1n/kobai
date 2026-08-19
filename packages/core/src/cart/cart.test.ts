@@ -266,22 +266,27 @@ describe("a Cart's identifier is the whole of the authority over it", () => {
     }
   });
 
-  it("is reachable by no listing, so there is nothing to enumerate", async () => {
+  it("is reachable by no listing a storefront's key opens", async () => {
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
     await startCart(kobai, catalog.apiKey.headers);
 
-    // The identifier is the credential, so a route handing out every Cart would hand out
-    // every credential. There is deliberately no such route on either surface.
+    // The identifier is the credential, so a route handing out every Cart would hand out every
+    // credential — and this key is the one a storefront holds. **A Merchant may enumerate them
+    // and the public may not** is the amended rule (ADR-0071), and this is the half of it that
+    // did not move: `GET /admin/carts` exists behind a session and `cart:read`, and there is
+    // still deliberately nothing here.
     const onTheStore = await kobai.request("/store/carts", {
       headers: catalog.apiKey.headers,
     });
-    const onTheAdmin = await kobai.request("/admin/carts", {
-      headers: catalog.merchant.headers,
-    });
 
     expect(onTheStore.status).toBe(404);
-    expect(onTheAdmin.status).toBe(404);
+    // …and the Merchant's list, which does exist, is not opened by that key either: a store
+    // credential is worth nothing on the admin surface (ADR-0020).
+    const withAStoreKey = await kobai.request("/admin/carts", {
+      headers: catalog.apiKey.headers,
+    });
+    expect(withAStoreKey.status).toBe(401);
   });
 });
 

@@ -38,6 +38,7 @@ import {
   schemeOf,
   sessionCookie,
 } from "../auth/session-cookie.ts";
+import { listCarts, readCart } from "../cart/read.ts";
 import {
   deletePrice,
   deleteProduct,
@@ -1055,6 +1056,82 @@ const readOrderRoute = createRoute({
   },
 });
 
+/**
+ * The Carts this Store is holding — and the route that reverses a rule Core had written down.
+ *
+ * `core_cart`'s schema comment used to say there was deliberately no route that lists Carts, so
+ * there was nothing to enumerate; both this route and that comment moved in the same change
+ * (ADR-0071). The amended rule is that **a Cart identifier is a capability Merchants hold and
+ * the public does not** — nothing on the store surface enumerates anything, and this list is
+ * behind a Merchant session and `cart:read`.
+ *
+ * It exists for a question a Merchant genuinely cannot ask otherwise: *why is that stock
+ * unavailable?* Once a Cart can hold stock before a Shopper is sent to their bank (ADR-0070),
+ * the answer is often a live Cart belonging to somebody who is mid-payment — which is exactly
+ * what `state=live` answers.
+ *
+ * **`cart:read` and not `order:read`.** ADR-0009's first decision is that a Cart and an Order
+ * are governed by opposite rules, so merging their Permissions would say the opposite in the one
+ * place a deployment configures trust; `catalog:read` would have been worse still, since a Role
+ * granted so somebody could edit Products would silently include every Shopper's basket.
+ */
+const listCartsRoute = createRoute({
+  method: "get",
+  path: "/carts",
+  summary: "List Carts",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time, and without Line Items — open one for those. \`state\` narrows to the Carts that are live, that expired, or that have already become an Order; the three partition the list, and unfiltered it is mostly history. Follow \`nextCursor\` for the next page (ADR-0064).`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.cartRead)] as const,
+  request: { query: contract.CartPageQuery },
+  responses: {
+    200: json("A page of the Carts this Store is holding.", contract.CartList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * One Cart, opened — the same record the storefront holding it reads.
+ *
+ * Byte for byte the shape `GET /store/carts/{id}` answers with, deliberately, exactly as the two
+ * Order reads are: a Cart is one record, and a Merchant looking into why something is held
+ * should be looking at what the storefront is looking at. What differs is the credential.
+ *
+ * **That is the safe direction of #207's asymmetry, and the rule it leaves behind is worth
+ * knowing.** The catalog shapes are split — `StoreProduct` apart from `Product` — because
+ * `/store` is opened by a **publishable** key, so anything those carry is public and a field a
+ * Merchant later needs would be published by the deploy that adds it. `Cart` is already the
+ * public shape, so a Merchant reading it publishes nothing. What must not happen is the reverse:
+ * **a Merchant-only field does not go on `Cart`** — it belongs on a shape this surface owns, or
+ * the split arrives here too.
+ *
+ * **There is no write beside these two, and that is a decision rather than a scope cut.**
+ * Releasing a hold by hand takes stock from a Shopper who may be at their bank having already
+ * paid — ADR-0070's failure mode, caused deliberately — and the sweeper already releases on
+ * expiry. Creating and editing a Cart on a Merchant's behalf is its own spec.
+ */
+const readCartRoute = createRoute({
+  method: "get",
+  path: "/carts/{id}",
+  summary: "Read a Cart",
+  description:
+    "Its Line Items as they stand, its deadline, and whether it has expired or has already become an Order. A Cart's lines are live rather than a snapshot, so they follow a catalog that changes under them (ADR-0009) — which is the opposite of what an Order's Line Items do.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.cartRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Cart, with its Line Items.", contract.Cart),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Cart exists.", contract.CartRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv> {
   const admin = new OpenAPIHono<AdminEnv>({ defaultHook: invalidRequestHook });
 
@@ -1280,6 +1357,26 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
           error:
             "No such Order exists. An Order is addressed by the identifier Capture reported, which is not its Order number.",
           reason: "order-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  guarded.openapi(listCartsRoute, async (c) => {
+    const page = await listCarts(deps.db, c.req.valid("query"));
+    return c.json({ carts: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(readCartRoute, async (c) => {
+    const found = await readCart(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Cart exists. A Cart is addressed by the identifier it was created with, and an expired or placed one still reads.",
+          reason: "cart-not-found" as const,
         },
         404,
       );

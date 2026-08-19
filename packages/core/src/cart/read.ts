@@ -1,5 +1,14 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableName, not, type SQL, sql } from "drizzle-orm";
+import type { PgColumn } from "drizzle-orm/pg-core";
 import type { Queryable } from "../db/client.ts";
+import {
+  cursorAt,
+  type Page,
+  type PageRequest,
+  pageSize,
+  rowsAfter,
+  takePage,
+} from "../db/page.ts";
 import { cart, cartLineItem, order, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 
@@ -24,13 +33,13 @@ import { isUuid } from "../db/uuid.ts";
  * question of whether a Cart is still alive. Judged in SQL rather than against `Date.now()` so
  * that one clock both sets the deadline and decides it has passed.
  *
- * The table is named as well as the column because Drizzle renders a column inside a
- * select-list `sql` template **unqualified** — `"expires_at"` — which resolves against whatever
- * Postgres finds first the moment the query joins anything. That is not hypothetical: the first
- * version of the Variant lookup in `write.ts` was written that way and silently compared
- * `core_price.variant_id` to `core_price.id`.
+ * The table is named as well as the column, through {@link qualified}, because Drizzle renders
+ * a column inside a select-list `sql` template **unqualified** — `"expires_at"` — which resolves
+ * against whatever Postgres finds first the moment the query joins anything. That is not
+ * hypothetical: the first version of the Variant lookup in `write.ts` was written that way and
+ * silently compared `core_price.variant_id` to `core_price.id`.
  */
-export const cartHasExpired = sql<boolean>`now() > ${cart}.${cart.expiresAt}`;
+export const cartHasExpired = sql<boolean>`now() > ${qualified(cart.expiresAt)}`;
 
 /**
  * Whether this Cart has already become an Order — and is therefore **spent** (#102).
@@ -45,7 +54,24 @@ export const cartHasExpired = sql<boolean>`now() > ${cart}.${cart.expiresAt}`;
  * `core_cart`. Both sides are table-qualified for the reason {@link cartHasExpired} spells out:
  * an unqualified `id` inside this subquery would bind to `core_order`'s own.
  */
-export const cartHasBeenPlaced = sql<boolean>`exists (select 1 from ${order} where ${order}.${order.cartId} = ${cart}.${cart.id})`;
+export const cartHasBeenPlaced = sql<boolean>`exists (select 1 from ${order} where ${qualified(order.cartId)} = ${qualified(cart.id)})`;
+
+/**
+ * A column, named with its table, in the one spelling that reads the same in every clause.
+ *
+ * **Drizzle qualifies a `Column` chunk differently depending on where the template lands**: it
+ * renders `"expires_at"` in a select list and `"core_cart"."expires_at"` everywhere else. So
+ * `${cart}.${cart.expiresAt}`, which is right in a select list, becomes
+ * `"core_cart"."core_cart"."expires_at"` the moment the same expression is used in a `where` —
+ * a syntax error, and a 500 rather than a wrong answer, which is how it was found (#227). The
+ * two expressions above are now read in both places, because `GET /admin/carts` filters by
+ * exactly what it reports, so they name their columns as identifiers instead: an identifier
+ * renders as itself wherever it lands. Through the Drizzle column rather than as a literal
+ * string, so a rename in `schema.ts` still reaches this.
+ */
+function qualified(column: PgColumn): SQL {
+  return sql`${sql.identifier(getTableName(column.table))}.${sql.identifier(column.name)}`;
+}
 
 /** One line of a Cart: a Variant, and how many of it. */
 export type CartLineItem = {
@@ -72,18 +98,27 @@ export type CartShopper = {
   readonly externalId: string | null;
 };
 
-export type Cart = {
+/**
+ * A Cart as a **list** reports it — everything but its lines.
+ *
+ * The split {@link Cart} makes with this is the one an Order and its summary already make: a
+ * list is not a detail view, and a Merchant scanning what is being held is looking for whose it
+ * is, what has become of it and when it lapses rather than for every line of every Cart at
+ * once.
+ */
+export type CartSummary = {
   /**
    * The identifier, and the whole of the authority to act on this Cart.
    *
    * There is no Shopper session to hang one off (ADR-0020), so holding this value is what
    * lets a storefront read and change the Cart. It is 122 bits from the platform CSPRNG, so
-   * it encodes nothing and orders by nothing, and no route lists Carts.
+   * it encodes nothing and orders by nothing, and it cannot be guessed from another.
+   *
+   * **A Merchant may enumerate these and the public may not** (ADR-0071). `GET /admin/carts`
+   * is behind a Merchant session and `cart:read`; nothing on the store surface lists anything.
    */
   readonly id: string;
   readonly shopper: CartShopper | null;
-  /** In the order the lines were first added — a total order, so it never varies. */
-  readonly lineItems: readonly CartLineItem[];
   readonly metadata: Record<string, unknown>;
   readonly expiresAt: string;
   /**
@@ -107,6 +142,112 @@ export type Cart = {
   readonly createdAt: string;
   readonly updatedAt: string;
 };
+
+/** A Cart opened: everything a list carries, and what is actually in it. */
+export type Cart = CartSummary & {
+  /** In the order the lines were first added — a total order, so it never varies. */
+  readonly lineItems: readonly CartLineItem[];
+};
+
+/**
+ * What has become of a Cart, as the one filter `GET /admin/carts` takes (ADR-0071).
+ *
+ * The three **partition** the table, which is what makes the filter worth having rather than
+ * three overlapping questions: a Cart that became an Order is `spent` whatever its deadline
+ * says, one that has not and is past its deadline is `expired`, and everything else is `live`.
+ * Without it the default list is mostly history, and `live` is the one a Merchant asking *why
+ * is that stock unavailable* actually wants (ADR-0070).
+ */
+export type CartState = "live" | "expired" | "spent";
+
+/**
+ * What the Cart list was asked for: a page, and the one state it may be narrowed to.
+ *
+ * One argument rather than two, because it is one request — `contract.CartPageQuery` produces
+ * exactly this, so the route hands over what it was given instead of taking the same object
+ * apart and passing half of it twice.
+ */
+export type CartPageRequest = PageRequest & { readonly state?: CartState };
+
+/**
+ * The rows of one {@link CartState}, or nothing to constrain at all when none was asked for.
+ *
+ * Written from the same two expressions the response reports `expired` and `placed` from, so a
+ * Cart cannot be filtered into one bucket and read as being in another — which is precisely
+ * what a second spelling of "is this Cart still alive" would eventually do.
+ */
+function inState(state: CartState | undefined): SQL | undefined {
+  switch (state) {
+    case "spent":
+      return cartHasBeenPlaced;
+    case "expired":
+      return and(not(cartHasBeenPlaced), cartHasExpired);
+    case "live":
+      return and(not(cartHasBeenPlaced), not(cartHasExpired));
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * A page of Carts, newest first — what a Merchant lists (ADR-0071).
+ *
+ * **Without their lines**, like every other list on this surface: opening one is what answers
+ * what is in it. The filter is applied in the same statement as the page, so a filtered page
+ * that comes back short is still a page — `nextCursor` is what says whether there is more, and
+ * this is the first list where that distinction does any work.
+ */
+export async function listCarts(
+  db: Queryable,
+  page: CartPageRequest,
+): Promise<Page<CartSummary>> {
+  const fetched = await db
+    .select({
+      id: cart.id,
+      shopperEmail: cart.shopperEmail,
+      shopperExternalId: cart.shopperExternalId,
+      metadata: cart.metadata,
+      expiresAt: cart.expiresAt,
+      expired: cartHasExpired,
+      placed: cartHasBeenPlaced,
+      createdAt: cart.createdAt,
+      updatedAt: cart.updatedAt,
+      cursorAt: cursorAt(cart.createdAt),
+    })
+    .from(cart)
+    .where(and(rowsAfter(page, cart.createdAt, cart.id), inState(page.state)))
+    // `id` breaks the tie, so two Carts started in the same instant come back in one stable
+    // order rather than in whichever order Postgres happened to read them — and so that a
+    // cursor cut from the last of them names one row rather than a group.
+    .orderBy(desc(cart.createdAt), desc(cart.id))
+    .limit(pageSize(page));
+
+  const { rows, nextCursor } = takePage(fetched, page);
+
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      shopper: shopperOf(row),
+      metadata: row.metadata,
+      expiresAt: row.expiresAt.toISOString(),
+      expired: row.expired,
+      placed: row.placed,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    })),
+    nextCursor,
+  };
+}
+
+/** `null` for a guest, which is the ordinary case — Core assumes a Shopper nowhere (ADR-0020). */
+function shopperOf(row: {
+  readonly shopperEmail: string | null;
+  readonly shopperExternalId: string | null;
+}): CartShopper | null {
+  return row.shopperEmail === null
+    ? null
+    : { email: row.shopperEmail, externalId: row.shopperExternalId };
+}
 
 /**
  * One Cart with its Line Items, or `undefined` when there is no such Cart — including when
@@ -149,10 +290,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
 
   return {
     id: row.id,
-    shopper:
-      row.shopperEmail === null
-        ? null
-        : { email: row.shopperEmail, externalId: row.shopperExternalId },
+    shopper: shopperOf(row),
     lineItems: lines.map((line) => ({
       id: line.id,
       variant: { id: line.variantId, sku: line.sku },

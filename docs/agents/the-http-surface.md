@@ -246,8 +246,19 @@ description that enumerated different paths per deployment is not a contract.
 thing** (#183): it builds one schema per **list** rather than per deployment, and what varies
 between them is which list's cursors that schema will accept — never which parameters exist or
 what they mean. One contract bound once per list is the same contract each time, which is why
-this is not the shape the paragraph above rules out. Everything else on the surface stays a
-module-level constant.
+this is not the shape the paragraph above rules out.
+
+**A list that also *filters* still names its list once, through the same builder** (#227).
+`contract.CartPageQuery` is the first and so far only one — `GET /admin/carts` takes ADR-0064's
+`limit` and `after` unchanged and `state=live|expired|spent` beside them — and it is a **module-level
+constant**, because a list's name is the only thing `pageQuery` is a factory *for* and there is
+one Cart list. What it must not become is a schema assembled out of the pieces: the whole point of
+#183's factory is that one argument settles both ends of a cursor, so anything built here goes
+through `pageQueryOf(list, filters)` and adds *filters only*. Two things about a filter carry to
+the next one: a value outside the set is **refused** rather than ignored, because a filter quietly
+dropped answers a different question from the one that was asked; and a filtered page is the case
+`nextCursor` was designed for, since a short page is not the end of a list. Everything else on the
+surface stays a module-level constant.
 
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.

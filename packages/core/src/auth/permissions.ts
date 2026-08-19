@@ -80,6 +80,27 @@ export const PERMISSIONS = {
    * order the migrations ran.
    */
   merchantRead: "merchant:read",
+  /**
+   * See the Carts this Store is holding — the list, and one opened.
+   *
+   * Its own word rather than a second use of `order:read`, and the difference is the expensive
+   * kind to get wrong (ADR-0071): ADR-0009's first decision is that a Cart and an Order are
+   * governed by opposite rules — one is expected to change and be thrown away, the other must
+   * never change again — so merging their Permissions would say the opposite in the one place a
+   * deployment configures trust. `catalog:read` was the other candidate and is worse: a Role
+   * granted so somebody could edit Products would silently include every Shopper's basket.
+   *
+   * There is no `cart:write` beside it **yet**, and the two halves of that are different:
+   * creating and editing a Cart on a Merchant's behalf is decided (ADR-0071) and belongs to its
+   * own spec, which will bring the word with it; **releasing a hold never arrives at all**,
+   * because doing it by hand takes stock from a Shopper who may be mid-payment at their bank and
+   * the sweeper already releases on expiry.
+   *
+   * It reads oddly last, like the three above it, and belongs there for the same reason: the
+   * seeded `owner` Role is a text array appended to one migration at a time and a test asserts
+   * it equals `ALL_PERMISSIONS` exactly, so this list's order is the order the migrations ran.
+   */
+  cartRead: "cart:read",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
