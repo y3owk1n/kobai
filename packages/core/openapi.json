@@ -1891,6 +1891,96 @@
           }
         }
       },
+      "CartReservations": {
+        "type": "object",
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reservations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldClaim"
+            },
+            "description": "Empty for a Cart of Variants nothing is counting: a Store selling downloads holds nothing, and that is a 200 rather than a refusal (ADR-0014)."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this hold lapses and the units go back on the shelf. Absent when nothing is held, because then there is no deadline. Holding again does not push it out — how long a hold stands is the deployment's setting (ADR-0075), not a thing a caller can extend by asking twice."
+          }
+        },
+        "required": [
+          "cartId",
+          "reservations"
+        ]
+      },
+      "HeldClaim": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Which kind of scarce thing this claims — `inventory` is the one Core has (ADR-0018)."
+          },
+          "subject": {
+            "type": "string",
+            "description": "What is claimed, in that provider's own terms. For `inventory` it is the Variant's identifier."
+          },
+          "quantity": {
+            "type": "integer",
+            "description": "How much of it is held."
+          }
+        },
+        "required": [
+          "provider",
+          "subject",
+          "quantity"
+        ]
+      },
+      "SecretKeyRequired": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "secret-key-required"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "CartReservationRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "cart-not-found",
+              "cart-expired",
+              "cart-placed",
+              "cart-empty",
+              "unknown-fulfilment-strategy",
+              "insufficient-inventory"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "PlacedOrder": {
         "allOf": [
           {
@@ -1978,24 +2068,6 @@
               "steps"
             ],
             "description": "How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this."
-          }
-        },
-        "required": [
-          "error",
-          "reason"
-        ]
-      },
-      "SecretKeyRequired": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "secret-key-required"
-            ]
           }
         },
         "required": [
@@ -5714,6 +5786,124 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CartRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/carts/{id}/reservations": {
+      "post": {
+        "summary": "Hold this Cart's stock",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Claims stock for every line whose Fulfilment Strategy tracks Inventory, and answers what is held and until when. Call it before sending a Shopper to a payment method they complete somewhere else — a bank redirect takes the money there, so a Shopper who returns to `insufficient-inventory` has already paid. All of it or none of it: a Cart that can hold the last poster but not the last mug holds neither. Calling it again for the same Cart adopts the hold rather than taking a second, so a retry is safe, and `POST /store/orders` then uses that hold rather than claiming again. Requires a **secret** key: holding stock is a resource a browser's key could exhaust (ADR-0055).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What this Cart is holding, and until when.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartReservations"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key is live and publishable, and this route requires a secret one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretKeyRequired"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Cart exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartReservationRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing was held. This Cart can no longer be claimed against — it has expired, or it has already been placed — or the Store has not got enough of something in it left to sell, or something in it names a Fulfilment Strategy this deployment no longer has wired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartReservationRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well formed, and still refused: this Cart has nothing in it, so there is nothing to hold.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartReservationRefusal"
                 }
               }
             }

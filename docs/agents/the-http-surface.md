@@ -17,14 +17,43 @@ one Order; those are unique indexes rather than conditional updates, and both ar
 
 No sequential assertion can see any of this, so **the guardrail is a concurrent test** —
 `packages/core/src/reservation/the-last-unit.test.ts`, dispatching many `POST /store/orders` at
-one unit of stock. **There are two of them**, and the second is
+one unit of stock. **There are three of them.** The second is
 `packages/core/src/reservation/the-variant-that-vanished.test.ts` — the same shape on the path
 where no money is involved (#145), dispatching six
 `DELETE /admin/variants/{id}` and six `PUT …/inventory` together after the count path was found
-reading a Variant in one statement and writing against it in another. How one of those is
+reading a Variant in one statement and writing against it in another. The third is
+`packages/core/src/reservation/the-cart-that-held-twice.test.ts`, below. How one of those is
 written, why each of its assertions is there, and why a green run proves less than you would
 think, is in [Writing tests](writing-tests.md) with the other seams; **write the next one the same
 way round.**
+
+**Two things claim stock now, and claim-or-adopt is what keeps them from claiming it twice**
+(ADR-0070). `POST /store/carts/{id}/reservations` holds a Cart's stock before a storefront sends
+a Shopper to their bank — a redirect method takes the money *there*, so a Shopper who returns to
+`insufficient-inventory` has already paid — and `hold-reservations` then **adopts** that hold
+instead of taking a second. `holdReservations` in `reservation/reservation.ts` is the one
+function both go through, and three things about it are decisions rather than implementation:
+
+- **It reports what it *claimed* apart from what the Cart is holding**, and a compensation may
+  release only the first. Releasing an adopted hold would take stock from a Cart that still owns
+  it, which is the failure the whole design exists to prevent.
+- **What is adopted is a hold matching the Cart's claims exactly, and nothing here ever releases
+  one.** A partial hold is not adopted — a line added afterwards would be captured against
+  nothing — and a hold *larger* than the Cart is not either, because `capture-order` consumes
+  every Reservation it is handed. Giving the misfitting hold back and taking a fresh one looks
+  right and is not: a placement that adopted it may be between `take-payment` and
+  `capture-order`, and releasing its rows fails that Capture **after the money moved**. So a
+  changed Cart claims afresh and its stale hold lapses, which costs a Store some unsellable stock
+  for one window and costs nobody their money. Adoption looks for the claims *among* what the
+  Cart holds for that reason: the next ask adopts rather than claiming a third time. The deadline
+  is never pushed out by asking again — how long a hold stands is the deployment's (ADR-0075),
+  not something a caller can extend by retrying.
+- **The claim-or-adopt decision is a `pg_advisory_xact_lock` per Cart, taken before the read**,
+  and that is ADR-0018's *other* answer rather than an exception to it — the same departure
+  `the-last-administrator` makes, for the same reason: the condition is about **other rows**, and
+  a `select` does not lock those. `core_reservation.cart_id` is what the read asks by, nullable
+  because the rows an upgrading deployment already has were written when nothing recorded it.
+  The claim on stock underneath is still Inventory's one conditional update.
 
 **One interface, and the providers are Core's own.** `reservation/provider.ts` is ADR-0018's
 single Reservation interface; Inventory is its only implementation and Capacity joins
@@ -53,8 +82,8 @@ subject is the timer itself.
 **How long a hold stands is the deployment's, not this module's** (ADR-0075).
 `reservations.holdWindowMs` in `kobai.config.ts` decides it, fifteen minutes if a Project says
 nothing, and `holdReservations` takes the number as an argument rather than reading a constant —
-so **a second thing that claims stock takes the deployment's window too**, which is the ticket
-ADR-0070 is about to bring. Core keeps a floor of one minute and deliberately **no ceiling**;
+so the store route above takes the deployment's window too, which is what that argument was made
+required for. Core keeps a floor of one minute and deliberately **no ceiling**;
 that asymmetry with `session.idleWindowMs` is argued on the config key itself. A test that
 configures a window boots with the key, exactly as `session` does.
 

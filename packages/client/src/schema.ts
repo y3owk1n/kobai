@@ -2196,6 +2196,74 @@ export interface paths {
       };
     };
   };
+  "/store/carts/{id}/reservations": {
+    /**
+     * Hold this Cart's stock
+     * @description Claims stock for every line whose Fulfilment Strategy tracks Inventory, and answers what is held and until when. Call it before sending a Shopper to a payment method they complete somewhere else — a bank redirect takes the money there, so a Shopper who returns to `insufficient-inventory` has already paid. All of it or none of it: a Cart that can hold the last poster but not the last mug holds neither. Calling it again for the same Cart adopts the hold rather than taking a second, so a retry is safe, and `POST /store/orders` then uses that hold rather than claiming again. Requires a **secret** key: holding stock is a resource a browser's key could exhaust (ADR-0055).
+     */
+    post: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description What this Cart is holding, and until when. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["CartReservations"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description The API key is live and publishable, and this route requires a secret one. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["SecretKeyRequired"];
+          };
+        };
+        /** @description No such Cart exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartReservationRefusal"];
+          };
+        };
+        /** @description Nothing was held. This Cart can no longer be claimed against — it has expired, or it has already been placed — or the Store has not got enough of something in it left to sell, or something in it names a Fulfilment Strategy this deployment no longer has wired. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CartReservationRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: this Cart has nothing in it, so there is nothing to hold. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["CartReservationRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/store/orders": {
     /**
      * Turn a Cart into an Order
@@ -2980,6 +3048,39 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    CartReservations: {
+      /** Format: uuid */
+      cartId: string;
+      /** @description Empty for a Cart of Variants nothing is counting: a Store selling downloads holds nothing, and that is a 200 rather than a refusal (ADR-0014). */
+      reservations: components["schemas"]["HeldClaim"][];
+      /**
+       * Format: date-time
+       * @description When this hold lapses and the units go back on the shelf. Absent when nothing is held, because then there is no deadline. Holding again does not push it out — how long a hold stands is the deployment's setting (ADR-0075), not a thing a caller can extend by asking twice.
+       */
+      expiresAt?: string;
+    };
+    HeldClaim: {
+      /** @description Which kind of scarce thing this claims — `inventory` is the one Core has (ADR-0018). */
+      provider: string;
+      /** @description What is claimed, in that provider's own terms. For `inventory` it is the Variant's identifier. */
+      subject: string;
+      /** @description How much of it is held. */
+      quantity: number;
+    };
+    SecretKeyRequired: {
+      error: string;
+      /** @enum {string} */
+      reason: "secret-key-required";
+    };
+    CartReservationRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "cart-not-found" | "cart-expired" | "cart-placed" | "cart-empty" | "unknown-fulfilment-strategy" | "insufficient-inventory";
+    };
     PlacedOrder: components["schemas"]["Order"] & {
       workflow: {
         name: string;
@@ -3003,11 +3104,6 @@ export interface components {
         failed: string;
         steps: components["schemas"]["StepReport"][];
       };
-    };
-    SecretKeyRequired: {
-      error: string;
-      /** @enum {string} */
-      reason: "secret-key-required";
     };
     PlaceOrderRequest: {
       /** @description The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020). */

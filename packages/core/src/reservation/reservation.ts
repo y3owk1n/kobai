@@ -1,4 +1,4 @@
-import { and, inArray, isNull, lt, type SQL, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt, type SQL, sql } from "drizzle-orm";
 import type { Database, Transaction } from "../db/client.ts";
 import { reservation } from "../db/schema.ts";
 import { inventoryProvider } from "./inventory.ts";
@@ -158,7 +158,35 @@ export type HeldReservation = ReservationClaim & { readonly id: string };
 
 /** Holding either claims everything asked for, or claims nothing and says which provider said no. */
 export type HoldResult =
-  | { readonly ok: true; readonly reservations: readonly HeldReservation[] }
+  | {
+      readonly ok: true;
+      /**
+       * Everything this Cart is holding now — what it already held and this call adopted, plus
+       * whatever this call had to claim.
+       *
+       * This is what `capture-order` consumes, so it is the whole hold rather than this call's
+       * share of it.
+       */
+      readonly reservations: readonly HeldReservation[];
+      /**
+       * The ones **this call** claimed, and the only ones its caller may ever release.
+       *
+       * Releasing an adopted hold would take stock away from a Cart that still owns it, which is
+       * the failure ADR-0070's whole design exists to prevent: the storefront held before it sent
+       * the Shopper to their bank, a placement adopted that hold and was then refused, and its
+       * compensation would have given away the units the Shopper had already paid for. Empty
+       * when everything asked for was already held.
+       */
+      readonly claimed: readonly HeldReservation[];
+      /**
+       * When this hold lapses — the earliest deadline among the Reservations, since that is the
+       * moment it stops covering the Cart.
+       *
+       * `undefined` when nothing is held at all, which is a Cart of Variants nothing is counting:
+       * there is no deadline to report because there is nothing to lose (ADR-0014).
+       */
+      readonly expiresAt: Date | undefined;
+    }
   | {
       readonly ok: false;
       readonly reason: ReservationRefusal;
@@ -166,7 +194,8 @@ export type HoldResult =
     };
 
 /**
- * Holds a Reservation for every scarce thing these lines claim.
+ * Holds a Reservation for every scarce thing these lines claim — **or adopts the hold this Cart
+ * already has** (ADR-0070).
  *
  * All of it or none of it, in one transaction: a Cart holding the last poster and the last mug
  * must not take the poster and then refuse, because the Shopper is told no either way and the
@@ -175,6 +204,37 @@ export type HoldResult =
  * that were not, or units held with no row to release them by, are the two failures this shape
  * removes.
  *
+ * **There are two callers now, and this is the whole of what they share.** A storefront holds a
+ * Cart's stock before sending a Shopper to their bank (`POST /store/carts/{id}/reservations`),
+ * and `hold-reservations` claims inside `place-order` as it always has. The second one must not
+ * take a *second* hold on a Cart the first already holds — that would claim the units twice and
+ * make a Store unable to sell stock it has — so this function is claim-**or**-adopt, and which
+ * of the two happened is reported as {@link HoldResult.claimed} rather than left to be inferred.
+ *
+ * **What is adopted is a hold that matches these claims exactly, and nothing else is touched.**
+ * A Cart with no such hold is claimed for exactly as before, which is what keeps a storefront
+ * that never holds unaffected. Two decisions are folded into that sentence and both are about
+ * what *not* to do with a hold that no longer fits the Cart — a line added, a quantity changed,
+ * a window that lapsed while the Shopper was at their bank:
+ *
+ * - **A partial hold is not adopted**, because `capture-order` consumes the Reservations it is
+ *   handed and nothing else: a Cart that grew a line after holding would have that line captured
+ *   against no claim at all, which is the overselling this file exists to prevent. A hold
+ *   *larger* than the Cart is refused adoption for the mirror reason — it would consume units for
+ *   goods nobody bought.
+ * - **A hold that does not fit is left standing rather than released.** It is tempting to give it
+ *   back and take a fresh one in the same transaction, and it is wrong: a placement that adopted
+ *   that hold may be between `take-payment` and `capture-order` right now, and releasing its rows
+ *   would make Capture raise **after the money moved** — the exact failure ADR-0070 exists to
+ *   prevent, arriving through the release path instead of through a compensation. **Nothing here
+ *   releases a Reservation.** The stale hold lapses and the sweeper gives it back, which costs a
+ *   Store some stock it cannot sell for the length of one window and costs nobody their money.
+ *
+ * The consequence to know about is that a Cart changed after it was held holds its old claim and
+ * its new one at once, so a Store with barely enough may refuse the second — and that a hold
+ * asked for a *third* time is adopted again rather than claimed again, because the matching
+ * subset of what the Cart holds is what adoption looks for.
+ *
  * **The window is passed in rather than read from the constant**, because it belongs to the
  * deployment rather than to this module (ADR-0075) — and required rather than defaulted, so a
  * caller that forgot it is a compile error instead of a second answer to how long this Store
@@ -182,6 +242,7 @@ export type HoldResult =
  */
 export async function holdReservations(
   db: Database,
+  cartId: string,
   lines: readonly ReservableLine[],
   holdWindowMs: number,
 ): Promise<HoldResult> {
@@ -189,6 +250,11 @@ export async function holdReservations(
 
   try {
     return await db.transaction(async (tx: Transaction): Promise<HoldResult> => {
+      // Before the read, and for the length of the transaction: see CART_HOLD_LOCK_NAMESPACE.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(${CART_HOLD_LOCK_NAMESPACE}, hashtext(${cartId}))`,
+      );
+
       const claims: ReservationClaim[] = [];
       // In series rather than in parallel: two providers claiming at once inside one
       // transaction would be two statements on one connection, and the first refusal should
@@ -196,7 +262,24 @@ export async function holdReservations(
       for (const provider of RESERVATION_PROVIDERS) {
         claims.push(...(await provider.claimsFor(tx, lines)));
       }
-      if (claims.length === 0) return { ok: true, reservations: [] };
+
+      // Already holding exactly this, so hold it again rather than twice. The deadline is not
+      // pushed out: a hold that renewed itself on every request would let a storefront keep a
+      // Store's stock indefinitely by retrying, and how long one stands is the deployment's
+      // decision rather than the caller's (ADR-0075).
+      const adopted = adoptable(await liveHoldOn(tx, cartId), claims);
+      if (adopted) {
+        return {
+          ok: true,
+          reservations: held(adopted),
+          claimed: [],
+          expiresAt: soonest(adopted),
+        };
+      }
+
+      if (claims.length === 0) {
+        return { ok: true, reservations: [], claimed: [], expiresAt: undefined };
+      }
 
       for (const [name, group] of byProvider(claims)) {
         const outcome = await providerNamed(name).hold(tx, group);
@@ -208,7 +291,7 @@ export async function holdReservations(
 
       const rows = await tx
         .insert(reservation)
-        .values(claims.map((claim) => ({ ...claim, expiresAt })))
+        .values(claims.map((claim) => ({ ...claim, cartId, expiresAt })))
         .returning({
           id: reservation.id,
           provider: reservation.provider,
@@ -216,7 +299,7 @@ export async function holdReservations(
           quantity: reservation.quantity,
         });
 
-      return { ok: true, reservations: rows };
+      return { ok: true, reservations: rows, claimed: rows, expiresAt };
     });
   } catch (cause) {
     if (cause instanceof HoldRefused) {
@@ -224,6 +307,138 @@ export async function holdReservations(
     }
     throw cause;
   }
+}
+
+/**
+ * The advisory-lock namespace every hold on a Cart serialises in, per Cart.
+ *
+ * Arbitrary but fixed, exactly as `createFirstMerchant`'s and `updateRole`'s are, and held for
+ * the length of the transaction however that transaction ends. It is the **two-argument** form —
+ * this namespace and `hashtext(cart_id)` — so two Carts never wait for each other: a
+ * deployment-wide lock would put every placement in a queue behind every other one, for a
+ * question that is only ever about one Cart. Postgres keeps the two-argument locks apart from
+ * the one-argument ones, so this cannot collide with either key above.
+ *
+ * **A conditional update cannot do this job**, which is the same departure from ADR-0018's usual
+ * answer that the last-administrator guard makes. Inventory claims a scarce thing with
+ * `update … where on_hand - reserved >= n` because the condition is about *the row being
+ * written*, so Postgres takes the row lock before evaluating it and the loser re-evaluates
+ * against what the winner left. Claim-or-adopt's condition is about **other rows** — is this
+ * Cart holding a Reservation already — and a `select` reads those without locking them, so two
+ * storefront retries arriving together each see no hold and each claim one. The lock is taken
+ * before the read, so the second transaction re-reads a database the first has already changed
+ * and adopts what it finds. `the-cart-that-held-twice.test.ts` is the assertion, and it has been
+ * watched failing with this line removed.
+ *
+ * **A collision on `hashtext` costs nothing but a wait.** Two Carts whose identifiers hash alike
+ * serialise their holds against each other, which is correctness with a moment of contention
+ * rather than a wrong answer — the lock decides who reads first and never what they read.
+ */
+const CART_HOLD_LOCK_NAMESPACE = 411_305_003;
+
+/** One row of the hold a Cart is carrying, as this module reads it back. */
+type LiveReservation = HeldReservation & { readonly expiresAt: Date };
+
+/**
+ * What this Cart is holding right now — held, unconsumed, unreleased, and not yet lapsed.
+ *
+ * **A lapsed hold is not a live one**, even though the sweeper has not reached it yet: adopting
+ * a Reservation whose window has passed would hand a Shopper a hold the next sweep is about to
+ * take away, which is the one failure `expires_at` exists to prevent. It is re-held instead,
+ * which gives the units back and takes them again in the same transaction.
+ */
+async function liveHoldOn(
+  tx: Transaction,
+  cartId: string,
+): Promise<readonly LiveReservation[]> {
+  return tx
+    .select({
+      id: reservation.id,
+      provider: reservation.provider,
+      subject: reservation.subject,
+      quantity: reservation.quantity,
+      expiresAt: reservation.expiresAt,
+    })
+    .from(reservation)
+    .where(
+      and(
+        eq(reservation.cartId, cartId),
+        isNull(reservation.consumedAt),
+        isNull(reservation.releasedAt),
+        // Postgres's clock rather than this process's, exactly as the sweeper compares it: a
+        // hold this process thinks is live and the sweeper thinks is lapsed is the disagreement
+        // that oversells.
+        gt(reservation.expiresAt, sql`now()`),
+      ),
+    );
+}
+
+/** The hold, as everything downstream of it carries a Reservation. */
+function held(live: readonly LiveReservation[]): readonly HeldReservation[] {
+  return live.map(({ id, provider, subject, quantity }) => ({
+    id,
+    provider,
+    subject,
+    quantity,
+  }));
+}
+
+/**
+ * The Reservations this Cart is holding that **are** these claims, one for one — or nothing,
+ * meaning there is no hold here to adopt.
+ *
+ * A **subset** rather than the whole of what the Cart holds, and each claim matched *exactly*
+ * rather than generously. Both halves are decisions:
+ *
+ * - **Exactly**, in both directions. A row holding fewer units than the claim is short for the
+ *   obvious reason; one holding more cannot be adopted either, because `capture-order` consumes
+ *   every Reservation it is handed — so a Cart that dropped a line and adopted its older, larger
+ *   hold would take units off the shelf for goods nobody bought.
+ * - **A subset**, so that a Cart which changed after it was held, and therefore claimed afresh,
+ *   is *adopted* the next time it asks rather than claiming a third time. Its stale rows are
+ *   left out of the answer and out of the way; the sweeper is what ends them.
+ *
+ * An empty set of claims is adopted by every hold, including no hold at all: a Cart of Variants
+ * nothing is counting has nothing to hold and nothing to look for.
+ */
+function adoptable(
+  live: readonly LiveReservation[],
+  claims: readonly ReservationClaim[],
+): readonly LiveReservation[] | undefined {
+  const spare = [...live];
+  const adopted: LiveReservation[] = [];
+
+  for (const claim of claims) {
+    const at = spare.findIndex(
+      (row) =>
+        row.provider === claim.provider &&
+        row.subject === claim.subject &&
+        row.quantity === claim.quantity,
+    );
+    // One of this Cart's claims is unheld, so there is no hold here that covers it, and the
+    // whole of what the Cart claims is taken afresh instead.
+    if (at === -1) return undefined;
+
+    const [row] = spare.splice(at, 1);
+    if (row) adopted.push(row);
+  }
+
+  return adopted;
+}
+
+/**
+ * The earliest deadline in a hold — when it stops covering the Cart entire.
+ *
+ * They are written together and so agree today; reporting the earliest is what keeps that an
+ * implementation detail rather than something a caller would have to know.
+ */
+function soonest(live: readonly LiveReservation[]): Date | undefined {
+  return live
+    .map((row) => row.expiresAt)
+    .reduce<Date | undefined>(
+      (earliest, at) => (earliest === undefined || at < earliest ? at : earliest),
+      undefined,
+    );
 }
 
 /**

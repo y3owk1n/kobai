@@ -111,8 +111,13 @@ last two have only the one excuse a reading of a single file can make — **the 
 created here, so no row it has not seen can refuse anything** — which is the same excuse
 Core's foreign keys already rest on.
 Core's own set is otherwise clear and stays clear that way: every `NOT NULL` in it is inside a
-`CREATE TABLE`, and its only `ALTER TABLE`s add foreign keys to tables created in the same
-migration.
+`CREATE TABLE`. Its `ALTER TABLE`s add foreign keys, and all but one of them do it to a table
+created in the same migration; the exception is `0031`, which puts a **nullable** `cart_id` on
+`core_reservation` and a foreign key on it (ADR-0070). A nullable column is safe to add at any
+size and a foreign key on one can refuse no row that is already there, since every one of them
+holds `null` — which is the shape at the head of this section, arriving without needing its
+second and third steps because `null` is the honest value for a hold taken before anything
+recorded a Cart.
 
 **`0016`'s unique index on `core_order.cart_id` is named by that check and shipped anyway**: a
 deployment left anywhere between `0012` — where `core_order` is created — and `0015` could meet

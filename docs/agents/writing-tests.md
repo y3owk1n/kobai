@@ -264,7 +264,11 @@ per Shopper, and fires `POST /store/orders` at all of them inside one `Promise.a
 `packages/core/src/reservation/the-variant-that-vanished.test.ts` is the second, and the pair is
 what makes this a technique rather than a special case: it dispatches six deletes and six counts
 at six Variants together and holds every count to one of the two answers that are true (#145).
-Four things about how they are written carry to the next one:
+`packages/core/src/reservation/the-cart-that-held-twice.test.ts` is the third, and it is the one
+whose subject is a lock rather than a conditional update — it dispatches eight holds at one Cart
+and eight at one unit of stock, because claim-or-adopt asks about *other* rows and so takes
+ADR-0018's other mechanism (ADR-0070). Four things about how they are written carry to the next
+one:
 
 - **Assert on what the losers were told, and on the books, not only on the winner.** One 201, and
   every other request refused with the *reason that is true* rather than failing some other way;

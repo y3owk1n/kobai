@@ -1,26 +1,9 @@
-import { asc, eq } from "drizzle-orm";
-import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
 import { lockVariants } from "../catalog/lock.ts";
 import type { Transaction } from "../db/client.ts";
 import { violatesUniqueIndex } from "../db/errors.ts";
-import {
-  cart,
-  cartLineItem,
-  order,
-  orderAdjustment,
-  orderLineItem,
-  payment,
-  product,
-  variant,
-} from "../db/schema.ts";
-import { isUuid } from "../db/uuid.ts";
+import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
 import { keyOf, writeFulfilments } from "../fulfilment/fulfilment.ts";
-import {
-  type AppliedFulfilment,
-  CORE_FULFILMENT_STRATEGIES,
-  type FulfilmentStrategies,
-  fulfilmentAnswersFor,
-} from "../fulfilment/strategy.ts";
+import type { AppliedFulfilment } from "../fulfilment/strategy.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import type { ReservationRefusal } from "../reservation/provider.ts";
@@ -34,7 +17,16 @@ import {
 import { runWorkflow } from "../workflow/run.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
 import { defineWorkflow } from "../workflow/workflow.ts";
-import { type Order, type OrderShopper, readOrder } from "./read.ts";
+import {
+  type CartLineToPlace,
+  type CartToPlace,
+  cartAlreadyPlaced,
+  type LoadCartRefusal,
+  type LoadedCart,
+  readCartToPlace,
+  reservableLinesOf,
+} from "./load-cart.ts";
+import { type Order, readOrder } from "./read.ts";
 
 /**
  * **`place-order`** — a Cart becomes an immutable Order, in one request.
@@ -102,67 +94,26 @@ export type PlaceOrderRequest = {
  * `PriceResolutionRefusal` in the same exhaustive way.
  */
 export type PlaceOrderRefusal =
-  | "cart-not-found"
-  | "cart-expired"
-  | "cart-placed"
-  | "cart-empty"
+  // Everything reading the Cart can say, folded in rather than spelled out: the hold route
+  // reads a Cart the same way and refuses the same words, so there is one list of them
+  // (`load-cart.ts`) and both status maps go red together when it grows.
+  | LoadCartRefusal
   | "no-payment-provider"
   | "payment-declined"
-  | "unknown-fulfilment-strategy"
-  // Every way a Reservation provider can say the Store has not got it, folded in rather than
-  // spelled out: a second provider adds a member to that union and this one grows with it, so
+  // Every way a Reservation provider can say the Store has not got it, folded in for the same
+  // reason: a second provider adds a member to that union and this one grows with it, so
   // the store surface's status map goes red naming the new reason instead of answering it 422.
   | ReservationRefusal;
 
-/** One line of the Cart being placed, with everything the snapshot will need. */
-export type CartLineToPlace = {
-  readonly id: string;
-  readonly variantId: string;
-  /** The Product's title **now**, which is what Capture freezes onto the Order. */
-  readonly title: string;
-  readonly sku: string;
-  readonly quantity: number;
-  /**
-   * How this line is delivered — its Variant's Fulfilment Strategy, asked here and carried
-   * (ADR-0014, ADR-0052).
-   *
-   * Resolved by `load-cart` rather than by each Step that wants it, so one placement gets one
-   * answer: it is what `hold-reservations` reads to decide whether anything is claimed, and what
-   * `capture-order` snapshots onto the Order's Fulfilments. A Step in between may read it and a
-   * replacement may decide differently about a line, which is the same latitude every other
-   * field here carries.
-   */
-  readonly fulfilment: AppliedFulfilment;
-  /**
-   * The Line Item's own open data (ADR-0004), carried through to the Order's snapshot.
-   *
-   * This is the door a Shopper's unmodelled choice comes through, and a Project's replaced
-   * Step is what reads it — so dropping it at Capture would lose the one record of what was
-   * asked for.
-   */
-  readonly metadata: Record<string, unknown>;
-};
-
-/** The Cart's own fields that become the Order's, copied rather than referenced. */
-export type CartToPlace = {
-  readonly id: string;
-  readonly shopper: OrderShopper | null;
-  readonly metadata: Record<string, unknown>;
-};
-
-/** What `load-cart` produces and `price-lines` prices. */
-export type LoadedCart = {
-  readonly cart: CartToPlace;
-  /**
-   * In the order they were added to the Cart — a total order, so two runs over one Cart price
-   * the same lines in the same sequence.
-   *
-   * That is the Cart's order and not the Order's: an Order reports its Line Items in SKU order,
-   * because Capture writes them all in one transaction and there is then no moment that tells
-   * one from another. See `read.ts`.
-   */
-  readonly lines: readonly CartLineToPlace[];
-};
+/**
+ * What reading the Cart produces, re-exported from where it is now read.
+ *
+ * The types stayed named here because they are `place-order`'s contract and are exported from
+ * `@kobai/core` under these names; the *reading* moved to `load-cart.ts` when a second caller
+ * arrived, so that a hold and the placement that adopts it cannot disagree about what is in a
+ * Cart (ADR-0070).
+ */
+export type { CartLineToPlace, CartToPlace, LoadedCart } from "./load-cart.ts";
 
 /** One line, priced by `resolve-price` at the moment of Capture. */
 export type PricedLine = CartLineToPlace & {
@@ -317,108 +268,23 @@ export type PaidOrder = ReservedLines & {
 };
 
 /**
- * Reads the Cart, and refuses the three states it cannot be placed from.
+ * Reads the Cart, and refuses the four states it cannot be placed from.
  *
- * It reads the Product's title and the Variant's SKU here rather than at Capture because they
- * are what the snapshot freezes, and reading them in the Step that loads keeps `capture-order`
- * a write: by the time the point of no return is reached, everything it needs is in hand.
- *
- * **It takes no lock on the Cart, unlike every route that changes one.** `cart/write.ts` holds
- * the row `for update` for the length of one mutation, which is a few milliseconds; this
- * Workflow runs on past here to hold Reservations and take Payment, so a lock held from here to
- * Capture would be a database row held across a call to somebody else's Payment Provider. What
- * that costs is that a line added to the Cart while an Order is being placed is not on the
- * Order — which is the right answer anyway: an Order records what was placed, and what was
- * placed is what this Step read.
+ * **The reading itself is `load-cart.ts`'s**, because the store route that holds a Cart's stock
+ * has to see the same lines, in the same order, with the same Fulfilment answers (ADR-0070). A
+ * second query would be a second answer to what is in a Cart, and the hold and the placement
+ * that adopts it would claim different things — which is the overselling ADR-0018 is about,
+ * arriving through a door nobody was watching. What is left here is the slot and the refusal.
  */
 export const loadCart = defineStep(
   "load-cart",
   async (input: PlaceOrderRequest, context): Promise<LoadedCart> => {
-    // Checked before Postgres sees it: a malformed uuid raises, and an unhandled raise is a
-    // 500 that reports a broken server for a request about something that does not exist.
-    if (!isUuid(input.cartId)) throw noSuchCart(input.cartId);
+    const read = await readCartToPlace(context.db, input.cartId, context.fulfilment);
+    // A refusal becomes this Step's, with the same word and the same prose the hold route
+    // answers with: one reading of a Cart, and one account of why it cannot be claimed against.
+    if (!read.ok) throw new StepFailure(read.reason, read.detail);
 
-    const [found] = await context.db
-      .select({
-        id: cart.id,
-        shopperEmail: cart.shopperEmail,
-        shopperExternalId: cart.shopperExternalId,
-        metadata: cart.metadata,
-        // The same expression the Cart's own routes judge expiry with, imported rather than
-        // rewritten: a second spelling of it would be a second answer to whether a Cart is
-        // still alive.
-        expired: cartHasExpired,
-        placed: cartHasBeenPlaced,
-      })
-      .from(cart)
-      .where(eq(cart.id, input.cartId))
-      .limit(1);
-    if (!found) throw noSuchCart(input.cartId);
-
-    if (found.expired) {
-      throw refuse(
-        "cart-expired",
-        "This Cart has expired, so it can no longer be placed. It is still readable and its Line Items are still there — start a new Cart.",
-      );
-    }
-
-    // Refused here so that nothing is priced and — when they arrive — no Reservation is held
-    // and no Payment is taken for a Cart that already has an Order. It is not what *makes* the
-    // rule true: the unique index on `core_order.cart_id` is, and it is what catches the pair
-    // of requests that get past this check at the same instant. See {@link captureOrder}.
-    if (found.placed) throw alreadyPlaced(input.cartId);
-
-    const selected = await context.db
-      .select({
-        id: cartLineItem.id,
-        variantId: variant.id,
-        title: product.title,
-        sku: variant.sku,
-        quantity: cartLineItem.quantity,
-        metadata: cartLineItem.metadata,
-        fulfilmentStrategy: variant.fulfilmentStrategy,
-        // The Variant's own open data, for the Strategy rather than for the snapshot — a
-        // made-to-order Strategy reads its own key out of it (ADR-0013), and Core reads none.
-        variantMetadata: variant.metadata,
-      })
-      .from(cartLineItem)
-      .innerJoin(variant, eq(variant.id, cartLineItem.variantId))
-      .innerJoin(product, eq(product.id, variant.productId))
-      .orderBy(asc(cartLineItem.createdAt), asc(cartLineItem.id))
-      .where(eq(cartLineItem.cartId, found.id));
-
-    // Asked once per line, here, and carried from here on: the answers decide what is claimed
-    // and become the Order's Fulfilment snapshot, and a placement that asked twice could get
-    // two answers (ADR-0052).
-    const lines = selected.map(
-      ({ fulfilmentStrategy, variantMetadata, ...line }): CartLineToPlace => ({
-        ...line,
-        fulfilment: fulfilmentOf(context.fulfilment, fulfilmentStrategy, {
-          id: line.variantId,
-          sku: line.sku,
-          metadata: variantMetadata,
-        }),
-      }),
-    );
-
-    if (lines.length === 0) {
-      throw refuse(
-        "cart-empty",
-        "This Cart has nothing in it. An Order with no Line Items would be a financial record of nothing, so placing one is refused rather than written.",
-      );
-    }
-
-    return {
-      cart: {
-        id: found.id,
-        shopper:
-          found.shopperEmail === null
-            ? null
-            : { email: found.shopperEmail, externalId: found.shopperExternalId },
-        metadata: found.metadata,
-      },
-      lines,
-    };
+    return read.loaded;
   },
 );
 
@@ -554,7 +420,7 @@ function unwoundBy<Input extends object, Done>() {
   };
 }
 
-/** What each run is holding, for the run that holds it. */
+/** What each run **claimed**, for the run that has to give it back — never what it adopted. */
 const holding = unwoundBy<TaxedLines, readonly HeldReservation[]>();
 
 /**
@@ -574,6 +440,14 @@ const holding = unwoundBy<TaxedLines, readonly HeldReservation[]>();
  * these claims for good inside the transaction that writes the Order, so **nothing there needs
  * a compensation**, because the database unwinds a claim and an Order together or not at all.
  *
+ * **It claims, or it adopts** (ADR-0070). A storefront may have held this Cart's stock already —
+ * before sending the Shopper to their bank, where the money moves at the bank rather than here —
+ * and taking a second hold on a Cart that already has one would claim the units twice and leave
+ * a Store unable to sell stock it has. So this Step asks for the Cart's hold rather than for a
+ * new one, and **its compensation releases only what this run actually claimed**: an adopted
+ * hold belongs to the Cart, and giving it back here would take the goods away from a Shopper who
+ * has already paid for them.
+ *
  * A Cart holding nothing scarce holds nothing: an untracked Variant produces no claim, so this
  * Step is free for a Store selling downloads and is not something such a Store has to switch
  * off.
@@ -584,16 +458,12 @@ export const holdReservations = defineStep(
   async (input: TaxedLines, context): Promise<ReservedLines> => {
     const held = await holdReservationsFor(
       context.db,
-      // The four things a provider may see, and no more: what was selected, how much of it,
-      // the Line Item's own open data — which is where a Capacity provider will find the date a
-      // Shopper asked for (ADR-0013) — and what this Variant's Fulfilment Strategy answered,
-      // which is what tells each provider whether the line is its business at all (ADR-0052).
-      input.lines.map((line) => ({
-        variantId: line.variantId,
-        quantity: line.quantity,
-        metadata: line.metadata,
-        fulfilment: line.fulfilment,
-      })),
+      // Which Cart this is held for, so that a hold the storefront already took for it is
+      // adopted rather than taken a second time (ADR-0070).
+      input.cart.id,
+      // The four things a provider may see, and no more — from the same function the hold
+      // route projects with, so the two cannot come to claim different things.
+      reservableLinesOf(input),
       // What this deployment decided a hold is worth, or Core's default for a context that
       // was assembled without one — the same reading `fulfilment` gets a line above
       // (ADR-0075).
@@ -604,17 +474,22 @@ export const holdReservations = defineStep(
     // Step learning a second word.
     if (!held.ok) throw new StepFailure(held.reason, held.detail);
 
-    holding.push(input, held.reservations);
+    // **What this run claimed, and never what it adopted.** A hold the storefront took before
+    // sending the Shopper to their bank belongs to that Cart, not to this attempt at placing it:
+    // releasing it here would take stock away from a Shopper who has already paid for it, which
+    // is the failure the whole of ADR-0070 exists to prevent. So the compensation is handed the
+    // claims this run made, which is empty when everything was already held.
+    holding.push(input, held.claimed);
 
     return { ...input, reservations: held.reservations };
   },
 
   async (input, context) => {
     // Nothing held, nothing to give back.
-    const reservations = holding.pop(input);
-    if (reservations === undefined) return;
+    const claimed = holding.pop(input);
+    if (claimed === undefined) return;
 
-    await releaseReservations(context.db, reservations);
+    await releaseReservations(context.db, claimed);
   },
 );
 
@@ -866,44 +741,6 @@ export const captureOrder = defineStep(
   },
 );
 
-/**
- * What this line's Fulfilment Strategy answers about it, or a refusal saying there is no such
- * Strategy here.
- *
- * A Variant may only be created pointing at a Strategy the deployment has wired, so the only way
- * to reach the refusal is for a Project to *unwire* one its Variants already point at. That is a
- * configuration change rather than a fault in anybody's request, and it is answered the way
- * `no-payment-provider` is: this Store cannot sell this thing until somebody changes the Store.
- * Refusing beats guessing — a Variant Core silently treated as `physical` would be one whose
- * stock it claimed and whose Order it recorded as shipping, neither of which anybody asked for.
- *
- * The context's Strategies are Core's own two when nothing was threaded, because that is what a
- * deployment which wired nothing has — not an empty set in which no Variant can be fulfilled.
- */
-function fulfilmentOf(
-  strategies: FulfilmentStrategies | undefined,
-  strategy: string,
-  variant: {
-    readonly id: string;
-    readonly sku: string;
-    readonly metadata: Record<string, unknown>;
-  },
-): AppliedFulfilment {
-  const answers = fulfilmentAnswersFor(
-    strategies ?? CORE_FULFILMENT_STRATEGIES,
-    strategy,
-    variant,
-  );
-  if (!answers) {
-    throw refuse(
-      "unknown-fulfilment-strategy",
-      `Variant ${JSON.stringify(variant.sku)} is fulfilled by ${JSON.stringify(strategy)}, and this deployment has no Fulfilment Strategy of that name. It was wired under \`fulfilment.strategies\` in this Project's \`kobai.config.ts\` when the Variant was created, and is not now.`,
-    );
-  }
-
-  return { strategy, ...answers };
-}
-
 /** The unique index that makes a Cart become exactly one Order — see `db/schema.ts`. */
 const ONE_ORDER_PER_CART = "core_order_cart_idx";
 
@@ -1115,22 +952,15 @@ export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order
 export type PlaceOrderWorkflow = typeof placeOrderWorkflow;
 
 /**
- * A Cart that has already become an Order, refused — from either of the two places that can
- * find out, so a Shopper who pressed the button twice is told the same thing whichever request
- * lost.
+ * A Cart that has already become an Order, refused by the index rather than by the read.
+ *
+ * The words are `load-cart.ts`'s, because that is the other place that finds out: the request
+ * that lost the race for the unique index is told the same thing the one that lost at the read
+ * was told a moment earlier.
  */
 function alreadyPlaced(cartId: string): StepFailure {
-  return refuse(
-    "cart-placed",
-    `Cart ${JSON.stringify(cartId)} has already been placed, and a Cart becomes exactly one Order. The Order it became is still readable; start a new Cart to buy anything else.`,
-  );
-}
-
-function noSuchCart(cartId: string): StepFailure {
-  return refuse(
-    "cart-not-found",
-    `No Cart ${JSON.stringify(cartId)} exists. A Cart is addressed by the identifier it was created with, and holding that identifier is the whole of the authority to act on it.`,
-  );
+  const { reason, detail } = cartAlreadyPlaced(cartId);
+  return refuse(reason, detail);
 }
 
 /**
