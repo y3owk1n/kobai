@@ -1,14 +1,15 @@
 **/node_modules
 **/dist
-.devbox
+**/.devbox
 .git
 .github
-.scratch
+**/.scratch
+.claude
 docs
 *.md
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 # Never as a file: an `.npmrc` for a private mirror holds an auth token, and a token in a
 # build context is in an image layer forever. This workspace resolves kobai through
 # `workspace:*` and needs none, so unlike the Project's Dockerfile there is nothing here to

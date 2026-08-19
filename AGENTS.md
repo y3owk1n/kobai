@@ -51,8 +51,31 @@ is the
 forgiving one — it rewrites rather than reports, so it is where a finding gets fixed. Reach
 for it first; most findings below `error` carry a safe fix.
 
-Three things follow, and each has a test rather than a convention behind it:
+Four things follow, and each has a test rather than a convention behind it:
 
+- **What the gate lints is `.gitignore`'s question, not `biome.json`'s** (ADR-0068).
+  `biome.json` sets `vcs.useIgnoreFile`, so a gitignored path is out of scope **at any
+  depth** — which is what `"!.devbox"` was not: it was root-anchored, so a `devbox run`
+  inside `reference/` left a nix profile manifest the gate then failed to format, naming a
+  nix store path and nothing that would lead you to `reference/` (#203). `.scratch/` was the
+  same bug with no ticket. So `files.includes` now excludes **only what git tracks** — the
+  five generated artifacts an ignore file can never carry — and
+  `tests/the-gate-lints-what-git-tracks.test.ts` fails naming any exclusion git tracks no
+  file under. **An artifact directory is one edit: add it to `.gitignore`.** Adding it here
+  too is the second, narrower answer that produced #203, and it now reddens the build.
+  **Every `.dockerignore` obeys the same rule and cannot delegate it**, Docker having no
+  `useIgnoreFile` — so a pattern naming something `.gitignore` names is written `**/`-first,
+  as `**/node_modules` always was and `.devbox`, `.env` and `.env.*` were not. That one had
+  no ticket and a worse consequence than a red gate: `COPY . .` put `reference/.devbox` and
+  any `reference/.env` into the image, and `.gitignore` is why `git status` would never have
+  shown you either. `tests/nothing-git-ignores-reaches-the-build-context.test.ts` derives it
+  from `.gitignore` for all **three** copies — the template's included, which follows only
+  through `devbox run template:generate`. **`.claude/worktrees/` is ignored for the same
+  reason and is the sharpest case**: a harness puts a whole second checkout there, and a
+  nested `biome.json` is one Biome refuses outright — so `devbox run lint` *failed*, naming
+  a directory you are not in. It is also the only entry in either ignore file with an
+  interior slash, so it is anchored at the root rather than matching at every depth, and the
+  `.dockerignore` sweep knows the difference.
 - **A rule below the floor is a decision.** `tests/the-lint-gate-fails-below-error.test.ts`
   asks Biome for every rule's default severity *at gate time* and fails naming any enabled
   rule that resolves below `warn`. So a Biome upgrade that demotes a rule, or adds a
@@ -62,8 +85,8 @@ Three things follow, and each has a test rather than a convention behind it:
   on purpose. Do not delete the assertion.
 - **`biome.json` cannot explain itself.** A comment in it stops Biome parsing its own config:
   it walks *up* to the parent checkout's and fails with "found a nested root configuration",
-  naming a directory you are not in. Every explanation lives in ADR-0039 or ADR-0033
-  instead. `devbox.json` is the opposite — HuJSON, real comments welcome, `"// …"` keys
+  naming a directory you are not in. Every explanation lives in ADR-0039, ADR-0068 or
+  ADR-0033 instead. `devbox.json` is the opposite — HuJSON, real comments welcome, `"// …"` keys
   never (ADR-0030).
 - **`devbox add` rewrites `devbox.json` into trailing-comma style.** `biome.json` expects
   that, through an `overrides` entry matching `**/devbox.json` — the workspace's and the

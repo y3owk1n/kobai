@@ -93,6 +93,7 @@ New to the project? These five carry the shape of everything else:
 | [0065](./0065-a-stores-default-currency-is-fixed.md) | A Store's default currency is fixed | Accepted — applies 0062's shape to the Store; holds 0008's question open |
 | [0066](./0066-administering-access-is-one-permission-and-the-last-administrator-cannot-be-removed.md) | Administering access is one Permission, and the last administrator cannot be removed | Accepted — makes 0027 reachable; applies 0059's shape to a Role |
 | [0067](./0067-a-set-the-deployment-declares-is-not-a-list-route.md) | A set the deployment declares is not a list route | Accepted — bounds 0064; answers 0010's finding against 0014 |
+| [0068](./0068-gitignore-is-the-one-statement-of-what-a-checkout-generates.md) | `.gitignore` is the one statement of what a checkout generates | Accepted — completes 0039; binds `biome.json` and every `.dockerignore` to it |
 
 ## Prototypes
 

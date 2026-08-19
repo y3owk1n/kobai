@@ -1,16 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "includes": [
       "**",
-      "!**/dist",
-      "!**/node_modules",
       "!**/migrations/meta",
       "!packages/core/openapi.json",
       "!packages/client/src/schema.ts",
       "!packages/create-kobai/template",
-      "!.devbox",
-      "!pnpm-lock.yaml"
+      "!**/pnpm-lock.yaml"
     ]
   },
   "formatter": {
