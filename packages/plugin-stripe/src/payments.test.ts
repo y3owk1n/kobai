@@ -255,6 +255,47 @@ describe("charging a payment the bank has already answered", () => {
     });
   });
 
+  it("declines a payment Stripe has never heard of", async () => {
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        status: 404,
+        body: {
+          error: {
+            type: "invalid_request_error",
+            code: "resource_missing",
+            message: "No such payment_intent: 'pi_redirect'.",
+          },
+        },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(
+      payments.charge(asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" })),
+    ).resolves.toMatchObject({ ok: false });
+  });
+
+  it("throws rather than declines when the key is wrong, so a Store hears about it", async () => {
+    // The difference this draws is the interface's own: a decline is an ordinary answer a
+    // storefront acts on, and a provider that *throws* is reporting that it is broken or
+    // unreachable. A deployment with a mistyped secret key is the second one — and answering
+    // it as a decline would turn a misconfiguration into every Shopper being told their bank
+    // said no, with nothing anywhere saying otherwise.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        status: 401,
+        body: {
+          error: { type: "invalid_request_error", message: "Invalid API Key provided." },
+        },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_wrong", fetch: stripe.fetch });
+
+    await expect(
+      payments.charge(asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" })),
+    ).rejects.toThrow(/Invalid API Key/);
+  });
+
   it("declines when the order carried no PaymentIntent at all", async () => {
     const stripe = stripeStub({});
     const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });

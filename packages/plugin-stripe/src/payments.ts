@@ -3,6 +3,7 @@ import {
   callStripe,
   integerOrUndefined,
   type StripeOptions,
+  type StripeResult,
   stringOrUndefined,
 } from "./api.ts";
 import type { StripeUnplacedRefundRow } from "./db/schema.ts";
@@ -135,7 +136,7 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
         method: "GET",
         path: `/v1/payment_intents/${encodeURIComponent(reference)}`,
       });
-      if (!found.ok) return notFound(found.status, found.error.message);
+      if (!found.ok) return notFound(found);
 
       const mismatch = disagreesWith(request, found.body);
       if (mismatch !== undefined) return mismatch;
@@ -316,10 +317,27 @@ function missingIntent(): PaymentOutcome {
   };
 }
 
-/** Stripe has never heard of this intent — a decline, for the same reason as above. */
-function notFound(status: number, message: string | undefined): PaymentOutcome {
+/**
+ * Stripe would not tell us about this intent — a decline only if it does not exist.
+ *
+ * **The one place this Plugin has to tell a refusal from an outage**, and it is the interface's
+ * own distinction: a decline is an ordinary answer a storefront acts on, and a throw reports
+ * that the provider is broken or unreachable. An intent Stripe has never heard of is the first
+ * — a storefront sent a reference that is not one, and no Order should be written. A mistyped
+ * secret key, a revoked one, a rate limit or a Stripe outage are all the second, and answering
+ * any of them as a decline would turn a deployment's own misconfiguration into every Shopper
+ * being told their bank said no, with nothing anywhere saying otherwise.
+ */
+function notFound(failure: Extract<StripeResult, { ok: false }>): PaymentOutcome {
+  const missing = failure.status === 404 || failure.error.code === "resource_missing";
+  if (!missing) {
+    throw new Error(
+      `Stripe answered ${failure.status} when this Plugin asked about a PaymentIntent: ${describe(failure.error.message)}`,
+    );
+  }
+
   return {
     ok: false,
-    detail: `This payment could not be found (Stripe answered ${status}): ${describe(message)}`,
+    detail: `This payment could not be found: ${describe(failure.error.message)}`,
   };
 }
