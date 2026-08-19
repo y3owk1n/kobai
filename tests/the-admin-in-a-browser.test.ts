@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  A_NARROW_WINDOW,
   ADMIN_PATH,
   type AdminSeam,
   auditAccessibility,
@@ -659,6 +660,91 @@ describe("the frame's own controls", () => {
 
     expect(where(page)).toBe("/api-keys");
     await auditAccessibility(page, "the API keys screen");
+  });
+});
+
+/**
+ * The frame at a width where the Admin renders its other self (#193).
+ *
+ * **This seam proves what it visits, at the viewport it visits it**, and until this block every
+ * window in the file was Playwright's 1280×720 — comfortably above `md`, which is the only width
+ * at which `Sidebar` takes its desktop branch. So `app-layout.tsx`'s `role="complementary"` and
+ * its `aria-label` reached an element on every screen #175 audited, and below `md` reached a
+ * Base UI dialog **root**,
+ * which is a state container and not an element: the Admin had no sidebar landmark on a phone at
+ * all, and the ticket whose whole subject was catching exactly this could not see it.
+ *
+ * **Which cases run twice is a decision, and the answer is "the sidebar's".** Running the file
+ * at two widths would double the wall-clock of a file the maintainer was told costs 5–15 seconds,
+ * and would re-audit an identical document for almost all of it: `hooks/use-mobile.ts` is the
+ * only thing in this Admin that renders anything *different*, and `components/ui/sidebar.tsx` is
+ * the only file that reads it. Everything else narrows in CSS, which changes a layout rather than
+ * a document, and axe reads the document. So these two cases cover the three places that hook is
+ * read — which branch `Sidebar` renders, which half `SidebarProvider`'s toggle takes, and whether
+ * `SidebarMenuButton` hides its tooltip — and **a third case is earned by something else
+ * branching on it**, not by a screen looking different when it is narrow.
+ *
+ * Both were watched failing before the fix, with `{...props}` still landing on `Sheet`, and both
+ * failed on the landmark never appearing — which is the whole of the fault and is worth saying
+ * exactly: axe stayed quiet on the sheet either way, because it excludes a `role="dialog"`
+ * subtree from the `region` rule. **Nothing but asking for the landmark by name could have found
+ * this**, which is why the case does that rather than leaning on the audit beside it.
+ */
+describe("the frame on a narrow screen", () => {
+  /** The sidebar wherever it renders — named by `app-layout.tsx`, and by nothing else. */
+  function sidebar(page: Page) {
+    return page.getByRole("complementary", { name: "Sections and account" });
+  }
+
+  /** The only way to a section below `md`, since the sidebar is not on screen until it is asked for. */
+  function toggle(page: Page) {
+    return page.getByRole("button", { name: "Toggle Sidebar" });
+  }
+
+  it("keeps the sidebar's landmark, and its sections, where the sidebar is a sheet", async () => {
+    const page = await seam.signedIn("/products", A_NARROW_WINDOW);
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    // A screen with no sidebar on it at all, which is what a Merchant meets first on a phone:
+    // the desktop branch is `hidden md:block` and the sheet has not been opened.
+    await auditAccessibility(page, "the Products screen in a narrow window");
+
+    await toggle(page).click();
+
+    await shows(sidebar(page), "the sidebar's landmark in a narrow window");
+    // Its contents, rather than only the role: a landmark on something holding nothing would
+    // satisfy the assertion above and none of what the landmark is for. Two of the sections
+    // rather than all of them — `lib/sections.ts` is where that list lives, and a copy here
+    // would be the second answer to what this Admin has.
+    await shows(
+      sidebar(page).getByRole("link", { name: "Products" }),
+      "the Products section, inside the sheet",
+    );
+    await shows(
+      sidebar(page).getByRole("link", { name: "Orders" }),
+      "the Orders section, inside the sheet",
+    );
+    await auditAccessibility(
+      page,
+      "the Products screen with the sidebar open in a narrow window",
+    );
+  });
+
+  it("navigates from the sheet, which is the only way to a section on a phone", async () => {
+    const page = await seam.signedIn("/products", A_NARROW_WINDOW);
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    await toggle(page).click();
+    await shows(sidebar(page), "the sidebar's landmark in a narrow window");
+    await sidebar(page).getByRole("link", { name: "Orders" }).click();
+
+    expect(where(page)).toBe("/orders");
+    await shows(page.getByText("Every Order this Store has taken"), "the Orders screen");
+    // Nothing here says whether the sheet closed behind the navigation. What this case is about
+    // is that a section is reachable from inside it and that the document is sound afterwards;
+    // an assertion either way would be writing down today's answer to a question #193 never
+    // asked, and this Admin does not close it.
+    await auditAccessibility(page, "the Orders screen reached from the sheet");
   });
 });
 

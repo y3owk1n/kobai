@@ -59,9 +59,13 @@ was a door.
 deliberately **no test diffing that directory against upstream** — it would go red on every
 shadcn release while saying nothing whatever about what we chose — so the list is the cheap half
 of that check, and its entire value is that a departure had to be typed out by somebody. Today
-it holds one change to what a component *does* — `select.tsx` and `dropdown-menu.tsx` portal
-into the frame's container rather than `<body>`, which the browser seam **does** hold, see
-below — and a table of Biome suppressions upstream is not written against. Add a component with
+it holds two changes to what a component *does* — `select.tsx` and `dropdown-menu.tsx` portal
+into the frame's container rather than `<body>`, and `sidebar.tsx` spreads the props it is given
+onto an element in its narrow branch rather than onto a dialog root that renders none (#193) —
+and a table of Biome suppressions upstream is not written against. The browser seam holds the
+first with an audit and the second by asking for the landmark by name — see below.
+
+Add a component with
 
 ```sh
 devbox run -- pnpm --filter kobai-reference-admin exec pnpm dlx shadcn@latest add <name>
@@ -98,7 +102,7 @@ Project — `node dist/src/server.js` against a throwaway database, on a port th
 and `tests/support/admin-browser.ts` is the harness, which says in its own header how to add a
 case. `devbox run browsers` downloads the browser and `devbox run ci` and `devbox run test`
 both run that themselves, for ADR-0044's reason: a guardrail behind an opt-in step is not a
-faster guardrail, it is an optional one. Six things about it are decisions rather than
+faster guardrail, it is an optional one. Seven things about it are decisions rather than
 implementation:
 
 - **It asserts the frame's promises and never screen behaviour.** Deep-linking, refresh,
@@ -143,6 +147,19 @@ implementation:
   reachable from another; the *catalog* is shared, because a boot per case is not affordable,
   so a case names its own titles and calls `emptyTheCatalog` when an empty list is its subject.
   Time is passed by winding `core_session.expires_at` back, never by waiting.
+- **A window is 1280×720 unless a case names another, and the seam proves what it visits at the
+  viewport it visits it** (#193). That is worth knowing about every assertion the file makes and
+  not only about the one that found it out: #175 built this seam, caught five accessibility faults
+  with it on their first run, and could not catch a sixth — `Sidebar` spreads `{...props}` onto a
+  different thing in each of its three branches, and below `md` onto a dialog *root*, so the
+  landmark `app-layout.tsx` passes reached no element and the Admin had no sidebar landmark on a
+  phone at all. A case wanting that layout passes `A_NARROW_WINDOW`. **Which cases run twice is a
+  decision, and the answer is "the sidebar's"**: `hooks/use-mobile.ts` is the only thing here that
+  renders a different *document*, and `components/ui/sidebar.tsx` is the only file that reads it —
+  everything else narrows in CSS, which changes a layout, and axe measures the document. Running
+  the whole file at two widths would double what the maintainer was told it costs, to re-prove an
+  identical DOM. **A third narrow case is earned by something else branching on that hook**, not
+  by a screen looking different when it is narrow.
 - **The browser is Chromium's headless shell**, which is what `--only-shell` downloads and what
   `channel: "chromium-headless-shell"` launches — since Playwright 1.49 a bare `headless: true`
   asks for the full browser, which is deliberately not downloaded. The flag and the channel are
