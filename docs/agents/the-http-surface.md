@@ -298,9 +298,8 @@ are told which route does it. A `PUT` beside them is a different judgement and n
 `PUT /admin/variants/{id}/inventory` stays a `PUT` because a count *is* the whole fact.
 
 **`packages/core/src/patch.ts` is where that is implemented, once** (#185). It was written out
-per module until six of them had accumulated across four files, and they had already drifted —
-two refusals missing the shared sentence, half the `metadata` refusals naming the field in
-backticks and half naming it bare. `changesFrom` narrows a body into the changes it asks for and
+per module until it had accumulated across four files and drifted — its own header says how far,
+and this file does not repeat the count. `changesFrom` narrows a body into the changes it asks for and
 `changesNothing` is the refusal; `text` and `openData` are the two field narrowings almost every
 correction wants. **A helper may answer with a refusal without costing ADR-0060's binding**,
 which is the part worth understanding before adding to it: every narrowing there refuses

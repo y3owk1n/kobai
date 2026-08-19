@@ -47,15 +47,38 @@ export type NotUsable<R extends string = never> = {
   readonly detail: string;
 };
 
-/** How one field narrows: the value it becomes, or the refusal it earns. */
+/**
+ * How one field narrows: the value it becomes, or the refusal it earns.
+ *
+ * Named for the **field it reads** rather than for its being a function, because that is how it
+ * is written down — a `fields` table maps each column to one of these, and `sku: text("sku")`
+ * reads as what the field is rather than as what reads it.
+ */
 export type Field<V, R extends string = never> = (
   value: unknown,
 ) => { readonly ok: true; readonly value: V } | NotUsable<R>;
 
-/** What {@link changesFrom} answers: the changes a body asked for, or why it asked for none. */
+/**
+ * What {@link changesFrom} answers: the changes a body asked for, or why it asked for none.
+ *
+ * `C` is written **mutable** and the changes come back as `Partial<C>`, because {@link
+ * changesFrom} fills the object a key at a time. Everything else in this file is `readonly`; a
+ * caller that wants its own changes read-only says so at its own boundary.
+ */
 export type Changes<C, R extends string = never> =
   | { readonly ok: true; readonly changes: Partial<C> }
   | NotUsable<R>;
+
+/**
+ * The `invalid` refusal, built.
+ *
+ * Exported so that a field narrowing a module writes for itself — `readRoleInput`'s
+ * `permissions`, which is the only one — says it the same way rather than hand-rolling the very
+ * literal this file exists to hold once.
+ */
+export function notUsable(detail: string): NotUsable {
+  return { ok: false, reason: "invalid", detail };
+}
 
 /**
  * Reads a `PATCH` body into the set of changes it asks for.
@@ -114,6 +137,16 @@ export function changesFrom<C extends object, R extends string = never>(
  * so a Merchant who sent a Price to a Variant, a `variants` to a Product or only a
  * `defaultCurrency` to the Store sent an empty body — and this is the one place they can be
  * told which route does it.
+ *
+ * **`fields` is prose and is deliberately not derived from the table {@link changesFrom} was
+ * given.** It names the fields as the **wire** spells them and that table is keyed by the
+ * column, and `PATCH /admin/variants/{id}` is the case where the two differ: a caller sends
+ * `fulfilment` and the column is `fulfilment_strategy`, so a derived sentence would name a field
+ * no body may carry. The English differs too — "or both" for two fields, "or any of them" for
+ * three — and that is a sentence rather than a list. What keeps it honest is a test instead:
+ * `http/a-correction-that-changes-nothing.test.ts` reads every field this sentence names back
+ * out of it and holds each one to the route's own request schema, so a renamed or mistyped field
+ * reddens the build.
  */
 export function changesNothing(fields: string, instead?: string): NotUsable {
   const said = `Name ${fields}. A request that changes nothing is more likely a mistake than an intention.`;
@@ -152,8 +185,4 @@ export function openData(field: string): Field<Record<string, unknown>> {
       ? notUsable(metadataDetail(`\`${field}\``))
       : { ok: true, value: metadata };
   };
-}
-
-function notUsable(detail: string): NotUsable {
-  return { ok: false, reason: "invalid", detail };
 }

@@ -17,6 +17,7 @@ import {
   changesFrom,
   changesNothing,
   mustBeText,
+  notUsable,
   openData,
   text,
 } from "../patch.ts";
@@ -156,9 +157,7 @@ export async function createRole(
   if (!usable.ok) return usable;
 
   const { name, permissions = [], metadata = {} } = usable.changes;
-  if (name === undefined) {
-    return { ok: false, reason: "invalid", detail: NAME_MUST_BE_A_NAME };
-  }
+  if (name === undefined) return notUsable(NAME_MUST_BE_A_NAME);
 
   // No select-then-insert: two requests offering the same name would both find nothing and
   // the loser's insert would surface as a 500 rather than as the conflict it is. The unique
@@ -384,12 +383,9 @@ function readRoleInput(input: CreateRoleInput): Changes<RoleColumns> {
       permissions: (value) => {
         const permissions = readPermissions(value);
         return permissions === undefined
-          ? {
-              ok: false,
-              reason: "invalid",
-              detail:
-                "`permissions` must be an array of non-empty strings. Which strings is not checked: a Role may hold a Permission this build of Core has never heard of, because a Plugin's is a string like any other.",
-            }
+          ? notUsable(
+              "`permissions` must be an array of non-empty strings. Which strings is not checked: a Role may hold a Permission this build of Core has never heard of, because a Plugin's is a string like any other.",
+            )
           : { ok: true, value: permissions };
       },
       metadata: openData("metadata"),
@@ -397,7 +393,13 @@ function readRoleInput(input: CreateRoleInput): Changes<RoleColumns> {
   );
 }
 
-/** The columns a body names, of which it names some. */
+/**
+ * The columns a body names, of which a `PATCH` names some and a create names all it means to.
+ *
+ * The **column** names, which is what `changesFrom` asks to be keyed by so that the result is
+ * the object `set` takes — here they are also the wire's, a Role having no field whose two names
+ * differ the way a Variant's Strategy does.
+ */
 type RoleColumns = {
   name: string;
   permissions: string[];
