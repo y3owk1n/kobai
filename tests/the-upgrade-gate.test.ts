@@ -370,14 +370,16 @@ describe("a customised Project taken across a Core major", () => {
   });
 
   it("still serves the price the Project's own Step decided, not Core's", () => {
-    // **The flagship.** A Merchant priced this Variant at $12.50 and the Project's Step says
+    // **The flagship.** A Merchant priced this Variant at 12.50 and the Project's Step says
     // one cent. If Core's rule wins here, replacing a Step stopped working across the major
     // and ADR-0003's central promise is broken — which is the single thing this gate exists
-    // to catch.
+    // to catch. The currency is this Project's own too, and it survives the same way: `MYR`
+    // is what `migrations/0001_the_store_prices_in_myr.sql` set, so a Store that read back as
+    // Core's placeholder `USD` would be a Project migration that stopped applying.
     expect(
       after.price.price,
       `The Step override stopped taking effect across the upgrade: the storefront was served ${after.price.price.amount} rather than the 1 this Project's \`everything-costs-one-cent\` Step decides. Core's own \`select-price\` would answer ${PRICED_AT}. See reference/kobai.config.ts and ADR-0003.`,
-    ).toMatchObject({ amount: 1, currency: "USD" });
+    ).toMatchObject({ amount: 1, currency: "MYR" });
 
     expect(
       after.price.workflow.steps.map((step) => step.implementation),

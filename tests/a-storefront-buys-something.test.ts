@@ -7,6 +7,16 @@ import {
   type TestKobai,
 } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
+import referenceConfig from "../reference/kobai.config.ts";
+import { createAdminAssets } from "../reference/src/admin-assets.ts";
+import { createProjectFetch, type ProjectFetch } from "../reference/src/app.ts";
+import { createFakeBank, type FakeBank } from "../reference/src/payments/fake-bank.ts";
+import {
+  createRedirectPaymentRoutes,
+  REDIRECT_CALLBACK_PATH,
+  REDIRECT_RETURN_PATH,
+  REDIRECT_START_PATH,
+} from "../reference/src/payments/redirect.ts";
 
 /**
  * A Shopper buys something, over `/store` and through `@kobai/client` — ADR-0069's instrument.
@@ -34,21 +44,46 @@ import { describe, expect, it } from "vitest";
  * would put the rule further from the thing it governs. The line is the marker below, and
  * everything under it is scanned.
  *
+ * **The one thing the journey reaches that is not kobai is the Developer's own server**, and it
+ * arrived with the bank redirect (ADR-0070). A payment the Shopper completes at their bank is
+ * settled by a route the *Project* mounts — a Plugin cannot add one, and signature verification
+ * and logging are the deployment's to own — so the redirect leg below posts at
+ * `reference/src/payments/redirect.ts` and that route calls `POST /store/orders` like any other
+ * client. It is not a hole in the ban and it is not exempt from it: the Project's paths reach
+ * this file as **imported constants**, so every kobai path the journey names is still a literal
+ * the sweep reads, and `reference/src/app.test.ts` holds that Project route to adding nothing
+ * whatever to the API it is served beside.
+ *
  * **Arrangement is free.** A Store has to have something in it before anybody can buy it, and
  * stocking a Store is a Merchant's job — so `/admin` and the harness are used freely up to the
- * marker, exactly as `seedTestCatalog` does. The ban begins where the Shopper does.
+ * marker, exactly as `seedTestCatalog` does. The ban begins where the Shopper does. **So is the
+ * clock**: there is no request that makes fifteen minutes have passed, so the hold below is
+ * lapsed by winding its row back, the way every window in this repository is tested, and that
+ * one line lives above the marker with the rest of the arrangement.
+ *
+ * That is worth saying plainly, because it is also the way the ban could be got round: the sweep
+ * reads this file's **text** below the marker, so anything a helper declared above it does is
+ * invisible to it. Two helpers are called from below — `aStoreThatTakesBankRedirects`, which
+ * stocks the Store, and `theHoldLapses`, which is the clock — and neither may grow into a
+ * storefront doing something a storefront could not. **Arranging and acting are the line**: if a
+ * helper up here starts doing what the Shopper is supposed to be doing, move it down and let the
+ * sweep judge it.
  *
  * The sentence being walked, from ADR-0069, with what passes today in **bold**:
  *
  * > A Shopper **browses** a Collection, **opens a product page** and picks an option, **adds it
- * > to a Cart**, **has the stock held**, pays through a bank redirect, and **the Order exists** once
- * > the bank has answered — whether or not the Shopper came back to the tab. The Merchant
+ * > to a Cart**, **has the stock held**, **pays through a bank redirect**, and **the Order exists
+ * > once the bank has answered — whether or not the Shopper came back to the tab**. The Merchant
  * > dispatches it, and **the Shopper reads it back** dispatched. And the same purchase completes
  * > through the hosted Checkout as through a Developer's own.
  *
  * So the journey walks as far as today's surface allows: browse, open a product page, read a
  * Variant on its own, ask what it costs, fill a Cart and change its mind twice, sign in, hold the
- * stock, place the Order, read it back. It walks **every** operation `/store` serves, and that is derived
+ * stock, place the Order, read it back — and then walks the purchase a second way, through a
+ * bank, three times over: the Shopper who comes back, the Shopper who never does, and the hold
+ * that lapsed while they were away. The last two are what ADR-0069 says this instrument is
+ * *better* than a browser for: "the callback arrives and the return never does" is two calls and
+ * one that is never made. It walks **every** operation `/store` serves, and that is derived
  * from the description rather than believed — a route added here without a clause in the
  * journey reddens the build, which is what "later specs extend it" has to mean to be worth
  * anything. Each
@@ -139,6 +174,131 @@ function clientCarrying(kobai: TestKobai, apiKey: string): KobaiClient {
 }
 
 /**
+ * The same Store, deployed by somebody who takes payments at a bank — the arrangement the three
+ * redirect cases start from.
+ *
+ * **It is the reference Project, booted**, rather than bare Core with a provider bolted on:
+ * `kobai.config.ts`, its Plugins, its replaced pricing Step and its own migration set, which is
+ * what makes this Store price in **MYR** — the currency FPX settles in, and the reason ADR-0069
+ * moved it off the placeholder dollars every amount in this repository used to be in. So the
+ * figures below are this deployment's own (`everything-costs-one-cent` decides them), which is
+ * the sharper version of ADR-0077's guarantee: what the Shopper authorises at the bank is what
+ * *this* Project charges, not what the catalog happens to say.
+ *
+ * **One object is the bank and the Payment Provider**, and it has to be: the thing that starts a
+ * payment and the thing kobai asks to confirm it are the same system, or `charge` is confirming
+ * somebody else's money. That is the shape `stripePayments` already has, and the one line
+ * `kobai.config.ts` moves on the day this Store takes cards.
+ *
+ * The fake is the artefact ADR-0070 asks for. Stripe's sandbox cannot be told to abandon, and it
+ * cannot be told that fifteen minutes have gone by; both of those are a method call here.
+ */
+type ARedirectStore = {
+  readonly kobai: TestKobai;
+  /** The page's key: browsing, the Cart, and asking what it comes to. */
+  readonly browser: KobaiClient;
+  /** The storefront's server key: holding stock and reading an Order back (ADR-0055). */
+  readonly server: KobaiClient;
+  /** The bank, which is also this deployment's Payment Provider. */
+  readonly bank: FakeBank;
+  /** The Developer's own server — this Project, serving the routes it mounts itself. */
+  readonly project: ProjectFetch;
+  /** What the Store sells here, found by browsing rather than handed over. */
+  readonly variantId: string;
+};
+
+async function aStoreThatTakesBankRedirects(): Promise<ARedirectStore> {
+  const bank = createFakeBank();
+  const kobai = await createTestKobai({
+    ...referenceConfig,
+    payments: { provider: bank },
+  });
+
+  const posters = await seedTestCatalog(kobai, {
+    title: THE_PRODUCT,
+    variants: [{ sku: THE_SKU, prices: [THE_PRICE] }],
+  });
+  const counted = await kobai.request(
+    `/admin/variants/${posters.variant(THE_SKU).id}/inventory`,
+    {
+      method: "PUT",
+      headers: { ...posters.merchant.headers, "content-type": "application/json" },
+      // Exactly what the Shopper below takes, so that a hold which lapses is a hold nothing
+      // else can be sold past — which is the state a Shopper meets when they come back from a
+      // bank late, and the only one in this whole design that takes money and gives no goods.
+      body: JSON.stringify({ onHand: THE_LAST_OF_THEM }),
+    },
+  );
+  expect(counted.status, "counting the posters").toBe(200);
+
+  const publishable = await createTestApiKey(kobai, posters.merchant, {
+    name: "the browser's",
+    kind: "publishable",
+  });
+
+  return {
+    kobai,
+    browser: clientCarrying(kobai, publishable.key),
+    server: clientCarrying(kobai, posters.apiKey.key),
+    bank,
+    variantId: posters.variant(THE_SKU).id,
+    project: createProjectFetch(
+      { fetch: kobai.fetch },
+      createAdminAssets(),
+      createRedirectPaymentRoutes({
+        kobai: { fetch: kobai.fetch },
+        payments: bank,
+        // A **secret** key, because the route it settles with places Orders (ADR-0055). It is
+        // the storefront's server-side credential and never the page's.
+        apiKey: posters.apiKey.key,
+      }),
+    ),
+  };
+}
+
+/**
+ * A `POST` at the Developer's own server, which is what both halves of a bank's answer are.
+ *
+ * The Shopper's browser is redirected back and posts what it was given; the bank posts its own
+ * event. Neither is kobai, and neither is in `@kobai/client` — a Project's routes are the
+ * Project's, which is the whole of why ADR-0070 puts them there.
+ */
+async function postedAt(
+  project: ProjectFetch,
+  path: string,
+  body: unknown,
+): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
+  const response = await project(
+    new Request(`${BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+  return {
+    status: response.status,
+    body: (await response.json()) as Record<string, unknown>,
+  };
+}
+
+/**
+ * Fifteen minutes go by while the Shopper is in their banking app.
+ *
+ * **The clock is arrangement, and this is the only honest way to move it.** There is no request
+ * that makes a window have elapsed, and a test that waited for a real one would wait a minute at
+ * the very least — Core's floor, and the floor is there because a hold has to outlive the
+ * placement that took it (ADR-0075). So the row is wound back, exactly as every session window
+ * in this repository is tested, and the sweeper has simply not come round yet: a hold that
+ * lapsed a moment ago is still holding its units, so the placement can neither adopt it nor
+ * claim past it. That is precisely the state a Shopper meets when they take too long.
+ */
+async function theHoldLapses(kobai: TestKobai): Promise<void> {
+  await kobai.database.query(
+    "update core_reservation set expires_at = now() - interval '1 minute' where released_at is null",
+  );
+}
+
+/**
  * What the Store sells, named here so the journey asks for it by name rather than by position.
  *
  * A storefront finds a Product by browsing; asserting on `products[0]` would be this test
@@ -148,7 +308,12 @@ const THE_PRODUCT = "A poster";
 const THE_SKU = "POSTER-A2";
 /** The other size, which the Shopper below adds to the Cart and then thinks better of. */
 const THE_OTHER_SKU = "POSTER-A3";
-/** Minor units — USD 12.50, and the amount the Order below has to come to twice over. */
+/**
+ * Minor units — 12.50 of whatever the Store prices in, and the amount the first Order below has
+ * to come to twice over. It is what a Merchant entered rather than what a Shopper is charged: the
+ * redirect Store further down runs the reference Project's own pricing Step, which throws it away
+ * (`WHAT_THIS_PROJECT_CHARGES`).
+ */
 const THE_PRICE = 1250;
 const BLURB = "Printed on heavy stock.";
 const HOW_MANY = 2;
@@ -156,6 +321,26 @@ const HOW_MANY = 2;
 const ON_THE_SHELF = 5;
 /** Who the Cart turns out to belong to, once the guest signs in half way through. */
 const THE_SHOPPER = "shopper@example.test";
+
+/**
+ * What the redirect Store has on its shelf, and what the Shopper takes: all of it.
+ *
+ * The two are the same number on purpose. A hold covering the whole shelf is what makes the
+ * lapsed one refuse a placement rather than merely being an odd row in a table — nothing can be
+ * sold past it until the sweeper gives it back.
+ */
+const THE_LAST_OF_THEM = 2;
+/**
+ * What that Project charges for one of anything, in **sen**.
+ *
+ * Not `THE_PRICE`. The reference Project replaced `select-price` with `everything-costs-one-cent`
+ * (ADR-0017), so the Merchant's 1250 is not what a Shopper is charged there — which is exactly
+ * what the quote has to be asked rather than worked out, and what the payment has to be started
+ * for (ADR-0077).
+ */
+const WHAT_THIS_PROJECT_CHARGES = 1;
+/** ISO 4217, and the reason FPX is a path the gate walks rather than prose (ADR-0069). */
+const THE_RINGGIT = "MYR";
 
 /** What a call answered, or a failure naming the step of the journey that did not complete. */
 function answered<Data>(
@@ -527,5 +712,271 @@ describe("a Shopper buys something", () => {
     expect(error && "reason" in error ? error.reason : undefined).toBe(
       "secret-key-required",
     );
+  });
+});
+
+/**
+ * The same purchase, paid for at a bank — ADR-0070's clause of the sentence.
+ *
+ * A redirect method takes the money **there**, when the Shopper authorises, which is what makes
+ * this a different journey rather than a different payment provider. Three things follow, and
+ * each is one of the cases below: the stock has to be held before the Shopper leaves; no Order
+ * may exist until the bank has answered; and the answer arrives twice, from the Shopper's
+ * browser and from the bank itself, in whichever order the world supplies.
+ *
+ * The two cases nobody could stage against a real provider are the point of the fake bank.
+ * Stripe's sandbox will not abandon a payment on command and will not let a quarter of an hour
+ * go by on request, so a gate built on it would walk the happy path and describe the other two
+ * in prose.
+ *
+ * **Two of the four were watched failing before they were trusted**, because an assertion nobody
+ * has seen fail is not yet known to be able to:
+ *
+ * - The race, against a build whose `Idempotency-Key` was a fresh UUID per call rather than the
+ *   reference's. It went red on the **books** rather than on the Order count, which is the part
+ *   worth recording: both callers ran the Workflow, both charged the same payment, and the one
+ *   the unique index on `core_order.cart_id` turned back refunded it — so the Shopper's money
+ *   came and went while "exactly one Order" stayed true. That is what the derived key buys, and
+ *   a count of Orders could not have told you.
+ * - The lapsed hold, twice — once against a route that did not call `refundUnplacedPayment`
+ *   (green everywhere except the books, which said the money was still at the bank), and once
+ *   with the wind-back taken out, which answered `placed` and proved the arrangement really is
+ *   what reaches the refusal rather than something else about the Cart.
+ */
+describe("a Shopper pays at their bank", () => {
+  /**
+   * Everything up to the moment the Shopper is inside their banking app: found, held, quoted,
+   * and a payment started for what this deployment says the Cart comes to.
+   *
+   * All four cases share it and none of them may skip it — a Shopper sent to a bank without a
+   * hold is the failure ADR-0070 exists to close, and a payment started for a figure kobai did
+   * not work out is ADR-0077's.
+   */
+  async function upToTheBank(store: ARedirectStore) {
+    const catalog = answered(
+      await store.browser.GET("/store/products"),
+      "browsing the catalog",
+    );
+    const listed = catalog.products.find((one) => one.title === THE_PRODUCT);
+    const page = answered(
+      await store.browser.GET("/store/products/{id}", {
+        params: { path: { id: listed?.id ?? "" } },
+      }),
+      "opening the product page",
+    );
+    const variantId = page.variants.find((one) => one.sku === THE_SKU)?.id ?? "";
+
+    const started = answered(
+      await store.browser.POST("/store/carts", {}),
+      "starting a Cart",
+    );
+    answered(
+      await store.browser.POST("/store/carts/{id}/line-items", {
+        params: { path: { id: started.id } },
+        body: { variantId, quantity: THE_LAST_OF_THEM },
+      }),
+      "filling the Cart",
+    );
+
+    // What it comes to, on the page's own key — a quote claims nothing and moves nothing, so it
+    // is on the other side of ADR-0055's line from the two calls that follow it.
+    const quote = answered(
+      await store.browser.POST("/store/carts/{id}/quote", {
+        params: { path: { id: started.id } },
+      }),
+      "asking what the Cart comes to",
+    );
+    expect(quote.currency).toBe(THE_RINGGIT);
+    expect(quote.total).toBe(THE_LAST_OF_THEM * WHAT_THIS_PROJECT_CHARGES);
+
+    // The stock, held before the Shopper goes anywhere. A secret key: a page's key that could
+    // hold stock could exhaust a Store's (ADR-0055).
+    const held = answered(
+      await store.server.POST("/store/carts/{id}/reservations", {
+        params: { path: { id: started.id } },
+      }),
+      "holding the stock",
+    );
+    expect(held.reservations).toEqual([
+      { provider: "inventory", subject: variantId, quantity: THE_LAST_OF_THEM },
+    ]);
+
+    // And the payment, started by the Developer's own server for the figure kobai quoted. The
+    // storefront never names an amount: one that could would be one whose bug the Merchant's
+    // books pay for.
+    const redirected = await postedAt(store.project, REDIRECT_START_PATH, {
+      cartId: started.id,
+    });
+    expect(redirected.status, "starting the payment").toBe(200);
+    expect(redirected.body.amount).toBe(quote.total);
+    expect(redirected.body.currency).toBe(THE_RINGGIT);
+
+    return {
+      cartId: started.id,
+      reference: String(redirected.body.reference),
+      total: quote.total,
+    };
+  }
+
+  it("holds the stock, sends the Shopper to their bank, and has the Order once they are back", async () => {
+    const store = await aStoreThatTakesBankRedirects();
+    await using _kobai = store.kobai;
+    const { reference, total } = await upToTheBank(store);
+
+    // The Shopper authorises, and the money leaves — at the bank, before kobai has heard
+    // anything. That is the whole difference from a card, and the reason everything above had
+    // to happen first.
+    store.bank.authorise(reference);
+
+    // They come back to the tab, and the storefront's return page tells this Project which
+    // payment it is. The reference travels on the body and never the query string (#138).
+    const settled = await postedAt(store.project, REDIRECT_RETURN_PATH, { reference });
+
+    expect(settled.status).toBe(200);
+    expect(settled.body.settled).toBe("placed");
+    // And the Order is real, read back over `/store` on the server's key like any other.
+    const confirmation = answered(
+      await store.server.GET("/store/orders/{id}", {
+        params: { path: { id: String(settled.body.orderId) } },
+      }),
+      "reading the Order back",
+    );
+    expect(confirmation.total).toBe(total);
+    expect(confirmation.currency).toBe(THE_RINGGIT);
+    // **The money is the bank's and it has arrived**, which is what a redirect method means:
+    // `charge` confirmed a payment that had already been made rather than making one.
+    expect(confirmation.payment).toMatchObject({
+      provider: "fake-bank",
+      reference,
+      amount: total,
+      received: true,
+    });
+    // The bank's own books agree, and nothing has been given back.
+    expect(store.bank.payment(reference)).toMatchObject({
+      status: "authorised",
+      refunded: 0,
+    });
+  });
+
+  it("has the Order anyway when the Shopper never comes back to the tab", async () => {
+    // The **ordinary** case, not the exotic one: a Shopper authorises in their banking app and
+    // never sees the tab again. Nothing below is a return — that call is simply never made —
+    // and the purchase still has to complete, because paying is what buys the thing.
+    const store = await aStoreThatTakesBankRedirects();
+    await using _kobai = store.kobai;
+    const { cartId, reference, total } = await upToTheBank(store);
+
+    store.bank.authorise(reference);
+
+    // The bank tells the Developer's server what happened. Same Project route, same
+    // `POST /store/orders` underneath, same `Idempotency-Key` derived from the same reference —
+    // which is what makes this and the return one intention rather than two designs.
+    const settled = await postedAt(
+      store.project,
+      REDIRECT_CALLBACK_PATH,
+      store.bank.callbackFor(reference),
+    );
+
+    expect(settled.status).toBe(200);
+    expect(settled.body.settled).toBe("placed");
+    const confirmation = answered(
+      await store.server.GET("/store/orders/{id}", {
+        params: { path: { id: String(settled.body.orderId) } },
+      }),
+      "reading the Order back",
+    );
+    expect(confirmation.total).toBe(total);
+    expect(confirmation.payment).toMatchObject({ reference, received: true });
+    // The Cart became that Order and can become no other, which is what a Shopper who reopens
+    // the tab an hour later depends on.
+    const abandoned = answered(
+      await store.server.GET("/store/carts/{id}", { params: { path: { id: cartId } } }),
+      "re-reading the Cart",
+    );
+    expect(abandoned.placed).toBe(true);
+  });
+
+  it("makes exactly one Order of the return and the callback, whichever wins", async () => {
+    const store = await aStoreThatTakesBankRedirects();
+    await using _kobai = store.kobai;
+    const { cartId, reference, total } = await upToTheBank(store);
+
+    store.bank.authorise(reference);
+
+    // Dispatched together, because that is how they arrive: the bank posts its event at the
+    // moment the Shopper's browser lands back on the tab, and neither knows about the other.
+    // Either may be the one that places.
+    const [returned, called] = await Promise.all([
+      postedAt(store.project, REDIRECT_RETURN_PATH, { reference }),
+      postedAt(store.project, REDIRECT_CALLBACK_PATH, store.bank.callbackFor(reference)),
+    ]);
+
+    // One of two answers each, and no third: the Order, or "the other one is placing it". A
+    // second Order, a second charge, or a refusal that left the Shopper with neither would each
+    // be a different shape from this.
+    const orders = new Set(
+      [returned, called]
+        .map((answer) => answer.body.orderId)
+        .filter((id): id is string => typeof id === "string"),
+    );
+    expect(orders.size, JSON.stringify([returned.body, called.body])).toBe(1);
+    for (const answer of [returned, called]) {
+      expect(["placed", "elsewhere"]).toContain(answer.body.settled);
+    }
+
+    const [orderId] = [...orders];
+    const confirmation = answered(
+      await store.server.GET("/store/orders/{id}", {
+        params: { path: { id: orderId ?? "" } },
+      }),
+      "reading the Order back",
+    );
+    expect(confirmation.total).toBe(total);
+    // And the Cart is spent, so no third caller could make a second Order of it either.
+    const spent = answered(
+      await store.server.GET("/store/carts/{id}", { params: { path: { id: cartId } } }),
+      "re-reading the Cart",
+    );
+    expect(spent.placed).toBe(true);
+    // One payment, taken once and not given back — the assertion a count of callbacks could
+    // never make.
+    expect(store.bank.payment(reference)).toMatchObject({
+      status: "authorised",
+      refunded: 0,
+    });
+  });
+
+  it("gives the money back when the hold lapsed while the Shopper was at their bank", async () => {
+    // **The case to watch hardest**, because it is the only one left in this design that can
+    // take a Shopper's money and give them nothing. The hold ran out while they were choosing
+    // their bank; the payment went through anyway, because a real-time debit does not ask kobai
+    // first; and kobai has nothing left to sell them.
+    const store = await aStoreThatTakesBankRedirects();
+    await using _kobai = store.kobai;
+    const { cartId, reference, total } = await upToTheBank(store);
+
+    await theHoldLapses(store.kobai);
+    store.bank.authorise(reference);
+
+    const settled = await postedAt(store.project, REDIRECT_RETURN_PATH, { reference });
+
+    // Refused for the reason that is true, and no Order was written.
+    expect(settled.status).toBe(409);
+    expect(settled.body.reason).toBe("insufficient-inventory");
+    expect(settled.body.orderId).toBeUndefined();
+    const unplaced = answered(
+      await store.server.GET("/store/carts/{id}", { params: { path: { id: cartId } } }),
+      "re-reading the Cart",
+    );
+    expect(unplaced.placed).toBe(false);
+
+    // **And the Shopper has their money.** Asserted on the bank's books rather than on the
+    // refund having been called: "the code ran" and "the Shopper got their money back" are two
+    // facts, and the second one is the one a Merchant is asked about.
+    expect(store.bank.payment(reference)).toMatchObject({
+      status: "refunded",
+      refunded: total,
+      refusal: "insufficient-inventory",
+    });
   });
 });

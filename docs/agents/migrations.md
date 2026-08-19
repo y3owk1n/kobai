@@ -30,6 +30,30 @@ never by calling `core_set_updated_at()`, which is a detail of a schema Core pro
 about. `@kobai/plugin-price-log` carries `resolved_at` and no `updated_at` at all, because
 its rows are never updated.
 
+## A Project's set may write Core's tables, and so applies after Core's
+
+**A Plugin's migration set applies in any order; a Project's does not have to.** That asymmetry is
+already the rule `reference/src/db/schema.ts` states from the other side — Core's tables are closed
+to a Plugin (ADR-0004) because a Plugin ships to Projects it has never seen, and a Project is under
+no such rule because it owns its repository, its database and its own set. The reference Project
+exercises it: `reference/migrations/0001_the_store_prices_in_myr.sql` **updates `core_store`**,
+because a Store's default currency is fixed once set and no route will ever move it (ADR-0065), so
+a deployment that prices in something other than Core's seeded placeholder says so in a migration
+of its own.
+
+Two consequences, and the second is the one that bites:
+
+- **It is a `--custom` migration**, like every other data change: drizzle-kit diffs schemas, so it
+  will neither write this nor notice it is missing. Guard it on the value Core seeded, so it can
+  only ever move a Store nobody has priced yet.
+- **That set now depends on Core's having run**, and applying it first fails loudly — which is
+  right, and is why the update is not wrapped in a "if the table exists" guard that would leave the
+  Store on the placeholder without saying so. `createKobai` composes Core's set in front of
+  everything `kobai.config.ts` wires, so that is the only order any deployment applies, and
+  `tests/the-cli-and-the-migrator-agree.test.ts` reverses **the Plugins** rather than the whole
+  list for exactly this reason. Do not write a Core-table dependency into a **Plugin's** set: there
+  the any-order property is the promise, and that test is where it is held.
+
 ## Adding a required column to a table that already exists
 
 **Never ship `ALTER TABLE … ADD COLUMN … NOT NULL` with no default.** Postgres refuses it

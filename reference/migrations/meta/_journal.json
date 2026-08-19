@@ -8,6 +8,13 @@
       "when": 1786959553265,
       "tag": "0000_vengeful_roland_deschain",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787155918910,
+      "tag": "0001_the_store_prices_in_myr",
+      "breakpoints": true
     }
   ]
 }
