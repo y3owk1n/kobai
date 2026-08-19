@@ -1,7 +1,8 @@
 import type { Session } from "@kobai/client";
-import { KeyRoundIcon, LogOutIcon, PackageIcon, ReceiptTextIcon } from "lucide-react";
+import { LogOutIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router";
+import { CommandPalette } from "@/components/command-palette";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   Breadcrumb,
@@ -28,6 +29,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { CrumbProvider } from "@/lib/crumb";
+import { SECTIONS, type Section, sectionOf } from "@/lib/sections";
 import { useKobai } from "@/lib/session";
 
 /**
@@ -40,42 +42,11 @@ import { useKobai } from "@/lib/session";
  * Everything visual comes from `components/ui/`: `Sidebar` and `Breadcrumb` are shadcn's own,
  * and this file only composes them and decides what goes in. A hand-drawn nav beside them is
  * the thing that convention rules out.
- */
-type Section = {
-  /** The route this is, exactly as `app.tsx` spells it. */
-  readonly path: string;
-  readonly label: string;
-  readonly Icon: typeof PackageIcon;
-};
-
-/**
- * What a Merchant switches between. A detail screen is reached from its list and gets no entry.
  *
- * Three of them today and roughly ten by the end of the spec, which is why this is data rather
- * than markup. Nothing here is gated on a Permission yet — showing a Merchant only the sections
- * their Role can read is #178's, and it is an affordance rather than a boundary when it lands
- * (ADR-0063).
+ * **What the sections are is `lib/sections.ts`'s**, and was a `const` here until #177 put a
+ * command palette beside the sidebar. Two affordances over one list is the whole reason it
+ * moved: a copy in each is how they come to disagree about what this Admin has.
  */
-const SECTIONS = [
-  { path: "/products", label: "Products", Icon: PackageIcon },
-  { path: "/orders", label: "Orders", Icon: ReceiptTextIcon },
-  { path: "/api-keys", label: "API keys", Icon: KeyRoundIcon },
-] as const satisfies readonly Section[];
-
-/**
- * Which section a path belongs to, so a detail view keeps its list highlighted.
- *
- * **Matched at the `/` boundary and never by bare prefix.** `/products` is a bare string prefix
- * of a hypothetical `/products-archive`, which would then light up the wrong entry — the same
- * shape of mistake `/admin` being a prefix of `/admin-ui` already cost this repository once, and
- * the fix is the same one: compare against `${path}/`, so the match is a path and not a string.
- */
-function sectionOf(pathname: string): Section | undefined {
-  return SECTIONS.find(
-    (section) => pathname === section.path || pathname.startsWith(`${section.path}/`),
-  );
-}
-
 export function AppLayout({ session }: { readonly session: Session }) {
   const { signOut } = useKobai();
   const here = sectionOf(useLocation().pathname);
@@ -142,7 +113,8 @@ export function AppLayout({ session }: { readonly session: Session }) {
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-4" />
           <Breadcrumbs section={here} record={record} />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
+            <CommandPalette />
             <ThemeToggle />
           </div>
         </header>

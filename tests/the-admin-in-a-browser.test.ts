@@ -650,6 +650,174 @@ describe("the frame's own controls", () => {
   });
 });
 
+/**
+ * The command palette (#177), whose whole interface is the keyboard.
+ *
+ * A sidebar stops being a pleasant way to navigate somewhere around six entries, and this Admin
+ * is on its way to roughly ten — so this is how a Merchant will reach a section, and none of it
+ * is visible to a scanner. Opening, filtering, walking the list and choosing are asserted here
+ * because every one of them is a keystroke, and **where the keyboard lands on the way out** is
+ * asserted twice, because that is the failure nothing else in this repository could see.
+ *
+ * One thing is asserted on the ARIA state rather than on focus, deliberately. The palette is a
+ * combobox over a listbox: the keyboard stays in the input while the arrow keys move the
+ * *selection*, which is what `aria-selected` says and what a screen reader announces. So
+ * `tabTo` is the right tool for reaching the button and the wrong one for the list — a case
+ * that tabbed through the options would be asserting an interaction this widget deliberately
+ * does not have — and where the keyboard *ends up* is asked with `isFocused`, because these
+ * cases know which control it should be on rather than hunting for it.
+ */
+describe("the command palette", () => {
+  /**
+   * The button in the header, which is also where the keyboard is meant to end up.
+   *
+   * Matched loosely because its name carries the shortcut, and which shortcut it names is the
+   * platform's: a case that spelled `⌘K` would be red on the runner rather than in the Admin.
+   */
+  function paletteButton(page: Page) {
+    return page.getByRole("button", { name: /^Search sections/ });
+  }
+
+  /** The input the palette is driven from, and the thing that is on screen when it is open. */
+  function paletteInput(page: Page) {
+    return page.getByRole("combobox", { name: "Search sections" });
+  }
+
+  /** The palette's rows: one per section, in a listbox that input drives. */
+  function paletteOptions(page: Page) {
+    return page.getByRole("option");
+  }
+
+  /** Which row the arrow keys are on, which is what a screen reader would announce. */
+  function selected(page: Page): Promise<string[]> {
+    return paletteOptions(page)
+      .and(page.locator('[aria-selected="true"]'))
+      .allInnerTexts();
+  }
+
+  /**
+   * Opens the palette and waits for it to hold the keyboard.
+   *
+   * The wait is an assertion rather than a settling: **opening has to take the keyboard**, or
+   * the next keystroke is one the screen underneath acts on. Without it this file was red about
+   * once in four runs and lied about why — the case below typed into a Product's Open link, its
+   * Enter followed the link, and the failure read as the palette having navigated to the wrong
+   * place rather than as its never having had the keyboard at all.
+   */
+  async function openPalette(page: Page, opensWith: string): Promise<void> {
+    await page.keyboard.press(opensWith);
+    await shows(paletteInput(page), "the command palette");
+    await expect.poll(() => isFocused(paletteInput(page))).toBe(true);
+  }
+
+  it("opens on the shortcut, filters to what was typed, and opens the section left", async () => {
+    const page = await seam.signedIn("/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    await openPalette(page, "Meta+k");
+    // Audited *while it is open*: an overlay is a different accessibility surface from the page
+    // under it, and every other audit in this file is of the page under it.
+    await auditAccessibility(page, "the Admin with the command palette open");
+
+    await page.keyboard.type("api");
+    await expect.poll(() => paletteOptions(page).allInnerTexts()).toEqual(["API keys"]);
+
+    // A filter that matches nothing says so, rather than showing an empty box — the same
+    // distinction between "loading" and "there is none" the list screens draw.
+    await page.keyboard.type("-that-this-admin-has-no-screen-for");
+    await expect.poll(() => paletteOptions(page).count()).toBe(0);
+    await shows(
+      page.getByText("Nothing in this Admin is called that."),
+      "the empty palette",
+    );
+
+    // Back to the one section, so what Enter chooses is the row a Merchant can see.
+    for (const _ of "-that-this-admin-has-no-screen-for") {
+      await page.keyboard.press("Backspace");
+    }
+    await expect.poll(() => paletteOptions(page).allInnerTexts()).toEqual(["API keys"]);
+
+    await page.keyboard.press("Enter");
+
+    expect(where(page)).toBe("/api-keys");
+    await shows(
+      page.getByText("The credentials a storefront presents at"),
+      "the API keys screen",
+    );
+  });
+
+  it("opens on Ctrl+K too, and the arrow keys move the selection down the list", async () => {
+    const page = await seam.signedIn("/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    // The other spelling, and it is not a courtesy: a Merchant on Windows or Linux has no ⌘.
+    await openPalette(page, "Control+k");
+
+    // Nothing has been typed, so the palette offers every section this Admin has — which is
+    // what makes it a way *round* the sidebar rather than a search of it.
+    await expect
+      .poll(() => paletteOptions(page).allInnerTexts())
+      .toEqual(["Products", "Orders", "API keys"]);
+    await expect.poll(() => selected(page)).toEqual(["Products"]);
+
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => selected(page)).toEqual(["Orders"]);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => selected(page)).toEqual(["API keys"]);
+    // Both directions, because a list that only walks one way is one a Merchant who overshoots
+    // has to close and reopen.
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(() => selected(page)).toEqual(["Orders"]);
+
+    await page.keyboard.press("Enter");
+
+    expect(where(page)).toBe("/orders");
+    await shows(page.getByText("Every Order this Store has taken"), "the Orders screen");
+  });
+
+  it("closes on Escape and hands the keyboard back to the button that opens it", async () => {
+    const page = await seam.signedIn("/products");
+    const button = paletteButton(page);
+    await shows(button, "the command palette's button in the header");
+
+    // Reached without the shortcut, because the shortcut is not the only way in and a Merchant
+    // who never learned it still has to be able to get here.
+    await tabTo(page, button, "the command palette's button");
+    await openPalette(page, "Enter");
+
+    await page.keyboard.press("Escape");
+
+    await hides(paletteInput(page), "the command palette");
+    await expect.poll(() => isFocused(button)).toBe(true);
+  });
+
+  it("hands the keyboard back after it navigates, rather than stranding it", async () => {
+    const product = await seam.createProduct({
+      title: "A poster the palette leaves behind",
+    });
+    const page = await seam.signedIn("/products");
+    const open = page
+      .getByRole("row", { name: product.title })
+      .getByRole("link", { name: "Open" });
+    await shows(open, "the Product's row in the list");
+
+    // The whole of this case, and it was watched failing with `finalFocus` taken out of
+    // `components/command-palette.tsx`. The keyboard starts on a control **belonging to the
+    // screen**, so what focus would otherwise be restored to is a control the Merchant is about
+    // to navigate away from — and what happened was worse than a stranded keyboard: focus
+    // landed back on this Open link, the Enter that chose Orders arrived on it, and the Admin
+    // opened the Product instead of the section that was asked for.
+    await tabTo(page, open, `the Open link of ${product.title}`);
+    await openPalette(page, "Meta+k");
+    await page.keyboard.type("orders");
+    await expect.poll(() => paletteOptions(page).allInnerTexts()).toEqual(["Orders"]);
+    await page.keyboard.press("Enter");
+
+    expect(where(page)).toBe("/orders");
+    await expect.poll(() => isFocused(paletteButton(page))).toBe(true);
+  });
+});
+
 describe("the gate above every screen", () => {
   it("says it is asking kobai who you are, and that screen is a screen", async () => {
     const page = await seam.signedIn("/products");
