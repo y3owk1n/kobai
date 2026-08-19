@@ -5,9 +5,10 @@ import {
   integerOrUndefined,
   type StripeOptions,
   stringOrUndefined,
+  stripeSaid,
 } from "./api.ts";
 import { type StripeUnplacedRefundRow, stripeUnplacedRefund } from "./db/schema.ts";
-import { STRIPE_CART_ID_KEY } from "./payments.ts";
+import { STRIPE_CART_ID_KEY } from "./metadata.ts";
 
 /**
  * The Project's ask, and the one operation on this Plugin that Core's interface has no room
@@ -84,7 +85,7 @@ export async function refundUnplacedPayment(
 
   if (!result.ok) {
     throw new Error(
-      `Stripe would not refund ${reference}, whose placement kobai refused with ${JSON.stringify(refusal)}: ${result.error.message ?? "it said nothing about why."}`,
+      `Stripe would not refund ${reference}, whose placement kobai refused with ${JSON.stringify(refusal)}: ${stripeSaid(result.error.message)}`,
     );
   }
 

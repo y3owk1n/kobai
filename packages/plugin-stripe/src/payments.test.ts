@@ -1,12 +1,9 @@
 import type { PaymentRequest } from "@kobai/core";
 import { createTestKobai } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
+import { cartIdOfPaymentIntent, STRIPE_PAYMENT_INTENT_KEY } from "./metadata.ts";
 import { stripeMigrationSet } from "./migration-set.ts";
-import {
-  cartIdOfPaymentIntent,
-  STRIPE_PAYMENT_INTENT_KEY,
-  stripePayments,
-} from "./payments.ts";
+import { stripePayments } from "./payments.ts";
 
 /**
  * **Nothing in this file reaches Stripe**, and that is a decision rather than an
@@ -74,11 +71,8 @@ function stripeStub(routes: Record<string, StripeAnswer>) {
 }
 
 /** What `place-order` sends a provider, with whatever the storefront put in the open context. */
-function asked(
-  metadata: Record<string, unknown>,
-  overrides: Partial<PaymentRequest> = {},
-): PaymentRequest {
-  return { amount: 2500, currency: "MYR", shopper: null, metadata, ...overrides };
+function asked(metadata: Record<string, unknown>): PaymentRequest {
+  return { amount: 2500, currency: "MYR", shopper: null, metadata };
 }
 
 /** A PaymentIntent as Stripe reports one, in the fields this Plugin reads. */
@@ -231,28 +225,6 @@ describe("charging a payment the bank has already answered", () => {
     await expect(
       payments.charge(asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" })),
     ).resolves.toEqual({ ok: false, detail: "Your bank declined this payment." });
-  });
-
-  it("refuses an intent that is not for what this Order comes to", async () => {
-    // The intent is created by a route the **Project** owns, from a Cart a browser named, and
-    // it arrives back here as an opaque string on the open context. Nothing but this compares
-    // it against the figure Core is about to write the Order for — so without it a storefront
-    // bug, or a caller who kept an old intent, buys an expensive Cart for a cheap payment.
-    const stripe = stripeStub({
-      "GET /v1/payment_intents/pi_redirect": {
-        body: intent("succeeded", { amount: 100 }),
-      },
-    });
-    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
-
-    const outcome = await payments.charge(
-      asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" }),
-    );
-
-    expect(outcome).toEqual({
-      ok: false,
-      detail: "This payment is for 100 MYR and this order comes to 2500 MYR.",
-    });
   });
 
   it("declines a payment Stripe has never heard of", async () => {
@@ -426,9 +398,22 @@ describe("a confirmed payment whose placement was refused", () => {
 
   it("leaves one row and one refund when the return and the webhook both ask", async () => {
     // Both callers make the same kobai call and both can meet the same refusal (ADR-0070), so
-    // both can arrive here. Stripe's idempotency key answers the second ask with the first
-    // refund; the unique constraint keeps the second from becoming a second row claiming the
-    // same money went back twice. Either alone would leave the books wrong.
+    // both can arrive here — genuinely at once, which is why they are dispatched together
+    // rather than one after the other. Stripe's idempotency key answers the second ask with
+    // the first refund; the unique constraint and `onConflictDoNothing` keep the second from
+    // becoming a second row claiming the same money went back twice. Either alone would leave
+    // the books wrong.
+    //
+    // **Watched failing first**, the way this repository requires of anything that dispatches
+    // at once: with `onConflictDoNothing` taken off the insert, this run failed on Postgres
+    // `23505`, `duplicate key value violates unique constraint
+    // "stripe_unplaced_refund_payment_intent_id_unique"`, `Key (payment_intent_id)=(pi_lapsed)
+    // already exists` — so the two writes really did overlap and the second really did reach
+    // the constraint. That recorded run is the whole of the proof: with the fix in, a request
+    // that landed in the window and one that arrived after the other committed now answer
+    // identically, so a green run can no longer show the window was reached. Changing how
+    // these are dispatched obliges you to watch it fail again rather than to trust that it
+    // still would.
     const stripe = stripeStub({ "POST /v1/refunds": REFUNDED });
     await using kobai = await createTestKobai({ migrationSets: [stripeMigrationSet] });
     const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
@@ -444,7 +429,10 @@ describe("a confirmed payment whose placement was refused", () => {
       payments.refundUnplacedPayment(asking),
     ]);
 
-    expect(second?.id).toBe(first?.id);
+    // Said as a defined string rather than as `first?.id === second?.id`, which two undefineds
+    // would satisfy just as happily — the same non-assertion the empty-bag rule is about.
+    expect(first.id).toEqual(expect.any(String));
+    expect(second.id).toBe(first.id);
     await expect(
       kobai.database.query("select count(*)::int as rows from stripe_unplaced_refund"),
     ).resolves.toEqual([{ rows: 1 }]);

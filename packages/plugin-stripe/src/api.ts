@@ -168,6 +168,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Stripe's own sentence about a failure, or an honest stand-in when it gave none.
+ *
+ * Every message this Plugin raises ends in one of these, so it is written once: a failure that
+ * says "Stripe refused and did not say why" is a different diagnosis from one quoting Stripe,
+ * and two copies of the stand-in would eventually be two different sentences.
+ */
+export function stripeSaid(message: string | undefined): string {
+  return message ?? "it said nothing about why.";
+}
+
 /** Read a field Stripe documents as a string, without believing that it is one. */
 export function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;

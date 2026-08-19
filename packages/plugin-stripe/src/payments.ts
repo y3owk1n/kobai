@@ -1,57 +1,17 @@
-import type { PaymentOutcome, PaymentProvider, PaymentRequest } from "@kobai/core";
+import type { PaymentOutcome, PaymentProvider } from "@kobai/core";
 import {
   callStripe,
-  integerOrUndefined,
   type StripeOptions,
   type StripeResult,
   stringOrUndefined,
+  stripeSaid,
 } from "./api.ts";
 import type { StripeUnplacedRefundRow } from "./db/schema.ts";
+import { STRIPE_CART_ID_KEY, STRIPE_PAYMENT_INTENT_KEY } from "./metadata.ts";
 import {
   refundUnplacedPayment,
   type UnplacedPaymentRefund,
 } from "./refund-unplaced-payment.ts";
-
-/**
- * The key the PaymentIntent's id travels under on `POST /store/orders`.
- *
- * ADR-0013's open context: everything the caller sent that Core does not model reaches a
- * provider verbatim in {@link PaymentRequest.metadata}, and this is the one key this Plugin
- * reads out of it. Both callers send it — the Shopper's returning browser and the Project's
- * webhook route — because both are making the same kobai call (ADR-0070).
- */
-export const STRIPE_PAYMENT_INTENT_KEY = "stripePaymentIntent";
-
-/**
- * The key the Cart identifier travels under in a PaymentIntent's `metadata`.
- *
- * Stripe hands the whole intent — metadata included — to a webhook, and the Cart is the only
- * thing that says which purchase a payment was for. So this is what turns
- * `payment_intent.succeeded` into `POST /store/orders` for a Cart, and it is what makes the
- * Shopper's return and the webhook the *same* kobai call rather than two designs (ADR-0070).
- */
-export const STRIPE_CART_ID_KEY = "kobaiCartId";
-
-/**
- * The Cart a PaymentIntent was created for, or `null` for one this Plugin did not start.
- *
- * What a Project's webhook route reaches for. Stripe delivers `payment_intent.succeeded` with
- * the intent as `data.object` and nothing else, so this is how the event becomes a
- * `POST /store/orders` for a particular Cart — and `null` is what lets a Project ignore the
- * payments in its Stripe account that kobai never started, rather than having to guess.
- *
- * Takes `unknown` deliberately: what arrives at a webhook is a parsed JSON body, and asking a
- * Project to assert a type before it may ask this question would be asking it to trust a
- * shape Stripe promises and this Plugin can check.
- */
-export function cartIdOfPaymentIntent(intent: unknown): string | null {
-  if (typeof intent !== "object" || intent === null) return null;
-  const metadata = (intent as { metadata?: unknown }).metadata;
-  if (typeof metadata !== "object" || metadata === null) return null;
-
-  const cartId = (metadata as Record<string, unknown>)[STRIPE_CART_ID_KEY];
-  return typeof cartId === "string" && cartId !== "" ? cartId : null;
-}
 
 /** What a Project asks for when a Shopper is about to be sent to their bank. */
 export type StartPaymentRequest = {
@@ -138,9 +98,15 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
       });
       if (!found.ok) return notFound(found);
 
-      const mismatch = disagreesWith(request, found.body);
-      if (mismatch !== undefined) return mismatch;
-
+      // **This Plugin does not compare the intent's amount against the Order's**, and that is
+      // a known gap rather than an oversight. It cannot be closed here: `place-order` charges
+      // the lines plus their Adjustments plus tax, computed at placement, while the intent is
+      // created before the redirect by a route the Project owns — and a Cart carries no
+      // totals, so a storefront has no kobai-supplied way to obtain that figure in advance.
+      // A check here would decline every purchase in any Store with tax or an Adjustment.
+      // Closing it properly means giving a storefront a total it can pay against, which is a
+      // decision neither #226 nor ADR-0070 takes.
+      //
       // A card entered in Elements without a redirect leaves the intent here, and this is
       // where `charge` really does confirm. Keyed on the intent, so a placement retried after
       // a timeout confirms the same payment rather than taking a second one.
@@ -154,7 +120,7 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
           // Stripe refuses a confirmation for reasons that are the Shopper's — a payment
           // method that cannot be charged — and for reasons that are the deployment's. Both
           // arrive as a 4xx with a sentence, and neither is this Plugin being unreachable.
-          return { ok: false, detail: describe(confirmed.error.message) };
+          return { ok: false, detail: stripeSaid(confirmed.error.message) };
         }
         return outcomeOf(reference, confirmed.body);
       }
@@ -179,7 +145,7 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
         // learns money is sitting where it should not be while the Shopper still learns why
         // they were refused.
         throw new Error(
-          `Stripe would not refund ${reference}: ${describe(result.error.message)}`,
+          `Stripe would not refund ${reference}: ${stripeSaid(result.error.message)}`,
         );
       }
     },
@@ -204,7 +170,7 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
 
       if (!result.ok) {
         throw new Error(
-          `Stripe refused to create a PaymentIntent for cart ${cartId}: ${describe(result.error.message)}`,
+          `Stripe refused to create a PaymentIntent for cart ${cartId}: ${stripeSaid(result.error.message)}`,
         );
       }
 
@@ -223,10 +189,6 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
       };
     },
   };
-}
-
-function describe(message: string | undefined): string {
-  return message ?? "it said nothing about why.";
 }
 
 /**
@@ -272,36 +234,6 @@ function declineDetail(intent: Record<string, unknown>): string {
 }
 
 /**
- * Whether this intent is for what Core is about to write the Order for, and a decline if not.
- *
- * The intent is created by a route the **Project** owns and comes back as an opaque string on
- * ADR-0013's open context, so nothing between the browser and here has compared the two
- * figures. Without this, a storefront bug — or a caller who kept a cheap intent from an
- * earlier Cart — buys the expensive Cart for the cheap payment, and Core would record the
- * Order at its own total and be right about a payment that never happened.
- *
- * Currency is compared case-insensitively because Stripe's are lower case and ISO 4217 is
- * written upper.
- */
-function disagreesWith(
-  request: PaymentRequest,
-  intent: Record<string, unknown>,
-): PaymentOutcome | undefined {
-  const amount = integerOrUndefined(intent.amount);
-  const currency = stringOrUndefined(intent.currency);
-  const agrees =
-    amount === request.amount &&
-    currency?.toUpperCase() === request.currency.toUpperCase();
-
-  if (agrees) return undefined;
-
-  return {
-    ok: false,
-    detail: `This payment is for ${amount ?? "an unknown amount"} ${currency?.toUpperCase() ?? "in an unknown currency"} and this order comes to ${request.amount} ${request.currency}.`,
-  };
-}
-
-/**
  * A decline rather than a throw, and the detail names what is missing.
  *
  * A throw would be this Plugin reporting that it is broken or unreachable, and it is neither:
@@ -332,12 +264,12 @@ function notFound(failure: Extract<StripeResult, { ok: false }>): PaymentOutcome
   const missing = failure.status === 404 || failure.error.code === "resource_missing";
   if (!missing) {
     throw new Error(
-      `Stripe answered ${failure.status} when this Plugin asked about a PaymentIntent: ${describe(failure.error.message)}`,
+      `Stripe answered ${failure.status} when this Plugin asked about a PaymentIntent: ${stripeSaid(failure.error.message)}`,
     );
   }
 
   return {
     ok: false,
-    detail: `This payment could not be found: ${describe(failure.error.message)}`,
+    detail: `This payment could not be found: ${stripeSaid(failure.error.message)}`,
   };
 }
