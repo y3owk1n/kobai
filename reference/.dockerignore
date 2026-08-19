@@ -9,16 +9,16 @@
 **/dist
 
 # Build state and history, none of which the image needs.
-.devbox
+**/.devbox
 .git
-*.tsbuildinfo
+**/*.tsbuildinfo
 
 # Prose. `.env.example` is documentation too, but it is the one a Developer copies, and
 # leaving it in costs nothing.
 *.md
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
 # Credentials, which must never arrive as a file. If kobai comes from a private mirror,
 # `.npmrc` holds an auth token — and a token copied into a build context is in an image
