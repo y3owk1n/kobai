@@ -23,6 +23,17 @@ import { describe, expect, it } from "vitest";
  *
  * `tests/no-push-script.test.ts` is the house pattern for this shape: a rule everyone agrees
  * on, held by something that reads the repository rather than by a convention.
+ *
+ * **This is the second thing here that reads TypeScript, and that is worth someone's
+ * attention rather than nobody's.** `tests/an-empty-bag-is-asserted-so-it-can-fail.test.ts`
+ * (#186) asks git for the same set of files and lexes the same comments and strings — to
+ * *blank* them, where this one wants what is inside them, which is why neither could call the
+ * other as it stands. AGENTS.md's own verdict on `kobai_dotenv` — *"a second parser would be
+ * two answers"* — applies, and the two answers already differ in what they know: the fail-open
+ * this reader was fixed for is a hazard the other's line-local blanking never had, and the
+ * `/` handling that fixed it is knowledge only this one has. One reader under `tests/support/`
+ * that offers both readings is the honest end state; extracting it is its own change, because
+ * it edits a guardrail this ticket is not about.
  */
 const run = promisify(execFile);
 const repoRoot = new URL("../", import.meta.url);
@@ -608,6 +619,21 @@ describe("reading a test file", () => {
         const b = 'insert into core_merchant (email) values ($1)';
       `),
     ).toHaveLength(2);
+  });
+
+  it("keeps its place past a regular expression that contains a slash", () => {
+    // The shape that made this a fail-open rather than a curiosity, taken from
+    // `tests/a-generated-project-boots.test.ts`, which writes an `.npmrc` line. Read
+    // naively, the `\/\/` in the pattern is a `//` comment: it ate the rest of the line,
+    // including the `}` closing the hole it sat in, and the reader was left one frame deep
+    // for the rest of the file. Everything after it — five lines that a probe proved
+    // invisible — went unchecked while the build stayed green.
+    const found = scan(`
+      await writeFile(join(project, ".npmrc"), \`//\${registry.url.replace(/^https?:\\/\\//, "")}/:_authToken=x\`);
+      await kobai.database.query("insert into core_role (name) values ($1)");
+    `);
+
+    expect(found).toHaveLength(1);
   });
 
   it("refuses to pass a file it lost its place in", () => {
