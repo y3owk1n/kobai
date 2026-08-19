@@ -303,11 +303,11 @@ function whyNotChanged(thrown: unknown): string {
 
   switch (reason) {
     case "last-administrator":
-      // What it tells a Merchant to do has to be a thing kobai can actually do: there is no
-      // route that moves a Merchant onto another Role, so "give somebody else the Permission"
-      // means adding a colleague against a Role that holds it, which `POST /admin/merchants`
-      // can. Advising the move would have been advice nobody could take.
-      return `Every Merchant who can administer Merchants holds this Role, so taking "${PERMISSIONS.merchantWrite}" away would leave nobody who could put it back — and no way in short of the database. Add a colleague against a Role that holds it — Merchants is where — and then come back.`;
+      // What it tells a Merchant to do has to be a thing kobai can actually do, and until #202
+      // the move was not one of them: `POST /admin/merchants` was the whole of what wrote
+      // `core_merchant`, so this sentence could only advise adding a colleague. It can advise
+      // either now, and both are on the same screen.
+      return `Every Merchant who can administer Merchants holds this Role, so taking "${PERMISSIONS.merchantWrite}" away would leave nobody who could put it back — and no way in short of the database. Give another Role that Permission and put somebody on it — Merchants is where a colleague is added or moved — and then come back.`;
 
     case "role-name-taken":
       return "Another Role already carries that name. A Merchant is created against a Role by name, so no two may share one.";
@@ -349,11 +349,11 @@ function whyNotDeleted(thrown: unknown): string {
 
   switch (reason) {
     case "role-in-use":
-      // And this one is a dead end rather than a step, which is the honest thing to say:
-      // kobai has no route that moves a Merchant onto another Role or removes one, so a Role
-      // somebody holds cannot be deleted at all today. Telling a Merchant to move them first
-      // would send them looking for a control that does not exist.
-      return "Merchants hold this Role, and deleting it would leave them signed in holding nothing at all. kobai has no way to move a Merchant onto another Role, so this one stays for as long as anybody holds it — narrow its Permissions instead. Merchants says who has it.";
+      // A step rather than the dead end it was (#202). This sentence used to have to say that
+      // kobai could not move a Merchant onto another Role at all — true then, and the finding
+      // that produced the route — so a Role somebody held could never be deleted by anybody.
+      // Now the advice names a control that exists, on the screen it is on.
+      return "Merchants hold this Role, and deleting it would leave them signed in holding nothing at all. Move each of them onto another Role first — Merchants says who has it, and moves them.";
 
     case "role-not-found":
       return "It is already gone — somebody else deleted it, or this page has been open a while.";

@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { Role } from "@kobai/client";
+import type { Merchant, Role } from "@kobai/client";
 import {
   keepPreviousData,
   useMutation,
@@ -19,7 +19,6 @@ import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -71,9 +70,16 @@ import { useKobaiClient } from "@/lib/session";
  * access confers nothing. Gating the list on the write would have meant granting the power to
  * change who has access in order to let somebody look.
  *
- * There is no way to remove a Merchant here, because there is no route that does. That is the
- * API's gap rather than this screen's omission, and the honest thing is to offer nothing for it
- * (ADR-0010): what an Admin needs and the API cannot do is a finding about the API.
+ * **Which Role a colleague holds is correctable from the roster** (#202). It is the remedy
+ * `role-in-use` never had: `DELETE /admin/roles/{id}` refuses while anybody holds the Role and
+ * points here, and until `PATCH /admin/merchants/{id}` existed there was nothing on this screen
+ * or in the API that could move any of them off it. A Role somebody held was permanent, and this
+ * screen had to say so.
+ *
+ * There is still no way to *remove* a Merchant here, because there is no route that does. That
+ * is the API's gap rather than this screen's omission, and the honest thing is to offer nothing
+ * for it (ADR-0010): what an Admin needs and the API cannot do is a finding about the API — and
+ * #202 is what that finding looks like once it has been answered.
  */
 const MERCHANTS = "merchants";
 
@@ -104,8 +110,8 @@ export function Merchants() {
           </CardTitle>
           <CardDescription>
             Everybody who can sign in to this Admin, newest first, and the Role each of
-            them holds. A Role is read on every request they make, so changing one reaches
-            them without their signing out.
+            them holds. A Role is read on every request they make, so moving somebody onto
+            another one reaches them without their signing out.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -140,7 +146,7 @@ export function Merchants() {
                 <TableRow>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
-                  <TableHead>What they may do</TableHead>
+                  <TableHead>What they may do now</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -153,7 +159,7 @@ export function Merchants() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{merchant.role.name}</Badge>
+                      <MerchantRole merchant={merchant} />
                     </TableCell>
                     {/* `whitespace-normal` overrides the cell's own `nowrap`, and it is an
                         accessibility fix rather than a layout preference: a Role holding every
@@ -185,6 +191,149 @@ export function Merchants() {
       <NewMerchant />
     </div>
   );
+}
+
+/**
+ * The shape of the one field a move carries, and only the shape (ADR-0063).
+ *
+ * Whether the Role still exists, and whether moving *this* Merchant would leave the deployment
+ * with nobody able to administer Merchants, are both rules in Core — the second is about rows
+ * this browser has not read and could not read honestly — so each arrives as a refusal rather
+ * than as a second copy of the rule here.
+ */
+const MoveMerchantForm = z.object({
+  role: z.string().min(1, "Choose the Role this Merchant is to hold."),
+});
+
+type MoveMerchantValues = z.infer<typeof MoveMerchantForm>;
+
+/**
+ * Which Role one Merchant holds, and the way to move them onto another (#202, ADR-0062).
+ *
+ * **This is the remedy `role-in-use` never had.** Deleting a Role Merchants hold is refused and
+ * always will be — Core will not cascade onto people or pick a Role on their behalf (ADR-0059) —
+ * and until `PATCH /admin/merchants/{id}` there was nothing that could clear the way, so the
+ * refusal was permanent. It is a step now, and this control is the step.
+ *
+ * Three things about it are decisions rather than layout:
+ *
+ * - **In the row, and the refusal with it.** `last-administrator` is the answer to a question
+ *   about the whole deployment, and the only place it means anything is beside the Merchant it
+ *   was refused for. Rendering it above the table would leave a Merchant reading a sentence
+ *   about a row they can no longer see which one it was.
+ * - **Nothing is predicted.** There is no check here for "is this the last administrator" and
+ *   there must not be one, for `ConfirmDelete`'s reason: the rule lives in Core, it is about
+ *   rows this list does not carry, and a screen that guessed would be wrong on every page but
+ *   the first. The Admin attempts and renders the answer.
+ * - **Move is dead while the picker still shows the Role they hold**, with real `disabled`
+ *   rather than `aria-disabled`, because there is nothing to explain — the same judgement
+ *   `Pager`'s dead Next and Previous make. What `aria-disabled` is for is the Role that may not
+ *   do this at all, which is {@link ActionButton}'s `unavailable`, and the two compose: that
+ *   branch forces `disabled` off so the sentence stays reachable.
+ */
+function MerchantRole({ merchant }: { readonly merchant: Merchant }) {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
+  const unavailable = useUnavailable(
+    PERMISSIONS.merchantWrite,
+    "move a Merchant onto another Role",
+  );
+
+  // `values` rather than `defaultValues`: the picker follows the roster, so a successful move —
+  // or somebody else's, arriving on the next refetch — leaves the field showing what this
+  // Merchant actually holds rather than what this browser last chose.
+  const form = useForm<MoveMerchantValues>({
+    resolver: zodResolver(MoveMerchantForm),
+    values: { role: merchant.role.name },
+  });
+  const chosen = form.watch("role");
+
+  const move = useMutation({
+    mutationFn: async (values: MoveMerchantValues) =>
+      orThrow(
+        await client.PATCH("/admin/merchants/{id}", {
+          params: { path: { id: merchant.id } },
+          body: values,
+        }),
+      ),
+    onSettled: () => queries.invalidateQueries({ queryKey: [MERCHANTS] }),
+  });
+
+  return (
+    <form
+      className="grid gap-2"
+      onSubmit={form.handleSubmit((values) => move.mutate(values))}
+    >
+      <div className="flex items-end gap-2">
+        <RoleField
+          id={`merchant-role-${merchant.id}`}
+          control={form.control}
+          name="role"
+          label={`Role for ${merchant.email}`}
+          quiet
+        />
+        <ActionButton
+          type="submit"
+          variant="outline"
+          size="sm"
+          unavailable={unavailable}
+          disabled={move.isPending || chosen === merchant.role.name}
+        >
+          {move.isPending ? <Spinner /> : null}
+          Move
+        </ActionButton>
+      </div>
+      <Problem
+        problem={move.isError ? whyNotMoved(move.error) : null}
+        title="The Merchant was not moved."
+      />
+    </form>
+  );
+}
+
+/**
+ * Why kobai turned the move back, in words a Merchant can act on.
+ *
+ * Exhaustive over `MerchantRefusal`, and the `never` is what keeps it so — the same family
+ * {@link whyNotCreated} narrows, because creating a colleague and moving one are refused by one
+ * closed set (ADR-0063).
+ */
+function whyNotMoved(thrown: unknown): string {
+  const fallback = "The Merchant was not moved.";
+  const reason = merchantReasonOf(thrown);
+
+  switch (reason) {
+    case "last-administrator":
+      // The one refusal here that is about the deployment rather than about this row, and the
+      // sentence has to say what to do: somebody else has to be able to administer Merchants
+      // before this one may stop. Both halves of that are reachable — a Role is given the
+      // Permission on Roles, and a holder is either added below or moved here.
+      return `This is the only Merchant who can administer Merchants, so moving them onto a Role without "${PERMISSIONS.merchantWrite}" would leave nobody who could move them back — and no way in short of the database. Give another Role that Permission on Roles, put somebody on it, and then come back.`;
+
+    case "unknown-role":
+      return "This deployment has no Role by that name any more — it was renamed or deleted since this list was read. Reload, and choose again.";
+
+    case "merchant-not-found":
+      return "kobai has no Merchant at that address any more. Reload the list.";
+
+    case "email-taken":
+      // A creation's refusal: this route sends no address and could not earn it.
+      return problemOf(thrown, fallback);
+
+    case "invalid":
+    case "malformed-body":
+      // kobai's own prose names the field, which is more than this screen knows.
+      return problemOf(thrown, fallback);
+
+    case undefined:
+      // A 500, which carries no `reason` on purpose, or the network being gone.
+      return fallback;
+
+    default: {
+      const unreached: never = reason;
+      return unreached;
+    }
+  }
 }
 
 /** A page of Merchants, before there is one. */
@@ -352,15 +501,29 @@ function useEveryRole() {
  * **A failed read blocks nothing that is not already blocked**: the field goes unavailable and
  * says what kobai said, and there is nothing useful to submit without it, because the Role is
  * required.
+ *
+ * **`label` and `quiet` are what let one field serve a card and a table cell** (#202). A row of
+ * the roster has a column heading already and one repeated label per row would be noise — but a
+ * column heading is not programmatically the label of a control inside a cell, so the label is
+ * still rendered and still associated, `sr-only`. `quiet` drops the standing description for the
+ * same reason and **keeps the exceptional ones**: a failed read and a truncated list are things
+ * a Merchant has to be told wherever the field is, and hiding those would make the picker lie
+ * about the set in the one place it was hidden.
  */
 function RoleField<T extends FieldValues>({
   id,
   control,
   name,
+  label = "Role",
+  quiet = false,
 }: {
   readonly id: string;
   readonly control: Control<T>;
   readonly name: Path<T>;
+  /** What the field is called. Rendered `sr-only` whenever {@link quiet} is set. */
+  readonly label?: string;
+  /** Say nothing under the field unless there is something exceptional to say. */
+  readonly quiet?: boolean;
 }) {
   const roles = useEveryRole();
   const { field, fieldState } = useController({ control, name });
@@ -369,10 +532,22 @@ function RoleField<T extends FieldValues>({
   // placeholder for — asserted in the browser, because "no Role is chosen yet" reading as an
   // empty box would be a control a Merchant cannot name.
   const chosen = typeof field.value === "string" ? field.value : "";
+  // **A value the list does not carry is offered anyway**, which is `FulfilmentStrategyField`'s
+  // decision arriving here: a `<select>` whose value matches no option shows nothing and reports
+  // `""`. That is harmless for a create, where the value is `""` until somebody chooses — and it
+  // is a misreport on a row of the roster, where the value is a Role the Merchant *does* hold.
+  // It is reachable two ways, and both are ordinary: the list is still in flight, or the Role is
+  // past the {@link MOST_ROLE_PAGES} this picker reads. Either way the row would say the
+  // colleague holds no Role at all, about a colleague who holds one.
+  const missing = chosen !== "" && !available.some((role) => role.name === chosen);
+
+  const note = roleFieldNote(roles);
 
   return (
     <Field data-invalid={fieldState.error !== undefined}>
-      <FieldLabel htmlFor={id}>Role</FieldLabel>
+      <FieldLabel htmlFor={id} className={quiet ? "sr-only" : undefined}>
+        {label}
+      </FieldLabel>
       <Select
         value={chosen}
         // Base UI reports `null` for "nothing selected", which this field never wants: a
@@ -391,6 +566,11 @@ function RoleField<T extends FieldValues>({
           <SelectValue placeholder="Choose a Role" />
         </SelectTrigger>
         <SelectContent>
+          {missing ? (
+            <SelectItem key={chosen} value={chosen}>
+              {chosen}
+            </SelectItem>
+          ) : null}
           {available.map((role) => (
             <SelectItem key={role.id} value={role.name}>
               {role.name}
@@ -398,21 +578,40 @@ function RoleField<T extends FieldValues>({
           ))}
         </SelectContent>
       </Select>
-      <FieldDescription>{roleFieldNote(roles)}</FieldDescription>
+      {quiet && !note.exceptional ? null : (
+        <FieldDescription>{note.said}</FieldDescription>
+      )}
       <FieldError errors={[fieldState.error]} />
     </Field>
   );
 }
 
-/** What to say under the picker: what went wrong, what was left out, or what it is for. */
-function roleFieldNote(roles: ReturnType<typeof useEveryRole>): string {
+/**
+ * What to say under the picker: what went wrong, what was left out, or what it is for.
+ *
+ * `exceptional` marks the first two — the ones a `quiet` field still has to render, because each
+ * says the list on screen is not the set kobai has.
+ */
+function roleFieldNote(roles: ReturnType<typeof useEveryRole>): {
+  readonly said: string;
+  readonly exceptional: boolean;
+} {
   if (roles.isError) {
-    return problemOf(roles.error, "kobai did not say which Roles it has.");
+    return {
+      said: problemOf(roles.error, "kobai did not say which Roles it has."),
+      exceptional: true,
+    };
   }
   if (roles.data?.complete === false) {
-    return `This deployment has more Roles than the first ${MOST_ROLE_PAGES} pages of them, so this list is not all of them. Roles is where the rest are.`;
+    return {
+      said: `This deployment has more Roles than the first ${MOST_ROLE_PAGES} pages of them, so this list is not all of them. Roles is where the rest are.`,
+      exceptional: true,
+    };
   }
-  return "What this colleague may do. Roles is where one is made or changed.";
+  return {
+    said: "What this colleague may do. Roles is where one is made or changed.",
+    exceptional: false,
+  };
 }
 
 /**
@@ -431,6 +630,13 @@ function whyNotCreated(thrown: unknown): string {
 
     case "unknown-role":
       return "This deployment has no Role by that name any more — it was renamed or deleted since this list was read. Reload, and choose again.";
+
+    case "merchant-not-found":
+    case "last-administrator":
+      // A move's refusals, and neither is reachable from a creation: this route addresses no
+      // Merchant and takes nobody's Permission away. Reported as kobai said it rather than as a
+      // sentence written here for a case nobody has seen.
+      return problemOf(thrown, fallback);
 
     case "invalid":
     case "malformed-body":

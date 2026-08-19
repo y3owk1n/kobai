@@ -1,6 +1,6 @@
 import { z } from "@hono/zod-openapi";
 import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
-import type { MerchantCreation } from "../auth/merchant.ts";
+import type { MerchantCreation, MerchantUpdate } from "../auth/merchant.ts";
 import type { RoleCreation, RoleDeletion, RoleUpdate } from "../auth/role.ts";
 import type { SessionPolicy, SessionRejection } from "../auth/session.ts";
 import type { CartRefusal as CartRefusalReason } from "../cart/write.ts";
@@ -548,17 +548,58 @@ export const SignInRequest = z
   .openapi("SignInRequest");
 
 /**
- * Every way adding a colleague can be refused, as a closed set.
+ * What a Merchant may change about a colleague who already exists — which is their Role, and
+ * nothing else (#202, ADR-0066).
  *
- * The keys are checked against `createMerchant`'s own union, so a fourth way to refuse a
- * Merchant has no key here and does not compile — the guarantee {@link SessionRefusal} gets
- * from `SessionRejection`, applied to a handler's refusals instead of a gate's.
+ * **The absences are the decision.** There is no `email` and no `password` here, because
+ * changing the address a colleague signs in with and setting their password from somebody
+ * else's session are two separate questions nobody has answered, and a `PATCH` that carried
+ * them would have answered both in passing. What a body naming neither is told names this
+ * field and says so, which is the second job ADR-0062 gives that refusal.
+ *
+ * The Role is named **by name**, as {@link CreateMerchantRequest} names it, so one surface
+ * spells one thing one way — and so a Role renamed between a picker being read and this being
+ * submitted is refused `unknown-role` rather than silently moving the Merchant somewhere else.
+ *
+ * **`role` is optional although it is the only field**, which reads like an oversight and is
+ * ADR-0062's shape: on every `PATCH` here an absent field means "leave it", and the emptiness is
+ * a *rule* the handler answers with the sentence every other correction shares — not a schema
+ * violation the edge reports in its own words. Required, `{}` would be turned back by the
+ * request hook before the handler ran, and this route would be the one correction on the
+ * surface that refuses a no-op differently from the rest.
+ */
+export const UpdateMerchantRequest = z
+  .object({
+    role: z.string().optional().meta({
+      description:
+        "A Role by name — the one this Merchant is to hold. It takes effect on their very next request, signed in or not, because a Role is read on each one rather than copied into the session. Naming the Role they already hold is accepted and changes nothing.",
+    }),
+  })
+  .openapi("UpdateMerchantRequest");
+
+/**
+ * Every way a Merchant can be refused, as a closed set.
+ *
+ * The keys are checked against `createMerchant`'s and `updateMerchant`'s own unions, so a fifth
+ * way to refuse a Merchant has no key here and does not compile — the guarantee
+ * {@link SessionRefusal} gets from `SessionRejection`, applied to a handler's refusals instead
+ * of a gate's.
+ *
+ * **`last-administrator` is here as well as in {@link RoleRefusal}, and it is deliberately the
+ * same word.** It names one fact about the deployment — that nobody would be left holding
+ * `merchant:write` — which two different acts can now bring about: narrowing the Role that
+ * carries it, and moving the last Merchant who holds it off that Role. A second word for the
+ * second act would make a client branch twice on one state (ADR-0066).
  */
 const MERCHANT_REASONS = {
   ...REQUEST_REASONS,
   "unknown-role": "unknown-role",
   "email-taken": "email-taken",
-} as const satisfies { [R in Refused<MerchantCreation> | RequestReason]: R };
+  "merchant-not-found": "merchant-not-found",
+  "last-administrator": "last-administrator",
+} as const satisfies {
+  [R in Refused<MerchantCreation> | Refused<MerchantUpdate> | RequestReason]: R;
+};
 
 export const MerchantRefusal = z
   .object({
