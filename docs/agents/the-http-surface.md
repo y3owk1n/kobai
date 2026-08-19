@@ -286,17 +286,34 @@ create a fourth over HTTP while somebody is paging. **A borderline case is a lis
 paging something that did not need it costs a parameter nobody sends and the reverse costs a
 break. Adding a second unpaged plural route means reopening ADR-0067, not following it.
 
-**A correction is a `PATCH`, and there is one way to do that too** (ADR-0062). Three routes
-correct a record that already exists — `PATCH /admin/products/{id}`,
-`PATCH /admin/variants/{id}` and `PATCH /admin/store` — and they behave identically on purpose:
-**an absent field means "leave it"**; a named `metadata` is **replaced** and never merged,
-because a merge leaves no way to take a key back out; and **a body naming nothing the route
-would change is refused at 400** rather than answered 200 with the row unchanged. That refusal
-does a second job at all three, because the schema strips a field the route does not carry — a
-Merchant who sent a Price to a Variant, a `variants` to a Product or only a `defaultCurrency` to
-the Store sent an empty body, so the refusal is where they are told which route does it. A `PUT`
-beside them is a different judgement and needs one: `PUT /admin/variants/{id}/inventory` stays a
-`PUT` because a count *is* the whole fact.
+**A correction is a `PATCH`, and there is one way to do that too** (ADR-0062). Every route that
+corrects a record which already exists behaves identically on purpose: **an absent field means
+"leave it"**; a named `metadata` is **replaced** and never merged, because a merge leaves no way
+to take a key back out; and **a body naming nothing the route would change is refused at 400**
+rather than answered 200 with the row unchanged, because a request that changes nothing is more
+likely a mistake than an intention. That refusal does a second job wherever the schema strips a
+field the route does not carry — a Merchant who sent a Price to a Variant, a `variants` to a
+Product or only a `defaultCurrency` to the Store sent an empty body, so the refusal is where they
+are told which route does it. A `PUT` beside them is a different judgement and needs one:
+`PUT /admin/variants/{id}/inventory` stays a `PUT` because a count *is* the whole fact.
+
+**`packages/core/src/patch.ts` is where that is implemented, once** (#185). It was written out
+per module until six of them had accumulated across four files, and they had already drifted —
+two refusals missing the shared sentence, half the `metadata` refusals naming the field in
+backticks and half naming it bare. `changesFrom` narrows a body into the changes it asks for and
+`changesNothing` is the refusal; `text` and `openData` are the two field narrowings almost every
+correction wants. **A helper may answer with a refusal without costing ADR-0060's binding**,
+which is the part worth understanding before adding to it: every narrowing there refuses
+`invalid`, a **literal** that every module's union already carries, so the assignment into
+`ProductUpdate`, `StoreUpdate`, `RoleUpdate` and the rest is what checks the two still agree and
+a module that renamed its `invalid` still reddens. A field refusing something *else* —
+`PATCH /admin/variants/{id}`'s `fulfilment`, with `unknown-fulfilment-strategy` — widens that
+refusal through a type parameter rather than replacing it. **`updateCart` is the one deliberate
+exception**, and its reason is written beside it: a Cart's `shopper` is three-valued and fills
+two columns, and it is read by the same `parseCartInput` a create uses, so it asks of the keys
+the body carried instead. **Rules do not go in that file** — whether a SKU is taken, whether this
+Store prices in that currency — and neither do they go in `input.ts`, which holds the same kind
+of narrowing and promises to hold no rule at all.
 
 **A Store's default currency does not move** (ADR-0065). `PATCH /admin/store` accepts a
 `defaultCurrency`, takes the code the Store already prices in — so a form submitting the whole

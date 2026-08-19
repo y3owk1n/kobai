@@ -118,7 +118,7 @@ export async function createProduct(
 
   const metadata = asMetadata(input.metadata);
   if (metadata === undefined) {
-    return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
+    return { ok: false, reason: "invalid", detail: metadataDetail("`metadata`") };
   }
 
   const variants = parseVariants(input.variants);
@@ -285,7 +285,7 @@ export async function setPrice(
 
   const metadata = asMetadata(input.metadata);
   if (metadata === undefined) {
-    return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
+    return { ok: false, reason: "invalid", detail: metadataDetail("`metadata`") };
   }
 
   if (input.currency !== undefined && typeof input.currency !== "string") {
