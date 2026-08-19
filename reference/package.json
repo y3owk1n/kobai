@@ -24,6 +24,7 @@
     "@kobai/core": "workspace:*",
     "@kobai/plugin-made-to-order": "workspace:*",
     "@kobai/plugin-price-log": "workspace:*",
+    "@kobai/plugin-stripe": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "kobai-reference-admin": "workspace:*"
   },

@@ -495,11 +495,16 @@ that the seam worked, not that anybody had ever put something of their own throu
 Two things closed that, in the same spec:
 
 - **A Payment Provider from a Project.** Core defines `PaymentProvider` and implements it
-  nowhere on purpose (ADR-0053). The only one that exists is `reference/src/payments/manual.ts`
-  — the reference Project's own source, reached by Core through one line of `kobai.config.ts`
-  and by nothing else. **You get that file too**: `create-kobai`'s template is generated from
-  the reference Project, so a scaffolded Project receives `manual.ts` as its own, and a Store
-  that takes cards replaces that file's export with an adapter and changes nothing else.
+  nowhere on purpose (ADR-0053). `reference/src/payments/manual.ts` is the reference Project's
+  own source, reached by Core through one line of `kobai.config.ts` and by nothing else.
+  **You get that file too**: `create-kobai`'s template is generated from the reference
+  Project, so a scaffolded Project receives `manual.ts` as its own, and a Store that takes
+  cards replaces that file's export with an adapter and changes nothing else.
+- **A Payment Provider from a Plugin.** `@kobai/plugin-stripe` is that adapter, off the shelf:
+  `payments: { provider: stripePayments({ secretKey }) }` and a Store takes cards, FPX and
+  GrabPay (ADR-0070). So the same named interface now has an implementation from a Project's
+  own source *and* one from a published package, which is the pair #72 asked for and neither
+  of them Core's.
 - **A Fulfilment Strategy from a Plugin.** `@kobai/plugin-made-to-order` offers one and the
   reference Project wires it (ADR-0052). Installing that Plugin does nothing; the wiring is
   what lets a Variant point at `made-to-order` at all, and what puts a Lead Time surcharge on

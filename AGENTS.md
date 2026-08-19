@@ -409,6 +409,7 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `packages/client` | `@kobai/client` — the typed client, generated from that description (ADR-0006). |
 | `packages/plugin-price-log` | `@kobai/plugin-price-log` — a deliberately trivial Plugin. One table, one offered Step, nothing else. |
 | `packages/plugin-made-to-order` | `@kobai/plugin-made-to-order` — the proof ADR-0014 asked for, at its thinnest. One Fulfilment Strategy, one offered Step that charges for a Lead Time, one table. |
+| `packages/plugin-stripe` | `@kobai/plugin-stripe` — the Payment Provider Core ships none of (ADR-0053). PaymentIntents with `automatic_payment_methods`, and one table: the refunds it made for payments that produced no Order (ADR-0070). **Nothing in the gate reaches Stripe** — the network is the `fetch` in `StripeOptions`, and every test replaces it. |
 | `packages/create-kobai` | `create-kobai` — the scaffolder. Generates a Project a Developer owns (ADR-0001, ADR-0034). |
 | `packages/create-kobai/template/` | What it generates. **Generated** from `reference/`, checked in, never hand-edited. |
 | `packages/create-kobai/standalone/` | The few files a generated Project has and `reference/` does not. **Authored here**, not generated. |

@@ -24,6 +24,7 @@ export const PUBLISHED_KOBAI_PACKAGES = [
   "@kobai/core",
   "@kobai/plugin-price-log",
   "@kobai/plugin-made-to-order",
+  "@kobai/plugin-stripe",
   "@kobai/client",
 ] as const;
 
