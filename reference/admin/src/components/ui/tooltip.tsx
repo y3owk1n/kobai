@@ -2,6 +2,41 @@ import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
 
 import { cn } from "@/lib/utils";
 
+/**
+ * **This tooltip is announced as nothing, and that is recorded rather than fixed** (#199,
+ * ADR-0063).
+ *
+ * Base UI's tooltip at the version this Admin pins gives its popup **no `role="tooltip"`** and
+ * sets **no `aria-describedby`** on the trigger — checked in the installed package rather than
+ * assumed. So what is written in here is a **visual** affordance and nothing else: a Merchant
+ * reading the screen with a screen reader focuses the control and hears the control, with no
+ * hint that there was ever a sentence beside it.
+ *
+ * **So never put information only in one.** `components/action-button.tsx` is the shape to
+ * copy for anything that must actually be announced: it renders the sentence a second time in
+ * an `sr-only` span, points the control's `aria-describedby` at *that*, and marks this popup
+ * `aria-hidden` so the same words are not read twice — and so the popup, which portals to the
+ * end of `<body>` outside every landmark, is not content `axe-core` reports under `region`.
+ *
+ * Fixing the primitive was weighed and refused, and the reason is worth having before somebody
+ * weighs it again. A `role` and an `aria-describedby` here would be honest but would not
+ * replace that workaround: Base UI unmounts the popup when it is closed, so the description
+ * would resolve to nothing until the tooltip is opened — which is precisely the reader who
+ * never opens it. It would also make the popup announced content at `<body>`, so it would drag
+ * in the container plumbing `select.tsx` and `dropdown-menu.tsx` carry, and
+ * `shadcn add tooltip --overwrite` would take the lot away again in silence. The gap is cheap
+ * to state and expensive to half-fix.
+ *
+ * Nothing depends on this today: the sidebar's collapsed tooltip is a nicety, because
+ * `SidebarMenuButton` clips its label with `overflow-hidden` rather than removing it, so the
+ * accessible name survives the collapse.
+ *
+ * **CHANGED FROM UPSTREAM: this comment, and nothing else.** The component itself is exactly
+ * what `shadcn add` wrote, which is why `README.md` files it under its own heading rather than
+ * in the list of changes to what a component *does*. It is still a departure an
+ * `--overwrite` would delete, so `tests/an-unavailable-control-can-still-be-reached.test.ts`
+ * asks for this note by name — a record nothing holds is what that file exists to replace.
+ */
 function TooltipProvider({ delay = 0, ...props }: TooltipPrimitive.Provider.Props) {
   return (
     <TooltipPrimitive.Provider data-slot="tooltip-provider" delay={delay} {...props} />

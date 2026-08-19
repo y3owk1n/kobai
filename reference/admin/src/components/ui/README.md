@@ -21,7 +21,7 @@ is the cheap half of that, and its value is that a departure had to be typed out
 
 ## What has actually been changed
 
-### Two changes to what a component does
+### Three changes to what a component does
 
 #### Where a popup is portaled — `select.tsx`, `dropdown-menu.tsx`
 
@@ -72,6 +72,61 @@ state container — `dialog.tsx`, `alert-dialog.tsx`, `sheet.tsx`, `dropdown-men
 `tooltip.tsx` — each declare their primitive's own props rather than an element's, so handing one
 a `role` is a **compile error** instead of silence. `Sidebar` was reachable only because it
 declares `React.ComponentProps<"div">` and then spreads the rest somewhere that is not a `div`.
+
+#### What an unavailable control may still receive — `sidebar.tsx`
+
+`sidebarMenuButtonVariants`, and the recipe `SidebarMenuSubButton` writes inline, no longer
+carry `aria-disabled:pointer-events-none`. Upstream mirrors each of its `disabled:` rules onto
+`aria-disabled:`, which reads like tidiness and is the one thing ADR-0063 and #178 rule out.
+
+**An action a Role cannot perform is `aria-disabled` rather than `disabled` precisely so that
+it can still be reached and told why.** A truly disabled control takes no focus and fires no
+pointer events, so it can host no tooltip and no explanation — which is the whole reason the
+decision picks the ARIA attribute over the real one. A recipe that then sets
+`pointer-events-none` on that attribute puts the missing half back: the control cannot be
+hovered, so it can host no tooltip either, and the affordance is defeated in silence.
+`buttonVariants` in `button.tsx` styles `disabled:` only, never `aria-disabled:`, which is why
+`src/components/action-button.tsx` works at all.
+
+The `disabled:` half is deliberately untouched, in both recipes. A control dead only while a
+request is in flight has nothing to explain and nobody to explain it to — the same line
+`components/pager.tsx` draws when it uses a real `disabled` for its dead Next and Previous.
+
+No sidebar control is `aria-disabled` today, so nothing was visibly broken; #180 puts Merchants,
+Roles and the Store on this frame, and a sidebar action a Role cannot perform is a plausible
+thing for it to want. **This one is held by a test rather than by this list** —
+`tests/an-unavailable-control-can-still-be-reached.test.ts` sweeps the whole of the Admin's
+source — this directory, the app-level components above it, and the copy under
+`packages/create-kobai/template/` a Developer receives — and fails naming any file that puts the
+variant back, which is what a `shadcn add sidebar --overwrite` would do. Both edited lines carry a `CHANGED FROM UPSTREAM`
+comment.
+
+### A gap recorded rather than fixed — `tooltip.tsx`
+
+**Base UI's tooltip is announced as nothing** (#199). At the version this Admin pins it gives
+its popup no `role="tooltip"` and sets no `aria-describedby` on the trigger — checked in the
+installed package, not assumed — so a tooltip here is a **visual** affordance and a screen
+reader is told about none of it.
+
+`tooltip.tsx` is therefore **not** in the list above: what it *does* is exactly what
+`shadcn add` wrote, and the only departure in it is the note at its head saying so — which
+carries a `CHANGED FROM UPSTREAM` line like every other, because an `--overwrite` deletes a
+comment as silently as it deletes a fix. What is written down here is the gap.
+**Never put information only in a tooltip.**
+`src/components/action-button.tsx` is the shape to copy where something must actually be
+announced — the sentence again in an `sr-only` span, the control described by *that*, and the
+popup `aria-hidden` so it is neither read twice nor reported by axe as content outside a
+landmark.
+
+Fixing the primitive was weighed and refused. A `role` and an `aria-describedby` would be
+honest and would still not replace that workaround, because Base UI unmounts the popup when it
+is closed: the description would resolve to nothing for exactly the reader who never opens the
+tooltip. It would also make the popup announced content portaled to `<body>`, dragging in the
+container plumbing `select.tsx` and `dropdown-menu.tsx` carry above — and
+`shadcn add tooltip --overwrite` would revert all of it silently. The reasoning is repeated at
+the head of the file, where somebody about to reach for a tooltip will meet it, and
+`tests/an-unavailable-control-can-still-be-reached.test.ts` asks both copies for it by name —
+so an overwrite that takes the note away is a red build rather than a quiet loss.
 
 ### The rest are suppression comments
 
