@@ -25,7 +25,12 @@ type CreatedProduct = {
   id: string;
   title: string;
   metadata: Record<string, unknown>;
-  variants: { id: string; sku: string; prices: unknown[] }[];
+  variants: {
+    id: string;
+    sku: string;
+    metadata: Record<string, unknown>;
+    prices: unknown[];
+  }[];
 };
 
 /** Creates a Product through the public API, and hands back what it answered with. */
@@ -63,11 +68,18 @@ describe("POST /admin/products", () => {
     });
 
     expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
+    const created = (await response.json()) as CreatedProduct;
+    expect(created).toMatchObject({
       title: "A2 poster",
-      metadata: {},
-      variants: [{ sku: "POSTER-A2", metadata: {}, prices: [] }],
+      variants: [{ sku: "POSTER-A2", prices: [] }],
     });
+
+    // Created without metadata, so both bags are empty — and `toEqual` on each of them
+    // rather than `metadata: {}` inside the match above, which asserted nothing at all: `{}`
+    // is a subset of every object, so that version passed against a Product that had stored
+    // whatever a bug left there (#186, docs/agents/writing-tests.md).
+    expect(created.metadata).toEqual({});
+    expect(created.variants[0]?.metadata).toEqual({});
   });
 
   it("refuses a Product with no Variant, and stores nothing", async () => {
@@ -527,12 +539,18 @@ describe("POST /admin/variants/:id/prices", () => {
     });
 
     expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
+    const price = (await response.json()) as {
+      amount: number;
+      currency: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(price).toMatchObject({
       // Minor units, so USD 12.50 is 1250 and nothing here is a float.
       amount: 1250,
       currency: "USD",
-      metadata: {},
     });
+    // `toEqual` on the bag, so "a Price created without metadata stores none" can fail (#186).
+    expect(price.metadata).toEqual({});
   });
 
   it("stores the Price as a row referencing the Variant, not as a column on it", async () => {

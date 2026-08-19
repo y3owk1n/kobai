@@ -555,6 +555,42 @@ without the mount breaks every private-registry build, and the mount without it 
 accident possible. The Project's image test greps the built image for the token rather than
 reading the Dockerfile, which is the only check that can see this.
 
+**An assertion about the *whole* of an open bag is `toEqual`; `toMatchObject` cannot express
+emptiness.** It matches a nested object as a **subset**, so `metadata: {}` inside one asserts
+nothing whatever — `{}` is a subset of every object, and the line passes against `{}`, against
+`{ printer: "riso" }`, and against whatever a bug happened to leave in the bag, while reading
+exactly like a test that the bag is empty. #169 wrote one to assert that a named `metadata`
+**replaces** rather than merges — ADR-0062's rule, which a Developer relies on — and #172
+found it passing just as happily against a merge that had kept the old keys. So pull the bag
+out and `toEqual` it, or assert the whole body with `toEqual` the way `role.test.ts`,
+`cart.test.ts`, `store.test.ts` and `order.test.ts` do, and keep `toMatchObject` for what it
+is good at: **"these fields, whatever else the route returns"**, which is what almost all of
+this repository's three hundred of them correctly say. An empty *array* is a different case
+and needs no such care — `toMatchObject` holds an array to the same length, so `prices: []`
+and `adjustments: []` really do assert emptiness — but `variants: [{}]` is the same trap one
+level down, asserting a length and nothing at all about what survived.
+
+**`tests/an-empty-bag-is-asserted-so-it-can-fail.test.ts` is what keeps that true**, because
+prose on its own had already lost this round: #186 found three more of them written after
+#172's fix landed, plus that `[{}]`. It sweeps every `.ts` and `.tsx` file **git tracks** —
+so a second checkout under `.claude/worktrees/` is not swept, and a helper under
+`tests/support/` or `src/testing/` is — blanks the comments and string literals first, so the
+ones quoting the trap are not read as the code they quote, and fails naming any empty object
+literal inside a `toMatchObject` **or `expect.objectContaining`** argument. **Deliberately not
+a lint rule**: Biome ships none for this, so it would mean introducing GritQL plugins as a
+mechanism for a single rule, and severity was never what was missing — under ADR-0039 every
+finding fails the gate already.
+
+**What it can see is a literal `{}` inside a literal call, and that is the whole of it.** A
+bag hoisted to a variable — `const expected = { metadata: {} }` — is the same non-assertion
+and is invisible to it, so the rule above is still yours to have read; the sweep catches the
+way it actually gets written. Everything it *can* see is watched rather than reasoned about:
+it fails against fixtures in its own file for each shape, including the two that would make it
+fail **open** — an apostrophe in JSX prose and a quote inside a regex literal, either of which
+would otherwise pair up and blank a live offence out of the scan, which is ADR-0049's trap
+arriving as a green build. And each assertion it made this repository rewrite was watched
+failing against a build that stores something, which the version it replaced passed.
+
 Real Postgres rather than a fake, because under
 [ADR-0004](../adr/0004-plugins-own-their-tables-core-tables-are-closed.md),
 [ADR-0011](../adr/0011-postgres-and-drizzle.md) and ADR-0030 the schema and its migrations
