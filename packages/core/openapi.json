@@ -593,6 +593,33 @@
           }
         }
       },
+      "FulfilmentStrategyList": {
+        "type": "object",
+        "properties": {
+          "strategies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FulfilmentStrategySummary"
+            },
+            "description": "All of them, in name order. Never empty: Core's `physical` and `digital` are there unless a Project replaced them, and a Project that replaced one wired something under that name."
+          }
+        },
+        "required": [
+          "strategies"
+        ]
+      },
+      "FulfilmentStrategySummary": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name a Variant's `fulfilment.strategy` points at — Core's own `physical` and `digital`, and whatever key this deployment's `kobai.config.ts` wired beside them."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
       "ProductDetail": {
         "allOf": [
           {
@@ -2890,6 +2917,69 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StoreRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/fulfilment-strategies": {
+      "get": {
+        "summary": "List Fulfilment Strategies",
+        "description": "Every Strategy this deployment has wired, in name order — the complete set a Variant's `fulfilment.strategy` may name, and the set the `unknown-fulfilment-strategy` refusal is made against. It answers a name and nothing else: what a Strategy says about shipping, stock and Lead Time is answered *about a Variant* (ADR-0014), so there is no answer to give without one. **This list does not page**, unlike every other on this surface: it is what a deployment was configured with rather than a table, so it cannot grow while the process runs and there is nothing for a cursor to be built over (ADR-0067).",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every Fulfilment Strategy this deployment has, in name order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentStrategyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
                 }
               }
             }

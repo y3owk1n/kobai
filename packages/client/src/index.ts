@@ -115,6 +115,8 @@ export type Store = components["schemas"]["Store"];
 export type Product = components["schemas"]["Product"];
 export type ProductDetail = components["schemas"]["ProductDetail"];
 export type Variant = components["schemas"]["Variant"];
+export type FulfilmentStrategySummary =
+  components["schemas"]["FulfilmentStrategySummary"];
 export type Price = components["schemas"]["Price"];
 export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];

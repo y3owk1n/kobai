@@ -63,7 +63,10 @@ import {
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
-import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
+import {
+  type FulfilmentStrategies,
+  fulfilmentStrategyNames,
+} from "../fulfilment/strategy.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
@@ -497,6 +500,48 @@ const updateStoreRoute = createRoute({
       "Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in.",
       contract.StoreRefusal,
     ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * The Fulfilment Strategies this deployment has wired, by name (ADR-0067).
+ *
+ * It exists because two routes refuse `unknown-fulfilment-strategy` and nothing could ask what
+ * the known ones are. A Merchant naming a Strategy — creating a Variant, or swapping one so a
+ * poster becomes a download — had to guess and be refused, and a client offering a choice had
+ * to hard-code Core's two, which is precisely the closed set ADR-0014 exists to rule out,
+ * written into every client instead of into the schema. ADR-0010 calls that a finding about
+ * the API rather than a gap in the Admin, and this is the finding answered.
+ *
+ * **`catalog:read` and not a Permission of its own.** The one thing this is for is filling in
+ * a Variant's Strategy, and a Merchant who may not read the catalog has no Variant to fill in;
+ * a word of its own would name a boundary that does not exist. Which gate a route sits behind
+ * is promised surface (ADR-0060), so it is not a decision to revisit once traffic exists.
+ *
+ * **It does not page, and that is ADR-0067 rather than an oversight.** Every other list on this
+ * surface takes `limit` and `after` and answers a `nextCursor` (ADR-0064), and the argument for
+ * that is entirely about rows arriving between one page and the next. There are no rows here —
+ * the set is `Object.keys` of what `kobai.config.ts` wired, decided at boot and unable to
+ * change while the process runs — so there is nothing to insert, nothing to skip, and no
+ * `created_at` a cursor could be built over.
+ */
+const listFulfilmentStrategiesRoute = createRoute({
+  method: "get",
+  path: "/fulfilment-strategies",
+  summary: "List Fulfilment Strategies",
+  description:
+    "Every Strategy this deployment has wired, in name order — the complete set a Variant's `fulfilment.strategy` may name, and the set the `unknown-fulfilment-strategy` refusal is made against. It answers a name and nothing else: what a Strategy says about shipping, stock and Lead Time is answered *about a Variant* (ADR-0014), so there is no answer to give without one. **This list does not page**, unlike every other on this surface: it is what a deployment was configured with rather than a table, so it cannot grow while the process runs and there is nothing for a cursor to be built over (ADR-0067).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  responses: {
+    200: json(
+      "Every Fulfilment Strategy this deployment has, in name order.",
+      contract.FulfilmentStrategyList,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -1133,6 +1178,14 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     const changed = await updateStore(deps.db, c.req.valid("json"));
     if (!changed.ok) return refused(c, changed, STORE_UPDATE_STATUS);
     return c.json(changed.store, 200);
+  });
+
+  guarded.openapi(listFulfilmentStrategiesRoute, (c) => {
+    // The same helper the `unknown-fulfilment-strategy` refusals list the known names with, so
+    // what this answers and what a refusal names cannot drift apart — one reading of the
+    // deployment's own configuration, sorted, rather than two spellings of it.
+    const strategies = fulfilmentStrategyNames(deps.fulfilment).map((name) => ({ name }));
+    return c.json({ strategies }, 200);
   });
 
   guarded.openapi(createProductRoute, async (c) => {

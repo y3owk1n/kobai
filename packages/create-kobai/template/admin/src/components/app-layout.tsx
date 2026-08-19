@@ -1,6 +1,6 @@
 import type { Session } from "@kobai/client";
 import { LogOutIcon } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router";
 import { CommandPalette } from "@/components/command-palette";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -29,6 +29,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { CrumbProvider } from "@/lib/crumb";
+import { PortalContainerProvider } from "@/lib/portal";
 import { type Section, sectionOf, useSections } from "@/lib/sections";
 import { useKobai, useSessionOnNavigation } from "@/lib/session";
 
@@ -62,79 +63,85 @@ export function AppLayout({ session }: { readonly session: Session }) {
   // layout owns the state and the screen writes to it through `CrumbProvider`, because the
   // title is a thing only the screen's own request knows — see `lib/crumb.tsx`.
   const [record, setRecord] = useState<string | null>(null);
+  const portals = useRef<HTMLDivElement>(null);
 
   return (
-    <SidebarProvider>
-      {/* A landmark, and `complementary` rather than `navigation` because this holds the
+    <PortalContainerProvider container={portals}>
+      <SidebarProvider>
+        {/* A landmark, and `complementary` rather than `navigation` because this holds the
           Merchant's account and the way out as well as the sections. Without one, every
           control in here is page content outside any landmark, which is what axe reports as
           `region` — caught by `tests/the-admin-in-a-browser.test.ts` and invisible to
           everything else in this repository. It is passed here rather than baked into
           `components/ui/sidebar.tsx`, because what a deployment's sidebar *is* belongs to the
           application composing it and not to the vendored primitive (ADR-0063). */}
-      <Sidebar collapsible="icon" role="complementary" aria-label="Sections and account">
-        <SidebarHeader>
-          <div className="flex items-center gap-2 px-2 py-1 font-medium group-data-[collapsible=icon]:hidden">
-            kobai Admin
-          </div>
-        </SidebarHeader>
-        <SidebarContent>
-          {/* Nothing at all when this Role can read none of them, rather than a "Store"
+        <Sidebar
+          collapsible="icon"
+          role="complementary"
+          aria-label="Sections and account"
+        >
+          <SidebarHeader>
+            <div className="flex items-center gap-2 px-2 py-1 font-medium group-data-[collapsible=icon]:hidden">
+              kobai Admin
+            </div>
+          </SidebarHeader>
+          <SidebarContent>
+            {/* Nothing at all when this Role can read none of them, rather than a "Store"
               heading over an empty list: a group naming a category with nothing in it reads
               as a list that failed to load. What that Merchant is told instead is a screen,
               in `app.tsx`. */}
-          <SidebarGroup hidden={sections.length === 0}>
-            <SidebarGroupLabel>Store</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {sections.map((section) => (
-                  <SidebarMenuItem key={section.path}>
-                    <SidebarMenuButton
-                      isActive={here === section}
-                      tooltip={section.label}
-                      render={<Link to={section.path} />}
-                    >
-                      <section.Icon />
-                      <span>{section.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-        <SidebarFooter>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <div className="truncate px-2 py-1 text-muted-foreground text-xs group-data-[collapsible=icon]:hidden">
-                {session.merchant.email}
-              </div>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip="Sign out" onClick={() => void signOut()}>
-                <LogOutIcon />
-                <span>Sign out</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarFooter>
-      </Sidebar>
+            <SidebarGroup hidden={sections.length === 0}>
+              <SidebarGroupLabel>Store</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {sections.map((section) => (
+                    <SidebarMenuItem key={section.path}>
+                      <SidebarMenuButton
+                        isActive={here === section}
+                        tooltip={section.label}
+                        render={<Link to={section.path} />}
+                      >
+                        <section.Icon />
+                        <span>{section.label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+          <SidebarFooter>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <div className="truncate px-2 py-1 text-muted-foreground text-xs group-data-[collapsible=icon]:hidden">
+                  {session.merchant.email}
+                </div>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="Sign out" onClick={() => void signOut()}>
+                  <LogOutIcon />
+                  <span>Sign out</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarFooter>
+        </Sidebar>
 
-      <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-          <SidebarTrigger />
-          <Separator orientation="vertical" className="h-4" />
-          <Breadcrumbs section={here} record={record} />
-          <div className="ml-auto flex items-center gap-1">
-            <CommandPalette />
-            <ThemeToggle />
-          </div>
-        </header>
-        {/* A `div` rather than a second `main`: `SidebarInset` is already one, and two of them
+        <SidebarInset>
+          <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+            <SidebarTrigger />
+            <Separator orientation="vertical" className="h-4" />
+            <Breadcrumbs section={here} record={record} />
+            <div className="ml-auto flex items-center gap-1">
+              <CommandPalette />
+              <ThemeToggle />
+            </div>
+          </header>
+          {/* A `div` rather than a second `main`: `SidebarInset` is already one, and two of them
             is a document with two main landmarks — which is a real refusal from axe rather
             than a style note, and one nothing outside a browser could have seen. */}
-        <div className="mx-auto w-full max-w-5xl p-6">
-          {/* The section, as the document's one first-level heading — for a reader with no
+          <div className="mx-auto w-full max-w-5xl p-6">
+            {/* The section, as the document's one first-level heading — for a reader with no
               sidebar and no breadcrumb to look at. Visually hidden, because the frame already
               says it twice on screen.
 
@@ -145,13 +152,21 @@ export function AppLayout({ session }: { readonly session: Session }) {
               heading at all, which is what every list screen was until #175 — and #176
               rewrote all six of them, and none of them argued for a better first-level title
               than its section — a record's own title is its `h2`. */}
-          <h1 className="sr-only">{here?.label ?? headingWithNoSection(pathname)}</h1>
-          <CrumbProvider name={setRecord}>
-            <Outlet />
-          </CrumbProvider>
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+            <h1 className="sr-only">{here?.label ?? headingWithNoSection(pathname)}</h1>
+            <CrumbProvider name={setRecord}>
+              <Outlet />
+            </CrumbProvider>
+            {/* Where every popup that portals out of a screen lands — a `Select`'s list, a menu's
+              items. Inside the `main` landmark on purpose: a portal's default target is
+              `<body>`, and `axe-core` reports content there as `region`, which is a violation
+              only visible while an overlay is open. `lib/portal.tsx` is the whole argument. It
+              is a sibling of the Outlet rather than a wrapper around it, so nothing a screen
+              renders can be laid out by it. */}
+            <div ref={portals} />
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </PortalContainerProvider>
   );
 }
 

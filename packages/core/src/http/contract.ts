@@ -883,6 +883,48 @@ export const ProductList = z
   .object({ products: z.array(Product).readonly(), nextCursor: NextCursor })
   .openapi("ProductList");
 
+/**
+ * One Fulfilment Strategy this deployment has wired, by the name a Variant points at.
+ *
+ * **A name and nothing else**, and that is a limit of what a Strategy can be asked rather than
+ * a field left for later. ADR-0014's three questions — does this ship, does it come off a
+ * count, is there a Lead Time — are asked *of a Variant*, because a Strategy may read that
+ * Variant's `metadata` to answer them. There is no Variant here, so there is no honest answer
+ * to carry, and a Strategy that answered differently per Variant would be misreported by one.
+ * They are on an Order's Fulfilments, where they are a snapshot of what was asked at Capture.
+ *
+ * An object rather than a bare string so that whatever a Strategy can one day say about itself
+ * arrives as a field beside `name` — additive under ADR-0060 — instead of as a change to the
+ * type of every element.
+ */
+export const FulfilmentStrategySummary = z
+  .object({
+    name: z.string().meta({
+      description:
+        "The name a Variant's `fulfilment.strategy` points at — Core's own `physical` and `digital`, and whatever key this deployment's `kobai.config.ts` wired beside them.",
+    }),
+  })
+  .openapi("FulfilmentStrategySummary");
+
+/**
+ * Every Strategy this deployment has, and deliberately **not** a page of them (ADR-0067).
+ *
+ * No `limit`, no `after` and no {@link NextCursor}, which is the one place kobai's surface
+ * departs from ADR-0064's "every list route". The reason is that this is not a list over a
+ * table: the set is `Object.keys` of what `kobai.config.ts` wired, fixed at boot, with no rows,
+ * no `created_at` to order by and nothing that can be inserted between one page and the next —
+ * so the failure a cursor exists to prevent cannot happen here, and the cursor could not be
+ * built from anything real if it did.
+ */
+export const FulfilmentStrategyList = z
+  .object({
+    strategies: z.array(FulfilmentStrategySummary).readonly().meta({
+      description:
+        "All of them, in name order. Never empty: Core's `physical` and `digital` are there unless a Project replaced them, and a Project that replaced one wired something under that name.",
+    }),
+  })
+  .openapi("FulfilmentStrategyList");
+
 export const CreateVariantRequest = z
   .object({
     sku: z.string(),

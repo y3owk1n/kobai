@@ -1,5 +1,11 @@
 # List pagination is a cursor, and the page number is given up
 
+> **"Every list route" is bounded by
+> [ADR-0067](./0067-a-set-the-deployment-declares-is-not-a-list-route.md).** Everything below
+> stands for a list over a **table**. A set the deployment declares in `kobai.config.ts` — today
+> only `GET /admin/fulfilment-strategies` — answers in full and does not page, because nothing
+> can be inserted into it between one page and the next, which is this record's entire argument.
+
 Every list route on kobai's HTTP surface takes `?limit=` and `?after=`, and answers with an
 **opaque** `nextCursor` beside its items. No route takes `?offset=`, and no route reports a
 total. There are therefore no numbered pages anywhere in kobai, in the Admin or in anything a

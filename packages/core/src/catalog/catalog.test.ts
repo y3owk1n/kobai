@@ -181,6 +181,11 @@ describe("the catalog is behind the Merchant session", () => {
     { method: "GET", path: "/admin/products", permission: PERMISSIONS.catalogRead },
     {
       method: "GET",
+      path: "/admin/fulfilment-strategies",
+      permission: PERMISSIONS.catalogRead,
+    },
+    {
+      method: "GET",
       path: "/admin/products/2f1b8a5e-0000-4000-8000-000000000000",
       permission: PERMISSIONS.catalogRead,
     },
@@ -632,6 +637,108 @@ describe("POST /admin/variants/:id/prices", () => {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
       reason: "variant-not-found",
+    });
+  });
+});
+
+describe("GET /admin/fulfilment-strategies", () => {
+  /** A Strategy of the shape a Plugin offers — five lines, no `name` inside it (ADR-0052). */
+  const rental = {
+    answersFor: () => ({
+      requiresShipping: true,
+      tracksInventory: false,
+      hasLeadTime: true,
+    }),
+  };
+
+  it("answers Core's own two on a deployment that wired nothing", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/fulfilment-strategies", { headers });
+
+    expect(response.status).toBe(200);
+    // Both of them, in name order, and a name is the whole of what a Strategy can say here:
+    // the three answers are asked *of a Variant* and there is none (ADR-0014, ADR-0067).
+    await expect(response.json()).resolves.toEqual({
+      strategies: [{ name: "digital" }, { name: "physical" }],
+    });
+  });
+
+  it("answers a Plugin's Strategy beside them, under the name the Project wired it as", async () => {
+    kobai = await createTestKobai({ fulfilment: { strategies: { rental } } });
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/fulfilment-strategies", { headers });
+
+    // The name is the key `kobai.config.ts` used and not anything inside the object, which is
+    // why two Plugins that both call theirs `rental` can be wired side by side (ADR-0052).
+    await expect(response.json()).resolves.toEqual({
+      strategies: [{ name: "digital" }, { name: "physical" }, { name: "rental" }],
+    });
+  });
+
+  it("reports a replaced Strategy once, not twice", async () => {
+    // A Project naming one of Core's *replaces* it rather than adding beside it, so the set is
+    // still two — the case a `[...core, ...wired]` would have got wrong.
+    kobai = await createTestKobai({ fulfilment: { strategies: { physical: rental } } });
+    const headers = await merchantHeaders(kobai);
+
+    await expect(
+      (await kobai.request("/admin/fulfilment-strategies", { headers })).json(),
+    ).resolves.toEqual({ strategies: [{ name: "digital" }, { name: "physical" }] });
+  });
+
+  it("lists exactly the Strategies a Variant is allowed to point at", async () => {
+    kobai = await createTestKobai({ fulfilment: { strategies: { rental } } });
+    const headers = await merchantHeaders(kobai);
+    const { strategies } = (await (
+      await kobai.request("/admin/fulfilment-strategies", { headers })
+    ).json()) as { strategies: { name: string }[] };
+
+    // The point of the route, and the only assertion that ties it to anything: every name it
+    // answers is accepted by the route that refuses `unknown-fulfilment-strategy`, and a name
+    // it does not answer is refused. Two readings of one configuration, held together.
+    for (const [index, { name }] of strategies.entries()) {
+      const accepted = await kobai.request("/admin/products", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          title: `Something ${name}`,
+          variants: [{ sku: `SKU-${index}`, fulfilment: { strategy: name } }],
+        }),
+      });
+      expect(accepted.status, `creating a Variant fulfilled by ${name}`).toBe(201);
+    }
+
+    const refused = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Something nobody wired",
+        variants: [{ sku: "SKU-UNWIRED", fulfilment: { strategy: "subscription" } }],
+      }),
+    });
+    expect(refused.status).toBe(422);
+    expect(strategies.map(({ name }) => name)).not.toContain("subscription");
+  });
+
+  it("takes no page query, and answers the whole set (ADR-0067)", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    // `limit` and `after` are refused by every list that pages — this one does not page, so
+    // they are simply not its parameters and are ignored rather than honoured. The assertion
+    // is that the answer is the whole set either way: a reader who sends them out of habit
+    // gets everything rather than a page they would then try to follow a cursor off.
+    const response = await kobai.request(
+      "/admin/fulfilment-strategies?limit=1&after=nonsense",
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      strategies: [{ name: "digital" }, { name: "physical" }],
     });
   });
 });
