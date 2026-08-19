@@ -6,6 +6,11 @@ import { createTestKobai, signInTestMerchant } from "@kobai/core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { ADMIN_PATH, createAdminAssets } from "./admin-assets.ts";
 import { createProjectFetch } from "./app.ts";
+import { createFakeBank } from "./payments/fake-bank.ts";
+import {
+  createRedirectPaymentRoutes,
+  REDIRECT_RETURN_PATH,
+} from "./payments/redirect.ts";
 
 /**
  * One process serving the Admin and the API, dispatched in-process like everything else.
@@ -75,6 +80,47 @@ describe("the Project's one origin", () => {
     // `/admin`, so there is nothing here the public API does not have.
     expect([401, 404]).toContain(invented.status);
     expect(store.status).toBe(401);
+  });
+
+  it("serves its own redirect payment routes, and adds nothing to kobai's surface for them", async () => {
+    // The one thing this Project mounts besides the Admin (ADR-0070). It has to be here — a
+    // Plugin cannot add a route — and the promise above still has to hold: what the Project
+    // serves at `/payments/…` is the Project's, and kobai's two surfaces are untouched by it.
+    await using kobai = await createTestKobai();
+    const bank = createFakeBank();
+    const fetch = createProjectFetch(
+      kobai,
+      await built({ "index.html": INDEX }),
+      createRedirectPaymentRoutes({ kobai, payments: bank, apiKey: "" }),
+    );
+
+    const settled = await fetch(
+      new Request(`http://kobai.test${REDIRECT_RETURN_PATH}`, { method: "POST" }),
+    );
+    const store = await fetch(new Request("http://kobai.test/store/carts"));
+    const admin = await fetch(new Request("http://kobai.test/admin/products"));
+
+    // This Project's, answering for itself — 503 rather than 401, because it was given no store
+    // key here and saying so beats passing on the refusal kobai would have made.
+    await expect(settled.json()).resolves.toMatchObject({ reason: "no-store-key" });
+    // And both of kobai's surfaces still answer as kobai, gate first.
+    expect(store.status).toBe(401);
+    expect(admin.status).toBe(401);
+  });
+
+  it("leaves `/payments` to kobai when this deployment takes no redirect payments", async () => {
+    // A deployment with no bank to redirect to mounts nothing, so there is no route standing
+    // ready to answer for a provider that does not exist — and the path is kobai's 404 like any
+    // other path kobai does not serve.
+    await using kobai = await createTestKobai();
+    const fetch = createProjectFetch(kobai, await built({ "index.html": INDEX }));
+
+    const response = await fetch(
+      new Request(`http://kobai.test${REDIRECT_RETURN_PATH}`, { method: "POST" }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ reason: "not-found" });
   });
 
   it("sends no CORS header, because there is no second origin to send one about", async () => {

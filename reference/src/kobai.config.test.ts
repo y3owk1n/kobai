@@ -115,16 +115,21 @@ describe("the reference Project's configuration", () => {
     ).resolves.toEqual([]);
   });
 
-  it("still serves the Store, because a wired Plugin changes no Core behaviour", async () => {
+  it("still serves the Store, and this one prices in ringgit", async () => {
     await using kobai = await createTestKobai(config);
     const merchant = await signInTestMerchant(kobai);
 
     const response = await kobai.request("/admin/store", { headers: merchant.headers });
 
     expect(response.status).toBe(200);
+    // A wired Plugin changes no Core behaviour, which is what this read was originally for.
+    // **`MYR` is this Project's own doing** — Core seeds the placeholder `USD` and no route
+    // will move it (ADR-0065), so `migrations/0001_the_store_prices_in_myr.sql` is what says
+    // this deployment prices in ringgit, and it is why a redirect payment here can be FPX at
+    // all: which methods a provider offers is decided by the currency (ADR-0069, ADR-0070).
     await expect(response.json()).resolves.toEqual({
       name: "kobai",
-      defaultCurrency: "USD",
+      defaultCurrency: "MYR",
       metadata: {},
     });
   });
@@ -171,7 +176,7 @@ describe("the Step this Project replaced", () => {
     await expect(response.json()).resolves.toMatchObject({
       variant: { sku: "POSTER-A2" },
       // Not 1250. The Price row still says 1250 — the rule that reads it is this Project's.
-      price: { amount: 1, currency: "USD" },
+      price: { amount: 1, currency: "MYR" },
     });
   });
 
@@ -211,7 +216,7 @@ describe("the Step this Project replaced", () => {
     });
 
     await expect(response.json()).resolves.toMatchObject({
-      price: { amount: 1250, currency: "USD" },
+      price: { amount: 1250, currency: "MYR" },
       workflow: {
         steps: [
           { step: "load-prices", implementation: "load-prices" },
@@ -265,7 +270,7 @@ describe("the Step this Project wired from a Plugin", () => {
     // *served*, which is the point of watching the Workflow rather than the database.
     await expect(
       kobai.database.query("select variant_id, amount, currency from price_log_entry"),
-    ).resolves.toEqual([{ variant_id: catalog.variantId, amount: 1, currency: "USD" }]);
+    ).resolves.toEqual([{ variant_id: catalog.variantId, amount: 1, currency: "MYR" }]);
   });
 
   it("records nothing when the same Project boots without that line", async () => {
@@ -325,7 +330,7 @@ describe("the Payment Provider this Project supplies", () => {
       payment: {
         provider: "manual",
         amount: 1,
-        currency: "USD",
+        currency: "MYR",
         reference: expect.stringMatching(/^manual-/),
       },
     });

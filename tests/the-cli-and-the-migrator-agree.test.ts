@@ -277,8 +277,27 @@ describe("the drizzle-kit CLI and the programmatic migrator", () => {
     const schema = inspectSchema(kobai.database);
 
     // Backwards, because no foreign key crosses from a Plugin table into a Core table and
-    // the order is therefore the caller's (ADR-0004). If it mattered, it would matter here.
-    const outcome = await runMigrations(kobai.db, SETS.map(({ set }) => set).reverse());
+    // the order among *those* is therefore the caller's (ADR-0004). If it mattered, it would
+    // matter here.
+    //
+    // **Core's stays in front, and that asymmetry is a decision rather than a convenience.** A
+    // Plugin ships to Projects it has never seen and may not touch Core's tables at all; a
+    // Project owns its whole database and may, which is the rule
+    // `reference/src/db/schema.ts` already states from the other side. The reference Project
+    // exercises it — `migrations/0001_the_store_prices_in_myr.sql` writes `core_store`, because
+    // a Store's default currency is fixed once it is set and no route will ever move it
+    // (ADR-0065) — so that set depends on Core's having run, and applying it first fails
+    // loudly rather than quietly leaving the Store on Core's placeholder. That is the order
+    // `createKobai` composes, Core's set in front of everything `kobai.config.ts` wires, and
+    // the only order any deployment applies.
+    const [core, ...plugins] = SETS;
+    expect(core?.set.name, "Core's set is no longer first in `wiredMigrationSets`").toBe(
+      "core",
+    );
+    const outcome = await runMigrations(kobai.db, [
+      ...(core ? [core.set] : []),
+      ...plugins.reverse().map(({ set }) => set),
+    ]);
     expect(outcome).toMatchObject({ ok: true });
     const afterTheMigrator = await schema.migrationTracking();
     await expectAgreement(afterTheMigrator);

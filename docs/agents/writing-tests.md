@@ -556,7 +556,7 @@ sentence passes in this file**, not when its routes exist. So a spec on ADR-0069
 this file; it does not add a second one, and it does not get to call its clause green by
 asserting it somewhere else.
 
-Three rules carry to the next clause added:
+Five rules carry to the next clause added:
 
 - **After arrangement it may reach `/store` and nothing else.** No `/admin`, no
   `kobai.database`, no Core internals — the completeness proof the admin surface has had since
@@ -571,6 +571,21 @@ Three rules carry to the next clause added:
   the Cart on a **publishable** key and the server places the Order on a **secret** one, and the
   journey asserts the browser's key is *refused* at the purchase leg — otherwise carrying two
   reads as ceremony rather than as a requirement.
+- **The Developer's own server is the one thing below the marker that is not kobai** (ADR-0070).
+  A payment the Shopper completes at their bank is settled by a route the **Project** mounts —
+  a Plugin cannot add one — so the redirect leg posts at `reference/src/payments/redirect.ts`,
+  which then calls `POST /store/orders` like any other client. It is not an exemption: the
+  Project's paths reach the journey as **imported constants**, so every kobai path the journey
+  names is still a literal the sweep reads, and `reference/src/app.test.ts` holds that route to
+  adding nothing to the API it is served beside. **A second such route is a decision, not a
+  precedent to follow loosely** — the question to ask is whether a Developer would have had to
+  write it, or whether kobai is missing a route.
+- **The clock is arrangement, and so is anything a helper above the marker does.** There is no
+  request that makes fifteen minutes have passed, so a lapsed hold is staged by winding
+  `core_reservation.expires_at` back, above the marker, exactly as `auth.test.ts` winds a session
+  back. That is also the way the ban could be got round, since the sweep reads only the text
+  below the marker: **arranging and acting are the line**, and a helper up there that starts doing
+  what the Shopper is supposed to be doing belongs below it, where the sweep can judge it.
 
 The **image seam** is the last one, and its rule is: **ask the built image, never the
 Dockerfile.** Both Dockerfiles ran `pnpm install --prod` in their runtime stage, which looks

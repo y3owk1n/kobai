@@ -52,6 +52,40 @@ const kobai = createKobai({
 /**
  * One process serves both. The Admin is a directory of built files at `/admin-ui`, and every
  * other path is kobai's — one container, one origin, and so no CORS anywhere (ADR-0010).
+ *
+ * **No redirect payment routes, because this deployment takes no redirect payments.** It
+ * settles out of band — see `payments` in `kobai.config.ts` and `src/payments/manual.ts` — so
+ * there is no bank to send a Shopper to and nothing for `src/payments/redirect.ts` to start a
+ * payment with. Mounting the routes against a provider this deployment has not got would be a
+ * route that answers for a bank that does not exist, which is the same judgement Core makes
+ * about a deployment with no Payment Provider (ADR-0053): it boots, it serves, and the thing
+ * it cannot do is simply not there.
+ *
+ * A deployment that *does* take them passes them here, and does it in one place:
+ *
+ * ```ts
+ * const bank = stripePayments({ secretKey: process.env.STRIPE_SECRET_KEY ?? "" });
+ * const fetch = createProjectFetch(
+ *   kobai,
+ *   createAdminAssets(),
+ *   createRedirectPaymentRoutes({
+ *     kobai,
+ *     apiKey: process.env.KOBAI_STORE_API_KEY ?? "",
+ *     payments: {
+ *       startPayment: bank.startPayment,
+ *       paymentOfCallback: (event) => …,
+ *       refundUnplacedPayment: (asked) =>
+ *         bank.refundUnplacedPayment({ ...asked, db: kobai.db }).then(() => undefined),
+ *     },
+ *   }),
+ * );
+ * ```
+ *
+ * — with the same object in `kobai.config.ts`'s `payments.provider`, because a bank that starts
+ * a payment and a Payment Provider that confirms it have to be the same system or `charge` is
+ * confirming somebody else's money. The gate boots this Project exactly that way with the fake
+ * bank in `src/payments/fake-bank.ts`, which is what makes ADR-0070's abandonment and
+ * lapsed-hold paths testable at all.
  */
 const fetch = createProjectFetch(kobai, createAdminAssets());
 

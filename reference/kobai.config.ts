@@ -127,6 +127,14 @@ export default defineKobaiConfig({
    * serves, and `POST /store/orders` refuses with `no-payment-provider` — a Store that cannot yet
    * be bought from is still a Store worth reading, and only a database that cannot be migrated
    * stops a boot (ADR-0048).
+   *
+   * **This is also the line that decides whether this Store can take a bank redirect, and today
+   * it says no.** A payment the Shopper completes at their bank is started by the *Project*
+   * before the redirect and confirmed by the Payment Provider afterwards (ADR-0070), so the two
+   * have to be one object: `manual` starts nothing, so `src/server.ts` mounts no redirect
+   * routes. `src/payments/fake-bank.ts` is an object that does both, and the gate boots this
+   * Project with it in place of `manual` — which is how abandonment and a lapsed hold are
+   * staged at all, and how `stripePayments({ … })` will arrive here.
    */
   payments: { provider: manualPaymentProvider },
 
