@@ -20,7 +20,8 @@ need a new entry, check first whether it belongs in the reference Project instea
 shared should live where it is booted and tested, not in a template nobody runs.
 
 **kobai's packages are published** (ADR-0034). `@kobai/core`, `@kobai/plugin-price-log`,
-`@kobai/plugin-made-to-order`, `@kobai/client` and `create-kobai` are at `0.1.0` and are no
+`@kobai/plugin-made-to-order`, `@kobai/plugin-stripe`, `@kobai/client` and `create-kobai` are
+at `0.1.0` and are no
 longer `private`, because a generated Project depends on them as ordinary versioned
 dependencies and `workspace:*` resolves nowhere outside this workspace. **A package the
 reference Project depends on has to be published, and it is named in exactly one place:**

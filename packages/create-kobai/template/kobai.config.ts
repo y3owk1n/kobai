@@ -5,6 +5,7 @@ import {
   madeToOrderMigrationSet,
 } from "@kobai/plugin-made-to-order";
 import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
+import { stripeMigrationSet } from "@kobai/plugin-stripe";
 import { projectMigrationSet } from "./src/migration-set.ts";
 import { manualPaymentProvider } from "./src/payments/manual.ts";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
@@ -13,7 +14,7 @@ import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.
  * Everything this Project has customised, in one file.
  *
  * A Developer should be able to read this and know what their deployment does differently from
- * stock kobai. **Five things, and nothing else**: two Plugins' tables are wired, one Step of
+ * stock kobai. **Five things, and nothing else**: three Plugins' tables are wired, one Step of
  * Core's price-resolution Workflow is somebody else's now, one Step a Plugin offers watches what
  * that Workflow decided, this Project supplies the Payment Provider — because kobai ships none —
  * and this Store makes some of what it sells to order, which takes a Fulfilment Strategy and a
@@ -35,7 +36,7 @@ import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.
  */
 export default defineKobaiConfig({
   /**
-   * Three migration sets, and they are here for different reasons.
+   * Four migration sets, and they are here for different reasons.
    *
    * `@kobai/plugin-price-log` is an ordinary dependency in this Project's `package.json` —
    * there is no bespoke installation mechanism, and installing it did nothing on its own. The
@@ -48,6 +49,15 @@ export default defineKobaiConfig({
    * holds what this Store's Shoppers asked for — see `fulfilment` and `place-order` below for
    * the two other lines that Plugin needs before it does anything at all.
    *
+   * `@kobai/plugin-stripe` is the one whose set is wired here **without** its provider being
+   * wired below, and that is not an oversight. This Store settles out of band — see `payments`
+   * — so nothing in this repository charges a card, and a Plugin's tables are still the
+   * Project's to create: the migration set is what a deployment applies, and applying it is
+   * how a Project's database is ready for the day somebody swaps `manual` for
+   * `stripePayments({ … })` and nothing else. It is also the difference between a Plugin whose
+   * schema is exercised by kobai's own gate and one whose tables no deployment here ever
+   * creates (ADR-0029).
+   *
    * `projectMigrationSet` is this Project's **own**, covering the tables in `src/db/schema.ts`
    * that neither Core nor any Plugin has heard of. It is the same kind of object, applied by
    * the same runner, into its own tracking table — a Project owns tables on exactly the terms
@@ -55,7 +65,12 @@ export default defineKobaiConfig({
    * those tables whenever it likes: `devbox run db:generate` and nothing else. Core's tables
    * stay closed to both (ADR-0004).
    */
-  migrationSets: [priceLogMigrationSet, madeToOrderMigrationSet, projectMigrationSet],
+  migrationSets: [
+    priceLogMigrationSet,
+    madeToOrderMigrationSet,
+    stripeMigrationSet,
+    projectMigrationSet,
+  ],
 
   /**
    * The flagship (ADR-0003), exercised for real.

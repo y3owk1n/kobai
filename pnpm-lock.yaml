@@ -113,6 +113,19 @@ importers:
         specifier: ^0.31.5
         version: 0.31.10
 
+  packages/plugin-stripe:
+    dependencies:
+      '@kobai/core':
+        specifier: workspace:*
+        version: link:../core
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/pg@8.21.0)(pg@8.23.0)
+    devDependencies:
+      drizzle-kit:
+        specifier: ^0.31.5
+        version: 0.31.10
+
   reference:
     dependencies:
       '@hono/node-server':
@@ -127,6 +140,9 @@ importers:
       '@kobai/plugin-price-log':
         specifier: workspace:*
         version: link:../packages/plugin-price-log
+      '@kobai/plugin-stripe':
+        specifier: workspace:*
+        version: link:../packages/plugin-stripe
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.21.0)(pg@8.23.0)

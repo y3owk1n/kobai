@@ -33,20 +33,25 @@ describe("installing the Plugins", () => {
 
     // No installer, no registry of its own, no postinstall step: a Plugin arrives the way
     // every other package does, and the only other thing kobai asks of a Developer is the
-    // one line in `kobai.config.ts` below. Two of them now, and the second cost the
-    // mechanism nothing — which is the claim two Plugins are here to check.
+    // one line in `kobai.config.ts` below. Three of them now, and none of the later two cost
+    // the mechanism anything — which is the claim more than one Plugin is here to check.
     expect(manifest.dependencies?.["@kobai/plugin-price-log"]).toBeDefined();
     expect(manifest.dependencies?.["@kobai/plugin-made-to-order"]).toBeDefined();
+    expect(manifest.dependencies?.["@kobai/plugin-stripe"]).toBeDefined();
   });
 });
 
 describe("the reference Project's configuration", () => {
   it("wires each Plugin's migration set beside its own, and that is the whole of the wiring", () => {
-    // Three sets, and the grouping is the point. Two arrived as dependencies and do nothing
+    // Four sets, and the grouping is the point. Three arrived as dependencies and do nothing
     // until this file names them (ADR-0017); `project` is this Project's own, covering tables
     // neither Core nor any Plugin has heard of. They are the same kind of object applied by
     // the same runner, which is what makes "a Project owns tables on the same terms a Plugin
     // does" a fact about the code rather than a claim in a document.
+    //
+    // `plugin-stripe` is the one whose set is wired while its provider is not — this Store
+    // settles out of band — which is the same ADR-0017 point from the other side: naming a
+    // migration set installs a Plugin's *tables* and commits a deployment to nothing else.
     //
     // **This is the one enumeration of the set list #129 deliberately left standing**, and
     // it is where a Plugin's line is meant to be read: this is the Project's test of its own
@@ -56,6 +61,7 @@ describe("the reference Project's configuration", () => {
     expect(config.migrationSets?.map((set) => set.name)).toEqual([
       "plugin-price-log",
       "plugin-made-to-order",
+      "plugin-stripe",
       "project",
     ]);
   });
@@ -69,13 +75,14 @@ describe("the reference Project's configuration", () => {
       "project_variant_note",
     ]);
 
-    // ...and it is tracked separately from Core's and from each Plugin's, so none of the four
+    // ...and it is tracked separately from Core's and from each Plugin's, so none of the five
     // can race or re-apply another's work.
     const tracking = (await schema.migrationTracking()).map((fact) => fact.table);
     expect(tracking).toContain("__drizzle_migrations_project");
     expect(tracking).toContain("__drizzle_migrations_core");
     expect(tracking).toContain("__drizzle_migrations_plugin_price_log");
     expect(tracking).toContain("__drizzle_migrations_plugin_made_to_order");
+    expect(tracking).toContain("__drizzle_migrations_plugin_stripe");
   });
 
   it("puts no foreign key from its own tables into Core's", async () => {
