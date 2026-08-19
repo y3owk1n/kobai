@@ -4,6 +4,7 @@
 .git
 .github
 **/.scratch
+.claude
 docs
 *.md
 **/.env

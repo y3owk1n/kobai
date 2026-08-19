@@ -15,6 +15,14 @@ dist/
 # issue tracker. Nothing here is a primary source; don't commit it.
 .scratch/
 
+# Agent worktrees. A harness that runs work on a branch puts a whole second checkout
+# here — `biome.json` and all — and Biome refuses at a nested root configuration, so
+# `devbox run lint` fails in the checkout that has one, naming a directory you are not
+# in. Ignoring it is the whole fix, because every other ignore file follows this one
+# (ADR-0068). `.claude/skills` is tracked and stays tracked: git does not ignore a file
+# it already has.
+.claude/worktrees/
+
 # OS
 .DS_Store
 Thumbs.db

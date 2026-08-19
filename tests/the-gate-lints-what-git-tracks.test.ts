@@ -80,13 +80,15 @@ const FINDING_IN_JSON = '{ "generated": true,   "byHand": false }\n';
  * formats YAML rather than red on it. Both were measured rather than assumed; see ADR-0068.
  */
 
+/**
+ * Order matters here, and only for the `linted: true` entry, which has to come **last**.
+ *
+ * A file Biome refuses to *configure* — the nested `biome.json` an agent worktree brings —
+ * stops the whole run, so nothing at all is reported and the control fails alongside it. Read
+ * in that order the failure says "the gate is looking at nothing", which is true and names
+ * nothing; read with the offending entry first it names the file that stopped it.
+ */
 const FIXTURE: readonly Fixture[] = [
-  {
-    path: "src/ordinary.ts",
-    source: FINDING_IN_TYPESCRIPT,
-    linted: true,
-    why: "An ordinary tracked source file. If the gate cannot see this one it is looking at nothing, and every assertion below would pass for the wrong reason.",
-  },
   {
     path: "reference/.devbox/nix/profile/default/manifest.json",
     source: FINDING_IN_JSON,
@@ -106,10 +108,22 @@ const FIXTURE: readonly Fixture[] = [
     why: "`!**/dist` came out of `includes` on the strength of `.gitignore` carrying `dist/`. This is where that strength is checked.",
   },
   {
+    path: ".claude/worktrees/another-branch/biome.json",
+    source: FINDING_IN_JSON,
+    linted: false,
+    why: "An agent harness puts a whole second checkout here, `biome.json` and all — and a nested root configuration is one Biome refuses outright, naming a directory you are not in, so this does not merely widen the scan: it makes `devbox run lint` fail in the checkout that has one.",
+  },
+  {
     path: "packages/core/openapi.json",
     source: FINDING_IN_JSON,
     linted: false,
     why: "A generated artifact that is *tracked*, so no ignore file can ever exclude it. This is the half `includes` still carries, and it has to keep working.",
+  },
+  {
+    path: "src/ordinary.ts",
+    source: FINDING_IN_TYPESCRIPT,
+    linted: true,
+    why: "An ordinary tracked source file. If the gate cannot see this one it is looking at nothing, and every assertion below would pass for the wrong reason.",
   },
 ];
 
@@ -167,7 +181,7 @@ describe("what the gate lints", () => {
     for (const { path, linted, why } of FIXTURE) {
       expect(
         report.includes(path),
-        `${path} should ${linted ? "" : "not "}be linted. ${why}`,
+        `${path} should ${linted ? "" : "not "}be linted. ${why}\n\nBiome reported:\n${report}`,
       ).toBe(linted);
     }
   });

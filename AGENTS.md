@@ -70,7 +70,12 @@ Four things follow, and each has a test rather than a convention behind it:
   any `reference/.env` into the image, and `.gitignore` is why `git status` would never have
   shown you either. `tests/nothing-git-ignores-reaches-the-build-context.test.ts` derives it
   from `.gitignore` for all **three** copies — the template's included, which follows only
-  through `devbox run template:generate`.
+  through `devbox run template:generate`. **`.claude/worktrees/` is ignored for the same
+  reason and is the sharpest case**: a harness puts a whole second checkout there, and a
+  nested `biome.json` is one Biome refuses outright — so `devbox run lint` *failed*, naming
+  a directory you are not in. It is also the only entry in either ignore file with an
+  interior slash, so it is anchored at the root rather than matching at every depth, and the
+  `.dockerignore` sweep knows the difference.
 - **A rule below the floor is a decision.** `tests/the-lint-gate-fails-below-error.test.ts`
   asks Biome for every rule's default severity *at gate time* and fails naming any enabled
   rule that resolves below `warn`. So a Biome upgrade that demotes a rule, or adds a

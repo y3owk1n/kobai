@@ -106,6 +106,30 @@ A generated Project is unaffected in both directions: it ships no `biome.json` a
 there is no second copy of this list to keep in step and nothing in
 `packages/create-kobai/src/adaptations.ts` to add.
 
+## An agent worktree is the case that proves the rule is worth having
+
+`.claude/worktrees/` is where a harness that runs work on a branch puts a **whole second
+checkout** — `biome.json` and all. It was neither tracked nor ignored, so
+`devbox run lint` in a checkout that had one did not merely lint three copies of the
+repository: it **failed outright**, at `Found a nested root configuration, but there's
+already a root configuration`, naming a directory the reader is not in. That is the same
+diagnostic ADR-0039 records as the reason `biome.json` cannot carry a comment, and the same
+complaint #203 makes about a failure that points nowhere useful.
+
+The fix is one line in `.gitignore` and nothing else, which is the rule above doing its job:
+git does not track it, so it can never belong in `files.includes`. `.claude/skills` stays
+tracked, because git does not ignore a file it already has.
+
+Two things about it are worth keeping:
+
+- **It is the first entry in either ignore file to hold an interior slash**, so it is
+  anchored to the repository root rather than matching at any depth — and the
+  `.dockerignore` rule below had to learn the difference, or it would have demanded a `**/`
+  that would be wrong.
+- **`.dockerignore` gets `.claude` too**, plainly and not under the derived rule, because
+  the directory only exists at the context root. Without it `COPY . .` sends every agent
+  worktree in the checkout into the build context.
+
 ## The same mistake is in `.dockerignore`, and there is no `useIgnoreFile` there
 
 `.gitignore` matches a slashless pattern at any depth. A `.dockerignore` pattern is anchored

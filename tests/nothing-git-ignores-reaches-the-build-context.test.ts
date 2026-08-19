@@ -77,6 +77,20 @@ function subject(pattern: string): string {
     .replace(/\/$/, "");
 }
 
+/**
+ * Whether a `.gitignore` pattern matches at any depth, which is **not** all of them.
+ *
+ * A pattern holding a slash anywhere but at its end is anchored to the directory its
+ * ignore file sits in — `.claude/worktrees/` matches the repository root's and nothing
+ * below it. Demanding `**\/` in front of a `.dockerignore` twin of one of those would be
+ * demanding the wrong thing, so those are not the rule's business. Every other entry in
+ * both ignore files is slashless and so matches everywhere, which is the case this exists
+ * for.
+ */
+function gitignoreMatchesAtEveryDepth(pattern: string): boolean {
+  return !pattern.replace(/^!/, "").replace(/\/$/, "").includes("/");
+}
+
 /** Whether a pattern matches at every depth, which is what a `.gitignore` entry does by default. */
 function matchesAtEveryDepth(pattern: string): boolean {
   return pattern.replace(/^!/, "").startsWith("**/");
@@ -87,7 +101,9 @@ describe("the build context", () => {
     "anchors $dockerignore the way .gitignore does",
     async ({ dockerignore, gitignore, why }) => {
       const ignored = new Set(
-        patternsIn(await readFile(join(repoRoot, gitignore), "utf8")).map(subject),
+        patternsIn(await readFile(join(repoRoot, gitignore), "utf8"))
+          .filter(gitignoreMatchesAtEveryDepth)
+          .map(subject),
       );
       const patterns = patternsIn(await readFile(join(repoRoot, dockerignore), "utf8"));
 
