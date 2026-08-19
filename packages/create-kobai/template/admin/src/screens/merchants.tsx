@@ -7,16 +7,11 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { UsersIcon } from "lucide-react";
-import {
-  type Control,
-  type FieldValues,
-  type Path,
-  useController,
-  useForm,
-} from "react-hook-form";
+import { type Control, type FieldValues, type Path, useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
+import { ListboxField } from "@/components/listbox-field";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
 import {
@@ -34,15 +29,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -487,7 +473,8 @@ function useEveryRole() {
 }
 
 /**
- * Which Role a colleague is created against — a choice among the ones this deployment has.
+ * Which Role a colleague is created against, or moved onto — a choice among the ones this
+ * deployment has.
  *
  * **A picker rather than a text field, and only because the API can answer.** It is the same
  * judgement `FulfilmentStrategyField` makes: whether a name is one of the Roles is not a rule
@@ -495,9 +482,18 @@ function useEveryRole() {
  * this read and the submit is still attempted and still refused with `unknown-role`. That is
  * what keeps it an affordance.
  *
- * Driven through `useController`, because a listbox is not an `<input>` and cannot be
- * `register`ed — the form still owns the value, so its validation and `reset` work here exactly
- * as they do for the two fields beside it.
+ * **The listbox is `components/listbox-field.tsx`** (#245), which is where `useController` and
+ * the rest of the Base UI composition live — this field is the second one over a set kobai
+ * names, and the two spelled it out identically until there was somewhere to spell it once.
+ * Two of the things that component decides on this field's behalf matter here in particular.
+ * A Role the list does not carry is still **offered**, because an option is what a Merchant
+ * sees selected and can come back to — harmless for a create, where there is no value until
+ * somebody chooses, and the whole point on a row of the roster, where the value is a Role the
+ * Merchant *does* hold; it is reachable two ways and both are ordinary, the list still being in
+ * flight or the Role sitting past the {@link MOST_ROLE_PAGES} this picker reads. And the form
+ * holds `""` for the untouched field, which the schema refuses and the picker shows its
+ * placeholder for — asserted in the browser, because "no Role is chosen yet" reading as an
+ * empty box would be a control a Merchant cannot name.
  *
  * **A failed read blocks nothing that is not already blocked**: the field goes unavailable and
  * says what kobai said, and there is nothing useful to submit without it, because the Role is
@@ -527,76 +523,23 @@ function RoleField<T extends FieldValues>({
   readonly quiet?: boolean;
 }) {
   const roles = useEveryRole();
-  const { field, fieldState } = useController({ control, name });
-  const available = roles.data?.roles ?? [];
-  // The Role this field is on, or `null` where it is on none. **`null` rather than `""`,
-  // because `null` is what Base UI means by "nothing selected"** — the two agreed by accident,
-  // a value serialising to `""` counting as empty for the placeholder, but only `null` says it.
-  // The *form* still holds `""` for the untouched field, which the schema refuses and the
-  // `Select` shows its placeholder for — asserted in the browser, because "no Role is chosen
-  // yet" reading as an empty box would be a control a Merchant cannot name.
-  const chosen =
-    typeof field.value === "string" && field.value !== "" ? field.value : null;
-  // **A value the list does not carry is offered anyway**, which is `FulfilmentStrategyField`'s
-  // decision arriving here: an option is what a Merchant sees selected and can come back to, so
-  // a list without one offers no way to keep the Role the picker is showing. That is harmless
-  // for a create, where there is no value until somebody chooses — and it matters on a row of
-  // the roster, where the value is a Role the Merchant *does* hold. It is reachable two ways,
-  // and both are ordinary: the list is still in flight, or the Role is past the
-  // {@link MOST_ROLE_PAGES} this picker reads.
-  const unlisted =
-    chosen !== null && !available.some((role) => role.name === chosen) ? chosen : null;
-  // What each Role on offer is called: the one list the options are drawn from, and the one
-  // `Select` resolves the trigger's text against. **`items` is how `Select.Value` renders a
-  // label rather than the raw value**, which is Base UI's documented shape — a name and a value
-  // that happen to be the same string here, and would not be the day either stops being a name.
-  const items = [
-    ...(unlisted === null ? [] : [{ value: unlisted, label: unlisted }]),
-    ...available.map((role) => ({ value: role.name, label: role.name })),
-  ];
-
   const note = roleFieldNote(roles);
 
   return (
-    <Field data-invalid={fieldState.error !== undefined}>
-      <FieldLabel htmlFor={id} className={quiet ? "sr-only" : undefined}>
-        {label}
-      </FieldLabel>
-      <Select
-        items={items}
-        value={chosen}
-        // Base UI reports `null` for "nothing selected", which this field never wants: a
-        // colleague is created against a Role, and clearing it would submit an empty name.
-        onValueChange={(next) => {
-          if (next !== null) field.onChange(next);
-        }}
-        disabled={roles.isError}
-      >
-        <SelectTrigger
-          id={id}
-          ref={field.ref}
-          onBlur={field.onBlur}
-          aria-invalid={fieldState.error !== undefined}
-        >
-          <SelectValue placeholder="Choose a Role" />
-        </SelectTrigger>
-        <SelectContent>
-          {/* The list's padding lives on the group in this distribution, so options that are
-              not wrapped in one sit flush against the popup's edge. */}
-          <SelectGroup>
-            {items.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      {quiet && !note.exceptional ? null : (
-        <FieldDescription>{note.said}</FieldDescription>
-      )}
-      <FieldError errors={[fieldState.error]} />
-    </Field>
+    <ListboxField
+      id={id}
+      control={control}
+      name={name}
+      label={label}
+      quiet={quiet}
+      options={(roles.data?.roles ?? []).map((role) => ({
+        value: role.name,
+        label: role.name,
+      }))}
+      placeholder="Choose a Role"
+      description={quiet && !note.exceptional ? undefined : note.said}
+      disabled={roles.isError}
+    />
   );
 }
 

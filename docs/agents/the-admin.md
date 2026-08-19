@@ -307,7 +307,10 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   accident, a value serialising to `""` counting as empty for the placeholder. The *form* still
   holds `""` for the untouched field — that is what the schema refuses — and `null` is only what
   `Select` is handed. **`ui/select.tsx` itself is upstream's**, which is the point: none of this
-  was a component to fix.
+  was a component to fix. **All three now live in `components/listbox-field.tsx` and are written
+  once** (#245): each was found once and then fixed twice by hand (#244), because two fields had
+  composed the vendored `Select` identically, and a third one would have got to reintroduce every
+  one of them with nothing going red.
 - **A popup that portals lands in the frame's container, not in `<body>`** (#179).
   `lib/portal.tsx` is the whole argument and `components/app-layout.tsx` renders the container
   inside `main`. Base UI moves a `Select`'s list and a `DropdownMenu`'s items out of the card
@@ -323,11 +326,16 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   `Content` passes `container` on; a new one that does not will be found by the first case that
   audits it open.
 - **A control that is not an `<input>` is driven with `useController`, never a `useState`
-  beside the form.** The Fulfilment Strategy picker is a listbox, so it cannot be `register`ed —
-  but the form still owns the value, which is what keeps its validation, `formState.errors` and
-  `reset` working like every field next to it.
-  **A second one factors this out of `components/fulfilment-strategy-field.tsx`**; reaching for
-  the vendored `Select` instead means answering the landmark question first.
+  beside the form.** A listbox cannot be `register`ed — but the form still owns the value, which
+  is what keeps its validation, `formState.errors` and `reset` working like every field next to
+  it. **A listbox over a set kobai names is `components/listbox-field.tsx`, and there is one of
+  it** (#245): it holds `useController`, the one `{ value, label }` list that draws both the
+  options and `items`, the `SelectGroup`, `null` for nothing selected, and the value the list
+  does not carry offered anyway so the picker can show and stay on it. A caller keeps what is
+  genuinely its own — which list this is and how it is read, what to say under the field, and
+  whether the read failed — which is all `FulfilmentStrategyField` and `screens/merchants.tsx`'s
+  `RoleField` are now. **A third picker composed from the vendored `Select` is the thing this
+  rules out**, and reaching for it anyway means answering the landmark question first.
 - **Card titles are headings on the Product screen and on no other.** The frame's `h1` names the
   section and a detail screen's `h2` names the record, so the cards under it are `h3` — but only
   where the cards are *sections of one record*, which is the Product screen and its repeated
