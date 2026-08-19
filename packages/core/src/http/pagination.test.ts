@@ -141,6 +141,12 @@ async function readToTheEnd(
  * unique across the Store, and the cursor sweep at the foot of this file seeds **both** Product
  * lists into one deployment. Two unmarked batches collide on `POSTER-0` and the second is
  * refused `sku-taken`, which is a 409 in the arrangement of a test about paging.
+ *
+ * **Each one is published, because a create makes a draft and `/store/products` answers no
+ * draft.** That is arrangement rather than subject here — this file is about the envelope around
+ * a list, and an unpublished batch would make every store-surface case above assert against an
+ * empty list while passing for the wrong reason on the Merchant's. What a status *does* to a
+ * list is `filtering.test.ts`'s subject.
  */
 async function seedProducts(
   kobai: TestKobai,
@@ -159,7 +165,16 @@ async function seedProducts(
       }),
     });
     expect(response.status, `creating ${mark} ${index}`).toBe(201);
-    created.push(((await response.json()) as { id: string }).id);
+    const { id } = (await response.json()) as { id: string };
+
+    const published = await kobai.request(`/admin/products/${id}`, {
+      method: "PATCH",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ status: "published" }),
+    });
+    expect(published.status, `publishing ${mark} ${index}`).toBe(200);
+
+    created.push(id);
   }
   return created;
 }

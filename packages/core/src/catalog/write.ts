@@ -173,6 +173,11 @@ export async function createProduct(
     productId = await db.transaction(async (tx) => {
       const [created] = await tx
         .insert(product)
+        // **No `status`, and that is the decision rather than an omission** (story 6). A create
+        // gets the column's own default — `draft` — so publishing is an act a Merchant performs
+        // at `PATCH /admin/products/{id}` rather than a side effect of typing a title. Naming it
+        // here, even as `draft`, would be a second place the answer is kept and the first place
+        // somebody would let a body choose it.
         .values({ title, description, handle, metadata })
         // The unique constraint is the check, and this is how its answer is read — exactly as
         // the SKUs below read theirs. A `select` for the handle and then an `insert` would let

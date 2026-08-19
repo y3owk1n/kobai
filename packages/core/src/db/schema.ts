@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { DRAFT, PRODUCT_STATUSES, type ProductStatus } from "../catalog/status.ts";
 import { DEFAULT_FULFILMENT_STRATEGY } from "../fulfilment/strategy.ts";
 
 /**
@@ -313,6 +314,29 @@ export const product = pgTable(
      * constraint is the one place a relaxation cannot reach the rows already stored.
      */
     handle: text("handle").notNull().unique(),
+    /**
+     * Whether a Shopper may see this Product at all — `draft`, `published` or `archived`.
+     *
+     * **A `DEFAULT` here and a backfill in `0040`, which is the whole reason this column cost
+     * three migrations** (ADR-0038). A Product created from now on is a `draft`, because
+     * publishing is a decision a Merchant makes rather than a side effect of creating; every
+     * Product that already existed had to become `published`, because it had been on sale the
+     * whole time. Two different values, so one of them is this `.default()` — visible, and right
+     * for every row written from here on — and the other is an `UPDATE` in a `--custom`
+     * migration. A default that has to be dropped once it has done its job was never a default.
+     *
+     * **The `check` is the opposite judgement from `handle`'s two lines up, and from
+     * `core_variant.fulfilment_strategy`'s** (ADR-0014). Those are open sets: what a handle may
+     * look like is a rule about a *request* and may be relaxed, and a Strategy is named by
+     * whatever key a deployment wired. These three words are Core's own and nothing outside Core
+     * can invent a fourth, so a row holding one is a bug rather than a Merchant's choice — which
+     * is exactly the case `core_api_key.kind` carries a `check` for. `catalog/status.ts` is the
+     * one list all of this is written from, so a fourth status is one edit there and a migration.
+     *
+     * The store surface answers `published` and nothing else, and it does that in the route
+     * rather than by offering a filter: a client that could ask for drafts is a client that will.
+     */
+    status: text("status").$type<ProductStatus>().notNull().default(DRAFT),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -320,6 +344,15 @@ export const product = pgTable(
   (table) => [
     // What `GET /admin/products` pages along — see `core_api_key`'s for why both columns.
     index("core_product_created_at_id_idx").on(table.createdAt, table.id),
+    // Written from `catalog/status.ts`'s one list rather than retyped, so a fourth status is one
+    // edit there and a migration — and `sql.raw`, because a `${value}` in a Drizzle template is
+    // a bound **parameter**: the generated DDL came out as `in ($1, $2, $3)`, which is not a
+    // constraint anything could enforce. The words are compile-time constants of Core's own,
+    // which is what makes quoting them by hand here safe.
+    check(
+      "core_product_status_is_known",
+      sql`${table.status} in (${sql.raw(PRODUCT_STATUSES.map((status) => `'${status}'`).join(", "))})`,
+    ),
   ],
 );
 

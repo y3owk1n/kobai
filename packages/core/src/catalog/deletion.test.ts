@@ -212,6 +212,10 @@ describe("DELETE /admin/products/{id}", () => {
           title: "A mug",
           description: null,
           handle: "a-mug",
+          // What `seedTestCatalog` leaves a Product in, because what it seeds is something to
+          // sell. Named here rather than left out: this is a whole-body assertion, and a field
+          // that goes missing from a Merchant's list should fail it.
+          status: "published",
           metadata: {},
         },
       ],

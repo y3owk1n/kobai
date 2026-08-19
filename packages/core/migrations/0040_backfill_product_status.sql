@@ -1,0 +1,33 @@
+-- Every Product that existed before a Product could be a draft is **published**.
+--
+-- The middle step of ADR-0038's three, and the only one written by hand: `0039` added
+-- `core_product.status` nullable, this fills it, and `0041` is what makes it `NOT NULL`,
+-- declares `draft` as the default and constrains the column to the three words. drizzle-kit
+-- diffs schemas, so a data change is invisible to it in both directions — it will neither write
+-- this nor notice it is missing.
+--
+-- **This is a backfill and not a default, and that is the whole reason the column costs three
+-- migrations.** A new Product should be a `draft` — publishing is a decision a Merchant makes
+-- rather than a side effect of creating (story 6) — and every Product that already exists must
+-- become `published`, because it has been on sale this whole time. Those are two different
+-- values, so the one that is right for future rows is the column's `DEFAULT` and the one that is
+-- right for the rows already there is this `UPDATE`. AGENTS.md states the rule directly: a
+-- default that has to be dropped once it has done its job was never a default.
+--
+-- **The value says what was true rather than guessing.** ADR-0038 asks a backfill to record the
+-- fact that was never recorded, and here there is one: on a deployment upgrading into this
+-- migration every Product in `core_product` is answerable at `GET /store/products` right now,
+-- because until `0041` no Product could be anything else. Writing `draft` instead would take a
+-- Store's whole catalog off its storefront on the deploy that upgraded kobai, which is the
+-- failure this file exists to prevent — silent, immediate, and reversible only by a Merchant who
+-- worked out what happened.
+--
+-- `WHERE "status" IS NULL` is what makes this a *backfill* rather than a reset: run against a
+-- table where a Merchant has since drafted or archived something, it leaves every one of those
+-- alone. Nothing can reach that state between `0039` and this migration in one deployment — the
+-- set applies in one pass at boot (ADR-0030) — but a migration that is only correct because of
+-- when it runs is one nobody can re-run.
+--
+-- `updated_at` advances on every row this writes, which is ADR-0037's trigger doing exactly what
+-- it says: the row was written. No migration can recover when a Product last actually changed.
+UPDATE "core_product" SET "status" = 'published' WHERE "status" IS NULL;

@@ -1,3 +1,4 @@
+import type { ProductStatus } from "../catalog/status.ts";
 import type { Kobai } from "../kobai.ts";
 import { createTestApiKey, type TestApiKey } from "./api-key.ts";
 import { expectStatus } from "./expect-status.ts";
@@ -51,6 +52,23 @@ export type TestCatalogOptions = {
    * no handle at all, which is the case a Merchant meets first.
    */
   readonly title?: string;
+  /**
+   * What the Product ends up in — `draft`, `published` or `archived`. Defaults to `published`.
+   *
+   * **Published by default, because a helper hides the arrangement and never the subject.** What
+   * this seeds is a Store with something to *sell*, and `POST /admin/products` deliberately
+   * creates a draft, which no storefront can see — so a helper that stopped there would arrange
+   * a catalog every store-surface test then had to publish for itself. Publishing is one more
+   * `PATCH /admin/products/{id}` through the public API, exactly as a Merchant would.
+   *
+   * A test whose subject *is* the status says so, and gets the Product left where it asked:
+   *
+   * ```ts
+   * await seedTestCatalog(kobai, { status: "draft" });     // left where the create leaves it
+   * await seedTestCatalog(kobai, { status: "archived" });  // off the storefront
+   * ```
+   */
+  readonly status?: ProductStatus;
   /**
    * A Merchant who is already signed in.
    *
@@ -111,9 +129,13 @@ const DEFAULT_AMOUNT = 1250;
  * });
  * ```
  *
- * That is one Product titled `A poster`, reachable at the handle `a-poster`, one Variant
- * `POSTER-A2`, one Price of `1250` in the Store's default currency, a signed-in Merchant and a
- * secret API key. **Amounts are integer minor units** and a Price's currency is the Store's
+ * That is one **published** Product titled `A poster`, reachable at the handle `a-poster`, one
+ * Variant `POSTER-A2`, one Price of `1250` in the Store's default currency, a signed-in Merchant
+ * and a secret API key. Published because a Product is created a draft and a draft is invisible
+ * to the store surface — so a helper that left it there would be arranging a catalog nothing
+ * could buy from. A test about drafting asks for `{ status: "draft" }`.
+ *
+ * **Amounts are integer minor units** and a Price's currency is the Store's
  * default, which since #5 is the only currency a Price may carry — so the helper never takes
  * one, and the correct thing is the only thing.
  *
@@ -131,6 +153,7 @@ const DEFAULT_AMOUNT = 1250;
  *   variants: [{ prices: [1250] }, { sku: "MUG", prices: [] }],
  * });
  * await seedTestCatalog(kobai, { merchant });             // one already signed in
+ * await seedTestCatalog(kobai, { status: "draft" });      // never published
  * ```
  *
  * Everything goes through the public API rather than through the database, like
@@ -171,6 +194,22 @@ export async function seedTestCatalog(
     201,
     "creating a Product",
   )) as { id: string; variants: readonly { id: string; sku: string }[] };
+
+  // Published unless the test said otherwise, and skipped entirely for a draft — which is what
+  // the create already left it as, so asking for one is asking for no second request rather than
+  // for a request that sets it back.
+  const status = options?.status ?? "published";
+  if (status !== "draft") {
+    await expectStatus(
+      await kobai.request(`/admin/products/${created.id}`, {
+        method: "PATCH",
+        headers: json,
+        body: JSON.stringify({ status }),
+      }),
+      200,
+      `putting the Product into ${status}`,
+    );
+  }
 
   const variants: TestCatalogVariant[] = [];
   // By SKU rather than by position: a Product reports its Variants in SKU order, not in the

@@ -1,9 +1,9 @@
 import type { CartState } from "@kobai/client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ShoppingCartIcon } from "lucide-react";
-import { useSearchParams } from "react-router";
 import { CartStateBadge } from "@/components/cart-state-badge";
 import { LinkButton } from "@/components/link-button";
+import { ListFilter, useListFilter } from "@/components/list-filter";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
 import {
@@ -80,6 +80,9 @@ const STATES: Record<CartState, string> = {
  */
 const OFFERED = Object.keys(STATES) as readonly CartState[];
 
+/** The three as a list, which is the shape `components/list-filter.tsx` takes. */
+const OPTIONS = OFFERED.map((state) => ({ value: state, label: STATES[state] }));
+
 /** The query parameter the filter lives in, spelled as `GET /admin/carts` spells it. */
 const STATE = "state";
 
@@ -89,15 +92,7 @@ const HERE = "/carts";
 export function Carts() {
   const client = useKobaiClient();
   const after = usePageCursor();
-  const [params] = useSearchParams();
-
-  // What the address asks for, and whether it is a state kobai has. An address a Merchant typed
-  // or was sent can name anything at all, and the two wrong answers are both worse than saying
-  // so: filtering by nothing would show the whole table under a heading claiming otherwise, and
-  // sending the word on would spend a round trip to be refused with `invalid`.
-  const asked = params.get(STATE);
-  const state = OFFERED.find((one) => one === asked);
-  const noSuchState = asked !== null && state === undefined;
+  const { asked, value: state, unknownValue } = useListFilter(STATE, OFFERED);
 
   const page = useQuery({
     // The filter is part of the key beside the cursor: a page of live Carts and a page of spent
@@ -124,7 +119,7 @@ export function Carts() {
     placeholderData: keepPreviousData,
     // Nothing is asked for while the address names a state kobai has never heard of: the screen
     // has an answer already, and it is not one kobai could improve on.
-    enabled: !noSuchState,
+    enabled: unknownValue === null,
   });
 
   // Nothing at all while the address names no state kobai has, and that is the assertion rather
@@ -132,7 +127,7 @@ export function Carts() {
   // new key is in flight, so a screen that read `page.data` here would print "no such Cart
   // state" over the rows of whichever filter the Merchant came from — the quiet failure this
   // screen exists to prevent, wearing the honest answer's clothes.
-  const carts = noSuchState ? undefined : page.data?.carts;
+  const carts = unknownValue === null ? page.data?.carts : undefined;
 
   return (
     <Card>
@@ -150,7 +145,13 @@ export function Carts() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <StateFilter asked={asked} />
+        <ListFilter
+          label="Filter the Carts"
+          section={HERE}
+          parameter={STATE}
+          asked={asked}
+          options={OPTIONS}
+        />
 
         <Problem
           problem={
@@ -158,9 +159,9 @@ export function Carts() {
           }
         />
 
-        {noSuchState ? <NoSuchState asked={asked} /> : null}
+        {unknownValue === null ? null : <NoSuchState asked={unknownValue} />}
 
-        {page.isPending && !noSuchState ? <CartsLoading /> : null}
+        {page.isPending && unknownValue === null ? <CartsLoading /> : null}
 
         {carts !== undefined && carts.length === 0 ? (
           <Empty className="border">
@@ -221,49 +222,6 @@ export function Carts() {
         <Pager nextCursor={page.data?.nextCursor} label="Carts" />
       </CardContent>
     </Card>
-  );
-}
-
-/**
- * The filter, as four addresses rather than as a control with a value.
- *
- * Links, deliberately: each of the four *is* a URL, so a Merchant can send "the live Carts" to
- * a colleague, a refresh lands back on it, and the back button walks between them — which is the
- * same bargain `components/pager.tsx` makes with the cursor, and the reason both live in the
- * query string. A `Select` beside the table would have been the same list behind a control whose
- * value nothing outside this tab can see.
- *
- * **Choosing a filter drops the cursor**, because a cursor locates a page of the list that
- * issued it: carrying one across a filter would ask for the middle of a list nobody was looking
- * at. Paging within a filter keeps it, which is the `Pager`'s half of the same rule.
- */
-function StateFilter({ asked }: { readonly asked: string | null }) {
-  return (
-    <nav aria-label="Filter the Carts" className="mb-4 flex flex-wrap gap-2">
-      {[undefined, ...OFFERED].map((state) => {
-        // Compared against what the **address** says rather than against the state it narrowed
-        // to, so that an address naming a state kobai does not have marks none of the four.
-        // Against the narrowed one it would mark "All", announcing a filter as in force on the
-        // one screen that is saying there is none.
-        const here = (state ?? null) === asked;
-        return (
-          <LinkButton
-            key={state ?? "all"}
-            to={{
-              pathname: HERE,
-              search: state === undefined ? "" : `?${STATE}=${state}`,
-            }}
-            size="sm"
-            variant={here ? "default" : "outline"}
-            // What tells a screen reader which of the four is in force. The visual half is the
-            // filled recipe above, and a colour on its own says nothing to anybody listening.
-            aria-current={here ? "page" : undefined}
-          >
-            {state === undefined ? "All" : STATES[state]}
-          </LinkButton>
-        );
-      })}
-    </nav>
   );
 }
 

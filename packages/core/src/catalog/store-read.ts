@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   cursorAt,
@@ -10,6 +10,7 @@ import {
 } from "../db/page.ts";
 import { product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { PUBLISHED } from "./status.ts";
 
 /**
  * Reading the catalog **as a storefront sees it**, which is deliberately not how a Merchant
@@ -43,6 +44,21 @@ import { isUuid } from "../db/uuid.ts";
  *   a Project may have replaced (ADR-0017). `GET /store/variants/{id}/price` is the question.
  * - **`fulfilment.strategy`, kept.** It is already published to a Merchant, it is what tells a
  *   storefront a download is a download, and ADR-0014 makes the set open rather than secret.
+ * - **`status`, dropped — and not merely dropped: never carried.** It is a Merchant's field, and
+ *   it is the one this whole split was argued about. A `status` on these shapes would tell every
+ *   browser holding a publishable key which Products a Merchant has not finished writing and
+ *   which have been taken off sale, and under ADR-0060 taking a field back out is a major. What
+ *   the storefront gets instead is that **the reads below answer `published` and nothing else**,
+ *   which is the same fact from the useful end: there is nothing to filter and nothing to forget
+ *   to filter.
+ *
+ * **That filtering is in the route rather than a parameter, deliberately.** `?status=` on
+ * `/store/products` would be a client able to ask for drafts, and a client that can is one that
+ * will — so a storefront would be publishing what a Merchant had not, by a query string.
+ * `GET /store/products/{idOrHandle}` answers a draft or an archived Product with the same
+ * `product-not-found` an unknown handle gets, so a draft is **invisible** rather than forbidden:
+ * a 403 there would tell an anonymous browser that a handle is taken, which is the leak the
+ * shared refusal is avoiding.
  *
  * There is no Store parameter and no scoping key, for the same reason `readStore` has none: one
  * deployment is one Store (ADR-0005).
@@ -112,7 +128,7 @@ export async function listStoreProducts(
       cursorAt: cursorAt(product.createdAt),
     })
     .from(product)
-    .where(rowsAfter(page, product.createdAt, product.id))
+    .where(and(rowsAfter(page, product.createdAt, product.id), IS_PUBLISHED))
     // `id` breaks the tie, so two Products created in the same instant come back in one stable
     // order and the cursor above names one row rather than a group of them.
     .orderBy(desc(product.createdAt), desc(product.id))
@@ -166,7 +182,10 @@ export async function readStoreProduct(
     })
     .from(product)
     .where(
-      isUuid(idOrHandle) ? eq(product.id, idOrHandle) : eq(product.handle, idOrHandle),
+      and(
+        isUuid(idOrHandle) ? eq(product.id, idOrHandle) : eq(product.handle, idOrHandle),
+        IS_PUBLISHED,
+      ),
     )
     .limit(1);
   if (!row) return undefined;
@@ -181,6 +200,16 @@ export async function readStoreProduct(
 
   return { ...row, variants: variants.map(asStoreVariant) };
 }
+
+/**
+ * The one status a storefront is answered with, and the one place it is said.
+ *
+ * Both reads above take it, because they are the two ways a Product is reached here and a filter
+ * on one of them is a filter a client works around by using the other. It is deliberately a
+ * constant rather than an argument: this reader has no caller that may ask for anything else,
+ * which is what "enforced in the route" means.
+ */
+const IS_PUBLISHED = eq(product.status, PUBLISHED);
 
 /**
  * One Variant, or `undefined` when there is no such Variant.

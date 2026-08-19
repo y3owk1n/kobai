@@ -430,6 +430,119 @@ describe("PATCH /admin/products/{id}", () => {
     expect(removed.status).toBe(400);
   });
 
+  it("publishes a draft, and the storefront can see it by both its addresses", async () => {
+    // Story 6, end to end and in one place: a Merchant decides a Product is ready, and the
+    // deciding is this request. What makes it a decision rather than a formality is the state
+    // before it — `seedTestCatalog({ status: "draft" })` leaves the Product exactly where
+    // `POST /admin/products` leaves one — so the 404s below are the *before* rather than the
+    // arrangement being wrong.
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai, { status: "draft" });
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+
+    const hidden = await kobai.request("/store/products", {
+      headers: catalog.apiKey.headers,
+    });
+    await expect(hidden.json()).resolves.toEqual({ products: [] });
+
+    const published = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "published" }),
+    });
+
+    expect(published.status).toBe(200);
+    await expect(published.json()).resolves.toMatchObject({ status: "published" });
+
+    const listed = await kobai.request("/store/products", {
+      headers: catalog.apiKey.headers,
+    });
+    await expect(listed.json()).resolves.toMatchObject({
+      products: [{ id: catalog.productId }],
+    });
+    for (const address of [catalog.productId, "a-poster"]) {
+      const shown = await kobai.request(`/store/products/${address}`, {
+        headers: catalog.apiKey.headers,
+      });
+      expect(shown.status, `/store/products/${address}`).toBe(200);
+    }
+  });
+
+  it("archives a published Product, and leaves the Order placed from it alone", async () => {
+    // Story 7, and the whole reason archiving exists beside `DELETE /admin/products/{id}`: the
+    // Product leaves the storefront and **the Order that was placed from it reads back
+    // unchanged**. That is ADR-0009's snapshot doing the work — so the assertion is the Order
+    // rather than the catalog, because "it disappeared from the store" is true of a delete too
+    // and only one of the two is safe to do to something that has been sold.
+    kobai = await createTestKobai();
+    const order = await seedTestOrder(kobai);
+    const catalog = order.catalog;
+    const before = await kobai.request(`/admin/orders/${order.id}`, {
+      headers: catalog.merchant.headers,
+    });
+    const asPlaced = await before.json();
+
+    const archived = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ status: "archived" }),
+    });
+
+    expect(archived.status).toBe(200);
+    await expect(archived.json()).resolves.toMatchObject({ status: "archived" });
+
+    const gone = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+    expect(gone.status).toBe(404);
+    // Byte for byte, which is the promise: an archived Product rewrites nothing anybody has
+    // been charged for.
+    const after = await kobai.request(`/admin/orders/${order.id}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(after.json()).resolves.toEqual(asPlaced);
+  });
+
+  it("puts an archived Product back into draft, so nothing here is one-way", async () => {
+    // Every one of the three is reachable from every other, because `status` is a field of an
+    // ordinary correction rather than a pair of one-way routes. A Merchant who archived the
+    // wrong Product has a way back that is not raw SQL.
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai, { status: "archived" });
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+
+    const redrafted = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "draft" }),
+    });
+
+    expect(redrafted.status).toBe(200);
+    await expect(redrafted.json()).resolves.toMatchObject({ status: "draft" });
+  });
+
+  it("refuses a status kobai does not have, and leaves the Product where it was", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+
+    const response = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "live" }),
+    });
+
+    // Refused by the schema, before the handler runs — `invalid`, which is what that word
+    // already means for a request that does not fit the endpoint.
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
+    // And nothing moved, which is the half a refusal is only half of.
+    const unchanged = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(unchanged.json()).resolves.toMatchObject({ status: "published" });
+  });
+
   it("refuses a body that names nothing it could change", async () => {
     kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);

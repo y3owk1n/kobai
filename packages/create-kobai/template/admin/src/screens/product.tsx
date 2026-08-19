@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { Price, Variant } from "@kobai/client";
+import type { Price, ProductStatus, Variant } from "@kobai/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackageXIcon } from "lucide-react";
 import { useState } from "react";
@@ -11,7 +11,12 @@ import { ConfirmDelete } from "@/components/confirm-delete";
 import { FormField } from "@/components/form-field";
 import { FulfilmentStrategyField } from "@/components/fulfilment-strategy-field";
 import { LinkButton } from "@/components/link-button";
+import { ListboxField } from "@/components/listbox-field";
 import { Problem } from "@/components/problem";
+import {
+  OFFERED_STATUSES,
+  PRODUCT_STATUS_LABELS,
+} from "@/components/product-status-badge";
 import { StorefrontPrice } from "@/components/storefront-price";
 import { TextareaField } from "@/components/textarea-field";
 import {
@@ -147,6 +152,7 @@ export function ProductScreen() {
         title={product.data.title}
         description={product.data.description}
         handle={product.data.handle}
+        status={product.data.status}
       />
 
       {product.data.variants.map((variant) => (
@@ -186,11 +192,13 @@ function ProductIdentity({
   title,
   description,
   handle,
+  status,
 }: {
   readonly id: string;
   readonly title: string;
   readonly description: string | null;
   readonly handle: string;
+  readonly status: ProductStatus;
 }) {
   const client = useKobaiClient();
   // Both, because deleting a Product invalidates more than the Product: the list behind it is
@@ -204,11 +212,16 @@ function ProductIdentity({
     resolver: zodResolver(ProductForm),
     // Keyed by the values it was opened with, so a change that landed leaves the fields showing
     // what kobai now holds rather than what was typed.
-    values: { title, description: description ?? "", handle },
+    values: { title, description: description ?? "", handle, status },
   });
 
   const save = useMutation({
-    mutationFn: async (values: { title: string; description: string; handle: string }) =>
+    mutationFn: async (values: {
+      title: string;
+      description: string;
+      handle: string;
+      status: ProductStatus;
+    }) =>
       orThrow(
         await client.PATCH("/admin/products/{id}", {
           params: { path: { id } },
@@ -218,6 +231,7 @@ function ProductIdentity({
             // means "leave it" on every `PATCH` in kobai (ADR-0062).
             description: values.description.trim() === "" ? null : values.description,
             handle: values.handle,
+            status: values.status,
           },
         }),
       ),
@@ -282,6 +296,23 @@ function ProductIdentity({
             description="What this Product says for itself, in your own words. Optional: a Product with an empty box here has no description at all, and emptying it removes the one it had."
             {...form.register("description")}
           />
+          {/* Where a Product is published and where it is archived — the whole of stories 6
+              and 7, and one field rather than a pair of buttons, because kobai answers them
+              with one. `ListboxField` rather than a `Select` composed here, since it is the
+              third picker on this frame and the first two had every defect #239 found fixed
+              twice by hand (#245). No `unlisted`: a Product is always on one of the three, and
+              the three are closed in kobai's own types. */}
+          <ListboxField
+            id="product-status"
+            control={form.control}
+            name="status"
+            label="Status"
+            options={OFFERED_STATUSES.map((one) => ({
+              value: one,
+              label: PRODUCT_STATUS_LABELS[one],
+            }))}
+            description="Whether a Shopper can see this Product. A draft is yours to prepare; publishing puts it on the storefront; archiving takes it off again and leaves every Order placed from it exactly as it was."
+          />
         </CardContent>
         <CardFooter className="mt-4">
           <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>
@@ -309,6 +340,10 @@ const ProductForm = z.object({
   // "remove the handle": kobai has no state for a Product with no address. What a handle may
   // *look* like stays kobai's rule, and arrives here as a refusal.
   handle: z.string().min(1, "A Product is reached at a handle, so it needs one."),
+  // The three kobai has, as an enum rather than a string: this is one of the sets kobai's own
+  // types close, so the Admin may hold it — the rule `lib/refusal.ts`'s `Record`s follow, and
+  // the opposite of the Fulfilment Strategy picker, whose set a deployment decides (ADR-0063).
+  status: z.enum(OFFERED_STATUSES),
 });
 
 /**

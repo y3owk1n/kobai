@@ -120,6 +120,28 @@ same fact, so keeping the newest was never available. And it is **watched failin
 pre-handle set and applies the rest onto it, and the run against a backfill with the
 disambiguation taken out is what says the arrangement reaches the hazard at all.
 
+**`core_product.status` is the second worked example, and what it shows is that the *value* is
+the hazard rather than the statement** (#252). `0039`–`0041` is the same three-step shape with no
+uniqueness on top of it: nullable column, a `--custom` `UPDATE`, then `SET NOT NULL` with `draft`
+as the declared default and a `CHECK` over the three words. Every one of those statements would
+have applied just as cleanly with a backfill writing `draft` — and that deploy would have taken a
+Store's whole catalog off its storefront, silently, at the moment kobai was upgraded. So this is
+the paragraph above arriving with teeth: the backfill writes `published` because until `0041`
+there was nothing else a Product could be, which is the fact that was never recorded rather than a
+guess at one. **The pair is what makes it a backfill rather than a default** — `published` for the
+rows that were there, `draft` for every row after — and
+`packages/core/src/catalog/a-catalog-that-was-already-on-sale.test.ts` asserts both, because
+either alone is satisfied by a column that only does one of them. It was watched failing against a
+`0040` writing `draft`, which is the only place in this repository that failure is visible.
+
+**A `CHECK` over a closed set of Core's own is fine in the third step and needs no fourth
+migration**, because the backfill has already made every row satisfy it — which is the shape the
+section below says nothing will tell you that you forgot. Whether a column gets one at all is a
+judgement about the set, not a convention: `core_product.status` and `core_api_key.kind` carry one
+because nothing outside Core can invent a fourth value, while `core_product.handle` and
+`core_variant.fulfilment_strategy` deliberately do not — a rule about a request may be relaxed,
+and a constraint is the one place a relaxation cannot reach the rows already written.
+
 **Uniqueness arrives in two spellings and the check reads both** (#153). `ALTER TABLE … ADD
 CONSTRAINT … UNIQUE` is what a `.unique()` on a column generates — eight of those in
 `packages/core/src/db/schema.ts` against three `uniqueIndex()`, so it is the *likelier* way a

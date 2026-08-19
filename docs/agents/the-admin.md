@@ -204,11 +204,21 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   **A list that narrows keeps its narrowing across a page** (#228). The pager moves the cursor
   and carries the rest of the query string over untouched, because one that rebuilt the search
   out of the cursor alone answers the second page of the *whole* table — which looks exactly
-  like paging working, and is a different question being answered. Carts is the list that has a
-  narrowing today (`?state=live|expired|spent`, ADR-0071), and the filter is a set of **links**
-  rather than a control with a value, for the reason the cursor is in the URL at all: each state
+  like paging working, and is a different question being answered. Two lists narrow today —
+  Carts by `?state=live|expired|spent` (ADR-0071) and Products by
+  `?status=draft|published|archived` (#252) — and **a narrowing is
+  `components/list-filter.tsx`, of which there is one** (#252). A filter is a set of **links**
+  rather than a control with a value, for the reason the cursor is in the URL at all: each value
   is an address a Merchant can send and a refresh lands on. Choosing one **drops** the cursor,
-  since a cursor locates a page of the list that issued it.
+  since a cursor locates a page of the list that issued it. The second copy of that nav was
+  verbatim, comments included, which is `listbox-field.tsx`'s lesson arriving one noun along:
+  extract on the second, because the third is what gets to reintroduce every defect the first
+  two had fixed by hand. `useListFilter` is the other half and holds the part that is easy to
+  get subtly wrong — **an address can name a value kobai has never heard of**, and both obvious
+  answers are worse than saying so: filtering by nothing shows the whole table under a heading
+  claiming otherwise, and sending the word on spends a round trip to be refused with `invalid`.
+  So the query is keyed on what the *address* said rather than on the value it narrowed to, and
+  a screen keeps its own empty state for the word — different lists, different prose.
 - **A closed refusal family is narrowed, never matched on prose.** `lib/refusal.ts` holds one
   `Record` per family keyed by that family's own union and a `narrowing()` built from it, so a
   `reason` added in Core has no key, does not compile, and reddens the Admin in the same commit

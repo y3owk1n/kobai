@@ -605,7 +605,7 @@ const createProductRoute = createRoute({
   path: "/products",
   summary: "Create a Product",
   description:
-    "A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed.",
+    "A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -636,10 +636,10 @@ const listProductsRoute = createRoute({
   method: "get",
   path: "/products",
   summary: "List Products",
-  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064).`,
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. \`status\` narrows to the Products that are drafts, that are published, or that have been archived; the three partition the catalog, and omitting it answers all of them. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064).`,
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
-  request: { query: contract.pageQuery("products") },
+  request: { query: contract.ProductPageQuery },
   responses: {
     200: json("A page of Products.", contract.ProductList),
     400: PAGE_QUERY_INVALID,
@@ -686,7 +686,7 @@ const updateProductRoute = createRoute({
   path: "/products/{id}",
   summary: "Correct a Product",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
