@@ -52,8 +52,12 @@ export function useFulfilmentStrategies() {
  * value lives with the rest of the form instead of in a `useState` beside it.
  *
  * shadcn is still what it is built out of: `Field`, `FieldLabel`, `FieldDescription` and
- * `FieldError` are all theirs, and the control carries `Input`'s own classes, so it is tuned by
- * the same tokens as everything else (ADR-0063).
+ * `FieldError` are all theirs. The control's classes are **copied** from `ui/input.tsx` rather
+ * than shared with it — minus the `file:` and `placeholder:` rules, which no `<select>` can use
+ * — because sharing them would mean exporting a string out of a vendored component, and the
+ * next `shadcn add input` would overwrite the export. They are the same **tokens** either way,
+ * which is what keeps this tuned with everything else (ADR-0063); what a `shadcn add input`
+ * that changes them leaves behind is a picker to re-copy, and there is one of it.
  *
  * **A failed read blocks nothing.** The field goes unavailable and says so, and the form around
  * it still submits — `fulfilment` is optional on both routes that take it, so correcting a SKU
@@ -82,10 +86,28 @@ export function FulfilmentStrategyField({
 } & Omit<ComponentProps<"select">, "id" | "children">) {
   const strategies = useFulfilmentStrategies();
   const wired = strategies.data?.strategies ?? [];
-  const unwired =
+
+  /**
+   * The value this field starts on, when the list does not carry it.
+   *
+   * Rendered as an option regardless, because a `<select>` whose value matches no option shows
+   * *nothing* and reports `""` — so a form submitted before the list arrived would send an
+   * empty Strategy, and the field would look blank in the meantime.
+   */
+  const missing =
     current !== undefined &&
     current !== "" &&
     !wired.some((strategy) => strategy.name === current);
+
+  /**
+   * Whether "this deployment does not have that Strategy" is a thing we actually know.
+   *
+   * **Only once the read succeeded.** While it is in flight `wired` is empty, so every Variant
+   * looks unwired — and labelling an ordinary `physical` one "not wired here" for the length of
+   * a round trip announces exactly the broken state this screen exists to *repair*, about a
+   * Variant that is fine. A failed read is the same mistake made permanently.
+   */
+  const known = strategies.isSuccess;
 
   return (
     <Field data-invalid={error !== undefined}>
@@ -100,7 +122,11 @@ export function FulfilmentStrategyField({
         )}
         {...select}
       >
-        {unwired ? <option value={current}>{current} — not wired here</option> : null}
+        {missing ? (
+          <option value={current}>
+            {known ? `${current} — not wired here` : current}
+          </option>
+        ) : null}
         {wired.map((strategy) => (
           <option key={strategy.name} value={strategy.name}>
             {strategy.name}

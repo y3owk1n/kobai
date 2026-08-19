@@ -89,7 +89,7 @@ New to the project? These five carry the shape of everything else:
 | [0061](./0061-what-the-first-publish-owes.md) | What the first publish owes is one list, and the next obligation joins it | Accepted — **a live list until the first publish** |
 | [0062](./0062-a-variant-is-corrected-in-place-and-a-price-is-superseded.md) | A Variant is corrected in place, and a Price is superseded | Accepted — the other half of 0059 |
 | [0063](./0063-the-admins-frame-is-conventional-because-a-developer-inherits-it.md) | The Admin's frame is conventional, because a Developer inherits it | Accepted — extends 0010 and 0033 |
-| [0064](./0064-list-pagination-is-a-cursor-and-the-page-number-is-given-up.md) | List pagination is a cursor, and the page number is given up | Accepted — constrains 0060 |
+| [0064](./0064-list-pagination-is-a-cursor-and-the-page-number-is-given-up.md) | List pagination is a cursor, and the page number is given up | **"Every list route" bounded by 0067.** A list over a table pages; rest stands |
 | [0065](./0065-a-stores-default-currency-is-fixed.md) | A Store's default currency is fixed | Accepted — applies 0062's shape to the Store; holds 0008's question open |
 | [0066](./0066-administering-access-is-one-permission-and-the-last-administrator-cannot-be-removed.md) | Administering access is one Permission, and the last administrator cannot be removed | Accepted — makes 0027 reachable; applies 0059's shape to a Role |
 | [0067](./0067-a-set-the-deployment-declares-is-not-a-list-route.md) | A set the deployment declares is not a list route | Accepted — bounds 0064; answers 0010's finding against 0014 |

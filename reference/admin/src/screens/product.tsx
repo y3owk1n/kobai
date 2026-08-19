@@ -82,6 +82,32 @@ import { useKobaiClient } from "@/lib/session";
  */
 const PRODUCT = "product";
 
+/**
+ * Why this Merchant cannot change the catalog, or `null` when they can.
+ *
+ * Six controls on this screen ask it and every one of them wants the same sentence, so it is
+ * asked in one place: a wording that differed between the rename button and the delete button
+ * would read as two different rules. It is an affordance and not a boundary —
+ * `requirePermission` in Core is the enforcement, and `lib/permissions.ts` is where that is
+ * written down at length.
+ */
+function useCannotWrite(): string | null {
+  return useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
+}
+
+/**
+ * Re-reads the Product, which is what every write on this screen does instead of patching.
+ *
+ * There is no optimistic update anywhere in this Admin (ADR-0063), so each of the six
+ * mutations below ends the same way — and ending it the same way is the point: what a Variant's
+ * `available` becomes after a count is `onHand - reserved`, a subtraction against a number this
+ * browser does not have.
+ */
+function useRereadProduct(productId: string): () => void {
+  const queries = useQueryClient();
+  return () => void queries.invalidateQueries({ queryKey: [PRODUCT, productId] });
+}
+
 export function ProductScreen() {
   const client = useKobaiClient();
   const id = useRouteId();
@@ -135,9 +161,12 @@ export function ProductScreen() {
  */
 function ProductIdentity({ id, title }: { readonly id: string; readonly title: string }) {
   const client = useKobaiClient();
+  // Both, because deleting a Product invalidates more than the Product: the list behind it is
+  // stale too, and that is the whole `[PRODUCT]` family rather than this one's key.
   const queries = useQueryClient();
+  const reread = useRereadProduct(id);
   const navigate = useNavigate();
-  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
+  const unavailable = useCannotWrite();
 
   const form = useForm({
     resolver: zodResolver(RenameForm),
@@ -154,7 +183,7 @@ function ProductIdentity({ id, title }: { readonly id: string; readonly title: s
           body: { title: values.title },
         }),
       ),
-    onSuccess: () => queries.invalidateQueries({ queryKey: [PRODUCT, id] }),
+    onSuccess: reread,
   });
 
   return (
@@ -241,8 +270,8 @@ function VariantCard({
   readonly variant: Variant;
 }) {
   const client = useKobaiClient();
-  const queries = useQueryClient();
-  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
+  const reread = useRereadProduct(productId);
+  const unavailable = useCannotWrite();
   // Newest first is what the API answers with, so the head of the list is the Price a Merchant
   // most recently entered — the one worth comparing against.
   const newest = variant.prices[0] ?? null;
@@ -272,9 +301,7 @@ function VariantCard({
                 }),
               )
             }
-            onDeleted={() =>
-              queries.invalidateQueries({ queryKey: [PRODUCT, productId] })
-            }
+            onDeleted={reread}
             problemOf={(thrown) => whyNotDeleted(thrown, "The Variant was not deleted.")}
           />
         </CardAction>
@@ -323,8 +350,8 @@ function VariantIdentity({
   readonly variant: Variant;
 }) {
   const client = useKobaiClient();
-  const queries = useQueryClient();
-  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
+  const reread = useRereadProduct(productId);
+  const unavailable = useCannotWrite();
 
   const form = useForm({
     resolver: zodResolver(IdentityForm),
@@ -341,7 +368,7 @@ function VariantIdentity({
           body: { sku: values.sku, fulfilment: { strategy: values.strategy } },
         }),
       ),
-    onSuccess: () => queries.invalidateQueries({ queryKey: [PRODUCT, productId] }),
+    onSuccess: reread,
   });
 
   return (
@@ -416,9 +443,8 @@ function Prices({
   readonly variant: Variant;
 }) {
   const client = useKobaiClient();
-  const queries = useQueryClient();
-  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
-  const reread = () => queries.invalidateQueries({ queryKey: [PRODUCT, productId] });
+  const reread = useRereadProduct(productId);
+  const unavailable = useCannotWrite();
 
   const form = useForm<AmountInput, unknown, AmountValues>({
     resolver: zodResolver(AmountForm),
@@ -684,8 +710,8 @@ function Stock({
   readonly variant: Variant;
 }) {
   const client = useKobaiClient();
-  const queries = useQueryClient();
-  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
+  const reread = useRereadProduct(productId);
+  const unavailable = useCannotWrite();
   const inventory = variant.inventory;
 
   const form = useForm<CountInput, unknown, CountValues>({
@@ -703,7 +729,7 @@ function Stock({
       ),
     // Re-read rather than patched: `available` is `onHand - reserved`, and `reserved` is a
     // number this browser does not hold and cannot predict (ADR-0063).
-    onSuccess: () => queries.invalidateQueries({ queryKey: [PRODUCT, productId] }),
+    onSuccess: reread,
   });
 
   return (
@@ -797,8 +823,8 @@ type CountValues = z.output<typeof CountForm>;
  */
 function NewVariant({ productId }: { readonly productId: string }) {
   const client = useKobaiClient();
-  const queries = useQueryClient();
-  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "change the catalog");
+  const reread = useRereadProduct(productId);
+  const unavailable = useCannotWrite();
 
   const form = useForm({
     resolver: zodResolver(IdentityForm),
@@ -814,7 +840,7 @@ function NewVariant({ productId }: { readonly productId: string }) {
         }),
       ),
     onSuccess: () => form.reset(),
-    onSettled: () => queries.invalidateQueries({ queryKey: [PRODUCT, productId] }),
+    onSettled: reread,
   });
 
   return (
@@ -843,6 +869,7 @@ function NewVariant({ productId }: { readonly productId: string }) {
           />
           <FulfilmentStrategyField
             id="new-variant-strategy"
+            current={DEFAULT_STRATEGY}
             error={form.formState.errors.strategy}
             {...form.register("strategy")}
           />
@@ -861,11 +888,18 @@ function NewVariant({ productId }: { readonly productId: string }) {
 /**
  * What a new Variant points at when nobody chooses.
  *
- * The same word Core's own default is, and it is written here rather than left blank because a
- * `Select` with no value shows nothing and would make the commonest case a required choice.
- * kobai defaults an absent `fulfilment` to this too, so the two agree — and a deployment that
- * *replaced* `physical` still has something wired under the name, because replacing is what
- * naming one of Core's in `kobai.config.ts` does.
+ * **This is not the Admin writing down the set**, which is the thing `FulfilmentStrategyField`
+ * exists to stop: it is `CreateVariantRequest`'s own documented default — "Defaults to
+ * `physical`" — which is promised surface under ADR-0060, so agreeing with it is reading kobai
+ * rather than guessing at it. Sending the same word the route would have applied to an absent
+ * `fulfilment` is what makes the picker's initial state honest.
+ *
+ * The alternative was to start on the first name the list answers with. That is alphabetical,
+ * so a new Variant would default to `digital` — a different Variant from the one the same
+ * request without this field would create, which is a worse kind of wrong than a constant.
+ *
+ * A deployment that *replaced* `physical` still has something wired under the name, because
+ * replacing is what naming one of Core's in `kobai.config.ts` does.
  */
 const DEFAULT_STRATEGY = "physical";
 

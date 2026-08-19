@@ -1496,14 +1496,25 @@ describe("the catalog screens", () => {
     await auditAccessibility(page, "the Product screen showing a stock count");
   });
 
-  it("offers the Strategies this deployment wired, and swaps the Variant onto one", async () => {
+  it("corrects a SKU and swaps the Strategy together, and the count under it does not move", async () => {
     const product = await seam.createProduct({ title: "A poster becoming a download" });
+    // Counted *before* the swap, which is the whole of what makes the last assertion mean
+    // anything: an uncounted Variant reports `inventory: null` afterwards whatever happened to
+    // it, so asserting on that would have been an assertion `null` passes by existing.
+    await seam.api("PUT", `/admin/variants/${product.variantId}/inventory`, {
+      onHand: 4,
+    });
     const page = await openAProduct(product);
+
+    // Scoped to the Variant's own section rather than taken `.first()`: the Add a Variant form
+    // below carries a SKU and a Strategy of its own, so an unscoped locator is two elements and
+    // an unscoped `.first()` is the right one only by accident of DOM order.
+    const identity = page.getByRole("group", { name: "Identity" });
 
     // The picker is fed by `GET /admin/fulfilment-strategies` (ADR-0067) — the route this
     // ticket added because the Admin had no way to learn the set, and hard-coding Core's two
     // is the closed set ADR-0014 exists to prevent, written into the client.
-    const picker = page.getByLabel("Fulfilment Strategy").first();
+    const picker = identity.getByLabel("Fulfilment Strategy");
     await shows(picker, "the Fulfilment Strategy picker");
 
     // Exactly what this deployment wired, asked of kobai rather than written down here: a case
@@ -1522,6 +1533,11 @@ describe("the catalog screens", () => {
       })
       .toEqual(wired);
 
+    // Both fields at once, because that is what the one form does — ADR-0062 settles the SKU
+    // and the Strategy as corrections in place, and a Merchant here to repair one is very often
+    // fixing the other.
+    const corrected = `SWAPPED-${Date.now()}`;
+    await identity.getByLabel("SKU").fill(corrected);
     await picker.selectOption("digital");
     await page.getByRole("button", { name: "Save Variant" }).click();
 
@@ -1531,14 +1547,58 @@ describe("the catalog screens", () => {
         message: "The Variant never settled on the Strategy it was swapped onto.",
       })
       .toBe("digital");
-    // The count under it does not move, which is ADR-0062's decision and the one thing a swap
-    // must not quietly do.
+    await shows(
+      page.getByRole("heading", { level: 3, name: `Variant ${corrected}` }),
+      "the Variant under its corrected SKU",
+    );
+
+    // **The count under it does not move**, which is ADR-0062's decision and the one thing a
+    // swap must not quietly do: discarding it would throw away a number a Merchant went and
+    // counted, and `consume` is guarded, so it could fail a Capture past `take-payment`.
     await expect(
-      seam.api<{ variants: { inventory: unknown }[] }>(
+      seam.api<{ variants: { sku: string; inventory: unknown }[] }>(
         "GET",
         `/admin/products/${product.id}`,
       ),
-    ).resolves.toMatchObject({ variants: [{ inventory: null }] });
+    ).resolves.toMatchObject({
+      variants: [{ sku: corrected, inventory: { onHand: 4, reserved: 0, available: 4 } }],
+    });
+  });
+
+  it("deletes a Price on its own, and reads the Variant back without it", async () => {
+    const product = await seam.createProduct({
+      title: "A poster with a Price to drop",
+      amount: 1250,
+    });
+    // A second Price, so the delete is the subject rather than the Variant becoming unquotable.
+    await seam.api("POST", `/admin/variants/${product.variantId}/prices`, {
+      amount: 900,
+    });
+    const page = await openAProduct(product);
+    await expect
+      .poll(() => priceTable(page).getByRole("row").count(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The Variant never showed both of its Prices.",
+      })
+      .toBe(3);
+
+    // The newest is at the head of the list, which is the one this row's Delete belongs to.
+    const row = priceTable(page).getByRole("row").filter({ hasText: "900" });
+    await row.getByRole("button", { name: "Delete" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await shows(dialog, "the Delete Price confirmation");
+    await dialog.getByRole("button", { name: "Delete" }).click();
+
+    await hides(dialog, "the Delete Price dialog");
+    // Read back rather than filtered out of an array: a Price is a row, and what the Variant
+    // carries once one is gone is kobai's answer (ADR-0008, ADR-0063).
+    await expect
+      .poll(() => priceTable(page).getByRole("row").count(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The deleted Price never left the table.",
+      })
+      .toBe(2);
+    await shows(priceTable(page).getByText("1250"), "the Price that was left alone");
   });
 
   it("supersedes a Price by adding the new one before removing the old, and never edits one", async () => {

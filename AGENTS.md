@@ -1081,7 +1081,19 @@ further things about the screens are conventions rather than one screen's choice
   Fulfilment Strategy field reads ADR-0067's route, because `physical` and `digital` in a
   `const` is ADR-0014's closed set moved into the client. It is the same rule as
   `lib/refusal.ts`'s `Record`s one step out: the Admin may hold what kobai's *types* close, and
-  must ask about what a deployment decides.
+  must ask about what a deployment decides. **A documented default is not the set**, which is
+  the one thing that may still be a constant: `DEFAULT_STRATEGY` is `physical` because
+  `CreateVariantRequest` promises "Defaults to `physical`" under ADR-0060, so a new Variant
+  starts on the Strategy the same request without that field would have got. Starting on the
+  first name the route answers with was the alternative and is worse — it is alphabetical, so
+  the picker would default to `digital`.
+- **A field whose options are still loading must not say the value is wrong.** The "not wired
+  here" option is gated on the query having **succeeded**, not on the name being absent from an
+  empty list — otherwise every ordinary `physical` Variant is labelled broken for the length of
+  a round trip, and permanently if the read fails, which announces exactly the state the screen
+  exists to repair about a Variant that is fine. The value is still rendered as an option while
+  the list is in flight, because a `<select>` whose value matches no option shows nothing and
+  reports `""`.
 - **A `<select>` is native, and this is the one place the Admin leaves shadcn.** shadcn's
   `Select` is a listbox in a **portal**, so its options sit at the end of `<body>` outside every
   landmark, and `axe-core` fails the build on it as `region` the moment a case audits a screen
@@ -1089,8 +1101,11 @@ further things about the screens are conventions rather than one screen's choice
   portal is excused by being hidden from the accessibility tree (`components/action-button.tsx`);
   a list of options a Merchant chooses from cannot be. `shadcn add select` is therefore
   deliberately **not** vendored here. `Field`, `FieldLabel`, `FieldDescription` and `FieldError`
-  are still shadcn's and the control carries `Input`'s own classes, so it is tuned by the same
-  tokens as everything else — and react-hook-form can `register` it, which a listbox cannot be.
+  are still shadcn's, and the control's classes are **copied** from `ui/input.tsx` rather than
+  shared with it — sharing would mean exporting a string out of a vendored component, which the
+  next `shadcn add input` overwrites. The tokens are the same either way, which is what keeps it
+  tuned with every other field; what a `shadcn add input` that changes them leaves behind is one
+  picker to re-copy. react-hook-form can `register` it, which a listbox cannot be.
   **A second one factors this out of `components/fulfilment-strategy-field.tsx`**; reaching for
   the vendored `Select` instead means answering the landmark question first.
 - **Card titles are headings on the Product screen and on no other.** The frame's `h1` names the
