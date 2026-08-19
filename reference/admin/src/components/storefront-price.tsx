@@ -1,9 +1,10 @@
 import type { KobaiClient, ResolvedPrice } from "@kobai/client";
-import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Problem } from "@/components/problem";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -20,7 +21,8 @@ import {
   readPreviewKey,
   writePreviewKey,
 } from "@/lib/preview-key";
-import { messageOf, reasonOf } from "@/lib/refusal";
+import { isApiKeyRejected, messageOf, Refused } from "@/lib/refusal";
+import { useKobaiClient } from "@/lib/session";
 
 /**
  * The price a storefront would receive (spec story 53), and the screen that closes the loop.
@@ -38,57 +40,33 @@ import { messageOf, reasonOf } from "@/lib/refusal";
  * difference is rendered loudly, and named — `workflow.steps` reports the slot and what
  * filled it, so the Admin can say *which* Step is somebody else's rather than only that the
  * number is odd.
+ *
+ * **It is a mutation rather than a query, and that is not a technicality.** Asking costs a
+ * key — the first ask on a browser session with none mints one — so it happens when a Merchant
+ * asks for it and never because a component mounted, and TanStack Query's word for a call made
+ * on purpose is a mutation. `PriceRefusal` is one of the two families whose `reason` is an open
+ * string (ADR-0060), because a Project's own Step may refuse with a word Core has never heard
+ * of, so what comes back here takes the prose by design rather than a narrowed arm.
  */
 export function StorefrontPrice({
-  client,
   variantId,
   entered,
 }: {
-  readonly client: KobaiClient;
   readonly variantId: string;
   /** The newest Price the Merchant entered, if there is one, to compare against. */
   readonly entered: { readonly amount: number; readonly currency: string } | null;
 }) {
-  const [resolved, setResolved] = useState<ResolvedPrice | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const client = useKobaiClient();
 
-  async function ask(): Promise<void> {
-    setBusy(true);
-    setProblem(null);
-    setResolved(null);
+  const ask = useMutation({
+    mutationFn: (): Promise<ResolvedPrice> => askAsAStorefront(client, variantId),
+  });
 
-    const held = readPreviewKey();
-    const minted = held ? { ok: true as const, key: held } : await mintPreviewKey(client);
-    if (!minted.ok) {
-      setProblem(minted.problem);
-      setBusy(false);
-      return;
-    }
-
-    const storefront = createStorefrontClient(minted.key);
-    const { data, error } = await storefront.GET("/store/variants/{id}/price", {
-      params: { path: { id: variantId } },
-    });
-
-    if (data) {
-      setResolved(data);
-    } else if (reasonOf(error)?.startsWith("api-key-")) {
-      // The key kept for this browser session has been revoked, or was minted against a
-      // database that has since gone. Forgetting it is what makes the next attempt mint a
-      // fresh one, rather than leaving the Merchant stuck presenting a dead credential.
-      clearPreviewKey();
-      setProblem(
-        "The publishable key this browser was using no longer works — it has been revoked. Ask again and a fresh one will be minted.",
-      );
-    } else {
-      setProblem(messageOf(error, "The store surface refused to resolve a price."));
-    }
-    setBusy(false);
-  }
-
+  const resolved = ask.data;
   const differs =
-    resolved !== null && entered !== null && resolved.price.amount !== entered.amount;
+    resolved !== undefined &&
+    entered !== null &&
+    resolved.price.amount !== entered.amount;
   const replaced = (resolved?.workflow.steps ?? []).filter(
     (ran) => ran.implementation !== ran.step,
   );
@@ -96,7 +74,13 @@ export function StorefrontPrice({
   return (
     <div className="grid gap-3">
       <div className="flex items-center gap-3">
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void ask()}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={ask.isPending}
+          onClick={() => ask.mutate()}
+        >
+          {ask.isPending ? <Spinner /> : null}
           {resolved ? "Ask again" : "What would a storefront receive?"}
         </Button>
         <span className="text-muted-foreground text-xs">
@@ -105,14 +89,17 @@ export function StorefrontPrice({
         </span>
       </div>
 
-      <Problem problem={problem} title="No price came back." />
+      <Problem
+        title="No price came back."
+        problem={ask.isError ? whyNoPrice(ask.error) : null}
+      />
 
       {resolved ? (
         <div className="grid gap-3">
           <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
             <div>
               <div className="text-muted-foreground text-xs">Entered by you</div>
-              <div className="text-lg font-medium">
+              <div className="font-medium text-lg">
                 {entered ? formatAmount(entered.amount, entered.currency) : "—"}
               </div>
             </div>
@@ -120,7 +107,7 @@ export function StorefrontPrice({
               <div className="text-muted-foreground text-xs">
                 Received by a storefront
               </div>
-              <div className="text-lg font-medium">
+              <div className="font-medium text-lg">
                 {formatAmount(resolved.price.amount, resolved.price.currency)}
               </div>
             </div>
@@ -181,6 +168,64 @@ export function StorefrontPrice({
 }
 
 /**
+ * Something the store surface, or the mint before it, would not do.
+ *
+ * It extends {@link Refused} rather than `Error` so that the refusal **body travels**, which is
+ * the whole reason that class carries one: a screen that has to narrow still can, and
+ * `problemOf` reads it like any other refusal. What it adds is the sentence to show when kobai
+ * sent no prose of its own — the mint and the price want different ones, and the revoked-key
+ * case has no body at all, because from kobai's side that was an ordinary `api-key-revoked`
+ * and the sentence a Merchant needs is about this browser rather than about that request.
+ */
+class PreviewRefused extends Refused {
+  constructor(refusal: unknown, fallback: string) {
+    super(refusal);
+    this.name = "PreviewRefused";
+    this.message = messageOf(refusal, fallback);
+  }
+}
+
+/** What to show when no price came back — never `TypeError: Failed to fetch`. */
+function whyNoPrice(thrown: unknown): string {
+  if (thrown instanceof PreviewRefused) return thrown.message;
+  return "The store surface could not be reached at all, so no price was resolved.";
+}
+
+/**
+ * One storefront's request for a price, with a storefront's credential.
+ *
+ * The key kept for this browser session is reused; a session with none mints one. A refusal
+ * whose `reason` names the key itself means the stored one has been revoked, or was minted
+ * against a database that has since gone — so it is forgotten, which is what makes the next
+ * attempt mint a fresh one rather than leaving the Merchant presenting a dead credential.
+ */
+async function askAsAStorefront(
+  client: KobaiClient,
+  variantId: string,
+): Promise<ResolvedPrice> {
+  const held = readPreviewKey() ?? (await mintPreviewKey(client));
+  const storefront = createStorefrontClient(held);
+
+  const { data, error } = await storefront.GET("/store/variants/{id}/price", {
+    params: { path: { id: variantId } },
+  });
+  if (data) return data;
+
+  if (isApiKeyRejected(error)) {
+    // The key kept for this browser session has been revoked, or was minted against a database
+    // that has since gone. Forgetting it is what makes the next attempt mint a fresh one,
+    // rather than leaving the Merchant presenting a dead credential.
+    clearPreviewKey();
+    throw new PreviewRefused(
+      null,
+      "The publishable key this browser was using no longer works — it has been revoked. Ask again and a fresh one will be minted.",
+    );
+  }
+
+  throw new PreviewRefused(error, "The store surface refused to resolve a price.");
+}
+
+/**
  * A publishable key for this browser session, minted through the public API.
  *
  * Publishable rather than secret on purpose: `kobai_pk_` is the kind that is safe in a
@@ -192,20 +237,13 @@ export function StorefrontPrice({
  * session and reused. Revoke it from the API keys screen, where every key this deployment
  * has issued is listed.
  */
-type MintedPreviewKey =
-  | { readonly ok: true; readonly key: string }
-  | { readonly ok: false; readonly problem: string };
-
-async function mintPreviewKey(client: KobaiClient): Promise<MintedPreviewKey> {
+async function mintPreviewKey(client: KobaiClient): Promise<string> {
   const { data, error } = await client.POST("/admin/api-keys", {
     body: { name: PREVIEW_KEY_NAME, kind: "publishable" },
   });
   if (!data) {
-    return {
-      ok: false,
-      problem: messageOf(error, "A publishable key could not be minted."),
-    };
+    throw new PreviewRefused(error, "A publishable key could not be minted.");
   }
   writePreviewKey(data.key);
-  return { ok: true, key: data.key };
+  return data.key;
 }

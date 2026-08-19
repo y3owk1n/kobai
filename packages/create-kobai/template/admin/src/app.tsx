@@ -1,13 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CompassIcon } from "lucide-react";
-import {
-  BrowserRouter,
-  Navigate,
-  Route,
-  Routes,
-  useNavigate,
-  useParams,
-} from "react-router";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppLayout } from "@/components/app-layout";
 import { LinkButton } from "@/components/link-button";
 import { Problem } from "@/components/problem";
@@ -22,7 +15,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { problemOf } from "@/lib/refusal";
-import { KobaiProvider, useKobai, useKobaiClient, useSession } from "@/lib/session";
+import { KobaiProvider, useSession } from "@/lib/session";
 import { ThemeProvider } from "@/lib/theme";
 import { ApiKeys } from "@/screens/api-keys";
 import { OrderScreen } from "@/screens/order";
@@ -46,6 +39,13 @@ import { SignIn } from "@/screens/sign-in";
  * and a refresh always landed back on Products. The server half of this has been in place the
  * whole time: `reference/src/admin-assets.ts` hands back `index.html` for every unmatched path
  * under `/admin-ui/` and lets the page read the URL. This is the page reading it.
+ *
+ * **Every route below is the screen itself**, with no adapter in between. Four of them were
+ * wrapped until #176, in shims that pulled the client and a back-navigation callback out of
+ * context and handed them down as props — the shape those screens had before there was a
+ * router. Each of them now reads what it needs from the router and from `useKobaiClient`, the
+ * way the Products screen has since #174, so a route in this file is a path and a component
+ * and nothing else.
  */
 const ADMIN_BASE = import.meta.env.BASE_URL.replace(/\/+$/, "") || "/";
 
@@ -93,17 +93,8 @@ export function App() {
  */
 function Admin() {
   const session = useSession();
-  const client = useKobaiClient();
-  const { expired, signedIn } = useKobai();
 
-  if (session.isPending) {
-    return (
-      <main className="flex min-h-dvh items-center justify-center gap-2 text-muted-foreground text-sm">
-        <Spinner />
-        Asking kobai who you are…
-      </main>
-    );
-  }
+  if (session.isPending) return <AskingWhoYouAre />;
 
   if (session.isError) {
     // Distinct from "you are not signed in", which is an ordinary 401 and answers `null`.
@@ -111,6 +102,9 @@ function Admin() {
     // what is wrong.
     return (
       <main className="mx-auto grid max-w-sm gap-3 p-6">
+        {/* Rendered in place of the frame, like the sign-in screen and the gate above, so
+            there is no `h1` above it to inherit. */}
+        <h1 className="sr-only">The kobai Admin could not reach kobai</h1>
         <Problem
           title="kobai did not answer."
           problem={problemOf(session.error, "The Admin could not reach kobai.")}
@@ -120,9 +114,7 @@ function Admin() {
     );
   }
 
-  if (!session.data) {
-    return <SignIn client={client} expired={expired} onSignedIn={signedIn} />;
-  }
+  if (!session.data) return <SignIn />;
 
   return (
     <Routes>
@@ -131,10 +123,10 @@ function Admin() {
             history so the back button leaves rather than bouncing. */}
         <Route index element={<Navigate to="/products" replace />} />
         <Route path="products" element={<Products />} />
-        <Route path="products/:id" element={<ProductRoute />} />
-        <Route path="orders" element={<OrdersRoute />} />
-        <Route path="orders/:id" element={<OrderRoute />} />
-        <Route path="api-keys" element={<ApiKeysRoute />} />
+        <Route path="products/:id" element={<ProductScreen />} />
+        <Route path="orders" element={<Orders />} />
+        <Route path="orders/:id" element={<OrderScreen />} />
+        <Route path="api-keys" element={<ApiKeys />} />
         <Route path="*" element={<NoSuchScreen />} />
       </Route>
     </Routes>
@@ -142,66 +134,24 @@ function Admin() {
 }
 
 /**
- * The four screens the frame carries but did not rewrite, each behind a route.
+ * The first moment of every page load: the session query in flight.
  *
- * They still take a client and a callback, which is the shape they had before there was a
- * router — so these adapt the route to them rather than the other way round. Moving each onto
- * TanStack Query, on the conventions Products now sets, is #176's whole ticket; doing it here
- * would have been the same work in a commit that could not be reviewed for it.
+ * It is a whole screen rather than a spinner inside the frame, because which frame to draw is
+ * exactly what is not known yet — the sidebar belongs to a Merchant and there may not be one.
+ * So it renders in place of the routes, like the sign-in screen, and like it carries its own
+ * `h1`: a page whose only content is a status message is still a page, and one with no
+ * first-level heading is one a screen reader cannot summarise.
  */
-function ProductRoute() {
-  const client = useKobaiClient();
-  const navigate = useNavigate();
-  const { id } = useParams();
-
-  if (id === undefined) return <Navigate to="/products" replace />;
-
+function AskingWhoYouAre() {
   return (
-    <ProductScreen
-      client={client}
-      id={id}
-      onBack={() => {
-        void navigate("/products");
-      }}
-    />
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-2 p-6 text-muted-foreground text-sm">
+      <h1 className="sr-only">Opening the kobai Admin</h1>
+      <p className="flex items-center gap-2">
+        <Spinner />
+        Asking kobai who you are…
+      </p>
+    </main>
   );
-}
-
-function OrdersRoute() {
-  const client = useKobaiClient();
-  const navigate = useNavigate();
-
-  return (
-    <Orders
-      client={client}
-      onOpen={(id) => {
-        void navigate(`/orders/${id}`);
-      }}
-    />
-  );
-}
-
-function OrderRoute() {
-  const client = useKobaiClient();
-  const navigate = useNavigate();
-  const { id } = useParams();
-
-  if (id === undefined) return <Navigate to="/orders" replace />;
-
-  return (
-    <OrderScreen
-      client={client}
-      id={id}
-      onBack={() => {
-        void navigate("/orders");
-      }}
-    />
-  );
-}
-
-function ApiKeysRoute() {
-  const client = useKobaiClient();
-  return <ApiKeys client={client} />;
 }
 
 /**

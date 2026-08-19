@@ -1,6 +1,6 @@
 import type { Session } from "@kobai/client";
 import { KeyRoundIcon, LogOutIcon, PackageIcon, ReceiptTextIcon } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
@@ -27,6 +27,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { CrumbProvider } from "@/lib/crumb";
 import { useKobai } from "@/lib/session";
 
 /**
@@ -78,6 +79,10 @@ function sectionOf(pathname: string): Section | undefined {
 export function AppLayout({ session }: { readonly session: Session }) {
   const { signOut } = useKobai();
   const here = sectionOf(useLocation().pathname);
+  // What the screen under the Outlet calls the record it is showing, if it has one yet. The
+  // layout owns the state and the screen writes to it through `CrumbProvider`, because the
+  // title is a thing only the screen's own request knows — see `lib/crumb.tsx`.
+  const [record, setRecord] = useState<string | null>(null);
 
   return (
     <SidebarProvider>
@@ -136,7 +141,7 @@ export function AppLayout({ session }: { readonly session: Session }) {
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-4" />
-          <Breadcrumbs />
+          <Breadcrumbs section={here} record={record} />
           <div className="ml-auto">
             <ThemeToggle />
           </div>
@@ -154,10 +159,12 @@ export function AppLayout({ session }: { readonly session: Session }) {
               under it, which is an ordinary outline rather than a missing heading. It is here
               rather than in each screen because a screen that forgot one is a page with no
               heading at all, which is what every list screen was until #175 — and #176
-              rewrites all six of them. A screen with a better first-level title than its
-              section is #176's to argue for. */}
+              rewrote all six of them, and none of them argued for a better first-level title
+              than its section — a record's own title is its `h2`. */}
           <h1 className="sr-only">{here?.label ?? "Not found"}</h1>
-          <Outlet />
+          <CrumbProvider name={setRecord}>
+            <Outlet />
+          </CrumbProvider>
         </div>
       </SidebarInset>
     </SidebarProvider>
@@ -165,16 +172,28 @@ export function AppLayout({ session }: { readonly session: Session }) {
 }
 
 /**
- * Where you are, derived from the URL and from nothing else.
+ * Where you are: the section from the URL, and the record from the screen showing it.
  *
- * A detail screen's crumb is its identifier, because the URL is all this component has —
- * `GET /admin/products/{id}` is what knows the title, and a layout that fetched one would be
- * fetching it a second time on every screen that already has it. Naming a crumb better than
- * the id is the detail screen's own business, and #176 is where each of them arrives.
+ * The URL is all this component can derive, and for a detail screen that is an identifier — a
+ * UUID in the one place a Merchant looks to find out where they are. `GET /admin/orders/{id}`
+ * is what knows the number, and a layout that fetched one would be fetching it a second time
+ * on every screen that already has it. So the screen says, through `lib/crumb.tsx`, and
+ * **`record` is `null` until it has an answer**: the identifier stays until the title arrives,
+ * rather than the crumb flickering empty and back.
+ *
+ * Only the **last** crumb is renamed. Everything above it is a path segment this Admin has no
+ * screen for today, and inventing a name for one would be naming something nobody is looking
+ * at.
  */
-function Breadcrumbs() {
+function Breadcrumbs({
+  section,
+  record,
+}: {
+  /** Which section this path belongs to, derived once by the layout above. */
+  readonly section: Section | undefined;
+  readonly record: string | null;
+}) {
   const pathname = useLocation().pathname;
-  const section = sectionOf(pathname);
 
   if (!section) {
     return (
@@ -209,7 +228,9 @@ function Breadcrumbs() {
             <BreadcrumbSeparator />
             <BreadcrumbItem>
               {index === rest.length - 1 ? (
-                <BreadcrumbPage className="max-w-64 truncate">{segment}</BreadcrumbPage>
+                <BreadcrumbPage className="max-w-64 truncate">
+                  {record ?? segment}
+                </BreadcrumbPage>
               ) : (
                 <span className="max-w-64 truncate">{segment}</span>
               )}

@@ -6,9 +6,9 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { PackageIcon } from "lucide-react";
-import type { ComponentProps } from "react";
-import { type UseFormReturn, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
@@ -28,8 +28,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -280,14 +278,25 @@ function NewProduct() {
             problem={create.isError ? whyNotCreated(create.error) : null}
           />
 
-          <NewProductField form={form} name="title" label="Title" />
-          <NewProductField form={form} name="sku" label="SKU" />
-          <NewProductField
-            form={form}
-            name="amount"
+          <FormField
+            id="new-product-title"
+            label="Title"
+            error={form.formState.errors.title}
+            {...form.register("title")}
+          />
+          <FormField
+            id="new-product-sku"
+            label="SKU"
+            error={form.formState.errors.sku}
+            {...form.register("sku")}
+          />
+          <FormField
+            id="new-product-amount"
             label="Price, in minor units"
             inputMode="numeric"
             placeholder="1250"
+            error={form.formState.errors.amount}
+            {...form.register("amount")}
           />
         </CardContent>
         <CardFooter className="mt-4">
@@ -298,48 +307,6 @@ function NewProduct() {
         </CardFooter>
       </form>
     </Card>
-  );
-}
-
-/**
- * One field of the New Product form: a label, an input, and whatever the schema said about it.
- *
- * The three were the same eight lines three times over, and the shape is what the next form in
- * this Admin should copy — `Field` is shadcn's, `FieldError` reads react-hook-form's error
- * objects as they come, and the invalid state is set in both the places that need it: `Field`
- * colours itself from `data-invalid`, and the `Input` announces itself with `aria-invalid`.
- *
- * The `id` carries the form's name as well as the field's, because an `id` is unique to the
- * document rather than to the form it is in — a second form on this screen with its own "title"
- * would otherwise point its label at this input.
- */
-function NewProductField({
-  form,
-  name,
-  label,
-  ...input
-}: {
-  readonly form: UseFormReturn<NewProductInput, unknown, NewProductValues>;
-  readonly name: keyof NewProductInput;
-  readonly label: string;
-  // `form` is HTML's own attribute on an `<input>` as well as react-hook-form's object, and
-  // the two would otherwise collide into `never`. An input inside a `<form>` needs no such
-  // attribute; the one here is the hook's.
-} & Omit<ComponentProps<typeof Input>, "id" | "name" | "form">) {
-  const error = form.formState.errors[name];
-  const id = `new-product-${name}`;
-
-  return (
-    <Field data-invalid={error !== undefined}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <Input
-        id={id}
-        aria-invalid={error !== undefined}
-        {...input}
-        {...form.register(name)}
-      />
-      <FieldError errors={[error]} />
-    </Field>
   );
 }
 

@@ -1,4 +1,9 @@
-import type { CatalogRefusal } from "@kobai/client";
+import type {
+  ApiKeyNotFound,
+  ApiKeyRefusal,
+  CatalogRefusal,
+  components,
+} from "@kobai/client";
 
 /**
  * The prose off a kobai refusal, whatever kind it was.
@@ -104,6 +109,25 @@ export function knownReasonOf<R extends string>(
 }
 
 /**
+ * A narrower for one closed family, built from that family's own union.
+ *
+ * Every screen that branches on a refusal asks the same two questions in the same order — was
+ * this a {@link Refused} at all, and is its `reason` one this family declares — so the pair is
+ * built once per family rather than restated per screen. What this deliberately does not do is
+ * collapse the families into one table: each `Record` below is keyed by exactly one union,
+ * which is what makes a reason added to *that* union in Core a build failure here (ADR-0063).
+ * One table of every reason in the API would compile forever and narrow nothing.
+ *
+ * `undefined` means "kobai did not say, or did not say something this family knows" — a 500, a
+ * refusal from another family, or the network being gone — so the caller's `switch` gets one
+ * arm for silence and an arm for each word, and the compiler counts them.
+ */
+function narrowing<R extends string>(known: Record<R, true>) {
+  return (thrown: unknown): R | undefined =>
+    thrown instanceof Refused ? knownReasonOf(thrown.body, known) : undefined;
+}
+
+/**
  * Every `reason` a catalog operation can be refused with, as a value rather than a type.
  *
  * `@kobai/client` is types only, so a runtime membership test needs a list — and a list
@@ -140,7 +164,91 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
  * not a refusal at all — so the screen's `switch` has one arm for "kobai did not say" and
  * arms for each thing it can say, and the compiler counts them.
  */
-export function catalogReasonOf(thrown: unknown): CatalogRefusal["reason"] | undefined {
-  if (!(thrown instanceof Refused)) return undefined;
-  return knownReasonOf(thrown.body, CATALOG_REASONS);
+export const catalogReasonOf = narrowing(CATALOG_REASONS);
+
+/**
+ * The one way reading an Order can be turned back, past the gates above every admin route.
+ *
+ * A family of one is still written as a `Record` rather than compared against the string:
+ * the Order screen that will one day have to tell `order-not-found` from whatever
+ * `GET /admin/orders/{id}` grows next should hear it from the compiler, not from a Merchant.
+ *
+ * `OrderRefusal` is reached through `components` because `@kobai/client` does not re-export
+ * it by name. That is the escape hatch the client documents for exactly this, and it narrows
+ * identically — the union is the generated one either way.
+ */
+const ORDER_REASONS: Record<components["schemas"]["OrderRefusal"]["reason"], true> = {
+  "order-not-found": true,
+};
+
+/** Which Order refusal this was — today, only that there is no such Order. */
+export const orderReasonOf = narrowing(ORDER_REASONS);
+
+/**
+ * The one way revoking an API key can be turned back.
+ *
+ * Revoking a key that is already revoked is *not* one of them: the route answers 204, because
+ * the state asked for is the state it is in. So this arrives only for a key that was never
+ * issued here, or one somebody else revoked and removed between two reads of the list.
+ */
+const API_KEY_NOT_FOUND_REASONS: Record<ApiKeyNotFound["reason"], true> = {
+  "api-key-not-found": true,
+};
+
+/** Which of the revoke route's own refusals this was. */
+export const apiKeyNotFoundReasonOf = narrowing(API_KEY_NOT_FOUND_REASONS);
+
+/**
+ * Why the **store** gate turned a request back — the storefront half of `lib/kobai.ts`'s four.
+ *
+ * `/store` sits behind a bearer API key rather than a Merchant session (ADR-0020), so these are
+ * a different four from `SESSION_ENDED`'s and mean a different thing: the key the Admin is
+ * presenting as a storefront is missing, malformed, unknown or revoked. The storefront price
+ * preview is the only thing in this Admin that ever presents one, and it forgets the key it
+ * held when one of these comes back.
+ *
+ * It used to ask `reason.startsWith("api-key-")`, which compiles forever: a fifth reason not
+ * spelled that way would have been missed, and a `PriceRefusal` from a Project's own Step —
+ * whose `reason` is an **open** string (ADR-0060) — would have matched if it happened to start
+ * with those characters. A `Record` keyed by the union is the convention for a reason
+ * (ADR-0063).
+ */
+const API_KEY_REJECTED: Record<ApiKeyRefusal["reason"], true> = {
+  "api-key-missing": true,
+  "api-key-malformed": true,
+  "api-key-unknown": true,
+  "api-key-revoked": true,
+};
+
+/**
+ * Whether the store gate rejected the key itself, as against refusing what was asked of it.
+ *
+ * Takes a refusal **body** rather than a thrown {@link Refused}, because the one caller reads
+ * the client's result directly rather than through `orThrow` — it has to tell this apart from
+ * every other refusal before it decides what to throw.
+ */
+export function isApiKeyRejected(refusal: unknown): boolean {
+  return knownReasonOf(refusal, API_KEY_REJECTED) !== undefined;
 }
+
+/**
+ * The two families `POST /admin/session` refuses through, as one set.
+ *
+ * Signing in is the one action in this Admin whose refusals span two schemas — a 400 from the
+ * request hook above every handler (`InvalidRequest`), and a 401 from the handler itself
+ * (`InvalidCredentials`) — and a Merchant looking at the form cares which of the three words
+ * came back rather than which schema carried it. Both unions are spread into one `Record`, so
+ * a reason added to **either** still has no key here and still fails the build.
+ */
+const SIGN_IN_REASONS: Record<
+  | components["schemas"]["InvalidCredentials"]["reason"]
+  | components["schemas"]["InvalidRequest"]["reason"],
+  true
+> = {
+  "invalid-credentials": true,
+  invalid: true,
+  "malformed-body": true,
+};
+
+/** Why signing in did not work, in kobai's own word for it. */
+export const signInReasonOf = narrowing(SIGN_IN_REASONS);
