@@ -81,7 +81,14 @@ export function AppLayout({ session }: { readonly session: Session }) {
 
   return (
     <SidebarProvider>
-      <Sidebar collapsible="icon">
+      {/* A landmark, and `complementary` rather than `navigation` because this holds the
+          Merchant's account and the way out as well as the sections. Without one, every
+          control in here is page content outside any landmark, which is what axe reports as
+          `region` — caught by `tests/the-admin-in-a-browser.test.ts` and invisible to
+          everything else in this repository. It is passed here rather than baked into
+          `components/ui/sidebar.tsx`, because what a deployment's sidebar *is* belongs to the
+          application composing it and not to the vendored primitive (ADR-0063). */}
+      <Sidebar collapsible="icon" role="complementary" aria-label="Sections and account">
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2 py-1 font-medium group-data-[collapsible=icon]:hidden">
             kobai Admin
@@ -134,9 +141,24 @@ export function AppLayout({ session }: { readonly session: Session }) {
             <ThemeToggle />
           </div>
         </header>
-        <main className="mx-auto w-full max-w-5xl p-6">
+        {/* A `div` rather than a second `main`: `SidebarInset` is already one, and two of them
+            is a document with two main landmarks — which is a real refusal from axe rather
+            than a style note, and one nothing outside a browser could have seen. */}
+        <div className="mx-auto w-full max-w-5xl p-6">
+          {/* The section, as the document's one first-level heading — for a reader with no
+              sidebar and no breadcrumb to look at. Visually hidden, because the frame already
+              says it twice on screen.
+
+              It names the **section** rather than the record, so `/products` and
+              `/products/{id}` announce the same `h1`; the second one's own title is the `h2`
+              under it, which is an ordinary outline rather than a missing heading. It is here
+              rather than in each screen because a screen that forgot one is a page with no
+              heading at all, which is what every list screen was until #175 — and #176
+              rewrites all six of them. A screen with a better first-level title than its
+              section is #176's to argue for. */}
+          <h1 className="sr-only">{here?.label ?? "Not found"}</h1>
           <Outlet />
-        </main>
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );

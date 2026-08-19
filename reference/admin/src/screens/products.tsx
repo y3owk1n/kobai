@@ -127,7 +127,11 @@ export function Products() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Title</TableHead>
-                  <TableHead className="w-0" />
+                  {/* Named rather than empty: a column header with no text is a column a
+                      screen reader announces as nothing at all. */}
+                  <TableHead className="w-0">
+                    <span className="sr-only">Open</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -35,6 +35,18 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
 
+      # The Chromium `tests/the-admin-in-a-browser.test.ts` drives. `devbox run ci` downloads
+      # it itself — the gate needs nothing run before it, and that stays true — so this only
+      # decides whether the download happens again on every run. Keyed on the lockfile, which
+      # is the same key the pnpm store uses and moves whenever the Playwright version does; it
+      # also moves for every other dependency, which costs one extra download and nothing else.
+      - name: Cache the browser
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
       # Postgres comes up through the repository's own compose file rather than a service
       # container, so CI runs against the same database a Developer does.
       - run: devbox run ci

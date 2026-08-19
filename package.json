@@ -16,10 +16,13 @@
       "@esbuild-kit/core-utils>esbuild": "^0.25.0"
     }
   },
+  "// devDependencies": "The guardrail suite under `tests/` and nothing else — every package's own toolchain is that package's. Two of these are the browser seam's (#175, ADR-0063): `playwright` drives a real Chromium against a really-booted reference Project, and `axe-core` is evaluated into the page it is looking at. Both are here rather than in `reference/admin/` because the test that uses them is here; the Admin's bundle contains neither, which `tests/admin-uses-only-the-public-api.test.ts` still holds. The npm package ships no browser — `devbox run browsers` downloads one, and `devbox run ci` runs that itself.",
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
     "@types/node": "^22.18.0",
+    "axe-core": "^4.13.0",
     "jsonc-parser": "^3.3.1",
+    "playwright": "^1.62.1",
     "typescript": "^7.0.2",
     "verdaccio": "^6.9.2",
     "vitest": "^4.1.10",

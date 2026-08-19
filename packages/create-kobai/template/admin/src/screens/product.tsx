@@ -71,7 +71,9 @@ export function ProductScreen({
         <p className="text-muted-foreground text-sm">Reading the Product…</p>
       ) : null}
 
-      {product ? <h1 className="font-medium text-xl">{product.title}</h1> : null}
+      {/* An `h2`: the frame renders the page's `h1` from the route, so this is the heading
+          under it rather than a second first-level one. */}
+      {product ? <h2 className="font-medium text-xl">{product.title}</h2> : null}
 
       {product
         ? product.variants.map((variant) => {
