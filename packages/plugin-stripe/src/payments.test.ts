@@ -268,6 +268,89 @@ describe("charging a payment the bank has already answered", () => {
     ).rejects.toThrow(/Invalid API Key/);
   });
 
+  it("declines an intent for a different amount from the one kobai is about to charge", async () => {
+    // The loop ADR-0077 closes. The intent is created by a Project's route *before* the Shopper
+    // is sent to their bank, and `place-order` works out the total at Capture from the lines,
+    // their Adjustments and the tax — so a storefront that quoted wrong, or that started the
+    // payment and then let the Cart change, sends the Shopper to pay 20.00 for a 25.00 basket.
+    // Core would record the Order at its own total, and the books would balance against money
+    // that never arrived.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        body: intent("succeeded", { amount: 2000 }),
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    const outcome = await payments.charge(
+      asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" }),
+    );
+
+    expect(outcome).toEqual({
+      ok: false,
+      detail:
+        "This payment is for 2000 MYR and this Order comes to 2500 MYR, so it was not taken. Ask `POST /store/carts/{id}/quote` for what the Cart comes to and start the payment for that.",
+    });
+  });
+
+  it("declines an intent in a different currency, however right the number looks", async () => {
+    // 2500 of one currency is not 2500 of another, and a comparison that only looked at the
+    // number would take a payment in the wrong money and record the Order in kobai's.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        body: intent("succeeded", { currency: "usd" }),
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(
+      payments.charge(asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" })),
+    ).resolves.toEqual({
+      ok: false,
+      detail:
+        "This payment is for 2500 USD and this Order comes to 2500 MYR, so it was not taken. Ask `POST /store/carts/{id}/quote` for what the Cart comes to and start the payment for that.",
+    });
+  });
+
+  it("refuses before it confirms, so a mismatched card payment is never taken at all", async () => {
+    // The check sits in front of the confirm rather than after it, which is the half that
+    // decides whether this is a guard or a report: an intent still at `requires_confirmation`
+    // is one whose money has *not* moved, so declining here leaves the Shopper unbilled instead
+    // of billed and refunded.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        body: intent("requires_confirmation", { amount: 9900 }),
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    const outcome = await payments.charge(
+      asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" }),
+    );
+
+    expect(outcome).toMatchObject({ ok: false });
+    // Nothing was confirmed. The stub throws for a route no test named, so reaching the confirm
+    // would have failed this differently — the assertion is here to say which fact is meant.
+    expect(stripe.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      "GET /v1/payment_intents/pi_redirect",
+    ]);
+  });
+
+  it("declines an intent Stripe described without an amount, rather than taking it on trust", async () => {
+    // Not a shape Stripe produces, and that is the point: something answering for Stripe that
+    // this Plugin cannot check is not something to confirm a payment against.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        body: { id: "pi_redirect", status: "succeeded" },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(
+      payments.charge(asked({ [STRIPE_PAYMENT_INTENT_KEY]: "pi_redirect" })),
+    ).resolves.toMatchObject({ ok: false });
+  });
+
   it("declines when the order carried no PaymentIntent at all", async () => {
     const stripe = stripeStub({});
     const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });

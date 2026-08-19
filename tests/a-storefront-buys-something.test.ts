@@ -432,6 +432,24 @@ describe("a Shopper buys something", () => {
     expect(reread.placed).toBe(false);
     expect(reread.lineItems).toHaveLength(1);
 
+    // What the Cart comes to, which is the figure a storefront has to start a payment for
+    // (ADR-0077). A redirect payment is created *before* the Shopper leaves and kobai works out
+    // the total at Capture, so without this route the amount on the payment is the storefront's
+    // own arithmetic — and an expensive Cart bought with a cheap payment is money that never
+    // arrived. On the **browser's** key, because a quote claims nothing and moves nothing: it is
+    // on the other side of ADR-0055's line from holding and placing.
+    const cartQuote = answered(
+      await browser.POST("/store/carts/{id}/quote", {
+        params: { path: { id: started.id } },
+      }),
+      "asking what the Cart comes to",
+    );
+    expect(cartQuote.total).toBe(THE_PRICE * HOW_MANY);
+    expect(cartQuote.lineItems.map((one) => one.sku)).toEqual([THE_SKU]);
+    // A moment rather than an offer: it says when it was worked out and carries nothing that
+    // could be sent back at kobai.
+    expect(new Date(cartQuote.quotedAt).getTime()).toBeLessThanOrEqual(Date.now());
+
     // The stock held, before anybody is sent anywhere to pay (ADR-0070). This is the clause a
     // redirect payment method needs: FPX and its kind take the money at the *bank*, so a
     // Shopper who authorises and comes back to `insufficient-inventory` has paid for something
@@ -463,6 +481,10 @@ describe("a Shopper buys something", () => {
     );
     expect(placed.total).toBe(THE_PRICE * HOW_MANY);
     expect(placed.lineItems[0]?.sku).toBe(THE_SKU);
+    // **The figure the storefront was quoted is the figure the Shopper was charged**, which is
+    // the whole reason the quote route exists: the payment it started is for the money kobai
+    // then took (ADR-0077).
+    expect(placed.total).toBe(cartQuote.total);
     // A Step ran, and the response says which. It is what lets a Developer who replaced one
     // see that theirs did (ADR-0017), so a journey that never looked would not be checking it.
     //

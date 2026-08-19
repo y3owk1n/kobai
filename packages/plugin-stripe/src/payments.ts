@@ -1,6 +1,7 @@
-import type { PaymentOutcome, PaymentProvider } from "@kobai/core";
+import type { PaymentOutcome, PaymentProvider, PaymentRequest } from "@kobai/core";
 import {
   callStripe,
+  integerOrUndefined,
   type StripeOptions,
   type StripeResult,
   stringOrUndefined,
@@ -98,15 +99,26 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
       });
       if (!found.ok) return notFound(found);
 
-      // **This Plugin does not compare the intent's amount against the Order's**, and that is
-      // a known gap rather than an oversight. It cannot be closed here: `place-order` charges
-      // the lines plus their Adjustments plus tax, computed at placement, while the intent is
-      // created before the redirect by a route the Project owns — and a Cart carries no
-      // totals, so a storefront has no kobai-supplied way to obtain that figure in advance.
-      // A check here would decline every purchase in any Store with tax or an Adjustment.
-      // Closing it properly means giving a storefront a total it can pay against, which is a
-      // decision neither #226 nor ADR-0070 takes.
+      // **The money in the intent is what kobai is about to charge, or this payment is not
+      // taken** (ADR-0077). This used to be a documented gap: a Cart carried no total, so a
+      // storefront had no kobai-supplied figure to create the intent for, and a comparison here
+      // would have declined every purchase in a Store with tax or an Adjustment. `POST
+      // /store/carts/{id}/quote` is that figure now, so the mismatch is back to being the
+      // exceptional case it always should have been — and it is the exceptional case that
+      // matters, because Core records the Order at *its* total and the books would otherwise
+      // balance against money that never arrived.
       //
+      // In front of the confirm below rather than after it, and what that buys depends on which
+      // of the two flows this is. **A card at `requires_confirmation` has not been charged**, so
+      // refusing here leaves the Shopper unbilled instead of billed and refunded. **A redirect
+      // intent that already succeeded has taken the money at the bank** — nothing in this
+      // Plugin can undo that by refusing — so there the decline is Core's `payment-declined`,
+      // no Order is written, and giving the money back is the Project's call to
+      // `refundUnplacedPayment`: exactly the path ADR-0070 already describes for a hold that
+      // lapsed while the Shopper was away, reached by a second cause.
+      const mismatch = declineIfItDisagreesWith(request, found.body);
+      if (mismatch) return mismatch;
+
       // A card entered in Elements without a redirect leaves the intent here, and this is
       // where `charge` really does confirm. Keyed on the intent, so a placement retried after
       // a timeout confirms the same payment rather than taking a second one.
@@ -231,6 +243,53 @@ function declineDetail(intent: Record<string, unknown>): string {
       : undefined;
 
   return message ?? "This payment was not completed.";
+}
+
+/**
+ * Whether this PaymentIntent is for what Core is about to charge — the decline if it is not.
+ *
+ * **This is the half of ADR-0077 that closes the loop.** The route that quotes a Cart gives a
+ * storefront the figure to start a payment for; nothing binds the two, and nothing could — the
+ * Cart is mutable by design (ADR-0009), so a line added between the redirect and the return is
+ * an ordinary thing that happens. What this does is refuse the purchase when the two figures
+ * have come apart, so that an expensive Cart cannot be bought with a cheap payment.
+ *
+ * **Both halves are compared, and the currency is not the cosmetic one.** 2500 of one currency
+ * is not 2500 of another, so a check on the number alone would take a payment in the wrong money
+ * and let Core record the Order in kobai's. Stripe writes its currencies in lower case and kobai
+ * writes ISO 4217 as it is written, which is the one difference this has to know about.
+ *
+ * **An intent with no amount is a decline too**, and deliberately not a throw: an amount is not
+ * something Stripe omits, so what is on the other end of that answer is something this Plugin
+ * cannot check a payment against — and confirming against it would be trusting exactly the thing
+ * that could not be verified. A throw would say the deployment is broken, which is the other
+ * diagnosis and is {@link notFound}'s to make.
+ *
+ * The detail is written for the Developer wiring the storefront rather than for the Shopper —
+ * the same choice {@link missingIntent} makes, and for the same reason: a Shopper can do nothing
+ * about this, and the person who can needs to be told which two figures disagreed.
+ */
+function declineIfItDisagreesWith(
+  request: PaymentRequest,
+  intent: Record<string, unknown>,
+): PaymentOutcome | undefined {
+  const amount = integerOrUndefined(intent.amount);
+  const currency = stringOrUndefined(intent.currency);
+  if (amount === undefined || currency === undefined) {
+    return {
+      ok: false,
+      detail:
+        "This payment was described without an amount or a currency, so it could not be checked against what this Order comes to, and it was not taken.",
+    };
+  }
+  if (amount === request.amount && currency === request.currency.toLowerCase()) {
+    return undefined;
+  }
+
+  return {
+    ok: false,
+    detail: `This payment is for ${amount} ${currency.toUpperCase()} and this Order comes to ${request.amount} ${request.currency}, so it was not taken. Ask \`POST /store/carts/{id}/quote\` for what the Cart comes to and start the payment for that.`,
+  };
 }
 
 /**

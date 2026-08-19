@@ -163,6 +163,18 @@ export type CartShopper = components["schemas"]["CartShopper"];
  * union and be told by its compiler when a fourth arrives.
  */
 export type CartState = components["schemas"]["CartState"];
+/**
+ * What a Cart comes to, as at one instant (ADR-0077).
+ *
+ * The figure a storefront starts a bank-redirect payment for, and the one shape here that is
+ * deliberately **not** a record of anything: nothing was written, nothing is held, and there is
+ * no identifier on it to send back. `quotedAt` is the whole of what it promises.
+ */
+export type Quote = components["schemas"]["Quote"];
+export type QuoteLineItem = components["schemas"]["QuoteLineItem"];
+export type QuoteAdjustment = components["schemas"]["QuoteAdjustment"];
+export type QuoteLevelAdjustment = components["schemas"]["QuoteLevelAdjustment"];
+export type QuoteRequest = components["schemas"]["QuoteRequest"];
 export type Merchant = components["schemas"]["Merchant"];
 export type Role = components["schemas"]["Role"];
 export type Session = components["schemas"]["Session"];
@@ -187,19 +199,20 @@ export type CartReservations = components["schemas"]["CartReservations"];
 export type HeldClaim = components["schemas"]["HeldClaim"];
 export type CartReservationRefusal = components["schemas"]["CartReservationRefusal"];
 export type OrderRefusal = components["schemas"]["OrderRefusal"];
+export type QuoteRequestRefusal = components["schemas"]["QuoteRequestRefusal"];
 export type PlaceOrderRequestRefusal = components["schemas"]["PlaceOrderRequestRefusal"];
 export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];
 export type SessionRefusal = components["schemas"]["SessionRefusal"];
 export type ApiKeyRefusal = components["schemas"]["ApiKeyRefusal"];
 export type PermissionDenied = components["schemas"]["PermissionDenied"];
 export type SecretKeyRequired = components["schemas"]["SecretKeyRequired"];
-// The last two are the ones that cannot be narrowed exhaustively, and each says so itself
+// The last three are the ones that cannot be narrowed exhaustively, and each says so itself
 // because a consumer meets the name rather than this comment. The shared argument, once:
-// resolving a price and placing an Order both run a Workflow, and a Step a Project or a
-// Plugin supplied is Extension Point 2 (ADR-0003) — it may refuse with a word Core has never
-// heard of, which Core answers 422 because it cannot say what the word means. Closing either
-// set here would close that Extension Point, so ADR-0060 leaves `reason` a bare `string` for
-// exactly these two and closes every other family above.
+// resolving a price, quoting a Cart and placing an Order all run a Workflow, and a Step a
+// Project or a Plugin supplied is Extension Point 2 (ADR-0003) — it may refuse with a word Core
+// has never heard of, which Core answers 422 because it cannot say what the word means. Closing
+// any of the three here would close that Extension Point, so ADR-0060 leaves `reason` a bare
+// `string` for exactly these and closes every other family above.
 
 /**
  * Why resolving a price was refused.
@@ -223,6 +236,16 @@ export type PriceRefusal = components["schemas"]["PriceRefusal"];
  * only correct answer for a refusal a Project wrote after this client was generated.
  */
 export type PlaceOrderRefusal = components["schemas"]["PlaceOrderRefusal"];
+/**
+ * Why a Cart could not be quoted, with the account of the Workflow run beside it.
+ *
+ * **`reason` is an open string**, for {@link PlaceOrderRefusal}'s reason and to a slightly
+ * sharper degree: the Steps a quote runs are exactly the pricing ones, which are the ones a
+ * Project is most likely to have replaced. Core's own are listed in the field's own description
+ * — everything the Cart read and `resolve-price` can say, and nothing about payment or stock,
+ * because a quote asks for neither.
+ */
+export type QuoteRefusal = components["schemas"]["QuoteRefusal"];
 
 /**
  * The generated surface itself, for anything the helpers above do not reach.

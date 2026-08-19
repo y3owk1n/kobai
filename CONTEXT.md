@@ -182,6 +182,15 @@ phone and an accountant puts in a spreadsheet. Monotonic per Store and stable fo
 Core's.
 _Avoid_: reference, order ID (that is the other one), invoice number, receipt number
 
+**Quote**:
+What a Cart comes to **right now**, answered by a route rather than carried on the Cart
+(ADR-0077). Produced by running the pricing half of the deployment's own `place-order` — the same
+prices, Adjustments and tax the placement will charge — and stopping before anything is claimed,
+charged or written. It carries the instant it was worked out and nothing else: no deadline,
+nothing to send back, and no hold. What a storefront starts a bank redirect's payment for.
+_Avoid_: estimate, price (that is a Variant's), total (there is none on the Cart), offer,
+reservation (that is stock), draft order
+
 **Capture**:
 The moment an Order comes into existence and becomes immutable, and the moment Reservations
 are consumed — one database transaction, and the last thing in `place-order` that can fail.

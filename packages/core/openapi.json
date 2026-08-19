@@ -2033,6 +2033,241 @@
           "reason"
         ]
       },
+      "Quote": {
+        "type": "object",
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217. Every amount here is in it."
+          },
+          "lineItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLineItem"
+            },
+            "description": "In the Cart's own order — the order `GET /store/carts/{id}` reports its lines in, and **not** the SKU order an Order reports Line Items in. Read a line by its `sku` rather than by position if you are comparing the two."
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLevelAdjustment"
+            },
+            "description": "The Adjustments belonging to no single line — a basket-wide voucher, a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own."
+          },
+          "total": {
+            "type": "integer",
+            "description": "What the whole Cart comes to, in minor units: every line total, plus these Adjustments and the tax on each of them. This is the figure a placement of this Cart, unchanged, would charge."
+          },
+          "quotedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this was worked out. Nothing is bound to it and nothing expires with it — it is here so the answer reads as a moment rather than as an offer."
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StepReport"
+                },
+                "description": "The Steps that produced this, in order — the pricing half of `place-order`, stopping before the Step that claims stock. A Project that replaced one sees its own here."
+              }
+            },
+            "required": [
+              "name",
+              "steps"
+            ]
+          }
+        },
+        "required": [
+          "cartId",
+          "currency",
+          "lineItems",
+          "adjustments",
+          "total",
+          "quotedAt",
+          "workflow"
+        ]
+      },
+      "QuoteLineItem": {
+        "type": "object",
+        "properties": {
+          "lineItemId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The **Cart's** Line Item this prices. Named rather than `id` because nothing was created: there is no Order here and no Line Item of one."
+          },
+          "variantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sku": {
+            "type": "string",
+            "description": "The Variant's SKU **now**, not a snapshot."
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "unitAmount": {
+            "type": "integer",
+            "description": "What one of it costs, in minor units — resolved through this deployment's `resolve-price`, exactly as placing would resolve it."
+          },
+          "tax": {
+            "type": "integer",
+            "description": "Tax on this line, in minor units. Zero until a tax Step is wired, the way an Order's is."
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteAdjustment"
+            },
+            "description": "The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them."
+          },
+          "total": {
+            "type": "integer",
+            "description": "What this line comes to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`."
+          }
+        },
+        "required": [
+          "lineItemId",
+          "variantId",
+          "sku",
+          "quantity",
+          "unitAmount",
+          "tax",
+          "adjustments",
+          "total"
+        ]
+      },
+      "QuoteAdjustment": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set."
+          },
+          "description": {
+            "type": "string",
+            "description": "For a person to read."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "**Signed** minor units: negative discounts, positive surcharges. The totals account for it either way."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "code",
+          "description",
+          "amount",
+          "metadata"
+        ]
+      },
+      "QuoteLevelAdjustment": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/QuoteAdjustment"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "tax": {
+                "type": "integer",
+                "description": "Tax on this Adjustment, in minor units, signed with `amount`. Zero until a tax Step is wired."
+              }
+            },
+            "required": [
+              "tax"
+            ]
+          }
+        ]
+      },
+      "QuoteRequestRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "malformed-body",
+              "metadata-in-both"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "QuoteRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "failed": {
+                "type": "string",
+                "description": "The slot that refused."
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StepReport"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "failed",
+              "steps"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason",
+          "workflow"
+        ]
+      },
+      "QuoteRequest": {
+        "type": "object",
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/OpenMetadata"
+          }
+        }
+      },
+      "OpenMetadata": {
+        "type": "object",
+        "additionalProperties": {},
+        "description": "Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either."
+      },
       "PlacedOrder": {
         "allOf": [
           {
@@ -2141,11 +2376,6 @@
         "required": [
           "cartId"
         ]
-      },
-      "OpenMetadata": {
-        "type": "object",
-        "additionalProperties": {},
-        "description": "Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either."
       }
     },
     "parameters": {}
@@ -6263,6 +6493,134 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CartReservationRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/carts/{id}/quote": {
+      "post": {
+        "summary": "What this Cart comes to",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Runs the pricing half of this deployment's own `place-order` — the same `resolve-price`, the same Adjustments, the same tax Step — and stops before anything is claimed, charged or written. So a Project that replaced a pricing Step quotes the prices it will charge, and the figure here is what placing this Cart unchanged would cost. It is a **quote at an instant**, not an offer: nothing is held, nothing binds a placement to it, `quotedAt` says when it was worked out, and there is nothing here to send back. Hold the stock with `POST /store/carts/{id}/reservations` — this does not. Send the same `metadata` you will place with, on the body or the query string, so that a Step reading it sees the same context both times.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What this Cart comes to, and the Steps that worked it out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, or a key arrived in both the query string and `metadata`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A Step refused: there is no such Cart.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing was quoted. The Cart can no longer produce an Order — it has expired, or it has already been placed — or something in it names a Fulfilment Strategy this deployment no longer has wired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Step refused. The request was well formed and the Workflow declined it — the Cart is empty, a line can no longer be priced, or a Step this build of Core does not know said no.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRefusal"
                 }
               }
             }

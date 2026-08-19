@@ -24,6 +24,7 @@ import {
 } from "../db/page.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
+import type { QuoteCartRefusal as QuoteCartReason } from "../order/quote-cart.ts";
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
 import type { HoldCartRefusal } from "../reservation/hold-cart.ts";
 import type { InventoryUpdate } from "../reservation/inventory.ts";
@@ -1404,6 +1405,12 @@ export const CartSummary = z
  * **No totals.** ADR-0009 makes a Cart unauthoritative: what a Shopper pays is resolved at
  * Capture, and a figure here would be one nothing stands behind and the first thing anybody
  * would mistake for one.
+ *
+ * **What a Cart comes to is asked for, at {@link Quote}** — `POST /store/carts/{id}/quote`,
+ * which runs this deployment's own pricing Steps and reports the instant it ran them
+ * (ADR-0077). That is a different thing from a field here, and the rule above is what decides
+ * it: an answer to a question carries a time and stands behind itself, and a number on this
+ * shape would do neither.
  */
 export const Cart = CartSummary.extend({
   lineItems: z.array(CartLineItem).readonly(),
@@ -1588,6 +1595,197 @@ export const CartReservationRefusal = z
     }),
   })
   .openapi("CartReservationRefusal");
+
+// ---- Quoting a Cart ---------------------------------------------------------------------
+
+/**
+ * One Adjustment as a quote reports it — what an Order's would say, without the row's identity.
+ *
+ * `id` is absent because nothing was written: a quote runs the Steps that *decide* an Adjustment
+ * and stops before the transaction that would give it one, so an identifier here would name a
+ * record that does not exist. Everything else is what {@link OrderAdjustment} carries.
+ */
+export const QuoteAdjustment = z
+  .object({
+    code: z.string().meta({
+      description:
+        "Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set.",
+    }),
+    description: z.string().meta({ description: "For a person to read." }),
+    amount: z.int().meta({
+      description:
+        "**Signed** minor units: negative discounts, positive surcharges. The totals account for it either way.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("QuoteAdjustment");
+
+/**
+ * An Adjustment on the Cart as a whole, with the tax a Step worked out for it.
+ *
+ * The split {@link OrderLevelAdjustment} makes, for the same reason: a line's own Adjustments are
+ * already inside that line's `tax`, because tax is charged on the adjusted line — so only the
+ * ones belonging to no line carry a figure of their own.
+ */
+export const QuoteLevelAdjustment = QuoteAdjustment.extend({
+  tax: z.int().meta({
+    description:
+      "Tax on this Adjustment, in minor units, signed with `amount`. Zero until a tax Step is wired.",
+  }),
+}).openapi("QuoteLevelAdjustment");
+
+/**
+ * One line of a Cart, priced as it would be charged now.
+ *
+ * It is **not** a snapshot and does not become one: `sku` is what the Variant is called at this
+ * instant, and a Product renamed a second later is renamed here too. That is the whole difference
+ * between this and {@link OrderLineItem}, which froze its copy at Capture (ADR-0009).
+ */
+export const QuoteLineItem = z
+  .object({
+    lineItemId: z.uuid().meta({
+      description:
+        "The **Cart's** Line Item this prices. Named rather than `id` because nothing was created: there is no Order here and no Line Item of one.",
+    }),
+    variantId: z.uuid(),
+    sku: z.string().meta({ description: "The Variant's SKU **now**, not a snapshot." }),
+    quantity: z.int(),
+    unitAmount: z.int().meta({
+      description:
+        "What one of it costs, in minor units — resolved through this deployment's `resolve-price`, exactly as placing would resolve it.",
+    }),
+    tax: z.int().meta({
+      description:
+        "Tax on this line, in minor units. Zero until a tax Step is wired, the way an Order's is.",
+    }),
+    adjustments: z.array(QuoteAdjustment).readonly().meta({
+      description:
+        "The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them.",
+    }),
+    total: z.int().meta({
+      description:
+        "What this line comes to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`.",
+    }),
+  })
+  .openapi("QuoteLineItem");
+
+/**
+ * **What a Cart comes to, as at one instant** (ADR-0077).
+ *
+ * The figure a storefront needs before it starts a payment the Shopper completes somewhere else:
+ * the payment has to be created for an amount, and until this route existed the only figure
+ * available was the storefront's own arithmetic over prices it had read (ADR-0070).
+ *
+ * **It is a quote and not a promise, and three things say so.** `quotedAt` is when it was worked
+ * out; there is no deadline on it, because a quote that expired would be one that was good until
+ * it did; and there is nothing here to quote back at kobai — no handle, no identifier, no token
+ * `POST /store/orders` would accept. Prices, Adjustments and tax may all move between this call
+ * and a placement, and what is charged is what the placement works out. What it *does* guarantee
+ * is that both figures come from the same declaration: this runs this deployment's own
+ * `place-order` Steps as far as the tax, so a Project that replaced a pricing Step quotes the
+ * prices it will charge.
+ *
+ * **Nothing is held, charged or written.** Stock is held by
+ * `POST /store/carts/{id}/reservations`, and asking this question claims nothing — so a Cart
+ * quoted and then placed can still be refused `insufficient-inventory`.
+ */
+export const Quote = z
+  .object({
+    cartId: z.uuid(),
+    currency: z.string().meta({ description: "ISO 4217. Every amount here is in it." }),
+    lineItems: z.array(QuoteLineItem).readonly().meta({
+      description:
+        "In the Cart's own order — the order `GET /store/carts/{id}` reports its lines in, and **not** the SKU order an Order reports Line Items in. Read a line by its `sku` rather than by position if you are comparing the two.",
+    }),
+    adjustments: z.array(QuoteLevelAdjustment).readonly().meta({
+      description:
+        "The Adjustments belonging to no single line — a basket-wide voucher, a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own.",
+    }),
+    total: z.int().meta({
+      description:
+        "What the whole Cart comes to, in minor units: every line total, plus these Adjustments and the tax on each of them. This is the figure a placement of this Cart, unchanged, would charge.",
+    }),
+    quotedAt: z.iso.datetime().meta({
+      description:
+        "When this was worked out. Nothing is bound to it and nothing expires with it — it is here so the answer reads as a moment rather than as an offer.",
+    }),
+    workflow: z.object({
+      name: z.string(),
+      steps: z.array(StepReport).readonly().meta({
+        description:
+          "The Steps that produced this, in order — the pricing half of `place-order`, stopping before the Step that claims stock. A Project that replaced one sees its own here.",
+      }),
+    }),
+  })
+  .openapi("Quote");
+
+export const QuoteRequest = z
+  .object({
+    // No `.meta()` here: this field emits a `$ref`, and a description on it would replace
+    // `OpenMetadata`'s own rather than sit beside it. The schema says the whole thing.
+    metadata: OpenMetadata.optional(),
+  })
+  .openapi("QuoteRequest");
+
+/**
+ * The ways this route turns a body back before the Workflow runs, as a **closed set**.
+ *
+ * Its own schema rather than a share of {@link PlaceOrderRequestRefusal}, although the words are
+ * the same three: that one is named for the route that places an Order, and a client reading a
+ * description should not have to work out that a schema named after one route governs another.
+ * The reasons are identical because the open context is — both halves, and a key in both refused
+ * rather than resolved (#121).
+ */
+export const QuoteRequestRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum({ ...REQUEST_REASONS, "metadata-in-both": "metadata-in-both" }),
+  })
+  .openapi("QuoteRequestRefusal");
+
+/**
+ * Every reason of Core's own a quote can be refused with — two unions, and it takes both.
+ *
+ * Reading the Cart makes the first, exactly as it does for a placement and for a hold, so a word
+ * added to `load-cart.ts` turns this red along with both of those. `resolve-price`'s travel out
+ * of `price-lines` as themselves, which is what makes a Plugin's or a Project's pricing Step able
+ * to refuse a quote in its own words.
+ *
+ * What is **not** here is everything the pricing half never reaches: no payment is asked for and
+ * nothing is claimed, so `payment-declined`, `no-payment-provider` and `insufficient-inventory`
+ * are not among the answers this route has.
+ */
+const QUOTE_REASONS = {
+  "cart-not-found": "cart-not-found",
+  "cart-expired": "cart-expired",
+  "cart-placed": "cart-placed",
+  "cart-empty": "cart-empty",
+  "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+  "variant-not-found": "variant-not-found",
+  "price-not-set": "price-not-set",
+} as const satisfies { [R in QuoteCartReason | PriceResolutionRefusal]: R };
+
+/**
+ * A Workflow declining to quote a Cart, and how far it got.
+ *
+ * `reason` is an open string for {@link PlaceOrderRefusal}'s reason: the pricing Steps are the
+ * ones a Project is most likely to have replaced, and a Step this build of Core has never heard
+ * of refuses with whatever it likes. Core answers 422 for a reason it does not know.
+ *
+ * `workflow` is not optional here, unlike a placement's: nothing turns a quote back between the
+ * request being read and the Workflow starting, because there is no idempotency key to claim.
+ */
+export const QuoteRefusal = z
+  .object({
+    error: z.string(),
+    reason: stepReason(QUOTE_REASONS),
+    workflow: z.object({
+      name: z.string(),
+      failed: z.string().meta({ description: "The slot that refused." }),
+      steps: z.array(StepReport).readonly(),
+    }),
+  })
+  .openapi("QuoteRefusal");
 
 // ---- Orders ----------------------------------------------------------------------------
 

@@ -102,6 +102,7 @@ New to the project? These five carry the shape of everything else:
 | [0074](./0074-currencies-are-enabled-by-the-store-and-selected-by-the-region.md) | Currencies are enabled by the Store and selected by the Region | Accepted — completes 0008; **narrows 0005 and 0065's argument** |
 | [0075](./0075-the-hold-window-is-a-projects-and-core-keeps-no-ceiling.md) | The hold window is a Project's, and Core keeps no ceiling over it | Accepted — 0050's shape, **without its cap**; carries out 0070 |
 | [0076](./0076-a-merchants-role-is-corrected-in-place.md) | A Merchant's Role is corrected in place, and a Merchant is still never removed | Accepted — 0062's shape on one more table; **discharges 0066's note** and makes 0059's repair reachable |
+| [0077](./0077-a-quote-is-a-route-not-a-total-on-the-cart.md) | A quote is a route, not a total on the Cart | Accepted — closes a hole in 0070; **leaves 0009 untouched** and says why |
 
 ## Prototypes
 

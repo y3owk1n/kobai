@@ -762,7 +762,7 @@ const ONE_ORDER_PER_CART = "core_order_cart_idx";
  * It travels as a bug rather than a refusal — a refusal would tell a storefront its request was
  * declined, when what happened is that this deployment is wired to charge fractions of a penny.
  */
-function inWholeMinorUnits(input: TaxedLines): void {
+export function inWholeMinorUnits(input: TaxedLines): void {
   const amounts = [
     ...input.adjustments.flatMap((adjustment) => [adjustment.amount, adjustment.tax]),
     ...input.lines.flatMap((line) => [
@@ -830,7 +830,7 @@ function idOf(lineIdBySku: Map<string, string>, sku: string): string {
 }
 
 /** What one line came to: the goods, its own Adjustments, and the tax on the adjusted figure. */
-function totalOf(line: TaxedLine): number {
+export function totalOf(line: TaxedLine): number {
   return line.unitAmount * line.quantity + sumOf(line.adjustments) + line.tax;
 }
 
@@ -838,11 +838,17 @@ function totalOf(line: TaxedLine): number {
  * What the whole Order comes to: every line total, plus the Adjustments belonging to no line and
  * the tax on each of them.
  *
- * One expression, read by **both** the Step that charges and the Step that writes — which is the
- * property worth having. A total computed twice is a total that can be computed two ways, and the
- * shape of that failure is a Shopper charged one figure while their Order records another.
+ * One expression, read by the Step that charges, the Step that writes and the quote route that
+ * answers what a Cart comes to (ADR-0077) — which is the property worth having. A total computed
+ * twice is a total that can be computed two ways, and the shape of that failure is a Shopper
+ * charged one figure while their Order records another, or quoted one figure and charged a
+ * second.
+ *
+ * Exported for the third of those, and it is the whole reason `quote-cart.ts` can promise
+ * agreement rather than assert it: a quote of an unchanged Cart runs the same Steps and then
+ * this same expression over what they produced.
  */
-function orderTotalOf(input: TaxedLines): number {
+export function orderTotalOf(input: TaxedLines): number {
   return (
     input.lines.reduce((sum, line) => sum + totalOf(line), 0) +
     input.adjustments.reduce(
@@ -913,7 +919,7 @@ function untaxed(adjustments: readonly Adjustment[]): readonly TaxedAdjustment[]
  * Multi-currency is out of scope by decision, and is additive when it arrives — a Price is a
  * row, so the shape that would represent it is more rows rather than a different Order.
  */
-function oneCurrency(lines: readonly TaxedLine[]): string {
+export function oneCurrency(lines: readonly TaxedLine[]): string {
   const currencies = [...new Set(lines.map((line) => line.currency))];
   const [only] = currencies;
   if (only === undefined) throw new Error("An Order was captured with no Line Items.");

@@ -55,6 +55,35 @@ function both go through, and three things about it are decisions rather than im
   because the rows an upgrading deployment already has were written when nothing recorded it.
   The claim on stock underneath is still Inventory's one conditional update.
 
+**A Cart's total is a route and never a field, and it prices through the deployment's own
+declaration** (ADR-0077). `POST /store/carts/{id}/quote` answers what a Cart comes to now — lines,
+Adjustments, tax — because ADR-0070 has the *Project* create the PaymentIntent and so needs an
+amount before kobai has computed anything, and a Cart carries no totals on purpose (ADR-0009).
+Four things about it are decisions rather than implementation, and the first is the one to hold:
+
+- **It runs the `place-order` value the surface was handed, sliced at a *named slot*.**
+  `quoteCart` in `order/quote-cart.ts` takes the deployment's declaration and runs it up to but
+  not including `hold-reservations` — the first Step that claims, charges or writes. A quote
+  computed any other way disagrees with the charge by construction for any Project that replaced
+  a pricing Step. The boundary is a slot name and never a count, because an inserted Step sits at
+  a position of its own and a count would stop the quote short of the tax it was asked for; both
+  halves are watched failing in `order/quote-cart.test.ts`.
+- **The figure is `orderTotalOf`'s, not a second implementation.** That function and `totalOf`,
+  `oneCurrency` and `inWholeMinorUnits` beside it are exported from `place-order.ts` for this one
+  caller, so "the quote and the placement agree" is a property of there being one expression.
+- **It is a `POST` for a question, and takes both halves of the open context.** A deployment whose
+  `apply-adjustments` reads a lead time has to quote with the context it will place with, and the
+  body half cannot travel on a `GET` — so it calls `openMetadataWithBody` and refuses
+  `metadata-in-both` at 400 exactly as `POST /store/orders` does.
+- **It sits behind an ordinary API key**, publishable included, which is ADR-0055's argument
+  rather than an exception to it: the secret-key routes consume stock or money and this consumes
+  neither. Which gate a route sits behind is promised (ADR-0060), so tightening it later is a
+  break.
+
+**The other half of it is in `@kobai/plugin-stripe`**, and without that half the route has only
+moved the problem: `charge` compares the intent's amount and currency against what Core is about
+to charge and declines a mismatch, **before** it confirms anything.
+
 **One interface, and the providers are Core's own.** `reservation/provider.ts` is ADR-0018's
 single Reservation interface; Inventory is its only implementation and Capacity joins
 `RESERVATION_PROVIDERS` when it is built. `core_reservation` is Core's record for every provider
