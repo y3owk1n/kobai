@@ -9,6 +9,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -86,16 +87,6 @@ export function FulfilmentStrategyField<T extends FieldValues>({
   const wired = strategies.data?.strategies ?? [];
 
   /**
-   * The value this field is on, when the list does not carry it.
-   *
-   * Offered as an option regardless, because a `Select` whose value matches no item shows
-   * nothing — so a Variant would look blank while the list was in flight, and the one state
-   * this screen exists to repair would be invisible rather than obvious.
-   */
-  const chosen = typeof field.value === "string" ? field.value : "";
-  const missing = chosen !== "" && !wired.some((strategy) => strategy.name === chosen);
-
-  /**
    * Whether "this deployment does not have that Strategy" is a thing we actually know.
    *
    * **Only once the read succeeded.** While it is in flight `wired` is empty, so every Variant
@@ -105,10 +96,47 @@ export function FulfilmentStrategyField<T extends FieldValues>({
    */
   const known = strategies.isSuccess;
 
+  /**
+   * The Strategy this field is on, or `null` where it is on none.
+   *
+   * **`null` rather than `""`, because `null` is what Base UI means by "nothing selected".**
+   * The two agreed by accident — a value serialising to `""` counts as empty for the
+   * placeholder — but only `null` says it. The *form* still holds `""` for the untouched
+   * field, which is the value the schema refuses; `null` is what `Select` is handed.
+   */
+  const chosen =
+    typeof field.value === "string" && field.value !== "" ? field.value : null;
+
+  /**
+   * The value this field is on, when the list does not carry it.
+   *
+   * Offered regardless, so the picker can show and stay on the Strategy the Variant actually
+   * points at — and named "not wired here" only once {@link known}, because until then every
+   * Variant looks unwired.
+   */
+  const unwired =
+    chosen !== null && !wired.some((strategy) => strategy.name === chosen)
+      ? { value: chosen, label: known ? `${chosen} — not wired here` : chosen }
+      : null;
+
+  /**
+   * What each Strategy on offer is called: the one list the options are drawn from, and the
+   * one `Select` resolves the trigger's text against.
+   *
+   * **`items` is how `Select.Value` renders a label rather than the raw value.** Without it
+   * the trigger and the list disagreed about the same Strategy — the option read
+   * `physical — not wired here` while the trigger under it read `physical`.
+   */
+  const items = [
+    ...(unwired ? [unwired] : []),
+    ...wired.map((strategy) => ({ value: strategy.name, label: strategy.name })),
+  ];
+
   return (
     <Field data-invalid={fieldState.error !== undefined}>
       <FieldLabel htmlFor={id}>Fulfilment Strategy</FieldLabel>
       <Select
+        items={items}
         value={chosen}
         // Base UI reports `null` for "nothing selected", which this field never wants: a Variant
         // always points at some Strategy, and clearing it would submit an empty name for kobai
@@ -127,16 +155,15 @@ export function FulfilmentStrategyField<T extends FieldValues>({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {missing ? (
-            <SelectItem value={chosen}>
-              {known ? `${chosen} — not wired here` : chosen}
-            </SelectItem>
-          ) : null}
-          {wired.map((strategy) => (
-            <SelectItem key={strategy.name} value={strategy.name}>
-              {strategy.name}
-            </SelectItem>
-          ))}
+          {/* The list's padding lives on the group in this distribution, so options that are
+              not wrapped in one sit flush against the popup's edge. */}
+          <SelectGroup>
+            {items.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
         </SelectContent>
       </Select>
       <FieldDescription>

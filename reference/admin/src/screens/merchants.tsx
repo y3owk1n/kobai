@@ -38,6 +38,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -528,18 +529,31 @@ function RoleField<T extends FieldValues>({
   const roles = useEveryRole();
   const { field, fieldState } = useController({ control, name });
   const available = roles.data?.roles ?? [];
-  // `""` is the untouched field, which the schema refuses and the `Select` shows its
-  // placeholder for — asserted in the browser, because "no Role is chosen yet" reading as an
-  // empty box would be a control a Merchant cannot name.
-  const chosen = typeof field.value === "string" ? field.value : "";
+  // The Role this field is on, or `null` where it is on none. **`null` rather than `""`,
+  // because `null` is what Base UI means by "nothing selected"** — the two agreed by accident,
+  // a value serialising to `""` counting as empty for the placeholder, but only `null` says it.
+  // The *form* still holds `""` for the untouched field, which the schema refuses and the
+  // `Select` shows its placeholder for — asserted in the browser, because "no Role is chosen
+  // yet" reading as an empty box would be a control a Merchant cannot name.
+  const chosen =
+    typeof field.value === "string" && field.value !== "" ? field.value : null;
   // **A value the list does not carry is offered anyway**, which is `FulfilmentStrategyField`'s
-  // decision arriving here: a `<select>` whose value matches no option shows nothing and reports
-  // `""`. That is harmless for a create, where the value is `""` until somebody chooses — and it
-  // is a misreport on a row of the roster, where the value is a Role the Merchant *does* hold.
-  // It is reachable two ways, and both are ordinary: the list is still in flight, or the Role is
-  // past the {@link MOST_ROLE_PAGES} this picker reads. Either way the row would say the
-  // colleague holds no Role at all, about a colleague who holds one.
-  const missing = chosen !== "" && !available.some((role) => role.name === chosen);
+  // decision arriving here: an option is what a Merchant sees selected and can come back to, so
+  // a list without one offers no way to keep the Role the picker is showing. That is harmless
+  // for a create, where there is no value until somebody chooses — and it matters on a row of
+  // the roster, where the value is a Role the Merchant *does* hold. It is reachable two ways,
+  // and both are ordinary: the list is still in flight, or the Role is past the
+  // {@link MOST_ROLE_PAGES} this picker reads.
+  const unlisted =
+    chosen !== null && !available.some((role) => role.name === chosen) ? chosen : null;
+  // What each Role on offer is called: the one list the options are drawn from, and the one
+  // `Select` resolves the trigger's text against. **`items` is how `Select.Value` renders a
+  // label rather than the raw value**, which is Base UI's documented shape — a name and a value
+  // that happen to be the same string here, and would not be the day either stops being a name.
+  const items = [
+    ...(unlisted === null ? [] : [{ value: unlisted, label: unlisted }]),
+    ...available.map((role) => ({ value: role.name, label: role.name })),
+  ];
 
   const note = roleFieldNote(roles);
 
@@ -549,6 +563,7 @@ function RoleField<T extends FieldValues>({
         {label}
       </FieldLabel>
       <Select
+        items={items}
         value={chosen}
         // Base UI reports `null` for "nothing selected", which this field never wants: a
         // colleague is created against a Role, and clearing it would submit an empty name.
@@ -566,16 +581,15 @@ function RoleField<T extends FieldValues>({
           <SelectValue placeholder="Choose a Role" />
         </SelectTrigger>
         <SelectContent>
-          {missing ? (
-            <SelectItem key={chosen} value={chosen}>
-              {chosen}
-            </SelectItem>
-          ) : null}
-          {available.map((role) => (
-            <SelectItem key={role.id} value={role.name}>
-              {role.name}
-            </SelectItem>
-          ))}
+          {/* The list's padding lives on the group in this distribution, so options that are
+              not wrapped in one sit flush against the popup's edge. */}
+          <SelectGroup>
+            {items.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
         </SelectContent>
       </Select>
       {quiet && !note.exceptional ? null : (

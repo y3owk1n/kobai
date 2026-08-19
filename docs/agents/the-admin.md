@@ -293,8 +293,21 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   empty list — otherwise every ordinary `physical` Variant is labelled broken for the length of
   a round trip, and permanently if the read fails, which announces exactly the state the screen
   exists to repair about a Variant that is fine. The value is still rendered as an option while
-  the list is in flight, because a `<select>` whose value matches no option shows nothing and
-  reports `""`.
+  the list is in flight, because a picker whose value matches no option shows nothing.
+- **A `Select` is given `items`, its options are wrapped in a `SelectGroup`, and "no value" is
+  `null`** (#239). All three are Base UI's documented shape and this Admin had none of them, so
+  each was a defect the type checker could not see. `Select.Value` renders the **raw value**
+  unless `Select.Root` is handed `items`, which is why the Fulfilment Strategy picker's trigger
+  read `physical` under an option reading `physical — not wired here`: build the one list of
+  `{ value, label }` and draw both the options and `items` from it, rather than writing the
+  options twice. The popup's padding lives on `SelectGroup` in this distribution — `SelectContent`
+  renders a bare `Select.List` and puts none on it — so options that are not wrapped in one sit
+  flush against the popup's edge, which is why the selects and the dropdown menus did not look
+  alike. And **`null` is what Base UI means by "nothing selected"**; `""` agreed with it only by
+  accident, a value serialising to `""` counting as empty for the placeholder. The *form* still
+  holds `""` for the untouched field — that is what the schema refuses — and `null` is only what
+  `Select` is handed. **`ui/select.tsx` itself is upstream's**, which is the point: none of this
+  was a component to fix.
 - **A popup that portals lands in the frame's container, not in `<body>`** (#179).
   `lib/portal.tsx` is the whole argument and `components/app-layout.tsx` renders the container
   inside `main`. Base UI moves a `Select`'s list and a `DropdownMenu`'s items out of the card
