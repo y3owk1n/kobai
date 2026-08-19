@@ -122,6 +122,7 @@ export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
 export type Payment = components["schemas"]["Payment"];
 export type Merchant = components["schemas"]["Merchant"];
+export type Role = components["schemas"]["Role"];
 export type Session = components["schemas"]["Session"];
 export type IssuedApiKey = components["schemas"]["IssuedApiKey"];
 export type ApiKeySummary = components["schemas"]["ApiKeySummary"];
@@ -134,6 +135,8 @@ export type StepReport = components["schemas"]["StepReport"];
 // removal: a name leaving the API is a build failure here, which is the behaviour to keep.
 export type InvalidRequest = components["schemas"]["InvalidRequest"];
 export type MerchantRefusal = components["schemas"]["MerchantRefusal"];
+export type RoleRefusal = components["schemas"]["RoleRefusal"];
+export type StoreRefusal = components["schemas"]["StoreRefusal"];
 export type CatalogRefusal = components["schemas"]["CatalogRefusal"];
 export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];
 export type SessionRefusal = components["schemas"]["SessionRefusal"];

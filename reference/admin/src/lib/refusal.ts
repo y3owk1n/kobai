@@ -3,6 +3,9 @@ import type {
   ApiKeyRefusal,
   CatalogRefusal,
   components,
+  MerchantRefusal,
+  RoleRefusal,
+  StoreRefusal,
 } from "@kobai/client";
 
 /**
@@ -183,6 +186,64 @@ const ORDER_REASONS: Record<components["schemas"]["OrderRefusal"]["reason"], tru
 
 /** Which Order refusal this was — today, only that there is no such Order. */
 export const orderReasonOf = narrowing(ORDER_REASONS);
+
+/**
+ * Every `reason` a Role operation can be refused with (#173, ADR-0066).
+ *
+ * The busiest of the three families this Admin's settings screens touch, and the one carrying
+ * the refusal that matters: `last-administrator`, which is kobai declining to leave the
+ * deployment with nobody who can administer Merchants. That one is a **lockout** rather than a
+ * preference — the first Merchant is seeded only while a deployment holds none, so the way back
+ * would be raw SQL — which is why the Role editor says the rule out loud before a Merchant tries
+ * it, and this is where the answer is narrowed when they do.
+ */
+const ROLE_REASONS: Record<RoleRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "role-not-found": true,
+  "role-name-taken": true,
+  "role-in-use": true,
+  "last-administrator": true,
+};
+
+/** Which Role refusal this was, for a screen with something better to say than the prose. */
+export const roleReasonOf = narrowing(ROLE_REASONS);
+
+/**
+ * Every `reason` creating a Merchant can be refused with.
+ *
+ * `unknown-role` is the one worth reading twice: a Role is named on the way in **by name**, so
+ * this arrives when the Role a colleague was to be created against has been renamed or deleted
+ * since the picker offering it was filled. That is a race rather than a typo, and the sentence
+ * for it has to say so.
+ */
+const MERCHANT_REASONS: Record<MerchantRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "unknown-role": true,
+  "email-taken": true,
+};
+
+/** Which refusal creating a Merchant met. */
+export const merchantReasonOf = narrowing(MERCHANT_REASONS);
+
+/**
+ * Every `reason` changing the Store can be refused with (#172, ADR-0065).
+ *
+ * `default-currency-is-fixed` is the interesting one and the Store screen is written so that a
+ * Merchant cannot reach it: every Price carries the Store's default and no other, so moving the
+ * column would reinterpret each amount already stored rather than convert it. The arm exists
+ * anyway — the family is closed and the compiler counts the arms, and a refusal that can only
+ * arrive from somewhere other than this form still has to be legible when it does.
+ */
+const STORE_REASONS: Record<StoreRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "default-currency-is-fixed": true,
+};
+
+/** Which refusal changing the Store met. */
+export const storeReasonOf = narrowing(STORE_REASONS);
 
 /**
  * The one way revoking an API key can be turned back.
