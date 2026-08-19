@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { CompassIcon } from "lucide-react";
+import { CompassIcon, LockIcon } from "lucide-react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppLayout } from "@/components/app-layout";
 import { LinkButton } from "@/components/link-button";
@@ -15,6 +15,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { problemOf } from "@/lib/refusal";
+import { useSections } from "@/lib/sections";
 import { KobaiProvider, useSession } from "@/lib/session";
 import { ThemeProvider } from "@/lib/theme";
 import { ApiKeys } from "@/screens/api-keys";
@@ -119,9 +120,7 @@ function Admin() {
   return (
     <Routes>
       <Route element={<AppLayout session={session.data} />}>
-        {/* Products is the Admin's front door, and `replace` keeps `/admin-ui/` out of the
-            history so the back button leaves rather than bouncing. */}
-        <Route index element={<Navigate to="/products" replace />} />
+        <Route index element={<FrontDoor />} />
         <Route path="products" element={<Products />} />
         <Route path="products/:id" element={<ProductScreen />} />
         <Route path="orders" element={<Orders />} />
@@ -155,6 +154,52 @@ function AskingWhoYouAre() {
 }
 
 /**
+ * Where `/admin-ui/` itself lands: the first section this Role can read.
+ *
+ * Products is still the front door for everybody who can read the catalog, which is every Role
+ * kobai seeds. It stopped being unconditional with #178: a Role without `catalog:read` sent to
+ * the Products list would meet a refusal on the one address it did not choose, which is exactly
+ * the empty-screen-that-403s ADR-0063 hides a section to avoid. So the front door is the head
+ * of the list the sidebar draws, and the two cannot disagree because they are one list.
+ *
+ * `replace` keeps `/admin-ui/` out of the history, so the back button leaves the Admin rather
+ * than bouncing off the redirect.
+ */
+function FrontDoor() {
+  const first = useSections()[0];
+  return first ? <Navigate to={first.path} replace /> : <NothingToShow />;
+}
+
+/**
+ * A Role that can read nothing at all.
+ *
+ * Not a contrived state: `POST /admin/roles` creates a Role with no Permissions by default, so
+ * this is what a colleague sees between being added and being told what they may do. The Admin
+ * has nowhere to send them and says so, rather than drawing an empty frame that looks like a
+ * list still loading.
+ *
+ * It offers no way out on purpose — there is nowhere to go — and no way to ask, because who
+ * administers access is not something this browser knows.
+ */
+function NothingToShow() {
+  return (
+    <Empty className="border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <LockIcon />
+        </EmptyMedia>
+        <EmptyTitle>This Admin has nothing to show you</EmptyTitle>
+        <EmptyDescription>
+          Your Role holds none of the permissions this Admin's screens need. A Merchant
+          who administers access can add them, and this screen will fill in the moment
+          they do.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+/**
  * A URL under `/admin-ui/` that no screen answers.
  *
  * The Project serves `index.html` for every path under the Admin's, so a mistyped one arrives
@@ -162,6 +207,12 @@ function AskingWhoYouAre() {
  * it must not do is show an empty frame and leave a Merchant wondering whether it is loading.
  */
 function NoSuchScreen() {
+  // The way out is the first section this Role can read, and not `/products`, which it was
+  // until #178: on a Role without `catalog:read` that was a mistyped address answered with a
+  // link to a refusal. A Role that can read nothing is offered no way out at all, because
+  // there is nowhere to send them.
+  const first = useSections()[0];
+
   return (
     <Empty className="border">
       <EmptyHeader>
@@ -170,11 +221,11 @@ function NoSuchScreen() {
         </EmptyMedia>
         <EmptyTitle>No such screen</EmptyTitle>
         <EmptyDescription>
-          Nothing in this Admin answers that address. The Products list is a good place to
-          start.
+          Nothing in this Admin answers that address.
+          {first ? ` The ${first.label} list is a good place to start.` : null}
         </EmptyDescription>
       </EmptyHeader>
-      <LinkButton to="/products">Go to Products</LinkButton>
+      {first ? <LinkButton to={first.path}>Go to {first.label}</LinkButton> : null}
     </Empty>
   );
 }

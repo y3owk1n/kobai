@@ -18,7 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { SECTIONS } from "@/lib/sections";
+import { useSections } from "@/lib/sections";
 
 /**
  * ⌘K, and every section of the Admin behind it.
@@ -31,8 +31,8 @@ import { SECTIONS } from "@/lib/sections";
  *
  * **It reads `lib/sections.ts`, which the sidebar reads too.** That is the whole reason the
  * list is a module rather than markup — two navigation affordances over one list cannot
- * disagree about what this Admin has — and it is where #178 narrows the list to the sections a
- * Role can read, once, rather than in each row offered here.
+ * disagree about what this Admin has — and `useSections` narrows it to the sections this Role
+ * can read once, rather than in each row offered here (#178, ADR-0063).
  *
  * Everything visual is `components/ui/`: `Command` is shadcn's own, `Dialog` is the one it
  * builds `CommandDialog` out of, and this file only decides what goes in (ADR-0063). It
@@ -45,6 +45,7 @@ import { SECTIONS } from "@/lib/sections";
  */
 export function CommandPalette() {
   const navigate = useNavigate();
+  const sections = useSections();
   const [open, setOpen] = useState(false);
   /**
    * What the button says the shortcut is.
@@ -136,7 +137,7 @@ export function CommandPalette() {
           <CommandList>
             <CommandEmpty>Nothing in this Admin is called that.</CommandEmpty>
             <CommandGroup heading="Sections">
-              {SECTIONS.map((section) => (
+              {sections.map((section) => (
                 <CommandItem
                   key={section.path}
                   // What cmdk filters and selects on. Spelled out rather than inferred from

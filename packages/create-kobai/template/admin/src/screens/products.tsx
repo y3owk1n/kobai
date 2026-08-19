@@ -8,11 +8,11 @@ import {
 import { PackageIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -38,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { catalogReasonOf, orThrow, problemOf, Refused } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
@@ -226,10 +227,17 @@ class NotPriced extends Refused {}
  * asked for cannot otherwise be seen: a Merchant on a fresh deployment would have to reach for
  * `curl` before the Admin could list anything, price anything, or show a resolved price
  * differing from an entered one.
+ *
+ * **It is shown to a Role that cannot use it, unavailable and explained** (ADR-0063). Hiding
+ * the form would leave a Merchant who may read the catalog with no way to learn that Products
+ * are creatable at all, and so no way to know what to ask for. None of this is a boundary:
+ * `POST /admin/products` is gated by `catalog:write` in Core, and `lib/permissions.ts` is where
+ * that distinction is written down.
  */
 function NewProduct() {
   const client = useKobaiClient();
   const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.catalogWrite, "create a Product");
 
   const form = useForm<NewProductInput, unknown, NewProductValues>({
     resolver: zodResolver(NewProductForm),
@@ -271,6 +279,9 @@ function NewProduct() {
           One Product, one Variant, one Price — the thinnest sellable thing.
         </CardDescription>
       </CardHeader>
+      {/* No guard of its own, deliberately: a browser performs the implicit submission of
+          Enter in a field by clicking this form's default button, which is the `ActionButton`
+          below — so the one no-op covers both ways in. */}
       <form onSubmit={form.handleSubmit((values) => create.mutate(values))}>
         <CardContent className="grid gap-4 sm:grid-cols-3">
           <Problem
@@ -300,10 +311,14 @@ function NewProduct() {
           />
         </CardContent>
         <CardFooter className="mt-4">
-          <Button type="submit" disabled={create.isPending}>
+          <ActionButton
+            type="submit"
+            unavailable={unavailable}
+            disabled={create.isPending}
+          >
             {create.isPending ? <Spinner /> : null}
             Create
-          </Button>
+          </ActionButton>
         </CardFooter>
       </form>
     </Card>

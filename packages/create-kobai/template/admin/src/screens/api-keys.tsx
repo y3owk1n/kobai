@@ -10,6 +10,7 @@ import { KeyRoundIcon } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
@@ -41,6 +42,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { clearPreviewKey, readPreviewKey, writePreviewKey } from "@/lib/preview-key";
 import { apiKeyNotFoundReasonOf, orThrow, problemOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
@@ -66,6 +68,9 @@ export function ApiKeys() {
   const client = useKobaiClient();
   const queries = useQueryClient();
   const after = usePageCursor();
+  // Asked once for the screen rather than once per row: a hook cannot be called inside the map
+  // below, and the answer is a property of the Role rather than of the key (ADR-0063).
+  const cannotRevoke = useUnavailable(PERMISSIONS.apiKeyWrite, "revoke a key");
 
   const [issued, setIssued] = useState<IssuedApiKey | null>(null);
   // `sessionStorage` is not something React re-renders for, so what is held there is mirrored
@@ -205,9 +210,13 @@ export function ApiKeys() {
                     </TableCell>
                     <TableCell>
                       {key.revokedAt ? null : (
-                        <Button
+                        <ActionButton
                           size="sm"
                           variant="destructive"
+                          // Shown and explained rather than hidden when the Role cannot revoke:
+                          // a Merchant who may list keys and not revoke them should be able to
+                          // see that revoking is a thing this deployment does (ADR-0063).
+                          unavailable={cannotRevoke}
                           // Every Revoke is disabled while one is in flight — the list is
                           // about to be re-read, and two revocations racing would report
                           // against whichever finished last. The spinner is what says which
@@ -220,7 +229,7 @@ export function ApiKeys() {
                             <Spinner />
                           ) : null}
                           Revoke
-                        </Button>
+                        </ActionButton>
                       )}
                       {/* Where it was attempted, and not at the top of a card six rows away
                           (ADR-0063, spec story 25). A refusal here names one key, so it
@@ -297,6 +306,7 @@ function MintKey({
 }) {
   const client = useKobaiClient();
   const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.apiKeyWrite, "mint a key");
 
   const form = useForm<MintKeyValues>({
     resolver: zodResolver(MintKeyForm),
@@ -324,6 +334,9 @@ function MintKey({
           one to ask <code>/store</code> what price a storefront would receive.
         </CardDescription>
       </CardHeader>
+      {/* No guard of its own: Enter in the field above is implicit submission, which a browser
+          performs by clicking this form's default button — the `ActionButton` below, whose
+          handler is the no-op. */}
       <form onSubmit={form.handleSubmit((values) => mint.mutate(values))}>
         <CardContent className="grid gap-4">
           <Problem
@@ -343,10 +356,10 @@ function MintKey({
           />
         </CardContent>
         <CardFooter className="mt-4 gap-2">
-          <Button type="submit" disabled={mint.isPending}>
+          <ActionButton type="submit" unavailable={unavailable} disabled={mint.isPending}>
             {mint.isPending ? <Spinner /> : null}
             Mint
-          </Button>
+          </ActionButton>
           {previewing ? (
             <Button type="button" variant="ghost" onClick={onForgetPreview}>
               Forget the preview key
