@@ -139,8 +139,27 @@ export type CreatedProduct = {
   readonly variantId: string;
 };
 
-/** An Order this seam placed, as much of it as a case has any business asserting on. */
-export type PlacedOrder = { readonly id: string; readonly number: number };
+/**
+ * An Order this seam placed, as much of it as a case has any business asserting on.
+ *
+ * `cartId` is here because a placed Cart is **spent** rather than gone (ADR-0071): it still
+ * reads, it is what `state=spent` answers with, and a case about the Carts list has no other
+ * way to name the row it expects to find there.
+ */
+export type PlacedOrder = {
+  readonly id: string;
+  readonly number: number;
+  readonly cartId: string;
+};
+
+/**
+ * A Cart this seam started and did not place — a **live** one, holding what is in it.
+ *
+ * The `sku` is the Variant its one line names, which is the only thing on the Cart's own screen
+ * that identifies what is in it: a Cart's lines are live rather than snapshotted (ADR-0009), so
+ * they carry no title of their own.
+ */
+export type StartedCart = { readonly id: string; readonly sku: string };
 
 /** What a Merchant is signed in with — the seeded one's, or a narrow Role's. */
 export type Credentials = { readonly email: string; readonly password: string };
@@ -212,6 +231,18 @@ export type AdminSeam = {
    * the Cart rather than the arrangement.
    */
   placeOrders(count?: number): Promise<readonly PlacedOrder[]>;
+  /**
+   * Starts Carts and leaves them alone — the live half of what the Carts list shows.
+   *
+   * Over `/store`, for {@link AdminSeam.placeOrders}'s reason and one more: the Admin's Cart
+   * surface is **read-only** (ADR-0071), so there is no route it could arrange one with even if
+   * a case wanted to. A storefront of its own per call, again because the catalog is shared.
+   *
+   * Nothing here expires one. A Cart's lifetime is measured in days, so a case that wants an
+   * expired one winds `core_cart.expires_at` back through {@link AdminSeam.database}, the way
+   * every other test in this repository passes time.
+   */
+  startCarts(count?: number): Promise<readonly StartedCart[]>;
   /**
    * Winds every session's idle window back, so the next request meets `session-expired`.
    *
@@ -356,6 +387,65 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     return { id: created.id, title: created.title, variantId };
   };
 
+  /**
+   * A sellable Variant, a key that may place, and the two calls a storefront makes with them.
+   *
+   * **A Product and a key of its own on every call**, rather than one kept for the file: the
+   * catalog is shared and `emptyTheCatalog` empties it, so anything cached here would be a
+   * Variant a later case had deleted — and a Cart failing for *that* reason would name the
+   * Cart rather than the arrangement.
+   */
+  const openAStorefront = async () => {
+    // Nothing this seam sells is counted, so no Reservation is held and no case can be made
+    // to fail by another one having sold the last unit (ADR-0018).
+    const sku = `SEAM-SELLS-${randomSuffix()}`;
+    const { variantId } = await createProduct({
+      title: `The browser seam's storefront ${randomSuffix()}`,
+      sku,
+      amount: 1250,
+    });
+
+    // Secret rather than publishable: placing is where money moves, and a publishable key
+    // is refused there with `secret-key-required` (ADR-0055).
+    const minted = await api<{ key: string }>("POST", "/admin/api-keys", {
+      name: `the browser seam's storefront ${randomSuffix()}`,
+      kind: "secret",
+    });
+
+    /**
+     * One call to the store surface, as a storefront makes it.
+     *
+     * Plain `fetch` with a bearer key, like `api` beside it: this is the test putting Carts
+     * and Orders in a database before a browser opens, and not the Admin doing anything —
+     * the Admin cannot place an Order and must not learn how, and its Cart surface is
+     * read-only (ADR-0071).
+     */
+    const post = async <T>(path: string, body: unknown): Promise<T> => {
+      const response = await fetch(new URL(path, origin), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${minted.key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        throw new Error(
+          `\`POST ${path}\` answered ${response.status} while arranging a browser case: ${await response.text()}`,
+        );
+      }
+      return (await response.json()) as T;
+    };
+
+    const start = async (): Promise<StartedCart> => {
+      const cart = await post<{ id: string }>("/store/carts", {});
+      await post(`/store/carts/${cart.id}/line-items`, { variantId, quantity: 1 });
+      return { id: cart.id, sku };
+    };
+
+    return { post, start };
+  };
+
   return {
     origin,
     merchant: MERCHANT,
@@ -402,68 +492,23 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     },
 
     async placeOrders(count = 1) {
-      // Nothing this seam sells is counted, so no Reservation is held and no case can be made
-      // to fail by another one having sold the last unit (ADR-0018).
-      const { variantId } = await createProduct({
-        title: `The browser seam's storefront ${randomSuffix()}`,
-        sku: `SEAM-SELLS-${randomSuffix()}`,
-        amount: 1250,
-      });
-
-      // Secret rather than publishable: placing is where money moves, and a publishable key
-      // is refused there with `secret-key-required` (ADR-0055).
-      const minted = await api<{ key: string }>("POST", "/admin/api-keys", {
-        name: `the browser seam's storefront ${randomSuffix()}`,
-        kind: "secret",
-      });
-      /**
-       * One call to the store surface, as a storefront makes it.
-       *
-       * Plain `fetch` with a bearer key, like `api` beside it: this is the test putting Orders
-       * in a database before a browser opens, and not the Admin doing anything — the Admin
-       * cannot place an Order and must not learn how.
-       */
-      const asAStorefront = async <T>(path: string, body: unknown): Promise<T> => {
-        const response = await fetch(new URL(path, origin), {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${minted.key}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(body),
-        });
-        if (!response.ok) {
-          throw new Error(
-            `\`POST ${path}\` answered ${response.status} while arranging an Order for a browser case: ${await response.text()}`,
-          );
-        }
-        return (await response.json()) as T;
-      };
+      const shop = await openAStorefront();
 
       const place = async (): Promise<PlacedOrder> => {
         // A Cart each, never one Cart placed twice: a Cart becomes exactly one Order.
-        const cart = await asAStorefront<{ id: string }>("/store/carts", {});
-        await asAStorefront(`/store/carts/${cart.id}/line-items`, {
-          variantId,
-          quantity: 1,
+        const cart = await shop.start();
+        const order = await shop.post<{ id: string; number: number }>("/store/orders", {
+          cartId: cart.id,
         });
-        const order = await asAStorefront<{ id: string; number: number }>(
-          "/store/orders",
-          { cartId: cart.id },
-        );
-        return { id: order.id, number: order.number };
+        return { id: order.id, number: order.number, cartId: cart.id };
       };
 
-      const placed: PlacedOrder[] = [];
-      // In batches rather than all at once: a page of Orders is twenty-odd placements, each
-      // three round trips, and queueing them all behind the Project's connection pool is
-      // slower than letting a few overlap. Nothing here is about contention — the two tests
-      // that are about that live beside the code they guard.
-      for (let from = 0; from < count; from += ORDERS_AT_ONCE) {
-        const batch = Math.min(ORDERS_AT_ONCE, count - from);
-        placed.push(...(await Promise.all(Array.from({ length: batch }, place))));
-      }
-      return placed;
+      return inBatches(count, place);
+    },
+
+    async startCarts(count = 1) {
+      const shop = await openAStorefront();
+      return inBatches(count, shop.start);
     },
 
     async expireEverySession() {
@@ -879,10 +924,27 @@ async function signInOverFetch(origin: string): Promise<string> {
   return cookie;
 }
 
+/**
+ * Runs one arrangement `count` times, a few of them overlapping.
+ *
+ * In batches rather than all at once: a page of Orders is twenty-odd placements, each three
+ * round trips, and queueing them all behind the Project's connection pool is slower than
+ * letting a few overlap. Nothing here is about contention — the three tests that are about
+ * that live beside the code they guard.
+ */
+async function inBatches<T>(count: number, one: () => Promise<T>): Promise<readonly T[]> {
+  const made: T[] = [];
+  for (let from = 0; from < count; from += ARRANGEMENTS_AT_ONCE) {
+    const batch = Math.min(ARRANGEMENTS_AT_ONCE, count - from);
+    made.push(...(await Promise.all(Array.from({ length: batch }, one))));
+  }
+  return made;
+}
+
 /** Enough of a random tail that two Products created in one run cannot share a SKU. */
 function randomSuffix(): string {
   return crypto.randomUUID().slice(0, 8).toUpperCase();
 }
 
-/** How many placements overlap while a case arranges a page of Orders. */
-const ORDERS_AT_ONCE = 8;
+/** How many arrangements overlap while a case builds a page of Orders or of Carts. */
+const ARRANGEMENTS_AT_ONCE = 8;

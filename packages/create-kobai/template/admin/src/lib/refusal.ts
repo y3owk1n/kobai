@@ -1,6 +1,7 @@
 import type {
   ApiKeyNotFound,
   ApiKeyRefusal,
+  CartRefusal,
   CatalogRefusal,
   InvalidCredentials,
   InvalidRequest,
@@ -184,6 +185,33 @@ const ORDER_REASONS: Record<OrderRefusal["reason"], true> = {
 
 /** Which Order refusal this was — today, only that there is no such Order. */
 export const orderReasonOf = narrowing(ORDER_REASONS);
+
+/**
+ * Every `reason` a Cart operation can be refused with (ADR-0071).
+ *
+ * **Wider than what this Admin can meet**, and deliberately not trimmed to it. The Cart surface
+ * here is read-only — there is no route that changes a Cart, and there must not be one, because
+ * releasing a hold by hand takes stock from a Shopper who may be mid-payment at their bank — so
+ * the only one of these a screen can actually arrive at is `cart-not-found`. The rest belong to
+ * the store surface's Cart writes, and they are keyed here anyway because the `Record` is keyed
+ * by the **family**: a reason added to `CartRefusal` in Core has no key, does not compile, and
+ * reddens this build in the same commit (ADR-0063). Trimming it to the reachable one would turn
+ * that guarantee off.
+ */
+const CART_REASONS: Record<CartRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "secret-key-required": true,
+  "cart-not-found": true,
+  "cart-expired": true,
+  "cart-placed": true,
+  "line-item-not-found": true,
+  "variant-not-found": true,
+  "variant-not-priced": true,
+};
+
+/** Which Cart refusal this was, for a screen with something better to say than the prose. */
+export const cartReasonOf = narrowing(CART_REASONS);
 
 /**
  * Every `reason` a Role operation can be refused with (#173, ADR-0066).

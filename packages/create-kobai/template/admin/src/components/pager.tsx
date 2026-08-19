@@ -71,9 +71,28 @@ export function usePageCursor(): string | undefined {
   return params.get(CURSOR) || undefined;
 }
 
-/** The search string for a page — the cursor, or nothing at all for the first one. */
-function searchFor(cursor: string | null): string {
-  return cursor === null ? "" : `?${new URLSearchParams({ [CURSOR]: cursor })}`;
+/**
+ * Builds the search string for a page: this address, with the cursor moved to a given one.
+ *
+ * **Everything else in the query string is carried over**, which is what makes paging a
+ * *filtered* list mean anything: the Carts list narrows by `?state=` (ADR-0071), and a pager
+ * that rebuilt the search out of the cursor alone would answer the second page of the whole
+ * table — which looks exactly like paging working, and is a different question being answered.
+ * A list with nothing else in its query string is unaffected, because there is nothing to carry.
+ *
+ * `null` is the first page, which has no cursor: the parameter is **removed** rather than sent
+ * empty, since an empty `after` is not a cursor kobai ever issued and is refused as one.
+ */
+function useSearchFor(): (cursor: string | null) => string {
+  const [params] = useSearchParams();
+
+  return (cursor) => {
+    const next = new URLSearchParams(params);
+    if (cursor === null) next.delete(CURSOR);
+    else next.set(CURSOR, cursor);
+    const search = next.toString();
+    return search === "" ? "" : `?${search}`;
+  };
 }
 
 /** A control that goes somewhere: one page of the list, and the trail that page inherits. */
@@ -120,6 +139,7 @@ export function Pager({
 }) {
   const { state } = useLocation();
   const after = usePageCursor();
+  const searchFor = useSearchFor();
   const trail = trailOf(state);
   const previous = trail.length === 0 ? undefined : trail[trail.length - 1];
 
@@ -166,6 +186,8 @@ function PreviousPage({
   readonly previous: string | null | undefined;
   readonly trail: Trail;
 }) {
+  const searchFor = useSearchFor();
+
   if (previous !== undefined) {
     return (
       <PageLink search={searchFor(previous)} trail={trail.slice(0, -1)}>
@@ -177,7 +199,7 @@ function PreviousPage({
 
   if (after !== undefined) {
     return (
-      <PageLink search="" trail={[]}>
+      <PageLink search={searchFor(null)} trail={[]}>
         <ChevronLeftIcon />
         First page
       </PageLink>

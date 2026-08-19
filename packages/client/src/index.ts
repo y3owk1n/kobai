@@ -140,6 +140,29 @@ export type Price = components["schemas"]["Price"];
 export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
 export type Payment = components["schemas"]["Payment"];
+/**
+ * A Cart, and what a **Merchant's** list of them reports — the same shape either surface
+ * answers with (ADR-0071).
+ *
+ * There is no `StoreCart` beside these the way there is a `StoreProduct`, and that asymmetry is
+ * the safe direction of it: `Cart` is already the shape a publishable key reads, so a Merchant
+ * reading one publishes nothing. What must not happen is the reverse — a Merchant-only field
+ * added here would be published by the deploy that adds it.
+ */
+export type Cart = components["schemas"]["Cart"];
+export type CartSummary = components["schemas"]["CartSummary"];
+export type CartList = components["schemas"]["CartList"];
+export type CartLineItem = components["schemas"]["CartLineItem"];
+export type CartShopper = components["schemas"]["CartShopper"];
+/**
+ * What has become of a Cart, and the one thing the Merchant's list filters by.
+ *
+ * A **closed** set of three that partition the list: a Cart that became an Order is `spent`
+ * whatever its deadline says, one that has not and is past its deadline is `expired`, and
+ * everything else is `live`. A consumer that offers the filter can therefore hold this as a
+ * union and be told by its compiler when a fourth arrives.
+ */
+export type CartState = components["schemas"]["CartState"];
 export type Merchant = components["schemas"]["Merchant"];
 export type Role = components["schemas"]["Role"];
 export type Session = components["schemas"]["Session"];
