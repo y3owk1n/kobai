@@ -930,15 +930,70 @@ ships none — see below.
 
 **The Admin is vendored source, not a dependency** (ADR-0010, ADR-0033). It lives at
 `reference/admin/` — React on Vite, Tailwind v4, shadcn/ui on **Base UI** — and every
-component under `src/components/ui/` is an ordinary file in this repository because that is
-how shadcn works: `shadcn add` copies source in. Edit them. Add another with
+component under `src/components/ui/` is an ordinary file in this repository because
+that is how shadcn works: `shadcn add` copies source in. Edit them.
+
+**The frame is conventional, because a Developer inherits it** (ADR-0063). react-router v7,
+TanStack Query with **no optimistic updates**, react-hook-form with zod checking **structure
+only**, and shadcn on Base UI. Not one of the four is kobai's own invention, and that is the
+decision rather than a shortcut around one: a dependency taken here
+is one the **Developer** carries, in a tree they own outright and can never upgrade away from —
+`kobai-upgrade` gets `node:fs` and a directory, and TypeScript 7 ships no compiler API
+(ADR-0035), so **no codemod will ever reach this source**. The bar is therefore not what kobai
+would enjoy maintaining, it is what a stranger who has inherited somebody else's React can look
+up. So **do not put a bespoke layer at any of the four** — and the thing to know before
+reaching for the obvious upgrade is that TanStack Router was weighed and refused: its generated
+route tree would be a *fifth* generated-and-byte-compared artifact beside `openapi.json`,
+`packages/client/src/schema.ts`, `packages/create-kobai/template/` and every migration set, to
+type route params `@kobai/client` already types and a search parameter ADR-0064 keeps opaque on
+purpose.
+
+**Where the Admin is served is said once**, and the router does not say it: `app.tsx` takes its
+`basename` from `import.meta.env.BASE_URL`, so `vite.config.ts`'s `base` is the single
+statement of that path — and it has to agree with `ADMIN_PATH` in
+`reference/src/admin-assets.ts`, which is the server half. Two literals in two packages is
+exactly the shape that goes wrong quietly, so `reference/src/app.test.ts` reads `base` back out
+of the config file and holds them equal. Nothing else about the stack has a test behind it, and
+that is honest rather than a gap: what holds a choice of library is the record that took it.
+
+**Base UI is not Radix, and two of the names differ.** `components.json` says
+`"style": "base-nova"`, so `shadcn add` fetches the Base UI distribution, where two of the names
+a Radix habit reaches for are not the names. There is **no `Form` component** — there is a
+`Field` family, and the distribution's own guide puts react-hook-form behind it, which is why
+`components/form-field.tsx` composes `Field` rather than wrapping a `Form` that does not exist.
+And **`sonner` is `toast`**: `shadcn add sonner` gets you the component under the other name.
+Everything else the frame needs is there under the name you expect — and this paragraph exists
+because both of these are otherwise rediscovered once per contributor, at the CLI.
+
+**shadcn is composed, never replaced, and identity lives in the theme layer** (ADR-0063). Every
+visual primitive comes from `src/components/ui/`; an app-level component composes them —
+`components/problem.tsx` is built *on* `Alert` and `components/pager.tsx` on `Pagination`, and a
+`Problem` that drew its own bordered box would be the thing this rules out. Density, colour and
+type are tuned in `src/index.css`'s tokens and its `@theme inline` block, because `shadcn add`
+writes the **upstream** version of whatever it is given: a hand-tuned `Button` and a `Table`
+added next month disagree on the day the second one arrives, while a value changed in the token
+layer reaches every component in the directory *including the ones not added yet*. That is the
+whole failure mode of "we customised our design system", arriving through a door nobody thought
+was a door.
+
+**An edit no token can reach is allowed, and its price is being written down twice**: a
+`CHANGED FROM UPSTREAM` comment at the line, and an entry in
+**`reference/admin/src/components/ui/README.md`**, which is where that list lives. There is
+deliberately **no test diffing that directory against upstream** — it would go red on every
+shadcn release while saying nothing whatever about what we chose — so the list is the cheap half
+of that check, and its entire value is that a departure had to be typed out by somebody. Today
+it holds one change to what a component *does* — `select.tsx` and `dropdown-menu.tsx` portal
+into the frame's container rather than `<body>`, which the browser seam **does** hold, see
+below — and a table of Biome suppressions upstream is not written against. Add a component with
 
 ```sh
 devbox run -- pnpm --filter kobai-reference-admin exec pnpm dlx shadcn@latest add <name>
 ```
 
-and move whatever it writes into `dependencies` over to `devDependencies` — the whole
-frontend toolchain is bundled at build time, so none of it belongs in the shipped image.
+and move whatever it writes into `dependencies` over to `devDependencies` — the whole frontend
+toolchain is bundled at build time, so none of it belongs in the shipped image. That README has
+the rest of it: what to run afterwards, what to answer when the CLI offers to overwrite a
+component that is already here, and the list itself.
 
 **One process serves both.** `reference/src/app.ts` asks one question — is this path the
 Admin's? — and hands everything else to `kobai.fetch` untouched. The Admin is at
@@ -966,7 +1021,7 @@ Project — `node dist/src/server.js` against a throwaway database, on a port th
 and `tests/support/admin-browser.ts` is the harness, which says in its own header how to add a
 case. `devbox run browsers` downloads the browser and `devbox run ci` and `devbox run test`
 both run that themselves, for ADR-0044's reason: a guardrail behind an opt-in step is not a
-faster guardrail, it is an optional one. Five things about it are decisions rather than
+faster guardrail, it is an optional one. Six things about it are decisions rather than
 implementation:
 
 - **It asserts the frame's promises and never screen behaviour.** Deep-linking, refresh,
@@ -1029,8 +1084,9 @@ back-navigation callback out of context and handed them down as props are gone, 
 would be the pre-frame shape coming back. **A form field is
 `components/form-field.tsx`** — a label, an input and the schema's message, in one place because
 the invalid state has to be set twice (`Field` reads `data-invalid`, the `Input` announces
-`aria-invalid`) and an `id` is unique to the document rather than to the form it is in. Six
-further things about the screens are conventions rather than one screen's choice:
+`aria-invalid`) and an `id` is unique to the document rather than to the form it is in. The rest
+are conventions rather than one screen's choice, and are deliberately not numbered here — the
+list grows with every screen, and a count in prose is the tax ADR-0049 removed from the tests:
 
 - **Every list pages through the cursor, with the cursor in the URL** — Products, Orders and
   API keys alike, through the one `components/pager.tsx`. A list route that took no page would
