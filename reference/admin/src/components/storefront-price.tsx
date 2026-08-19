@@ -1,9 +1,9 @@
 import type { KobaiClient, ResolvedPrice } from "@kobai/client";
 import { useMutation } from "@tanstack/react-query";
+import { ActionButton } from "@/components/action-button";
 import { Problem } from "@/components/problem";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { createStorefrontClient } from "@/lib/kobai";
 import { formatAmount } from "@/lib/money";
+import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import {
   clearPreviewKey,
   PREVIEW_KEY_NAME,
@@ -57,6 +58,27 @@ export function StorefrontPrice({
   readonly entered: { readonly amount: number; readonly currency: string } | null;
 }) {
   const client = useKobaiClient();
+  /**
+   * Asking costs a key, so the Permission this control needs is the one that mints one.
+   *
+   * `api-key:write` rather than anything about the catalog: the store surface is reached with a
+   * credential and the first ask on a browser session with none mints it, so a Role that cannot
+   * mint cannot make a storefront's request at all. It is shown and explained rather than
+   * hidden, like every other unavailable action (ADR-0063) — this is the one screen that says
+   * what a storefront actually receives, and a Merchant who cannot see the control has no way
+   * to learn the question can be asked.
+   *
+   * **It is deliberately wider than the operation**, by exactly one case: a browser session
+   * already holding a preview key needs no mint, so a Role narrowed *since* that key was stored
+   * is told it cannot do something it could. Asking `readPreviewKey()` instead would be worse
+   * than the case it fixes — `sessionStorage` is not something React re-renders for, so the
+   * control would go available only on the next render that happened for some other reason,
+   * which is the flicker `screens/api-keys.tsx` mirrors that value into state to avoid.
+   */
+  const unavailable = useUnavailable(
+    PERMISSIONS.apiKeyWrite,
+    "ask what a storefront would receive",
+  );
 
   const ask = useMutation({
     mutationFn: (): Promise<ResolvedPrice> => askAsAStorefront(client, variantId),
@@ -74,15 +96,16 @@ export function StorefrontPrice({
   return (
     <div className="grid gap-3">
       <div className="flex items-center gap-3">
-        <Button
+        <ActionButton
           size="sm"
           variant="outline"
+          unavailable={unavailable}
           disabled={ask.isPending}
           onClick={() => ask.mutate()}
         >
           {ask.isPending ? <Spinner /> : null}
           {resolved ? "Ask again" : "What would a storefront receive?"}
-        </Button>
+        </ActionButton>
         <span className="text-muted-foreground text-xs">
           Asked over <code>/store</code>, with a publishable API key — the way a
           storefront asks.

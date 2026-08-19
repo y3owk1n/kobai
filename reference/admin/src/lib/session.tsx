@@ -5,9 +5,12 @@ import {
   type ReactNode,
   use,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { useLocation } from "react-router";
 import { createAdminClient } from "@/lib/kobai";
 import { clearPreviewKey } from "@/lib/preview-key";
 
@@ -114,12 +117,11 @@ export function useKobaiClient(): KobaiClient {
  * that went wrong is left as an error, so the gate can tell "kobai says you are not signed in"
  * from "kobai did not answer".
  *
- * **Never cached as fresh**, so it is re-read on every window focus. A Role edited under a live
- * session otherwise leaves the Admin confidently wrong about what this Merchant may do
- * (ADR-0063), and `role.permissions` is already on every response. ADR-0063 asks for a re-read
- * **on navigation** as well, and there is not one: this query is observed by the gate, which
- * never unmounts, so a route change is not an event it sees. Nothing reads `permissions` yet —
- * #178 is where the affordances that do arrive, and where that half falls due.
+ * **Never cached as fresh**, so it is re-read on every window focus — and on every navigation,
+ * through {@link useSessionOnNavigation}. A Role edited under a live session otherwise leaves
+ * the Admin confidently wrong about what this Merchant may do (ADR-0063), and `role.permissions`
+ * is already on every response. Both halves are the *affordances* catching up rather than a
+ * check being re-run: the enforcement is Core's, and `lib/permissions.ts` says so at length.
  */
 export function useSession() {
   const client = useKobaiClient();
@@ -131,5 +133,35 @@ export function useSession() {
       return data ?? null;
     },
     staleTime: 0,
+    // Said rather than inherited. It is TanStack Query's default, but half of ADR-0063's
+    // re-read rests on it — and `app.tsx` sets `defaultOptions` for this cache, so a later
+    // line there could turn it off and take the focus half of this with it silently.
+    refetchOnWindowFocus: true,
   });
+}
+
+/**
+ * Re-reads who you are whenever the address changes — ADR-0063's other half.
+ *
+ * Window focus is the query's own doing, because nothing is ever cached as fresh. A navigation
+ * is not: the query is observed by the gate in `app.tsx` and by the frame around every screen,
+ * neither of which unmounts, so a route change is not an event TanStack Query sees. Hence an
+ * explicit one, called once by `AppLayout`.
+ *
+ * Two details are deliberate. The **first render is not a navigation** — the gate has just
+ * fetched this — so it is skipped rather than spending a second request on every page load. And
+ * `cancelRefetch: false` is what keeps a navigation to one request: a screen that reads
+ * permissions mounts a fresh observer of a query that is never fresh, which starts a fetch of
+ * its own, and invalidating with the default would cancel that one and start another.
+ */
+export function useSessionOnNavigation(): void {
+  const queries = useQueryClient();
+  const { pathname } = useLocation();
+  const previous = useRef(pathname);
+
+  useEffect(() => {
+    if (previous.current === pathname) return;
+    previous.current = pathname;
+    void queries.invalidateQueries({ queryKey: SESSION }, { cancelRefetch: false });
+  }, [pathname, queries]);
 }

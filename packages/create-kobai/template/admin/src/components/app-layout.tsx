@@ -29,8 +29,8 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { CrumbProvider } from "@/lib/crumb";
-import { SECTIONS, type Section, sectionOf } from "@/lib/sections";
-import { useKobai } from "@/lib/session";
+import { type Section, sectionOf, useSections } from "@/lib/sections";
+import { useKobai, useSessionOnNavigation } from "@/lib/session";
 
 /**
  * The frame every signed-in screen hangs in: a sidebar, a breadcrumb, and the Outlet.
@@ -45,11 +45,19 @@ import { useKobai } from "@/lib/session";
  *
  * **What the sections are is `lib/sections.ts`'s**, and was a `const` here until #177 put a
  * command palette beside the sidebar. Two affordances over one list is the whole reason it
- * moved: a copy in each is how they come to disagree about what this Admin has.
+ * moved: a copy in each is how they come to disagree about what this Admin has — and since #178
+ * it is one *narrowing* of that list, so what the sidebar draws and what the palette offers are
+ * the same answer to "what may this Role read".
  */
 export function AppLayout({ session }: { readonly session: Session }) {
   const { signOut } = useKobai();
-  const here = sectionOf(useLocation().pathname);
+  const pathname = useLocation().pathname;
+  const here = sectionOf(pathname);
+  const sections = useSections();
+  // The half of ADR-0063 the query cannot do for itself: a Role edited under a live session
+  // otherwise leaves the frame offering sections this Merchant lost, until the window is
+  // focused again. This is the frame catching up, and never a check being re-run.
+  useSessionOnNavigation();
   // What the screen under the Outlet calls the record it is showing, if it has one yet. The
   // layout owns the state and the screen writes to it through `CrumbProvider`, because the
   // title is a thing only the screen's own request knows — see `lib/crumb.tsx`.
@@ -71,11 +79,15 @@ export function AppLayout({ session }: { readonly session: Session }) {
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup>
+          {/* Nothing at all when this Role can read none of them, rather than a "Store"
+              heading over an empty list: a group naming a category with nothing in it reads
+              as a list that failed to load. What that Merchant is told instead is a screen,
+              in `app.tsx`. */}
+          <SidebarGroup hidden={sections.length === 0}>
             <SidebarGroupLabel>Store</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {SECTIONS.map((section) => (
+                {sections.map((section) => (
                   <SidebarMenuItem key={section.path}>
                     <SidebarMenuButton
                       isActive={here === section}
@@ -133,7 +145,7 @@ export function AppLayout({ session }: { readonly session: Session }) {
               heading at all, which is what every list screen was until #175 — and #176
               rewrote all six of them, and none of them argued for a better first-level title
               than its section — a record's own title is its `h2`. */}
-          <h1 className="sr-only">{here?.label ?? "Not found"}</h1>
+          <h1 className="sr-only">{here?.label ?? headingWithNoSection(pathname)}</h1>
           <CrumbProvider name={setRecord}>
             <Outlet />
           </CrumbProvider>
@@ -141,6 +153,18 @@ export function AppLayout({ session }: { readonly session: Session }) {
       </SidebarInset>
     </SidebarProvider>
   );
+}
+
+/**
+ * What the page is called when the address belongs to no section.
+ *
+ * There are two such addresses and they are not the same page. `/` is the front door, which
+ * renders a screen of its own for a Role that can read nothing (#178) — announcing that as "Not
+ * found" would tell a Merchant their Admin is broken when it is their Role that is empty.
+ * Anything else is a URL no screen answers, which "Not found" is exactly right for.
+ */
+function headingWithNoSection(pathname: string): string {
+  return pathname === "/" ? "kobai Admin" : "Not found";
 }
 
 /**

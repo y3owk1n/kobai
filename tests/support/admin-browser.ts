@@ -49,6 +49,9 @@ export { ADMIN_PATH };
  *   browser context of its own — its own cookie jar, its own `localStorage` — so no case can
  *   be reached by what another one left behind. Both take a path *inside* the Admin, written
  *   the way `app.tsx` spells the route and without `/admin-ui` in front of it.
+ * - **A case about what a Role may do signs in as somebody else.** The seeded Merchant holds
+ *   every Permission there is, so {@link AdminSeam.merchantOnARole} makes a narrow one and
+ *   {@link AdminSeam.signedInAs} opens a window as them.
  * - **Audit every screen the case visits** with {@link auditAccessibility}. It is a call per
  *   *screen* rather than per case: a case that navigates twice audits twice.
  * - **Reach a control the way a Merchant without a mouse would** where that is the subject —
@@ -117,11 +120,23 @@ export type CreatedProduct = {
 /** An Order this seam placed, as much of it as a case has any business asserting on. */
 export type PlacedOrder = { readonly id: string; readonly number: number };
 
+/** What a Merchant is signed in with — the seeded one's, or a narrow Role's. */
+export type Credentials = { readonly email: string; readonly password: string };
+
+/**
+ * A Merchant created against a Role holding exactly the Permissions a case named.
+ *
+ * `roleId` is here because the interesting half of #178 is a Role changing **under** a live
+ * session: a case winds the Permissions on this identifier and then asks the Admin what it
+ * offers, without anybody signing out.
+ */
+export type MerchantOnARole = Credentials & { readonly roleId: string };
+
 export type AdminSeam = {
   /** Where the Project is serving, on a port the OS chose. */
   readonly origin: string;
   /** The seeded Merchant's credentials, for a case that types them into the form. */
-  readonly merchant: { readonly email: string; readonly password: string };
+  readonly merchant: Credentials;
   /** The throwaway database, for arranging what the API cannot reach. */
   readonly database: TestDatabase;
 
@@ -129,6 +144,21 @@ export type AdminSeam = {
   anonymous(path?: string): Promise<Page>;
   /** A browser already carrying a Merchant session, at a path inside the Admin. */
   signedIn(path?: string): Promise<Page>;
+  /** The same, as somebody other than the seeded Merchant — see {@link AdminSeam.merchantOnARole}. */
+  signedInAs(who: Credentials, path?: string): Promise<Page>;
+
+  /**
+   * A colleague on a Role holding exactly the Permissions named, created through the API.
+   *
+   * The seeded Merchant holds `owner`, which is every Permission Core defines (ADR-0041), so
+   * nothing the Admin hides or explains for want of one is reachable as them. This is how a
+   * case gets a narrow Merchant: a Role of its own — named uniquely, because no two Roles may
+   * share a name and the deployment outlives the case — and a Merchant created against it.
+   *
+   * The Permissions are **strings** rather than anything narrower, exactly as the API takes
+   * them: the set is open, and a case may name one Core has never heard of.
+   */
+  merchantOnARole(permissions: readonly string[]): Promise<MerchantOnARole>;
 
   /** One call against the public API, as the seeded Merchant. */
   api<T>(method: string, path: string, body?: unknown): Promise<T>;
@@ -233,21 +263,19 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     return arranging;
   };
 
-  const openWindow = async (path: string, credentialled: boolean): Promise<Page> => {
+  const openWindow = async (path: string, as: Credentials | null): Promise<Page> => {
     const context = await started.newContext({ baseURL: origin });
     context.setDefaultTimeout(LOCATOR_TIMEOUT);
     windows.push(context);
 
-    if (credentialled) {
+    if (as !== null) {
       // Through the browser context's own request API, so the `Set-Cookie` is stored by the
       // same jar the page reads — attributes, path scoping and all — rather than by this
       // seam's idea of what the cookie looks like (ADR-0032).
-      const signIn = await context.request.post(`${origin}/admin/session`, {
-        data: MERCHANT,
-      });
+      const signIn = await context.request.post(`${origin}/admin/session`, { data: as });
       if (!signIn.ok()) {
         throw new Error(
-          `The seeded Merchant could not sign in (${signIn.status()}): ${await signIn.text()}`,
+          `\`${as.email}\` could not sign in (${signIn.status()}): ${await signIn.text()}`,
         );
       }
     }
@@ -301,8 +329,28 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     merchant: MERCHANT,
     database,
 
-    anonymous: (path = "/") => openWindow(path, false),
-    signedIn: (path = "/") => openWindow(path, true),
+    anonymous: (path = "/") => openWindow(path, null),
+    signedIn: (path = "/") => openWindow(path, MERCHANT),
+    signedInAs: (who, path = "/") => openWindow(path, who),
+
+    async merchantOnARole(permissions) {
+      const suffix = randomSuffix();
+      const roleName = `the browser seam's narrow role ${suffix}`;
+
+      const role = await api<{ id: string }>("POST", "/admin/roles", {
+        name: roleName,
+        permissions,
+      });
+      const who = {
+        email: `narrow-${suffix.toLowerCase()}@kobai.test`,
+        // Long enough that Core's own minimum cannot refuse it, and the same for every one of
+        // these: nothing here is a test about passwords.
+        password: "this-colleague-signs-in-with-this",
+      };
+      await api("POST", "/admin/merchants", { ...who, role: roleName });
+
+      return { ...who, roleId: role.id };
+    },
 
     api,
 
@@ -453,6 +501,40 @@ export async function shows(locator: Locator, what: string): Promise<void> {
   }
 }
 
+/**
+ * How long to let a request the Admin should never have made turn up.
+ *
+ * A negative assertion has no event to wait on, so it waits on the clock — the one place in
+ * this seam that does. Long enough that anything the browser started has left it, short enough
+ * that a case asserting nothing happened is not the slowest in the file.
+ */
+const NOTHING_ATTEMPTED_GRACE = 500;
+
+/**
+ * Records every request that is not a read, for a case whose subject is that none is made.
+ *
+ * The only thing that can tell "nothing happened" from "it was tried and refused": watching for
+ * a refusal on screen instead passes against a real attempt, because an assertion that
+ * something is absent is satisfied by its not having arrived yet.
+ *
+ * `settled()` waits {@link NOTHING_ATTEMPTED_GRACE} and hands back what was attempted, as
+ * `METHOD /path` strings a failure can print.
+ */
+export function watchForWrites(page: Page): { settled(): Promise<string[]> } {
+  const attempted: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "GET") return;
+    attempted.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
+
+  return {
+    async settled() {
+      await page.waitForTimeout(NOTHING_ATTEMPTED_GRACE);
+      return attempted;
+    },
+  };
+}
+
 /** The other direction: waits for something to go, and says what it was when it stays. */
 export async function hides(locator: Locator, what: string): Promise<void> {
   try {
@@ -472,6 +554,10 @@ export async function hides(locator: Locator, what: string): Promise<void> {
  * all, so **anything a new one needs is added here**, and the shape is deliberately the
  * narrowest that compiles.
  */
+/** The two globals the focus callback below reaches for, declared for `document`'s reason. */
+declare const window: { dispatchEvent(event: object): boolean };
+declare const Event: new (type: string) => object;
+
 declare const document: {
   readonly activeElement: unknown;
   readonly documentElement: { readonly className: string };
@@ -503,6 +589,21 @@ export async function isFocused(locator: Locator): Promise<boolean> {
   const element = locator.first();
   if ((await element.count()) === 0) return false;
   return element.evaluate((node) => node === document.activeElement);
+}
+
+/**
+ * Tells the page its window has been focused again.
+ *
+ * A headless browser's page is always visible, so there is no window to leave and come back to
+ * and nothing here can produce the real event. What this dispatches is the one TanStack Query's
+ * focus manager subscribes to — `visibilitychange`, on `window` — so a case using it asserts
+ * that the Admin is listening for a focus and re-reads when it hears one, which is the half of
+ * ADR-0063's re-read that a navigation does not cover.
+ */
+export async function refocusTheWindow(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("visibilitychange"));
+  });
 }
 
 /**

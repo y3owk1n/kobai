@@ -926,8 +926,9 @@ implementation:
 
 - **It asserts the frame's promises and never screen behaviour.** Deep-linking, refresh,
   browser back and forward, a session running out mid-use and the Merchant landing back where
-  they were, a refusal rendering where it was attempted, and skeleton, spinner and empty
-  states. **A case that a request-level test could have asked belongs there instead**, which
+  they were, a refusal rendering where it was attempted, skeleton, spinner and empty states,
+  and what a narrow Role is offered — which sections, which actions, and that an unavailable
+  one really does nothing (`seam.merchantOnARole`, `seam.signedInAs`). **A case that a request-level test could have asked belongs there instead**, which
   is where screen behaviour has always been asserted.
 - **`axe-core` runs on every screen a case visits and any violation fails the build.** It is a
   call per screen rather than per case, so a case that navigates twice audits twice — and an
@@ -942,7 +943,10 @@ implementation:
   naming where the keyboard got to instead — `Tab` walks the page, `ArrowDown` walks an open
   menu. Focus after a re-sign-in and the `aria-disabled` controls that stay focusable so they
   can host the explanation of why they are unavailable (#178) are keyboard decisions, and all
-  arrive here. **The command palette is a combobox over a listbox**, so the arrow keys move the
+  arrive here. **An unavailable control is asserted twice**, because the tooltip and the
+  announcement are two different things: what a mouse sees is the popup, and what a screen
+  reader is told is the `aria-describedby` the component wires itself, since Base UI's tooltip
+  gives its popup no `role="tooltip"` and associates it with nothing. **The command palette is a combobox over a listbox**, so the arrow keys move the
   *selection* while the keyboard stays in the input — its list is asserted on `aria-selected`,
   which is what a screen reader announces, `tabTo` is for reaching its button, and where the
   keyboard ends up after it closes is asked with `isFocused`.
@@ -956,11 +960,9 @@ implementation:
   asks for the full browser, which is deliberately not downloaded. The flag and the channel are
   one decision in two files and the seam's first case holds them together.
 
-Two hazards in the Admin are known and are **not** this seam's to close. ADR-0063 asks the
-session query to be re-read on window focus *and* on navigation and only focus is wired —
-`reference/admin/src/lib/session.tsx` says so at the query, and it falls due with #178. And
-`Pager`'s dead Next/Previous use real `disabled` rather than `aria-disabled`, deliberately,
-because there is no explanation to host on one.
+One thing in the Admin looks like an oversight and is not: `Pager`'s dead Next/Previous use
+real `disabled` rather than `aria-disabled`, deliberately, because there is no explanation to
+host on one. The same goes for every control dead only while a request is in flight.
 
 **Every screen is on the frame, and a screen takes no props** (#176). A screen is a component a
 route names and nothing else: it reads its identifier from the router (`lib/route.ts`'s
@@ -999,13 +1001,34 @@ further things about the screens are conventions rather than one screen's choice
 - **What the Admin's sections are is `lib/sections.ts`, and there is one of it** (#177). The
   sidebar draws one entry per section and the command palette — ⌘K and Ctrl+K, built from
   shadcn's `command` — offers one row per section, and a list living in either would have been
-  copied into the other. **That module is also where #178 hides the sections a Role cannot
-  read**: a narrowing of the one list, never a permission check inside each entry. The palette
+  copied into the other. **That module is also where the sections a Role cannot read are
+  hidden** (#178): `useSections` narrows the one list, never a permission check inside each
+  entry — and `app.tsx`'s front door redirects to the head of *that* list, so the address
+  nobody chose cannot be one this Merchant would meet a refusal on. The palette
   is the one navigation affordance a Plugin-contributed screen could use without renegotiating
   the sidebar (#71 is still open), which is why the list is data rather than markup. It closes
   onto the button that opens it — `finalFocus` on the popup, which is why it composes `Dialog`
   rather than taking `CommandDialog` whole — because choosing a section unmounts the screen
   focus would otherwise return to.
+- **A permission check in the Admin is an affordance and never a boundary** (#178, ADR-0063).
+  `requirePermission` in Core is the enforcement; `lib/permissions.ts` is where that is written
+  down at length, because the next person to read one of these checks will assume it is doing
+  security work — and would then be right to wonder why it is cached at all. Four things follow.
+  **The set of Permissions is open**, so a Role's are asked by `permissions.includes(…)` and
+  never as a union or a `switch`: `Session`'s own description says a deployment may hold a
+  permission this build of Core has never heard of. **A section is hidden and an action is
+  shown**, because a screen that 403s on load teaches nothing while a hidden button leaves a
+  Merchant no way to learn the Permission is a thing to ask for. **An unavailable action is
+  `aria-disabled`, never `disabled`** — a truly disabled control takes no focus and fires no
+  pointer events, so it can host no tooltip and cannot be reached to be told why — which means
+  the handler has to genuinely no-op, and `components/action-button.tsx` is the one place that
+  is done. A form around one needs no guard of its own: a browser performs implicit submission
+  by clicking the form's default button, so Enter in a field arrives at the same handler, and
+  the second guard written for it was taken out again after no case could see it go. **The
+  session query is re-read on navigation as well as on focus**, through
+  `useSessionOnNavigation`, and **on focus explicitly rather than by inheriting TanStack
+  Query's default**, because `app.tsx` sets `defaultOptions` for that cache and a line there
+  could otherwise take half of this away in silence. Both halves are asserted in the browser.
 - **A contrast failure is fixed in the token layer.** `--destructive` is darker than shadcn's
   default because `text-destructive` on `bg-destructive/10` — every destructive control in this
   distribution — measured 3.99:1; `src/index.css` carries the measurement at the value. Tuning
@@ -1624,8 +1647,9 @@ The **browser seam** is the Admin's, and it is the only one that opens a browser
 `tests/the-admin-in-a-browser.test.ts` drives Chromium against a really-booted reference
 Project; `tests/support/admin-browser.ts` is the harness and its header says how to add a
 case. It asserts the **frame's** promises — deep-linking, refresh, back and forward, session
-expiry and return, a refusal rendering where it was attempted, and list, loading and empty
-states — with `axe-core` on every screen and explicit keyboard assertions beside it. It
+expiry and return, a refusal rendering where it was attempted, list, loading and empty states,
+and what a Role is offered and refused (#178) — with `axe-core` on every screen and explicit
+keyboard assertions beside it. It
 asserts no screen behaviour: **a case a request could have asked belongs in the HTTP seam.**
 [The Admin](#the-admin) has the rest of it.
 

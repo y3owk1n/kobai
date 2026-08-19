@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ADMIN_PATH,
@@ -13,9 +13,11 @@ import {
   isFocused,
   keyboardTo,
   LOCATOR_TIMEOUT,
+  refocusTheWindow,
   shows,
   startAdminSeam,
   tabTo,
+  watchForWrites,
 } from "./support/admin-browser.ts";
 import { readDevbox } from "./support/init-hook.ts";
 
@@ -1134,5 +1136,269 @@ describe("the storefront price preview", () => {
     ]);
 
     await auditAccessibility(page, "the Product screen showing a resolved price");
+  });
+});
+
+/**
+ * What a Role may do, as the Admin offers it (#178, ADR-0063).
+ *
+ * **Every case here signs in as somebody other than the seeded Merchant**, because the seeded
+ * one holds `owner` — every Permission Core defines (ADR-0041) — so there is nothing for the
+ * Admin to hide or explain to them. `seam.merchantOnARole` is what makes a narrow one.
+ *
+ * None of this is a boundary and no case here should be read as asserting one. `requirePermission`
+ * is the enforcement, and it is asserted where it lives — `auth.test.ts` sweeps the whole admin
+ * surface for it. What is asserted here is the **affordance**: that a section a Role cannot read
+ * is not offered, that an action it cannot perform is shown, reachable, and explained rather
+ * than hidden or silently dead, and that a Role edited under a live session takes effect without
+ * anybody signing out. Every one of those is a thing only a browser can be asked.
+ *
+ * The `aria-disabled` cases are the ones with no substitute anywhere else. A truly `disabled`
+ * control takes no focus and fires no pointer events, so the explanation this ticket exists to
+ * give would be unreachable through the obvious implementation — and the price of `aria-disabled`
+ * is that it does *not* prevent activation, so the no-op has to be real. Both halves are asked:
+ * the keyboard reaches the control and is told why, and pressing Enter on it changes nothing.
+ */
+describe("what a Role may do", () => {
+  /** The Permissions the Admin's own screens read, spelled as the API spells them. */
+  const CATALOG_READ = "catalog:read";
+  const CATALOG_WRITE = "catalog:write";
+  const ORDER_READ = "order:read";
+  const API_KEY_READ = "api-key:read";
+  const API_KEY_WRITE = "api-key:write";
+
+  /**
+   * What a screen reader would read out about a control, off its `aria-describedby`.
+   *
+   * The tooltip is the *visual* half of the explanation and associates itself with nothing —
+   * Base UI's popup carries no `role="tooltip"` and sets no `aria-describedby` — so this is the
+   * half that is actually announced, and a case that only asserted the tooltip would pass
+   * against a control a screen reader is told nothing about.
+   */
+  async function describedText(page: Page, control: Locator): Promise<string> {
+    const describedBy = await control.getAttribute("aria-describedby");
+    expect(describedBy, "the control is described by nothing at all").toBeTruthy();
+    // `textContent` rather than `innerText`: the sentence is deliberately rendered where only
+    // a screen reader finds it, and what a screen reader reads is the text and not the pixels.
+    return (await page.locator(`#${describedBy}`).textContent()) ?? "";
+  }
+
+  /** The sidebar's own entries, which are links and not buttons (`LinkButton`, #175). */
+  function sections(page: Page): Promise<string[]> {
+    return page
+      .getByRole("complementary", { name: "Sections and account" })
+      .getByRole("link")
+      .allInnerTexts();
+  }
+
+  it("offers only the sections the Role can read, in the sidebar and in the palette", async () => {
+    const narrow = await seam.merchantOnARole([CATALOG_READ, CATALOG_WRITE]);
+    const page = await seam.signedInAs(narrow, "/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    // Orders and API keys would 403 on load for this Role, and an empty screen that refuses
+    // teaches nothing — so they are absent rather than present and dead (ADR-0063).
+    await expect.poll(() => sections(page)).toEqual(["Products"]);
+
+    // The palette reads the same list, which is the whole reason `lib/sections.ts` is a module:
+    // two navigation affordances over one list cannot disagree about what this Admin has.
+    await page.keyboard.press("Meta+k");
+    await shows(
+      page.getByRole("combobox", { name: "Search sections" }),
+      "the command palette",
+    );
+    await expect
+      .poll(() => page.getByRole("option").allInnerTexts())
+      .toEqual(["Products"]);
+
+    await auditAccessibility(page, "the Admin's palette on a narrow Role");
+  });
+
+  it("sends the front door to a section the Role can actually read", async () => {
+    // No `catalog:read`, so the Products list this Admin's front door has always pointed at is
+    // a screen this Merchant would meet a refusal on.
+    const narrow = await seam.merchantOnARole([ORDER_READ]);
+    const page = await seam.signedInAs(narrow, "/");
+
+    await expect.poll(() => where(page)).toBe("/orders");
+    await expect.poll(() => sections(page)).toEqual(["Orders"]);
+    await auditAccessibility(
+      page,
+      "the front door on a Role that cannot read the catalog",
+    );
+  });
+
+  it("says so, rather than showing an empty frame, when a Role reaches nothing at all", async () => {
+    // A Role with no Permissions at all is what `POST /admin/roles` creates by default, so it
+    // is not a contrived state: it is the one a colleague is added on before anybody says what
+    // they may do.
+    const narrow = await seam.merchantOnARole([]);
+    const page = await seam.signedInAs(narrow, "/");
+
+    await shows(
+      page.getByText("This Admin has nothing to show you"),
+      "the screen for a Role that can read nothing",
+    );
+    await expect.poll(() => sections(page)).toEqual([]);
+    // The frame names the section in the document's one `h1`, and this address belongs to no
+    // section — so the fallback matters here in a way it never did while `/` redirected
+    // instantly. A Merchant whose Role is empty must not hear their Admin announced as an
+    // error.
+    expect(await page.getByRole("heading", { level: 1 }).innerText()).toBe("kobai Admin");
+    await auditAccessibility(page, "the Admin on a Role that reaches nothing");
+  });
+
+  it("shows an action the Role cannot perform, reachable by keyboard, and says why", async () => {
+    const narrow = await seam.merchantOnARole([CATALOG_READ]);
+    const page = await seam.signedInAs(narrow, "/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    const create = newProductForm(page).getByRole("button", { name: "Create" });
+    // Shown rather than hidden: a Merchant with no way to see that Products can be created has
+    // no way to learn to ask for the Permission (ADR-0063).
+    await shows(create, "the Create button");
+    expect(await create.getAttribute("aria-disabled")).toBe("true");
+    // And not the attribute that would have made the explanation unreachable.
+    expect(await create.getAttribute("disabled")).toBeNull();
+    // The half `disabled` would have taken away, and the reason `aria-disabled` is not a style
+    // preference: a control that takes no focus cannot be reached to be told why it is dead.
+    await tabTo(page, create, "the unavailable Create button");
+
+    // What a mouse gets, from the keyboard: focusing the control opens the same tooltip
+    // hovering it would.
+    const tooltip = page.locator('[data-slot="tooltip-content"]');
+    await shows(tooltip, "the tooltip explaining the Create button");
+    expect(await tooltip.innerText()).toContain(`does not hold "${CATALOG_WRITE}"`);
+    // And what a screen reader gets, which is not the same thing: Base UI's tooltip is a
+    // visual affordance and associates itself with nothing, so the control has to be described
+    // by the sentence whether the tooltip is open or not.
+    expect(await describedText(page, create)).toContain(
+      `does not hold "${CATALOG_WRITE}"`,
+    );
+
+    await auditAccessibility(page, "the Products screen on a Role that cannot write");
+  });
+
+  it("does nothing at all when an unavailable action is activated", async () => {
+    const narrow = await seam.merchantOnARole([CATALOG_READ]);
+    const page = await seam.signedInAs(narrow, "/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    const title = `Never created ${Date.now()}`;
+    const form = newProductForm(page);
+    await form.getByLabel("Title").fill(title);
+    await form.getByLabel("SKU").fill(`NEVER-${Date.now()}`);
+    await form.getByLabel(PRICE_FIELD).fill("1250");
+
+    const writes = watchForWrites(page);
+
+    // `aria-disabled` does not prevent activation, which is exactly why the handler has to
+    // no-op for real — and there are three ways in. A click is the mouse's, forced past
+    // Playwright's own refusal to click something `aria-disabled`, because a browser has no
+    // such refusal; Enter on the focused control is the keyboard's; and Enter in a *field* is
+    // implicit submission, which a browser performs by clicking this form's default button —
+    // so it arrives at the same handler, which is why the form needs no guard of its own.
+    //
+    // Watched failing with the handler forwarded: this reported `POST /admin/products`.
+    const create = form.getByRole("button", { name: "Create" });
+    await create.click({ force: true });
+    await create.press("Enter");
+    await form.getByLabel(PRICE_FIELD).press("Enter");
+
+    // A refused creation is not the failure this case is about: spending a round trip to be
+    // told something the Admin already knew is the thing the affordance exists to avoid.
+    await expect(writes.settled()).resolves.toEqual([]);
+
+    // And the books, because the screen cannot prove a Product was not created.
+    const listed = await seam.api<{ products: { title: string }[] }>(
+      "GET",
+      "/admin/products?limit=100",
+    );
+    expect(listed.products.map((product) => product.title)).not.toContain(title);
+  });
+
+  it("does nothing when an unavailable action is not a form's either", async () => {
+    // The Create button above is a `type="submit"`, so what stops it is `preventDefault` on the
+    // click. Revoke is a plain button, where the whole of the no-op is the caller's own handler
+    // not being forwarded — a different half of the same component, and the one that carries
+    // every unavailable action this Admin has that is not a form's.
+    //
+    // Watched failing with that handler forwarded: this reported the `DELETE` it should not
+    // have made.
+    const narrow = await seam.merchantOnARole([API_KEY_READ]);
+    await seam.api("POST", "/admin/api-keys", {
+      name: `never revoked ${Date.now()}`,
+      kind: "publishable",
+    });
+    const page = await seam.signedInAs(narrow, "/api-keys");
+    await shows(
+      page.getByText("The credentials a storefront presents at"),
+      "the API keys screen",
+    );
+
+    const revoke = page.getByRole("button", { name: "Revoke" }).first();
+    await shows(revoke, "a Revoke button");
+    expect(await revoke.getAttribute("aria-disabled")).toBe("true");
+    expect(await describedText(page, revoke)).toContain(
+      `does not hold "${API_KEY_WRITE}"`,
+    );
+
+    const writes = watchForWrites(page);
+
+    await revoke.click({ force: true });
+    await revoke.press("Enter");
+
+    await expect(writes.settled()).resolves.toEqual([]);
+    await auditAccessibility(page, "the API keys screen on a Role that cannot revoke");
+  });
+
+  it("takes a Role edited elsewhere on the next navigation, without signing out", async () => {
+    const narrow = await seam.merchantOnARole([CATALOG_READ, ORDER_READ]);
+    const page = await seam.signedInAs(narrow, "/products");
+    await expect.poll(() => sections(page)).toEqual(["Products", "Orders"]);
+
+    // Somebody else, in another browser, widens this Role. The Merchant's session is untouched
+    // — a Role is read on every request rather than copied into the session — so the Admin is
+    // now confidently wrong about what this Merchant may do until it asks again.
+    await seam.api("PATCH", `/admin/roles/${narrow.roleId}`, {
+      permissions: [CATALOG_READ, ORDER_READ, API_KEY_READ],
+    });
+
+    await page.getByRole("link", { name: "Orders" }).click();
+    expect(where(page)).toBe("/orders");
+
+    // The half of ADR-0063 that #175 left unwired: the session query is re-read on navigation
+    // as well as on window focus, so the frame catches up without anybody signing out.
+    await expect.poll(() => sections(page)).toEqual(["Products", "Orders", "API keys"]);
+
+    // And back the other way, which is the direction that actually takes an offer away — a
+    // frame that only ever grew would be wrong in the one case a Merchant is *meant* to stop
+    // being able to reach something.
+    await seam.api("PATCH", `/admin/roles/${narrow.roleId}`, {
+      permissions: [CATALOG_READ],
+    });
+    await page.getByRole("link", { name: "Products" }).click();
+    await expect.poll(() => sections(page)).toEqual(["Products"]);
+  });
+
+  it("takes a Role edited elsewhere when the window is focused, with no navigation", async () => {
+    const narrow = await seam.merchantOnARole([CATALOG_READ]);
+    const page = await seam.signedInAs(narrow, "/products");
+    await expect.poll(() => sections(page)).toEqual(["Products"]);
+
+    await seam.api("PATCH", `/admin/roles/${narrow.roleId}`, {
+      permissions: [CATALOG_READ, ORDER_READ],
+    });
+
+    // The other half of ADR-0063's re-read, and the half a headless browser cannot produce for
+    // real: its page is always visible, so there is no window to come back to. What is asserted
+    // is that the Admin is listening — TanStack Query's focus manager subscribes to
+    // `visibilitychange` on `window`, and this Admin says `refetchOnWindowFocus` rather than
+    // inheriting it. Watched failing with that turned off, which is what makes this a case
+    // about the Admin rather than about TanStack Query's defaults.
+    await refocusTheWindow(page);
+
+    expect(where(page)).toBe("/products");
+    await expect.poll(() => sections(page)).toEqual(["Products", "Orders"]);
   });
 });
