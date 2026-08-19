@@ -1710,10 +1710,12 @@ describe("the catalog screens", () => {
       "The dialog closed on a refusal, which puts the explanation where the Merchant is not.",
     ).toBe(true);
 
-    // And nothing was deleted, which is the other half of "it was refused".
+    // And nothing was deleted, which is the other half of "it was refused" — the one Variant
+    // it had, still the one it has. Named rather than left as `[{}]`, which asserted only
+    // the length of the list and nothing whatever about what survived (#186).
     await expect(
-      seam.api<{ variants: unknown[] }>("GET", `/admin/products/${product.id}`),
-    ).resolves.toMatchObject({ variants: [{}] });
+      seam.api<{ variants: { id: string }[] }>("GET", `/admin/products/${product.id}`),
+    ).resolves.toMatchObject({ variants: [{ id: product.variantId }] });
   });
 
   it("deletes a Variant a Product can spare, and reads the Product back", async () => {

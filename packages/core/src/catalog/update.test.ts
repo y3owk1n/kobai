@@ -428,11 +428,16 @@ describe("PATCH /admin/variants/{id}", () => {
     // why this is a `PATCH`: under a `PUT`, a client that sent only its metadata would have
     // made this a poster again, and one that sent only its SKU would have emptied the bag.
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      sku: "PDF",
-      fulfilment: { strategy: "digital" },
-      metadata: { edition: "second" },
-    });
+    const corrected = (await response.json()) as {
+      sku: string;
+      fulfilment: { strategy: string };
+      metadata: Record<string, unknown>;
+    };
+    expect(corrected).toMatchObject({ sku: "PDF", fulfilment: { strategy: "digital" } });
+    // `toEqual` on the bag, exactly as the Product's and the Store's versions of this case
+    // do it: a subset match around a bag permits the keys a merge would have left beside
+    // `edition`, which is the implementation this case exists to rule out.
+    expect(corrected.metadata).toEqual({ edition: "second" });
 
     // Replaced rather than merged: a merge would leave no way to take a key back out.
     //

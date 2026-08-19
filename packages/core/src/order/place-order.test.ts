@@ -341,7 +341,10 @@ describe("Adjustments on an Order", () => {
     const { response } = await placePricedCart(kobai, 2);
 
     expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
+    const placed = (await response.json()) as {
+      adjustments: { metadata: Record<string, unknown> }[];
+    };
+    expect(placed).toMatchObject({
       // The Order-level Adjustment, which belongs to no single line.
       adjustments: [
         {
@@ -349,7 +352,6 @@ describe("Adjustments on an Order", () => {
           code: "voucher",
           description: "Welcome voucher",
           amount: -500,
-          metadata: {},
         },
       ],
       lineItems: [
@@ -369,6 +371,11 @@ describe("Adjustments on an Order", () => {
         },
       ],
     });
+
+    // The Step attached no bag to the voucher, and this is the assertion that says so:
+    // `metadata: {}` inside the match above was a subset match, which every bag satisfies
+    // (#186, docs/agents/writing-tests.md).
+    expect(placed.adjustments[0]?.metadata).toEqual({});
   });
 
   it("charges a total that accounts for every one of them", async () => {
