@@ -639,6 +639,46 @@ export interface paths {
       };
     };
   };
+  "/admin/fulfilment-strategies": {
+    /**
+     * List Fulfilment Strategies
+     * @description Every Strategy this deployment has wired, in name order — the complete set a Variant's `fulfilment.strategy` may name, and the set the `unknown-fulfilment-strategy` refusal is made against. It answers a name and nothing else: what a Strategy says about shipping, stock and Lead Time is answered *about a Variant* (ADR-0014), so there is no answer to give without one. **This list does not page**, unlike every other on this surface: it is what a deployment was configured with rather than a table, so it cannot grow while the process runs and there is nothing for a cursor to be built over (ADR-0067).
+     */
+    get: {
+      responses: {
+        /** @description Every Fulfilment Strategy this deployment has, in name order. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["FulfilmentStrategyList"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/products": {
     /**
      * List Products
@@ -2338,6 +2378,14 @@ export interface components {
       metadata?: {
         [key: string]: unknown;
       };
+    };
+    FulfilmentStrategyList: {
+      /** @description All of them, in name order. Never empty: Core's `physical` and `digital` are there unless a Project replaced them, and a Project that replaced one wired something under that name. */
+      strategies: components["schemas"]["FulfilmentStrategySummary"][];
+    };
+    FulfilmentStrategySummary: {
+      /** @description The name a Variant's `fulfilment.strategy` points at — Core's own `physical` and `digital`, and whatever key this deployment's `kobai.config.ts` wired beside them. */
+      name: string;
     };
     ProductDetail: components["schemas"]["Product"] & {
       variants: components["schemas"]["Variant"][];
