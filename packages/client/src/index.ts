@@ -123,6 +123,18 @@ export type Product = components["schemas"]["Product"];
 export type ProductDetail = components["schemas"]["ProductDetail"];
 export type Variant = components["schemas"]["Variant"];
 /**
+ * Whether a Shopper may see a Product, and the one thing a Merchant's Product list filters by.
+ *
+ * A **closed** set of three that partition the catalog: a `draft` is being prepared, a
+ * `published` Product is what the store surface answers with, and an `archived` one has left the
+ * storefront without taking the Orders that reference it with it. A consumer that offers the
+ * filter can therefore hold this as a union and be told by its compiler when a fourth arrives.
+ *
+ * It is on {@link Product} and {@link ProductDetail} and deliberately on neither store shape —
+ * see below.
+ */
+export type ProductStatus = components["schemas"]["ProductStatus"];
+/**
  * What a **storefront** is shown, which is deliberately less than a Merchant is.
  *
  * Declared apart from {@link Product}, {@link ProductDetail} and {@link Variant} rather than

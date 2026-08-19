@@ -10,6 +10,7 @@ import {
 import { changesFrom, changesNothing, type Field, openData, text } from "../patch.ts";
 import { handleField, handleTaken } from "./handle.ts";
 import { type ProductDetail, readVariants, type Variant } from "./read.ts";
+import { productStatusField } from "./status.ts";
 import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 
 /**
@@ -44,6 +45,7 @@ export type UpdateProductInput = {
   readonly title?: unknown;
   readonly description?: unknown;
   readonly handle?: unknown;
+  readonly status?: unknown;
   readonly metadata?: unknown;
 };
 
@@ -144,6 +146,7 @@ export async function updateProduct(
       title: input.title,
       description: input.description,
       handle: input.handle,
+      status: input.status,
       metadata: input.metadata,
     },
     {
@@ -153,6 +156,14 @@ export async function updateProduct(
       // is one they can correct it to. There is deliberately no `null` here as there is for the
       // description beside it: a Product with no address is not a state that exists.
       handle: handleField,
+      // **This is where a Product is published and where it is archived**, and it is an ordinary
+      // field of an ordinary correction rather than two routes of its own. Publishing is a
+      // decision (story 6) and archiving is a decision (story 7); what makes them one field is
+      // that they are the same decision asked twice, and a `POST …/publish` beside a
+      // `POST …/archive` would be two more paths promised for ever (ADR-0060) saying what
+      // `status` already says. There is no `null` here either: a Product with no status is not a
+      // state kobai has.
+      status: productStatusField,
       metadata: openData("metadata"),
     },
     // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
@@ -160,7 +171,7 @@ export async function updateProduct(
     // does not carry, so a body naming `variants` is this body, and the refusal is where a
     // Merchant who tried to add one is told which route adds one.
     changesNothing(
-      "a `title`, a `description`, a `handle`, a `metadata`, or any of them",
+      "a `title`, a `description`, a `handle`, a `status`, a `metadata`, or any of them",
       "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
     ),
   );
@@ -180,6 +191,7 @@ export async function updateProduct(
           title: product.title,
           description: product.description,
           handle: product.handle,
+          status: product.status,
           metadata: product.metadata,
         });
       if (!updated) return noSuchProduct(productId);

@@ -144,6 +144,15 @@ when a Merchant names none, and correctable afterwards. Never an identifier: a h
 parses as one is refused, because `GET /store/products/{idOrHandle}` reads a UUID as the id.
 _Avoid_: slug, permalink, key, alias, code (that is a currency's or a discount's)
 
+**Status**:
+Whether a Shopper may see a Product — **draft**, **published** or **archived**. The three
+partition the catalog. A Product is created a draft and published as a decision rather than as a
+side effect of creating; archiving takes it off the storefront without touching the Orders that
+reference it, which is what makes it the instrument for something that has been sold and deletion
+the wrong one. The store surface answers published Products only, and a draft is *invisible*
+there rather than forbidden.
+_Avoid_: state (that is a Cart's), visibility, active, live, unpublished, deleted
+
 **Variant**:
 The sellable thing, carrying the SKU. Every Product has at least one, including a Product
 with no options at all.

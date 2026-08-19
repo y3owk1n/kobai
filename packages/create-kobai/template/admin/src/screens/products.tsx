@@ -11,8 +11,15 @@ import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
+import { ListFilter, useListFilter } from "@/components/list-filter";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
+import {
+  OFFERED_STATUSES,
+  PRODUCT_STATUS_LABELS,
+  PRODUCT_STATUS_OPTIONS,
+  ProductStatusBadge,
+} from "@/components/product-status-badge";
 import {
   Card,
   CardContent,
@@ -59,27 +66,51 @@ import { useKobaiClient } from "@/lib/session";
  */
 const PRODUCTS = "products";
 
+/** The query parameter the filter lives in, spelled as `GET /admin/products` spells it. */
+const STATUS = "status";
+
+/** Where this section lives, exactly as `app.tsx` and `lib/sections.ts` spell it. */
+const HERE = "/products";
+
 export function Products() {
   const client = useKobaiClient();
   const after = usePageCursor();
+  const { asked, value: status, unknownValue } = useListFilter(STATUS, OFFERED_STATUSES);
 
   const page = useQuery({
-    // The cursor is part of the key, so each page is cached as itself.
-    queryKey: [PRODUCTS, after ?? null],
+    // The cursor is part of the key, so each page is cached as itself — and so is the filter
+    // beside it, because a page of drafts and a page of published Products are two different
+    // answers to two different questions.
+    //
+    // Keyed on what the **address** asked for rather than on the status it narrowed to, so that
+    // a word kobai does not have is its own key rather than the unfiltered catalog's.
+    queryKey: [PRODUCTS, asked, after ?? null],
     queryFn: async () =>
       orThrow(
         await client.GET("/admin/products", {
-          // `after` is omitted rather than sent empty for the first page: an empty string is
-          // not a cursor kobai issued, and it is refused as one.
-          params: { query: after === undefined ? {} : { after } },
+          params: {
+            query: {
+              // Each omitted rather than sent empty. An empty `after` is a cursor kobai never
+              // issued and is refused as one, and an empty `status` is not one of the three.
+              ...(after === undefined ? {} : { after }),
+              ...(status === undefined ? {} : { status }),
+            },
+          },
         }),
       ),
     // The previous page stays on screen while the next one is fetched, so moving through a
     // list is a spinner over what you were reading rather than the whole table disappearing.
     placeholderData: keepPreviousData,
+    // Nothing is asked for while the address names a status kobai has never heard of: the
+    // screen has an answer already, and it is not one kobai could improve on.
+    enabled: unknownValue === null,
   });
 
-  const products = page.data?.products;
+  // Nothing at all while the address names no status kobai has, and that is the assertion
+  // rather than a tidiness: `placeholderData` hands this observer the page it was last showing
+  // while a new key is in flight, so a screen that read `page.data` here would print "no such
+  // status" over the rows of whichever filter the Merchant came from.
+  const products = unknownValue === null ? page.data?.products : undefined;
 
   return (
     <div className="grid gap-6">
@@ -97,6 +128,14 @@ export function Products() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <ListFilter
+            label="Filter the Products"
+            section={HERE}
+            parameter={STATUS}
+            asked={asked}
+            options={PRODUCT_STATUS_OPTIONS}
+          />
+
           <Problem
             problem={
               page.isError
@@ -105,7 +144,9 @@ export function Products() {
             }
           />
 
-          {page.isPending ? <ProductsLoading /> : null}
+          {unknownValue === null ? null : <NoSuchStatus asked={unknownValue} />}
+
+          {page.isPending && unknownValue === null ? <ProductsLoading /> : null}
 
           {products !== undefined && products.length === 0 ? (
             <Empty className="border">
@@ -113,10 +154,19 @@ export function Products() {
                 <EmptyMedia variant="icon">
                   <PackageIcon />
                 </EmptyMedia>
-                <EmptyTitle>No Products yet</EmptyTitle>
+                <EmptyTitle>
+                  {status === undefined
+                    ? "No Products yet"
+                    : `No ${PRODUCT_STATUS_LABELS[status].toLowerCase()} Products`}
+                </EmptyTitle>
                 <EmptyDescription>
-                  Nothing is for sale until a Product exists. Create one below — a title,
-                  a SKU and a Price is the thinnest sellable thing.
+                  {/* Which of the two sentences this is matters: "there is nothing here"
+                      and "there is nothing here *in this status*" are different facts, and
+                      a filtered list saying the first would send a Merchant looking for a
+                      catalog they still have. */}
+                  {status === undefined
+                    ? "Nothing is for sale until a Product exists. Create one below — a title, a SKU and a Price is the thinnest sellable thing."
+                    : "Nothing in this Store is in that status. Choose All above to see the whole catalog."}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -131,6 +181,10 @@ export function Products() {
                       what a storefront links to, so scanning for the one that is wrong is a
                       thing a Merchant does across the whole catalog. */}
                   <TableHead>Handle</TableHead>
+                  {/* Beside the handle, because it is the other thing that decides whether a
+                      storefront can reach this Product at all: an address nothing publishes is
+                      an address that answers 404. */}
+                  <TableHead>Status</TableHead>
                   {/* Named rather than empty: a column header with no text is a column a
                       screen reader announces as nothing at all. */}
                   <TableHead className="w-0">
@@ -144,6 +198,9 @@ export function Products() {
                     <TableCell className="font-medium">{product.title}</TableCell>
                     <TableCell className="text-muted-foreground">
                       /{product.handle}
+                    </TableCell>
+                    <TableCell>
+                      <ProductStatusBadge status={product.status} />
                     </TableCell>
                     <TableCell>
                       <LinkButton
@@ -166,6 +223,32 @@ export function Products() {
 
       <NewProduct />
     </div>
+  );
+}
+
+/**
+ * An address naming a status kobai does not have.
+ *
+ * Only ever reached by typing or by following a stale link, and it says so rather than quietly
+ * showing every Product — a filter that was dropped answers a different question from the one
+ * that was asked, and a Merchant reading the whole catalog would not know it had been. kobai
+ * refuses this word too, with `invalid`; this screen is what stops the round trip being needed
+ * to find out.
+ */
+function NoSuchStatus({ asked }: { readonly asked: string }) {
+  return (
+    <Empty className="border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <PackageIcon />
+        </EmptyMedia>
+        <EmptyTitle>No such Product status</EmptyTitle>
+        <EmptyDescription>
+          kobai knows no Product status called “{asked}”. A Product is a draft, published
+          or archived, and the three above are the whole of it.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

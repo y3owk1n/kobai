@@ -751,7 +751,7 @@ export interface paths {
   "/admin/products": {
     /**
      * List Products
-     * @description Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064).
+     * @description Newest first, 20 at a time. `status` narrows to the Products that are drafts, that are published, or that have been archived; the three partition the catalog, and omitting it answers all of them. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064).
      */
     get: {
       parameters: {
@@ -760,6 +760,8 @@ export interface paths {
           limit?: number;
           /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
+          /** @description Narrow to the Products in one status — `draft` to find what is still being prepared, `published` for what is on sale, `archived` for what has been taken off it. The three partition the catalog, so omitting this answers all of them. A value that is not one of the three is **refused** rather than ignored, because a filter quietly dropped answers a different question from the one that was asked. */
+          status?: components["schemas"]["ProductStatus"];
         };
       };
       responses: {
@@ -803,7 +805,7 @@ export interface paths {
     };
     /**
      * Create a Product
-     * @description A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed.
+     * @description A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.
      */
     post: {
       requestBody: {
@@ -970,7 +972,7 @@ export interface paths {
     };
     /**
      * Correct a Product
-     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.
      */
     patch: {
       parameters: {
@@ -2870,6 +2872,8 @@ export interface components {
     ProductDetail: components["schemas"]["Product"] & {
       variants: components["schemas"]["Variant"][];
     };
+    /** @enum {string} */
+    ProductStatus: "draft" | "published" | "archived";
     Variant: {
       /** Format: uuid */
       id: string;
@@ -2917,6 +2921,7 @@ export interface components {
       description: string | null;
       /** @description The address this Product is known by, unique across the Store — `blue-poster`, so a storefront's URL can be `/products/blue-poster` rather than a UUID. `GET /store/products/{idOrHandle}` accepts it in place of the identifier. */
       handle: string;
+      status: components["schemas"]["ProductStatus"];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -2963,6 +2968,7 @@ export interface components {
       description?: string | null;
       /** @description A new address for this Product — the storefront URL it is reached at moves with it, so anything already linking to the old one stops resolving. There is no `null` here as there is for the description: a Product with no address is not a state that exists. One another Product answers to is refused at 409. */
       handle?: string;
+      status?: components["schemas"]["ProductStatus"];
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;

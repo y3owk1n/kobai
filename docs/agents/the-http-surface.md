@@ -302,16 +302,42 @@ what they mean. One contract bound once per list is the same contract each time,
 this is not the shape the paragraph above rules out.
 
 **A list that also *filters* still names its list once, through the same builder** (#227).
-`contract.CartPageQuery` is the first and so far only one — `GET /admin/carts` takes ADR-0064's
-`limit` and `after` unchanged and `state=live|expired|spent` beside them — and it is a **module-level
-constant**, because a list's name is the only thing `pageQuery` is a factory *for* and there is
-one Cart list. What it must not become is a schema assembled out of the pieces: the whole point of
-#183's factory is that one argument settles both ends of a cursor, so anything built here goes
-through `pageQueryOf(list, filters)` and adds *filters only*. Two things about a filter carry to
-the next one: a value outside the set is **refused** rather than ignored, because a filter quietly
-dropped answers a different question from the one that was asked; and a filtered page is the case
-`nextCursor` was designed for, since a short page is not the end of a list. Everything else on the
-surface stays a module-level constant.
+`contract.CartPageQuery` was the first — `GET /admin/carts` takes ADR-0064's `limit` and `after`
+unchanged and `state=live|expired|spent` beside them — and `contract.ProductPageQuery` is the
+second, with `status=draft|published|archived` on `GET /admin/products` (#252). Both are
+**module-level constants**, because a list's name is the only thing `pageQuery` is a factory *for*
+and there is one of each list. What such a schema must not become is one assembled out of the
+pieces: the whole point of #183's factory is that one argument settles both ends of a cursor, so
+anything built here goes through `pageQueryOf(list, filters)` and adds *filters only*. Everything
+else on the surface stays a module-level constant.
+
+**The filtering convention is three promises, and they are asserted for every filter at once in
+`packages/core/src/http/filtering.test.ts`** (#209, #252):
+
+- **Absent means unfiltered**, which is what made each of these additive.
+- **A value outside the set is refused at 400, from the schema, never ignored** — a filter quietly
+  dropped answers a different question from the one that was asked and hands back a page the
+  caller reads as the truth. The refusal is `pageQuery`'s existing `invalid`; an unusable
+  parameter does not fit the endpoint's schema and needs no `reason` of its own.
+- **A filter composes with the cursor**, and a filtered page being short is still not an
+  end-of-list signal — this is the case `nextCursor` was designed for.
+
+That file is **its own** rather than another table in `pagination.test.ts`, and the reason is that
+file's argument turned round: the page envelope is the same on every list, and filters are not.
+Its table is checked against the description, so **a route declaring a query parameter that is
+neither `limit` nor `after` and has no entry reddens the build** — which is what stops the next
+filter opting out of the sweep silently. A filter whose values are not a closed set (a Collection
+identifier, say) fits it: an entry names its own values and its own unusable one.
+
+**A filter is not how a surface hides something.** `status` narrows the *Merchant's* list;
+`GET /store/products` and `GET /store/products/{idOrHandle}` answer published Products only, and
+that is enforced in `catalog/store-read.ts` rather than offered as a parameter, because a client
+that could ask for drafts is a client that will. A draft answers the same `product-not-found` an
+unknown handle does — invisible rather than forbidden, which is also what stops the store surface
+leaking that a handle is taken. And **`status` is on `Product` and `ProductDetail` and on neither
+store shape**: it is a Merchant's field, so #207's split is what keeps it off a publishable key's
+responses, and its absence from both is asserted directly in `store.test.ts` beside `inventory`
+and `prices`.
 
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.

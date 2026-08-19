@@ -119,6 +119,25 @@ handle of its own on purpose: that way every test in this repository that seeds 
 also exercising what `POST /admin/products` does when a Merchant names no handle, which is the
 case they meet first.
 
+**What it seeds is `published`, and that is one `PATCH` it makes on your behalf** (#252).
+`POST /admin/products` creates a **draft** — publishing is a decision a Merchant makes rather
+than a side effect of creating — and the store surface answers no draft at all, so a helper that
+stopped at the create would arrange a catalog nothing could be bought from and every
+store-surface test would have to publish for itself. A test whose subject *is* the status says
+so, and gets the Product left exactly where it asked:
+
+```ts
+await seedTestCatalog(kobai, { status: "draft" });     // where the create leaves one
+await seedTestCatalog(kobai, { status: "archived" });  // off the storefront
+```
+
+That is the same line `prices` and `variants` draw, from the other side: the helper hides the
+arrangement a test does not care about, and `{ status: "draft" }` is how a test says the status
+is the thing it is about. **A test that builds Products by hand rather than through this helper
+inherits the draft** — `pagination.test.ts`'s seeder publishes each one for exactly that reason,
+and an unpublished batch there would make every `/store/products` case assert against an empty
+list while passing for the wrong reason.
+
 **Nothing it seeds is counted**, and there is deliberately no option that counts it. A Variant
 with no Inventory row sells freely and holds no Reservation (ADR-0018), which is what every test
 that is not about stock wants; a test that *is* about stock says so with

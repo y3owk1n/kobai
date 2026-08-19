@@ -438,6 +438,128 @@ describe("browsing the catalog", () => {
     }
   });
 
+  /**
+   * The third promise about what a store response does **not** carry, asserted directly.
+   *
+   * `status` is a Merchant's field and is on `Product` and `ProductDetail`; it is on neither
+   * shape here, and #207's whole argument for keeping the two apart is this one: `/store` is
+   * opened by a **publishable** key, so a `status` here would tell every browser which Products
+   * a Merchant has not finished writing — and under ADR-0060 taking a field back out again is a
+   * major.
+   *
+   * Arranged to exist, exactly as `inventory` and `prices` are: the Product really is
+   * `published`, and `GET /admin/products/{id}` is asked in the same test to say so. An
+   * assertion that something is absent is worth nothing until the thing is present somewhere.
+   */
+  it("publishes no status, on either shape a Product is answered in", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedSomethingToBrowse(kobai);
+
+    const merchant = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    // The arrangement, asserted: the Store really is holding the thing the store surface is
+    // about to be held to omitting.
+    await expect(merchant.json()).resolves.toMatchObject({ status: "published" });
+
+    const listed = await kobai.request("/store/products", {
+      headers: catalog.apiKey.headers,
+    });
+    const detail = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    const [inList] = ((await listed.json()) as { products: object[] }).products;
+    const opened = (await detail.json()) as object;
+
+    for (const [where, shape] of [
+      ["in the list", inList],
+      ["opened", opened],
+    ] as const) {
+      expect(shape, `${where}: status`).not.toHaveProperty("status");
+    }
+  });
+
+  /**
+   * Story 22 and story 24, on the list: a Shopper never sees something they cannot buy, and a
+   * Developer building a storefront does not have to filter drafts out and cannot forget to.
+   *
+   * **Enforced in the route rather than left to a filter**, which is why there is no
+   * `?status=` here to assert against: a client that could ask for drafts is a client that
+   * will. The published Product beside them is the arrangement rather than decoration — a list
+   * that answered nothing at all would satisfy the first half of this and be a broken
+   * storefront.
+   */
+  it("answers neither a draft nor an archived Product", async () => {
+    kobai = await createTestKobai();
+    const onSale = await seedTestCatalog(kobai, {
+      title: "A poster",
+      variants: [{ sku: "POSTER-A2" }],
+    });
+    await seedTestCatalog(kobai, {
+      merchant: onSale.merchant,
+      title: "A draft mug",
+      status: "draft",
+      variants: [{ sku: "MUG-DRAFT" }],
+    });
+    await seedTestCatalog(kobai, {
+      merchant: onSale.merchant,
+      title: "An old tote",
+      status: "archived",
+      variants: [{ sku: "TOTE-OLD" }],
+    });
+
+    const response = await kobai.request("/store/products", {
+      headers: onSale.apiKey.headers,
+    });
+
+    expect(response.status).toBe(200);
+    const { products } = (await response.json()) as { products: { title: string }[] };
+    // The whole list rather than "does not contain": a storefront reading three Products where
+    // one is for sale and a storefront reading one are different pages, and only one of them is
+    // this promise.
+    expect(products.map((product) => product.title)).toEqual(["A poster"]);
+  });
+
+  /**
+   * The same two stories on the read, and the reason the refusal is the ordinary one.
+   *
+   * A draft answers **`product-not-found`**, the same 404 an unknown handle gets — so a draft is
+   * *invisible* rather than forbidden. A 403 would be a different sentence: it would tell an
+   * anonymous browser holding a publishable key that a handle is taken and that something exists
+   * behind it, which is exactly what a Merchant preparing a Product has not published.
+   */
+  it("answers a draft and an archived Product not-found, by id and by handle", async () => {
+    kobai = await createTestKobai();
+    const draft = await seedTestCatalog(kobai, {
+      title: "A draft mug",
+      status: "draft",
+      variants: [{ sku: "MUG-DRAFT" }],
+    });
+    const archived = await seedTestCatalog(kobai, {
+      merchant: draft.merchant,
+      title: "An old tote",
+      status: "archived",
+      variants: [{ sku: "TOTE-OLD" }],
+    });
+
+    for (const [what, address] of [
+      ["a draft by id", draft.productId],
+      ["a draft by handle", "a-draft-mug"],
+      ["an archived Product by id", archived.productId],
+      ["an archived Product by handle", "an-old-tote"],
+    ] as const) {
+      const response = await kobai.request(`/store/products/${address}`, {
+        headers: draft.apiKey.headers,
+      });
+
+      expect(response.status, what).toBe(404);
+      await expect(response.json(), what).resolves.toMatchObject({
+        reason: "product-not-found",
+      });
+    }
+  });
+
   it("carries every Variant of a Product, in SKU order", async () => {
     kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai, {

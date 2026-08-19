@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database, Queryable } from "../db/client.ts";
 import {
   cursorAt,
@@ -11,6 +11,7 @@ import {
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
+import type { ProductStatus } from "./status.ts";
 
 /**
  * Reading the catalog.
@@ -93,11 +94,30 @@ export type Product = {
    * `PATCH /admin/products/{id}`.
    */
   readonly handle: string;
+  /**
+   * Whether a Shopper may see this Product — `draft`, `published` or `archived`.
+   *
+   * **A Merchant's field, and it is on this shape and on neither store shape**, which is #207's
+   * split doing the job it was made for: `/store` is opened by a publishable key, so a `status`
+   * published there would tell every browser which Products a Merchant has not finished writing
+   * — and under ADR-0060 taking a field back off is a major. The storefront is answered
+   * published Products and nothing else instead, in the route.
+   */
+  readonly status: ProductStatus;
   readonly metadata: Record<string, unknown>;
 };
 
 /** A Product opened — its Variants and their Prices, which is the whole sellable picture. */
 export type ProductDetail = Product & { readonly variants: readonly Variant[] };
+
+/**
+ * What the Product list was asked for: a page, and the one status it may be narrowed to.
+ *
+ * One argument rather than two, exactly as `CartPageRequest` is one — `contract.ProductPageQuery`
+ * produces this shape, so the route hands over what it was given instead of taking the same
+ * object apart and passing half of it twice.
+ */
+export type ProductPageRequest = PageRequest & { readonly status?: ProductStatus };
 
 /**
  * A page of Products, newest first — a Merchant listing them has just created one and is
@@ -107,10 +127,17 @@ export type ProductDetail = Product & { readonly variants: readonly Variant[] };
  * this is the list where an unbounded response hurts first, because a Merchant's catalog grows
  * and nothing about the route said when to stop. `page.after` is the record the caller last
  * saw, so a Product created since changes nothing about what follows it.
+ *
+ * **`status` narrows it, and absent means unfiltered** — the filtering convention, whose second
+ * consumer this is. The filter is applied in the same statement as the page, so a filtered page
+ * that comes back short is still a page: `nextCursor` is what says whether there is more, which
+ * is the clause of ADR-0064 a filter is the first thing to exercise. A Merchant's list is the
+ * one place a draft is visible at all — the store surface answers `published` and nothing else,
+ * in the route rather than through this parameter.
  */
 export async function listProducts(
   db: Database,
-  page: PageRequest,
+  page: ProductPageRequest,
 ): Promise<Page<Product>> {
   const rows = await db
     .select({
@@ -118,11 +145,19 @@ export async function listProducts(
       title: product.title,
       description: product.description,
       handle: product.handle,
+      status: product.status,
       metadata: product.metadata,
       cursorAt: cursorAt(product.createdAt),
     })
     .from(product)
-    .where(rowsAfter(page, product.createdAt, product.id))
+    .where(
+      and(
+        rowsAfter(page, product.createdAt, product.id),
+        // `undefined` where nothing was asked, which `and` drops: absent means unfiltered, and
+        // that is the convention rather than this list's own choice.
+        page.status === undefined ? undefined : eq(product.status, page.status),
+      ),
+    )
     // `id` breaks the tie, so two Products created in the same instant still come back in
     // one stable order rather than in whichever order Postgres happened to read them — and
     // so that the cursor above names one row rather than a group of them.
@@ -133,13 +168,14 @@ export async function listProducts(
 
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
   // response by being forgotten about — the same reason a Payment is rebuilt rather than
-  // spread. A Product reports five fields, and these are them.
+  // spread. A Product reports six fields, and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
       title: row.title,
       description: row.description,
       handle: row.handle,
+      status: row.status,
       metadata: row.metadata,
     })),
     nextCursor,
@@ -163,6 +199,9 @@ export async function readProduct(
       title: product.title,
       description: product.description,
       handle: product.handle,
+      // No filter beside it, and that asymmetry with `catalog/store-read.ts` is the point: a
+      // Merchant opens a draft to work on it, which is what drafting is for.
+      status: product.status,
       metadata: product.metadata,
     })
     .from(product)

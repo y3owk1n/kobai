@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import {
+  createTestApiKey,
   createTestKobai,
   inspectSchema,
   sessionOf,
@@ -26,6 +27,7 @@ type CreatedProduct = {
   title: string;
   description: string | null;
   handle: string;
+  status: string;
   metadata: Record<string, unknown>;
   variants: {
     id: string;
@@ -271,6 +273,44 @@ describe("POST /admin/products", () => {
       variants: [{ sku: "POSTER-A2" }],
     });
     expect(named.handle).toBe("the-star");
+  });
+
+  it("creates a draft, which is a Product no storefront can see yet", async () => {
+    // Story 5, and the half of story 6 this route is responsible for: what a create makes is a
+    // Product a Merchant can prepare, and **publishing is a separate act**.
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const headers = { ...merchant.headers, "content-type": "application/json" };
+    const key = await createTestApiKey(kobai, merchant);
+
+    const created = await createProduct(kobai, headers);
+
+    expect(created.status).toBe("draft");
+    // The consequence rather than the column: the storefront cannot see it, by either address.
+    for (const address of [created.id, created.handle]) {
+      const shown = await kobai.request(`/store/products/${address}`, {
+        headers: key.headers,
+      });
+      expect(shown.status, `a draft at /store/products/${address}`).toBe(404);
+    }
+  });
+
+  it("makes a draft of a body that asked to be published, because there is no such field", async () => {
+    // The other side of the same decision, and what keeps it a decision. `CreateProductRequest`
+    // carries no `status`, so one sent anyway is stripped by the schema exactly as a `variants`
+    // sent to a `PATCH` is — there is no spelling of "create it published" for a client to find,
+    // and the Product it made is still a draft rather than one published by a key nobody
+    // declared.
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const created = await createProduct(kobai, headers, {
+      title: "A published poster",
+      status: "published",
+      variants: [{ sku: "POSTER-PUB" }],
+    });
+
+    expect(created.status).toBe("draft");
   });
 
   it("refuses a Product with no Variant, and stores nothing", async () => {

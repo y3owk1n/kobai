@@ -9,6 +9,7 @@ import type {
   ProductDeletion,
   VariantDeletion,
 } from "../catalog/delete.ts";
+import { PRODUCT_STATUSES } from "../catalog/status.ts";
 import type { StoreCatalogRefusal as StoreCatalogReason } from "../catalog/store-read.ts";
 import type { ProductUpdate, VariantUpdate } from "../catalog/update.ts";
 import type {
@@ -997,6 +998,28 @@ export const ProductHandle = z.string().meta({
     "The address this Product is known by, unique across the Store — `blue-poster`, so a storefront's URL can be `/products/blue-poster` rather than a UUID. `GET /store/products/{idOrHandle}` accepts it in place of the identifier.",
 });
 
+/**
+ * Whether a Shopper may see this Product — and the field that is on the admin shapes and on
+ * **neither** store shape.
+ *
+ * A **closed** set of three that partition the catalog, built from `catalog/status.ts`'s one
+ * list rather than retyped here: a `draft` is being prepared and nobody outside the Admin can
+ * see it, a `published` Product is what a storefront is served, and an `archived` one has left
+ * the storefront without taking the Orders that reference it with it (ADR-0009). A client that
+ * offers the filter can hold this as a union and be told by its compiler when a fourth arrives.
+ *
+ * **{@link StoreProduct} and {@link StoreProductDetail} do not carry it, and that is the field
+ * #207's split was argued about.** `/store` is opened by a publishable key, so anything those
+ * shapes carry is public — a `status` there would tell every browser which Products a Merchant
+ * has not finished writing — and under ADR-0060 taking a field back out again is a major. What
+ * a storefront gets instead is that the store reads answer `published` Products and nothing
+ * else, enforced in the route rather than left to a filter: a client that could ask for drafts
+ * is a client that will. That absence is asserted directly in `http/store.test.ts`, beside
+ * `inventory` and `prices`, because a promise about what is *not* in a response is one nothing
+ * else notices going missing.
+ */
+export const ProductStatus = z.enum(PRODUCT_STATUSES).openapi("ProductStatus");
+
 /** As a list reports it: no Variants, because a list is not a detail view. */
 export const Product = z
   .object({
@@ -1004,6 +1027,7 @@ export const Product = z
     title: z.string(),
     description: ProductDescription,
     handle: ProductHandle,
+    status: ProductStatus,
     metadata: Metadata,
   })
   .openapi("Product");
@@ -1021,6 +1045,25 @@ export const ProductDetail = Product.extend({
 export const ProductList = z
   .object({ products: z.array(Product).readonly(), nextCursor: NextCursor })
   .openapi("ProductList");
+
+/**
+ * The Product list's query: ADR-0064's two parameters, and the one thing this list narrows by.
+ *
+ * A **constant**, like {@link CartPageQuery} and like every other schema on this surface —
+ * `pageQuery` is a factory only because a list's name is what varies between its callers, and
+ * there is one Merchant's Product list. What makes this the same contract as every other list's
+ * is that it goes through {@link pageQueryOf}: a filter is added, and nothing about paging is
+ * re-decided here.
+ *
+ * **`GET /store/products` takes no filter of its own and must not grow this one.** It is a
+ * different list with a different name, and the only status it answers is `published`.
+ */
+export const ProductPageQuery = pageQueryOf("products", {
+  status: ProductStatus.optional().meta({
+    description:
+      "Narrow to the Products in one status — `draft` to find what is still being prepared, `published` for what is on sale, `archived` for what has been taken off it. The three partition the catalog, so omitting this answers all of them. A value that is not one of the three is **refused** rather than ignored, because a filter quietly dropped answers a different question from the one that was asked.",
+  }),
+});
 
 /**
  * One Fulfilment Strategy this deployment has wired, by the name a Variant points at.
@@ -1081,6 +1124,11 @@ export const CreateVariantRequest = z
  * `variants` is required and non-empty because a Product is never sellable in itself
  * (ADR-0008) — a Product with no options is not the exception, it is the ordinary case,
  * and it gets exactly one Variant like everything else.
+ *
+ * **There is no `status` here, and that is the decision** (story 6). What this route creates is
+ * a **draft**, always; publishing is an act a Merchant performs at `PATCH /admin/products/{id}`
+ * rather than a side effect of typing a title. A `status` on this body would make the two the
+ * same request again, with the draft as whatever a client remembered to send.
  */
 export const CreateProductRequest = z
   .object({
@@ -1126,6 +1174,10 @@ export const UpdateProductRequest = z
     handle: z.string().optional().meta({
       description:
         "A new address for this Product — the storefront URL it is reached at moves with it, so anything already linking to the old one stops resolving. There is no `null` here as there is for the description: a Product with no address is not a state that exists. One another Product answers to is refused at 409.",
+    }),
+    status: ProductStatus.optional().meta({
+      description:
+        "**Where a Product is published and where it is archived.** `published` puts it on the storefront, `archived` takes it off without touching the Orders that reference it — an Order's Line Items are a snapshot (ADR-0009) — and `draft` puts it back into preparation. There is no `null`: a Product with no status is not a state kobai has.",
     }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
