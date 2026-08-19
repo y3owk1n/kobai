@@ -68,6 +68,37 @@ export type ForeignKeyFact = {
   readonly to: TableRef;
 };
 
+/**
+ * One index, with the columns it orders by **in order** — which is the whole reason this is a
+ * fact of its own rather than a longer answer from {@link SchemaInspector.indexedColumnsOf}.
+ *
+ * A keyset page rests on a *composite* index (ADR-0064): `(created_at, id)` supports
+ * `order by created_at desc, id desc` and a row comparison against the pair, while an index on
+ * `created_at` beside a separate one on `id` supports neither and is indistinguishable from it
+ * once the columns are flattened into a set. So the columns arrive as a list and the list keeps
+ * its order.
+ *
+ * **A column carries its sort direction, because the bare name is not enough to know what an
+ * index supports.** `pg_get_indexdef` renders a *single* key column without the `DESC` and the
+ * `NULLS` placement it renders for the whole index, so `(created_at desc, id desc)` and
+ * `(created_at, id)` arrive identically unless they are added back — which would let a caller
+ * accept an index for an ordering it cannot serve. They are spelled here exactly as Postgres
+ * spells them whole: `DESC` where the column descends, and a `NULLS` clause only where it is
+ * not that direction's default. An **expression** index arrives as the expression's text rather
+ * than as nothing at all, since an index this cannot describe would otherwise read as an index
+ * with no columns. Only the key columns are reported: an `INCLUDE`d payload column is not part
+ * of the ordering and would misrepresent one if it were listed beside the ones that are.
+ */
+export type IndexFact = {
+  readonly name: string;
+  readonly columns: readonly string[];
+  /**
+   * Whether it covers only the rows of a `where` clause — which is the other way an index that
+   * names the right columns in the right order still does not answer for the whole table.
+   */
+  readonly isPartial: boolean;
+};
+
 export type MigrationTrackingFact = {
   readonly schema: string;
   readonly table: string;
@@ -102,6 +133,20 @@ export type SchemaInspector = {
    * and a Plugin that needs an index needs its own table.
    */
   indexedColumnsOf(table: TableRef | string): Promise<string[]>;
+  /**
+   * Every index on a table, sorted by name, each carrying its key columns **in index order**.
+   *
+   * The question {@link indexedColumnsOf} cannot be asked: that one flattens every index into
+   * one set of column names, which answers "is this column indexed at all" — right for
+   * ADR-0004's `metadata`, and unable to tell a composite `(created_at, id)` from two
+   * single-column indexes that happen to cover the same two names. A keyset page needs the
+   * former and is not helped by the latter (ADR-0064), so the check that a paged list has its
+   * index asks here.
+   *
+   * The primary key's own index is included, because it is an index a query can use like any
+   * other and hiding it would make a table's answer disagree with `\d`.
+   */
+  indexesOf(table: TableRef | string): Promise<IndexFact[]>;
   /**
    * The triggers on a table, sorted by name — the ones somebody declared, not the hidden
    * ones Postgres attaches to enforce a foreign key.
@@ -227,6 +272,56 @@ export function inspectSchema(source: SchemaQuery): SchemaInspector {
         [ref.schema, ref.name],
       );
       return rows.map((row) => row.column_name);
+    },
+
+    async indexesOf(table) {
+      const ref = resolve(table);
+      const rows = await source.query<{
+        index_name: string;
+        columns: string[];
+        is_partial: boolean;
+      }>(
+        // `pg_get_indexdef(oid, n, true)` renders the nth **key** column, which is what makes
+        // an expression index describable at all: `indkey` holds 0 for one, so a join through
+        // `pg_attribute` would drop it and report an index one column short. `indnkeyatts`
+        // rather than `indnatts` stops at the last key column, leaving an `INCLUDE`d payload
+        // out of an answer that is about ordering.
+        //
+        // What that per-column form does *not* render is the sort direction, so `indoption`
+        // puts it back: bit 0 is `DESC` and bit 1 is `NULLS FIRST`, and a `NULLS` clause is
+        // spelled only when it is not the default for the direction — descending defaults to
+        // nulls first and ascending to nulls last — which is how Postgres renders the whole
+        // index. `indoption` is an `int2vector` and so subscripts from zero.
+        `select
+           index_class.relname as index_name,
+           index_.indpred is not null as is_partial,
+           array(
+             select pg_get_indexdef(index_.indexrelid, key_position::int, true)
+                    || case when sort.flags & 1 = 1 then ' DESC' else '' end
+                    || case
+                         when (sort.flags & 2 = 2) <> (sort.flags & 1 = 1)
+                           then case
+                                  when sort.flags & 2 = 2 then ' NULLS FIRST'
+                                  else ' NULLS LAST'
+                                end
+                         else ''
+                       end
+             from generate_series(1, index_.indnkeyatts) as key_position,
+                  lateral (select index_.indoption[key_position - 1] as flags) as sort
+           ) as columns
+         from pg_index index_
+         join pg_class table_ on table_.oid = index_.indrelid
+         join pg_class index_class on index_class.oid = index_.indexrelid
+         join pg_namespace namespace on namespace.oid = table_.relnamespace
+         where namespace.nspname = $1 and table_.relname = $2
+         order by index_name`,
+        [ref.schema, ref.name],
+      );
+      return rows.map((row) => ({
+        name: row.index_name,
+        columns: row.columns,
+        isPartial: row.is_partial,
+      }));
     },
 
     async triggersOf(table) {

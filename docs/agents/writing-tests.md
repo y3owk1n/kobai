@@ -434,11 +434,34 @@ await expect(schema.foreignKeysCrossingInto("core")).resolves.toEqual([]);
 await expect(schema.columnsOwnedBy("core")).resolves.toEqual(stockCoreColumns);
 ```
 
-It also reads `migrationTracking()`, `columnsOf()`, `indexedColumnsOf()` and `triggersOf()`
-— that last one because Core advances `updated_at` in the database rather than in TypeScript
-(ADR-0037), so "does this table have the trigger" is a question about Postgres. It scans
-every non-system schema rather than only `public` — the prototype's inspector reported "no
-tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
+It also reads `migrationTracking()`, `columnsOf()`, `indexedColumnsOf()`, `indexesOf()` and
+`triggersOf()` — that last one because Core advances `updated_at` in the database rather than
+in TypeScript (ADR-0037), so "does this table have the trigger" is a question about Postgres.
+It scans every non-system schema rather than only `public` — the prototype's inspector reported
+"no tracking tables" for exactly that reason while they sat in `drizzle` the whole time.
+
+**`indexedColumnsOf` and `indexesOf` are two questions, and picking the wrong one is a test
+that passes against the thing it was written to forbid** (#219). The first flattens every index
+on a table into one set of column names — right for "is `metadata` indexed anywhere", which is
+ADR-0004's question and has no notion of an index having a shape. The second reports each index
+separately, with its **key columns in index order**, which is the only way to tell a composite
+`(created_at, id)` from a `created_at` index sitting beside an `id` one: the two flatten to the
+same set, and a keyset page rests on the first and is not helped by the second (ADR-0064). So
+`db/schema.test.ts` sweeps every paged list with `indexesOf`, and it pairs that with tables
+built to be exactly the shapes that name the right columns and answer for nothing — two
+single-column indexes, the pair declared `desc`, and a partial index — asserting each is
+refused, because the distinction is the whole reason the second question exists.
+
+**A column carries its sort direction and an index says whether it is partial, and both are
+there because the obvious query omits them.** `pg_get_indexdef` renders a *single* key column
+without the `DESC` and `NULLS` it renders for the whole index, so `(created_at desc, id desc)`
+arrives looking exactly like `(created_at, id)` unless `indoption` is read back — which is how
+the first version of this check accepted an index for an ordering it could not serve. A partial
+index is the same trap through `indpred`. An **expression** index describes itself rather than
+arriving with no columns at all, and an `INCLUDE`d payload is left out of an answer that is
+about ordering. `packages/core/src/testing/schema.test.ts` is where those clauses are asserted
+rather than only written down, on shapes Core does not happen to have — a promise made only
+about tables that do not exist is not a promise.
 
 `foreignKeysTargeting(table)` asks the foreign-key question of **one table instead of one
 package**, and it is the stronger of the two: `foreignKeysCrossingInto` excuses a package's

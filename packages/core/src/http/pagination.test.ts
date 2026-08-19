@@ -545,8 +545,8 @@ describe("a cursor is bound to the list that issued it", () => {
    * entitled to claim when it says a **collision** in `PagedList` is caught here.
    *
    * That claim rests on `LISTS` being every paged list there is, and `LISTS` is a hand-written
-   * table. A sixth list route added without an entry would be swept by nothing — its cursor
-   * never offered anywhere, its name never held against the other five — and the omission is
+   * table. A list route added without an entry would be swept by nothing — its cursor never
+   * offered anywhere, its name never held against the others — and the omission is
    * the same manual step whoever added it had already missed. So the table is checked against
    * the description rather than trusted, the way this repository derives such a list rather
    * than writing one down (ADR-0049).
