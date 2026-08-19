@@ -59,11 +59,25 @@ was a door.
 deliberately **no test diffing that directory against upstream** — it would go red on every
 shadcn release while saying nothing whatever about what we chose — so the list is the cheap half
 of that check, and its entire value is that a departure had to be typed out by somebody. Today
-it holds two changes to what a component *does* — `select.tsx` and `dropdown-menu.tsx` portal
-into the frame's container rather than `<body>`, and `sidebar.tsx` spreads the props it is given
-onto an element in its narrow branch rather than onto a dialog root that renders none (#193) —
-and a table of Biome suppressions upstream is not written against. The browser seam holds the
-first with an audit and the second by asking for the landmark by name — see below.
+it holds three changes to what a component *does* — `select.tsx` and `dropdown-menu.tsx` portal
+into the frame's container rather than `<body>`; `sidebar.tsx` spreads the props it is given
+onto an element in its narrow branch rather than onto a dialog root that renders none (#193);
+and neither of `sidebar.tsx`'s two button recipes takes pointer events away from an
+`aria-disabled` control any more (#199) — and a table of Biome suppressions upstream is not
+written against. The browser seam holds the first with an audit and the second by asking for the
+landmark by name; the third is held by
+`tests/an-unavailable-control-can-still-be-reached.test.ts`, because nothing a browser can be
+asked would have seen it — see below.
+
+**It also holds one thing that has deliberately *not* been changed, and it is the one to know
+before reaching for a tooltip.** Base UI's tooltip at the version this Admin pins gives its
+popup no `role="tooltip"` and sets no `aria-describedby` on the trigger, so it is a **visual**
+affordance and a screen reader is told none of it. **Never put information only in a tooltip**:
+`components/action-button.tsx` is the shape to copy, rendering the sentence again in an
+`sr-only` span and describing the control by that. Fixing `ui/tooltip.tsx` was weighed and
+refused (#199) — Base UI unmounts the popup when it is closed, so an `aria-describedby` would
+resolve to nothing for exactly the reader who never opens the tooltip, and the workaround would
+have to stay anyway.
 
 Add a component with
 
@@ -228,7 +242,13 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   `aria-disabled`, never `disabled`** — a truly disabled control takes no focus and fires no
   pointer events, so it can host no tooltip and cannot be reached to be told why — which means
   the handler has to genuinely no-op, and `components/action-button.tsx` is the one place that
-  is done. A form around one needs no guard of its own: a browser performs implicit submission
+  is done. **That is a rule about the styling too**, which is not obvious and was shipping
+  broken: a recipe under `components/ui/` that sets `pointer-events-none` on `aria-disabled:`
+  puts the missing half back, and `sidebar.tsx` carried exactly that because upstream shadcn
+  mirrors each `disabled:` rule onto the ARIA one (#199).
+  `tests/an-unavailable-control-can-still-be-reached.test.ts` sweeps the Admin's source and
+  fails naming any file that does it, which is what a `shadcn add --overwrite` would reintroduce
+  in silence. The `disabled:` half is untouched, for the reason `Pager` is. A form around one needs no guard of its own: a browser performs implicit submission
   by clicking the form's default button, so Enter in a field arrives at the same handler, and
   the second guard written for it was taken out again after no case could see it go. **The
   session query is re-read on navigation as well as on focus**, through
