@@ -1,5 +1,11 @@
 # Headless: kobai ships no storefront
 
+> **Two clauses amended by [ADR-0073](./0073-the-checkout-is-hosted-optional-and-not-vendored.md).**
+> kobai optionally hosts the purchase leg — a **Checkout** a Project switches on — so it owns no
+> *storefront* pixels rather than none at all, and the quality bar below gains a second
+> measurement. The headline stands: kobai ships no storefront, and browse, Collections, product
+> pages and the cart page are the Developer's.
+
 kobai is headless. It ships an API and an Admin, and it does not ship a storefront — the
 Shopper-facing experience belongs entirely to whoever builds it. Recorded because kobai
 also claims "best UX in the market", and a future reader will reasonably ask how those two

@@ -19,18 +19,18 @@ New to the project? These five carry the shape of everything else:
    future arguments about scope.
 4. **[0008](./0008-variants-are-sellable-and-prices-are-rows.md)** — the spine of the
    commerce model.
-5. **[0024](./0024-one-release-target-v1-and-1-0-are-the-same-thing.md)** — one release
-   target, and the three earlier decisions it voided.
+5. **[0069](./0069-what-done-means-and-the-journey-that-says-so.md)** — what "done" means,
+   as one Shopper journey, and the order the remaining specs run in.
 
 ## All records
 
 | # | Decision | Status |
 |---|---|---|
 | [0001](./0001-customisation-lives-in-a-project-not-a-fork.md) | Customisation lives in a scaffolded Project, not a fork | Accepted |
-| [0002](./0002-headless-the-storefront-is-out-of-scope.md) | Headless: kobai ships no storefront | Accepted |
+| [0002](./0002-headless-the-storefront-is-out-of-scope.md) | Headless: kobai ships no storefront | **Two clauses amended by 0073.** Headline stands |
 | [0003](./0003-the-extension-surface-and-what-we-promise.md) | The extension surface, and what we promise stability on | Accepted — **amended by 0047 and 0060** |
 | [0004](./0004-plugins-own-their-tables-core-tables-are-closed.md) | Plugins own their tables; Core's tables are closed | Accepted |
-| [0005](./0005-single-tenant-with-first-class-channels-and-regions.md) | Single-tenant, with Channels and Regions first-class | Accepted |
+| [0005](./0005-single-tenant-with-first-class-channels-and-regions.md) | Single-tenant, with Channels and Regions first-class | Accepted — **Region's definition narrowed by 0074** |
 | [0006](./0006-typescript-on-node-with-a-rest-openapi-contract.md) | TypeScript on Node, with a REST/OpenAPI contract | Accepted |
 | [0007](./0007-a-project-not-a-business-scoped-by-one-real-store.md) | kobai is a project, not a business ~~scoped by one real store~~ | **Scope clause superseded by 0024.** Rest stands |
 | [0008](./0008-variants-are-sellable-and-prices-are-rows.md) | Variants are the only sellable thing, and Prices are rows | Accepted |
@@ -40,16 +40,16 @@ New to the project? These five carry the shape of everything else:
 | [0012](./0012-capacity-constrained-availability-without-yield-pricing.md) | Capacity-constrained availability, without yield pricing | Accepted |
 | [0013](./0013-core-owns-no-lead-time-pricing-and-workflow-context-is-open.md) | Core owns no lead-time pricing, and Workflow context is open | Accepted — test case re-anchored by 0029 |
 | [0014](./0014-fulfilment-strategies-are-an-open-set-and-fulfilment-is-its-own-entity.md) | Fulfilment strategies are an open set, and Fulfilment is its own entity | Accepted |
-| [0015](./0015-shopper-supplied-input-is-project-owned.md) | Shopper-supplied input is Project-owned, and is not Media | Accepted |
+| [0015](./0015-shopper-supplied-input-is-project-owned.md) | Shopper-supplied input is Project-owned, and is not Media | Accepted — **clarified by 0072** |
 | [0016](./0016-kobai-is-not-a-cms-in-v1.md) | kobai is not a CMS ~~in v1~~ | **Amended by 0023.** Naming correction stands |
 | [0017](./0017-plugins-offer-steps-and-the-project-wires-them.md) | Plugins offer Steps; the Project wires them | Accepted — unwinding edge settled by 0036 |
 | [0018](./0018-one-reservation-model-implemented-without-holds.md) | One Reservation model, ~~implemented without holds~~ | **"No holds" superseded by 0027.** Interface and atomicity stand |
 | [0019](./0019-plugins-are-npm-packages-and-semver-covers-only-the-promised-surface.md) | Plugins are npm packages, and semver covers only the promised surface | Accepted — **two exceptions: 0047, 0060** |
-| [0020](./0020-core-owns-merchant-auth-and-api-keys-but-not-shopper-credentials.md) | Core owns Merchant auth and API keys, but not Shopper credentials | **"One role" superseded by 0027.** Rest stands |
+| [0020](./0020-core-owns-merchant-auth-and-api-keys-but-not-shopper-credentials.md) | Core owns Merchant auth and API keys, but not Shopper credentials | **"One role" superseded by 0027.** Rest stands — **extended by 0071** |
 | [0021](./0021-v1-ships-one-real-order-1-0-is-the-envisioned-platform.md) | ~~v1 ships one real order; 1.0 is the envisioned platform~~ | **Superseded by 0024** |
 | [0022](./0022-shapes-modelled-now-features-built-later.md) | Translations, Adjustments and Returns are modelled now; ~~Bundles are ruled out~~ | **Amended by 0024 and 0027.** Bundles are a Plugin |
 | [0023](./0023-the-content-platform-is-a-first-party-plugin.md) | The content platform is a first-party Plugin | Accepted — amends 0016 |
-| [0024](./0024-one-release-target-v1-and-1-0-are-the-same-thing.md) | One release target: "v1" and "1.0" are the same thing | Accepted — supersedes 0021 |
+| [0024](./0024-one-release-target-v1-and-1-0-are-the-same-thing.md) | One release target: "v1" and "1.0" are the same thing | **Scope clause superseded by 0069.** Its refusal to split into milestones stands |
 | [0025](./0025-one-core-package-with-first-party-plugins-as-the-split-points.md) | One Core package, with first-party Plugins as the split points | Accepted |
 | [0026](./0026-postgres-backed-jobs-pluggable-storage-in-process-worker.md) | Postgres-backed jobs, pluggable storage, in-process worker | Accepted |
 | [0027](./0027-holds-roles-and-bundles-re-decided-on-platform-terms.md) | Holds, roles and bundles, re-decided on platform terms | Accepted |
@@ -76,12 +76,12 @@ New to the project? These five carry the shape of everything else:
 | [0048](./0048-readiness-is-asked-over-the-transport-the-application-uses.md) | Readiness is asked over the transport the application uses, and waiting is not migrating | Accepted |
 | [0049](./0049-migration-counts-are-derived-and-the-strength-moved-to-the-effect.md) | Migration counts are derived, and the strength moved to the effect | Accepted |
 | [0050](./0050-the-idle-window-is-a-projects-the-cap-is-cores.md) | The idle window is a Project's, the absolute cap is Core's | Accepted — supersedes part of 0045 |
-| [0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md) | The commerce spine comes before the content Plugin | Accepted — amends 0029 |
+| [0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md) | The commerce spine comes before the content Plugin | **Ordering superseded by 0069.** Its rule — the hardest proof earliest — stands |
 | [0052](./0052-a-fulfilment-strategy-is-dependency-substitution.md) | A Fulfilment Strategy is dependency substitution, not a sixth Extension Point | Accepted — reconciles 0014 with 0003 |
-| [0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) | Core owns the Payment record and ships no provider | Accepted |
+| [0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) | Core owns the Payment record and ships no provider | Accepted — **completed by 0070** for redirect methods |
 | [0054](./0054-a-step-may-invoke-another-workflow.md) | A Step may invoke another Workflow, and the deployment's declaration is the one that runs | Accepted — extends 0017 |
-| [0055](./0055-placing-an-order-requires-a-secret-key.md) | Placing an Order requires a secret key, and that is a gate rather than a check | Accepted — extends 0020 |
-| [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053 |
+| [0055](./0055-placing-an-order-requires-a-secret-key.md) | Placing an Order requires a secret key, and that is a gate rather than a check | Accepted — extends 0020; **0071 keeps it out of the Admin** |
+| [0056](./0056-a-payment-records-whether-the-money-arrived.md) | A Payment records whether the money arrived, and that is a record rather than a status | Accepted — completes 0053; **0070 reaches its open door without using it** |
 | [0057](./0057-the-reservation-sweeper-is-an-interval-not-a-job.md) | The Reservation sweeper is an interval, not a job | Accepted — amends part of 0026 |
 | [0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md) | A promised surface may be broken until the first release, and a compile error is the notice | Accepted — its first rule expires at the first publish |
 | [0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md) | Catalog deletion refuses rather than cascading or releasing | Accepted — completes 0008; its open question settled by **0062** |
@@ -90,10 +90,16 @@ New to the project? These five carry the shape of everything else:
 | [0062](./0062-a-variant-is-corrected-in-place-and-a-price-is-superseded.md) | A Variant is corrected in place, and a Price is superseded | Accepted — the other half of 0059 |
 | [0063](./0063-the-admins-frame-is-conventional-because-a-developer-inherits-it.md) | The Admin's frame is conventional, because a Developer inherits it | Accepted — extends 0010 and 0033; **three corrections amended in from the building** |
 | [0064](./0064-list-pagination-is-a-cursor-and-the-page-number-is-given-up.md) | List pagination is a cursor, and the page number is given up | **"Every list route" bounded by 0067**, and **"the Admin gets next/prev" amended in from the building**. A list over a table pages; rest stands |
-| [0065](./0065-a-stores-default-currency-is-fixed.md) | A Store's default currency is fixed | Accepted — applies 0062's shape to the Store; holds 0008's question open |
+| [0065](./0065-a-stores-default-currency-is-fixed.md) | A Store's default currency is fixed | Accepted — **its argument narrowed by 0074**, which answers 0008's question. The refusal stands |
 | [0066](./0066-administering-access-is-one-permission-and-the-last-administrator-cannot-be-removed.md) | Administering access is one Permission, and the last administrator cannot be removed | Accepted — makes 0027 reachable; applies 0059's shape to a Role |
 | [0067](./0067-a-set-the-deployment-declares-is-not-a-list-route.md) | A set the deployment declares is not a list route | Accepted — bounds 0064; answers 0010's finding against 0014 |
 | [0068](./0068-gitignore-is-the-one-statement-of-what-a-checkout-generates.md) | `.gitignore` is the one statement of what a checkout generates | Accepted — completes 0039; binds `biome.json` and every `.dockerignore` to it |
+| [0069](./0069-what-done-means-and-the-journey-that-says-so.md) | What "done" means, and the journey that says so | Accepted — **supersedes 0024's scope clause; reorders 0051** |
+| [0070](./0070-a-payment-the-shopper-completes-at-their-bank.md) | A payment the Shopper completes at their bank | Accepted — completes 0053 and 0056 |
+| [0071](./0071-a-cart-is-listable-and-a-merchant-may-place-an-order-on-behalf.md) | A Cart is listable, and a Merchant may place an Order on behalf | Accepted — extends 0020 and 0055 |
+| [0072](./0072-an-address-is-cores-and-validating-one-is-not.md) | An Address is Core's, and validating one is not | Accepted — clarifies 0015 |
+| [0073](./0073-the-checkout-is-hosted-optional-and-not-vendored.md) | The Checkout is hosted, optional, and not vendored | Accepted — **amends 0002**; deliberately not 0033's shape |
+| [0074](./0074-currencies-are-enabled-by-the-store-and-selected-by-the-region.md) | Currencies are enabled by the Store and selected by the Region | Accepted — completes 0008; **narrows 0005 and 0065's argument** |
 
 ## Prototypes
 
@@ -116,12 +122,17 @@ Throwaway code kept as a primary source, on branches out of main.
   break deliberately carries no codemod, because the Project's own compiler is the notice.
   The first break a codemod *can* migrate is what will close this.
 
-- **[ADR-0051](./0051-the-commerce-spine-comes-before-the-content-plugin.md)** — the spine
-  spec is justified over content only if it actually runs one of the three named proofs, and
-  made-to-order is the cheapest. Cut it for size and the spine grows Core while proving
-  nothing new about the surface, which is what ADR-0029 exists to prevent. The correct
-  response to that pressure is to reopen ADR-0051, not to ship the spine and promise the
-  proof later.
+- **[ADR-0069](./0069-what-done-means-and-the-journey-that-says-so.md)** — two things it
+  defers may not stay deferred. **Capacity is out**, which leaves ADR-0018 promising "one
+  interface, two providers" while only one will exist at the first release; **that wording is
+  owed a correction**, and correcting prose is cheaper than shipping a calendar to make an old
+  sentence true. And **ADR-0026's job queue may arrive unplanned**: #70 decides whether events
+  are durable, and if they are, the queue is pulled into the Order-after-Capture spec along
+  with the sweeper debt ADR-0057 already owes it.
+
+_ADR-0051's risk — that the spine would grow Core while running none of the three named proofs
+— was discharged: `@kobai/plugin-made-to-order` ships, the reference Project wires it, and the
+upgrade gate crosses a Core major with it. Its ordering is now ADR-0069's._
 
 _ADR-0011's Drizzle risk was closed by prototype — see above._
 

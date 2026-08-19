@@ -114,7 +114,8 @@ _Avoid_: hook, seam, slot (a UI slot is one *kind* of Extension Point), API
 **Store**:
 The single commercial identity a deployment represents. A **singleton** — never a scoping
 key, never a foreign key, never in a `where` clause. If it appears in one, multi-tenancy
-is being smuggled in. See ADR-0005.
+is being smuggled in. It **enumerates the currencies this deployment may price in**, one of
+which is the **default** and does not move (ADR-0065, ADR-0074). See ADR-0005.
 _Avoid_: tenant, site, shop, merchant (that's a person)
 
 **Channel**:
@@ -123,8 +124,10 @@ Store's catalog. A sales channel and nothing else; it is **not** a tenant bounda
 _Avoid_: sales channel, storefront, site, market
 
 **Region**:
-A geography with its own currency, tax treatment, and available payment and shipping
-methods.
+A geography with its own currency, tax treatment, and available shipping methods. It
+**selects** one of the Store's enabled currencies rather than declaring its own. It carries no
+list of payment methods: which methods a Shopper is offered follows from the currency and the
+provider, and kobai models no payment methods at all (ADR-0074).
 _Avoid_: market, locale, country, zone
 
 ## Catalog
@@ -145,6 +148,12 @@ quantity, or customer group. A **row, not a column** — several may exist per V
 resolution picks the best match.
 _Avoid_: cost (that is what the Merchant pays), rate, amount, tariff
 
+**Collection**:
+A Merchant-managed grouping of Products, for browsing and merchandising. Core's rather than
+the content Plugin's: the grouping is a catalog relationship, while the *page* that renders one
+is content.
+_Avoid_: category, tag, group, taxonomy, bundle (that is a Plugin's composed Variant)
+
 **Translation**:
 The locale-specific text of a translatable entity, held in its own table rather than as
 columns. Modelled from the start even while only one locale exists — see ADR-0022.
@@ -157,12 +166,14 @@ A Shopper's mutable, disposable, unauthoritative selection before purchase. Expe
 change and to be thrown away. A Cart becomes **exactly one** Order, and is **spent** once it
 has: it still reads, and it refuses every change and every further placement, the way an
 expired one does. Enforced in DDL rather than by a check, so two simultaneous placements
-cannot both succeed.
+cannot both succeed. It carries **one currency**, fixed when it is created: switching Region
+means a new Cart, because repricing one in flight changes what somebody already agreed to.
 _Avoid_: basket, bag, session, checkout, order (never)
 
 **Order**:
 The immutable financial record of a completed purchase. Never edited after capture.
-_Avoid_: purchase, transaction, sale, checkout, receipt
+_Avoid_: purchase, transaction, sale, checkout, receipt, draft order (there is no draft
+state — an Order a Merchant places on behalf is placed when they place it, ADR-0071)
 
 **Order number**:
 The human-facing identifier of an Order, distinct from its ID — what a Shopper reads over the
@@ -177,6 +188,20 @@ are consumed — one database transaction, and the last thing in `place-order` t
 Nothing that happens after it can be compensated, because an Order is never edited.
 _Avoid_: checkout, place (the Workflow is `place-order`; the moment is Capture), confirm,
 submit, payment capture (that is money, and is always written in full)
+
+**Checkout**:
+The Shopper-facing pages kobai **optionally** hosts between a Cart and Capture — Address,
+shipping, payment, confirmation. Off unless a Project switches it on, and never the storefront
+around it: browse, Collections, product pages and the cart page stay the Developer's (ADR-0073).
+_Avoid_: cart page, order form, payment page, `place-order` (that is the Workflow), Capture
+(that is the moment)
+
+**Address**:
+A postal destination Core models structurally and snapshots onto an Order — country, lines,
+postal code, and the Region it falls in. Core checks its **shape and nothing more**; whether it
+is a real address is a Project's rule or a Plugin's (ADR-0072).
+_Avoid_: location, delivery details, billing details (those are uses, not things), postal code
+(that is one field)
 
 **Idempotency key**:
 A value the caller chooses and sends with `place-order`, saying which attempt at one purchase
@@ -291,11 +316,12 @@ These appeared in early descriptions of kobai and should not be used again:
 - **"override control base"** — what was meant is the **Project**, plus the extension
   points a Plugin registers against. See ADR-0001.
 - **"time-based pricing"** — see the ban below.
-- **"checkout"** — it was already refused under both **Cart** and **Order**, and it kept
-  coming back as the name for the process between them. It names three different things at
-  once: the Cart being edited, the act of placing an Order, and the page a storefront builds.
-  The Workflow is **`place-order`** and the moment it ends at is **Capture**; the page belongs
-  to whoever built the storefront (ADR-0002) and is not kobai's to name.
+- **"checkout"** — **revived, with one referent** (ADR-0073). It was retired for naming three
+  things at once: the Cart being edited, the act of placing an Order, and the page a storefront
+  builds. kobai now ships one of them, so **Checkout** names the pages kobai optionally hosts
+  and nothing else — the Workflow is still `place-order`, the moment is still **Capture**, and a
+  storefront's own purchase pages are still not kobai's to name. The `_Avoid_` lines under Cart,
+  Order and Capture stand unchanged, and are what hold it to the one meaning.
 
 A note on **Bundle**: a Variant composed of other Variants is a **Plugin** concept, never
 Core (ADR-0027). If the word is wanted for a mere marketing grouping, the term is

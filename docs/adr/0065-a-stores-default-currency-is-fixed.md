@@ -1,5 +1,11 @@
 # A Store's default currency is fixed
 
+> **Its argument narrowed by [ADR-0074](./0074-currencies-are-enabled-by-the-store-and-selected-by-the-region.md).**
+> A Store now enables several currencies and a Price carries its own, so "moving the default
+> reinterprets every amount" is no longer true of every Price — only of the unconstrained ones,
+> which is what the default now denominates. **The refusal stands on that narrower base.** It is
+> not vestigial.
+
 `PATCH /admin/store` changes the Store's **name** and its **metadata**. It accepts a
 `defaultCurrency` and refuses to move it — **422 `default-currency-is-fixed`** for any code
 other than the one the Store already prices in — whatever the Store holds, and whether or not a
