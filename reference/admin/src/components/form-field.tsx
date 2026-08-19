@@ -1,5 +1,5 @@
-import type { ComponentProps } from "react";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import type { ComponentProps, ReactNode } from "react";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 
 /**
@@ -22,17 +22,26 @@ import { Input } from "@/components/ui/input";
  * object. That keeps this free of react-hook-form's generics — which differ per form, and
  * differ again where a zod `transform` makes the input and output types diverge — and it keeps
  * the registration visible at the field it registers.
+ *
+ * `description` is `components/textarea-field.tsx`'s, in the same place and for the same reason
+ * (#251): a field whose label does not say it all needs a sentence under it, and the two
+ * siblings differing over where that sentence goes would be the drift they were split to avoid.
+ * It is a `ReactNode` because those sentences are the ones that cite an ADR or emphasise a
+ * word, and optional because a field whose label says it all needs none.
  */
 export function FormField({
   id,
   label,
   error,
+  description,
   ...input
 }: {
   readonly id: string;
   readonly label: string;
   /** react-hook-form's error object for this field, as it comes. */
   readonly error: { readonly message?: string } | undefined;
+  /** What this field needs explaining about it, under the input. */
+  readonly description?: ReactNode;
   // `form` is HTML's own attribute on an `<input>` as well as react-hook-form's object, and an
   // input inside a `<form>` needs no such attribute — so it is refused here rather than left to
   // collide.
@@ -41,6 +50,9 @@ export function FormField({
     <Field data-invalid={error !== undefined}>
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Input id={id} aria-invalid={error !== undefined} {...input} />
+      {description === undefined ? null : (
+        <FieldDescription>{description}</FieldDescription>
+      )}
       <FieldError errors={[error]} />
     </Field>
   );

@@ -510,10 +510,13 @@ describe("a Shopper buys something", () => {
     const listed = catalog.products.find((one) => one.title === THE_PRODUCT);
     expect(listed, `the Store lists no ${THE_PRODUCT}`).toBeDefined();
 
-    // The product page: one request, and everything on it.
+    // The product page: one request, and everything on it — **fetched by the handle the list
+    // reported**, which is story 23 and the whole reason a Product has one. A storefront's own
+    // route is `/products/blue-poster`, so the identifier it holds at this point is the address
+    // in its URL rather than a UUID it would have had to carry separately.
     const page = answered(
-      await browser.GET("/store/products/{id}", {
-        params: { path: { id: listed?.id ?? "" } },
+      await browser.GET("/store/products/{idOrHandle}", {
+        params: { path: { idOrHandle: listed?.handle ?? "" } },
       }),
       "opening the product page",
     );
@@ -758,9 +761,11 @@ describe("a Shopper pays at their bank", () => {
       "browsing the catalog",
     );
     const listed = catalog.products.find((one) => one.title === THE_PRODUCT);
+    // By identifier here, where the leg above opens the same route by handle: both are the
+    // storefront's to use, and the two spellings being one route is what `{idOrHandle}` says.
     const page = answered(
-      await store.browser.GET("/store/products/{id}", {
-        params: { path: { id: listed?.id ?? "" } },
+      await store.browser.GET("/store/products/{idOrHandle}", {
+        params: { path: { idOrHandle: listed?.id ?? "" } },
       }),
       "opening the product page",
     );

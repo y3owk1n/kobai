@@ -252,8 +252,32 @@ one a Project may have replaced (ADR-0017) — `GET /store/variants/{id}/price` 
 directly** in `store.test.ts`, against a Variant that really is counted and really is priced,
 because a promise about what is *not* in a response is one nothing else notices going missing.
 The same split runs through the refusals: `StoreCatalogRefusal` is two words where
-`CatalogRefusal` is nine, bound by its own mapped `satisfies`, because a storefront must not be
+`CatalogRefusal` is ten, bound by its own mapped `satisfies`, because a storefront must not be
 handed `sku-taken` as something a catalog read might answer.
+
+**A Product is addressed by its id or by its handle, and the resolution rule is held up by a
+refusal at the other end** (#251). `GET /store/products/{idOrHandle}` reads a **UUID as an id
+and anything else as a handle** — one query, no fallback from one to the other, because the two
+spaces do not overlap. What makes them not overlap is that `POST /admin/products` **refuses a
+handle that parses as a UUID**, at 400: without that refusal a Product could hold an address by
+which it was unreachable, and the rule would be a guess. Three things follow, and each is a
+decision rather than an implementation detail:
+
+- **A handle absent from a create is derived from the title and one that is given is taken as
+  given** (`catalog/handle.ts`), and **either way a collision is refused rather than suffixed** —
+  **409 `handle-taken`**, on `sku-taken`'s distinction: the body is well formed, the Store is
+  what refuses it, and it becomes possible again by itself. A Merchant who asked for an address
+  and silently got a numbered one would find out from their storefront.
+- **A handle that resolves to nothing is the same `product-not-found` a bad id answers.** It is
+  one question asked two ways, and a `reason` of its own would be permanent under ADR-0060 and
+  buy a storefront a distinction it cannot act on.
+- **`PATCH /admin/products/{id}` corrects one, under the same two refusals**, because the
+  correction is read by the very narrowing the create is: what could not be created cannot be
+  corrected to. There is no `null` for it as there is for `description` — a Product with no
+  address is not a state kobai has.
+
+The **backfill** that got this column onto populated tables, and the disambiguation it had to
+guarantee, is [migrations](migrations.md)'s subject rather than this file's.
 
 **Two routes over one table are two lists.** `GET /store/products` and `GET /admin/products` page
 the same rows in the same order and take **different** `PagedList` names — `store-products` and

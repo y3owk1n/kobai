@@ -626,12 +626,15 @@ async function seedThree(
 
   const seeded: string[] = [];
   // Three Carts over the store surface, which is the only way there is to make one — a Merchant
-  // reads them and writes none of them (ADR-0071). One catalog behind all three, under a SKU of
-  // its own: the cursor sweep seeds every list into one deployment, and the Orders branch seeds
-  // a catalog too, so two default ones would collide on `POSTER-A2` and be refused `sku-taken`.
+  // reads them and writes none of them (ADR-0071). One catalog behind all three, under a SKU
+  // **and a title** of its own: the cursor sweep seeds every list into one deployment, and the
+  // Orders branch seeds a catalog too, so two default ones would collide on `POSTER-A2` and be
+  // refused `sku-taken` — and, since a handle is proposed from the title, on `a-poster` and be
+  // refused `handle-taken` before that.
   if (list.key === "carts") {
     const catalog = await seedTestCatalog(kobai, {
       merchant,
+      title: "A Cart poster",
       variants: [{ sku: "CART-POSTER", prices: [1250] }],
     });
     for (let index = 0; index < 3; index += 1) {

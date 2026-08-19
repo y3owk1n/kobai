@@ -1,0 +1,1 @@
+ALTER TABLE "core_product" ADD COLUMN "handle" text;

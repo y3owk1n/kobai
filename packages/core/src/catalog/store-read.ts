@@ -24,7 +24,10 @@ import { isUuid } from "../db/uuid.ts";
  *
  * What a Shopper is shown, and what they are not:
  *
- * - **`description`, kept**, and it is the first field this reader gained after the split. It is
+ * - **`handle`, kept**, and it is the field this reader exists to publish: it is the address a
+ *   storefront's own URL is built out of, so a Product that could not report it would leave a
+ *   storefront with nothing but the UUID this column was added to replace.
+ * - **`description`, kept**, and it was the first field this reader gained after the split. It is
  *   copy a Merchant writes *for a Shopper to read*, so a storefront that could not read it would
  *   be missing the thing it was written for — which is what makes publishing it a decision taken
  *   here rather than a field inherited by accident.
@@ -77,6 +80,8 @@ export type StoreProduct = {
   readonly title: string;
   /** What a Merchant wrote about it, or `null` where nobody has written anything. */
   readonly description: string | null;
+  /** The address it is known by — what `/products/blue-poster` is built out of. */
+  readonly handle: string;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -102,6 +107,7 @@ export async function listStoreProducts(
       id: product.id,
       title: product.title,
       description: product.description,
+      handle: product.handle,
       metadata: product.metadata,
       cursorAt: cursorAt(product.createdAt),
     })
@@ -115,12 +121,13 @@ export async function listStoreProducts(
   const { rows: found, nextCursor } = takePage(rows, page);
 
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
-  // response by being forgotten about. A Product reports four fields here and these are them.
+  // response by being forgotten about. A Product reports five fields here and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
       title: row.title,
       description: row.description,
+      handle: row.handle,
       metadata: row.metadata,
     })),
     nextCursor,
@@ -128,25 +135,39 @@ export async function listStoreProducts(
 }
 
 /**
- * One Product with its Variants, or `undefined` when there is no such Product — including when
- * `id` is not an identifier at all, which is the same answer for the caller and avoids handing
- * Postgres a value it would refuse to cast.
+ * One Product with its Variants, addressed **by its id or by its handle**, or `undefined` when
+ * neither names one.
+ *
+ * **A UUID is read as an id and anything else as a handle**, which is the whole resolution rule
+ * and the reason `catalog/handle.ts` refuses a handle that parses as a UUID at creation: a
+ * Product whose address were one would be looked up by the wrong column and could never be
+ * reached by it. Nothing here has to fall back from one to the other — the two spaces do not
+ * overlap, so a miss is a miss, and a second query would only make the same absence cost twice.
+ *
+ * It is one function rather than two for the reason `STORE_VARIANT_COLUMNS` is one constant:
+ * what a Product looks like to a storefront must not depend on which way it was asked for, and
+ * two readers is exactly how that comes apart.
+ *
+ * The admin reader beside this one deliberately stays id-only. A handle is an address for the
+ * storefront that publishes it; a Merchant's screen holds an identifier that never changes,
+ * which is the one thing a correctable handle is not.
  */
 export async function readStoreProduct(
   db: Database,
-  id: string,
+  idOrHandle: string,
 ): Promise<StoreProductDetail | undefined> {
-  if (!isUuid(id)) return undefined;
-
   const [row] = await db
     .select({
       id: product.id,
       title: product.title,
       description: product.description,
+      handle: product.handle,
       metadata: product.metadata,
     })
     .from(product)
-    .where(eq(product.id, id))
+    .where(
+      isUuid(idOrHandle) ? eq(product.id, idOrHandle) : eq(product.handle, idOrHandle),
+    )
     .limit(1);
   if (!row) return undefined;
 

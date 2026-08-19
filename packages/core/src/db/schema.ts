@@ -287,6 +287,32 @@ export const product = pgTable(
      * by having been written before a catalog referenced either.
      */
     description: text("description"),
+    /**
+     * The **address** this Product is known by — `blue-poster`, so a storefront's URL is
+     * `/products/blue-poster` rather than a UUID.
+     *
+     * Unique across the deployment, because an address two Products share addresses neither:
+     * `GET /store/products/{idOrHandle}` reads anything that is not a UUID as one of these, and
+     * that resolution is only statable while exactly one row can answer to it. It is the second
+     * identifying string on this half of the schema and it is spelled like the first — a
+     * `.unique()`, the way `core_variant.sku` is, because a SKU identifies one Variant for the
+     * same reason (ADR-0008, story 20).
+     *
+     * **`NOT NULL` and unique on a table that already exists, which is ADR-0038's whole dance
+     * and the reason this column cost three migrations rather than one.** `0036` adds it
+     * nullable, `0037` backfills every row from its title with the disambiguation that makes
+     * the constraint satisfiable, and `0038` is what this declaration generates: `SET NOT NULL`
+     * and the unique constraint, arriving onto data that can already meet both. Reversing that
+     * order is the failure the dance exists for — Postgres refuses either statement against the
+     * rows a Store with traffic is already holding, and under ADR-0030 that Project gets no
+     * service rather than a bad column.
+     *
+     * A `check` constraining its *shape* is deliberately absent. What a handle may look like is
+     * a rule about a request — it is refused at 400 by `catalog/handle.ts` and may be relaxed
+     * there — while a Product written before the rule existed must still be readable, and a
+     * constraint is the one place a relaxation cannot reach the rows already stored.
+     */
+    handle: text("handle").notNull().unique(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

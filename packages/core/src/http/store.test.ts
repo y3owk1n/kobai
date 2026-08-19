@@ -330,6 +330,10 @@ describe("browsing the catalog", () => {
           // Published on purpose: it is copy a Merchant wrote *for a Shopper*, so a
           // storefront that could not read it would be missing the thing it was written for.
           description: "Printed on 200gsm uncoated stock.",
+          // Published on purpose too, and it is the field this list exists to make useful: a
+          // storefront builds `/products/a-poster` out of it, which is what the whole column
+          // was added for.
+          handle: "a-poster",
           metadata: { blurb: "Printed on heavy stock." },
         },
       ],
@@ -349,6 +353,7 @@ describe("browsing the catalog", () => {
       id: catalog.productId,
       title: "A poster",
       description: "Printed on 200gsm uncoated stock.",
+      handle: "a-poster",
       metadata: { blurb: "Printed on heavy stock." },
       variants: [
         {
@@ -451,6 +456,49 @@ describe("browsing the catalog", () => {
       "POSTER-A2",
       "POSTER-A3",
     ]);
+  });
+
+  it("opens the same Product by its handle as by its identifier", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedSomethingToBrowse(kobai);
+
+    // The handle is taken off the response rather than written down here, because that is what
+    // a storefront actually has: it lists, reads a handle, and builds `/products/<handle>` out
+    // of it. A literal would be this test agreeing with itself about the derivation.
+    const listed = await kobai.request("/store/products", {
+      headers: catalog.apiKey.headers,
+    });
+    const page = (await listed.json()) as { products: { handle: string }[] };
+    const handle = page.products[0]?.handle;
+    expect(handle).toBe("a-poster");
+
+    const byHandle = await kobai.request(`/store/products/${handle}`, {
+      headers: catalog.apiKey.headers,
+    });
+    const byId = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    // Byte for byte, because the point is that this is one route and one reader answering one
+    // question two ways — story 23, and the reason the path parameter is `{idOrHandle}`.
+    expect(byHandle.status).toBe(200);
+    await expect(byHandle.json()).resolves.toEqual(await byId.json());
+  });
+
+  it("answers the same not-found for a handle nothing answers to", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    // A handle that resolves to nothing is the same question a bad identifier asks — "is there
+    // such a Product" — so it is deliberately not a `reason` of its own (ADR-0060).
+    const response = await kobai.request("/store/products/no-such-poster", {
+      headers: catalog.apiKey.headers,
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "product-not-found",
+    });
   });
 
   it("accepts a publishable key, which is the key a browser holds", async () => {

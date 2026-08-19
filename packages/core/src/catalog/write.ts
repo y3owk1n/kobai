@@ -10,6 +10,7 @@ import {
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { text } from "../patch.ts";
 import { readStore } from "../store/read.ts";
+import { handleField, handleTaken, noHandleToPropose, proposeHandle } from "./handle.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
 import {
   type Price,
@@ -45,6 +46,7 @@ import {
 export type CreateProductInput = {
   readonly title?: unknown;
   readonly description?: unknown;
+  readonly handle?: unknown;
   readonly metadata?: unknown;
   readonly variants?: unknown;
 };
@@ -53,7 +55,11 @@ export type ProductCreation =
   | { readonly ok: true; readonly product: ProductDetail }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | "sku-taken" | "unknown-fulfilment-strategy";
+      readonly reason:
+        | "invalid"
+        | "handle-taken"
+        | "sku-taken"
+        | "unknown-fulfilment-strategy";
       readonly detail: string;
     };
 
@@ -129,6 +135,21 @@ export async function createProduct(
     description = written.value;
   }
 
+  // Proposed from the title where the body named none, and taken as given where it did — which
+  // is the whole of story 3 and story 2 in three lines. The proposal is a convenience and never
+  // a correction: a `handle` a Merchant did name goes through the same narrowing
+  // `PATCH /admin/products/{id}` reads it with, so what may be created can be corrected to.
+  let handle: string;
+  if (input.handle === undefined) {
+    const proposed = proposeHandle(title);
+    if (proposed === undefined) return noHandleToPropose(title);
+    handle = proposed;
+  } else {
+    const asked = handleField(input.handle);
+    if (!asked.ok) return asked;
+    handle = asked.value;
+  }
+
   const metadata = asMetadata(input.metadata);
   if (metadata === undefined) {
     return { ok: false, reason: "invalid", detail: metadataDetail("`metadata`") };
@@ -152,9 +173,17 @@ export async function createProduct(
     productId = await db.transaction(async (tx) => {
       const [created] = await tx
         .insert(product)
-        .values({ title, description, metadata })
+        .values({ title, description, handle, metadata })
+        // The unique constraint is the check, and this is how its answer is read — exactly as
+        // the SKUs below read theirs. A `select` for the handle and then an `insert` would let
+        // two requests offering the same address both find nothing, and the loser would surface
+        // as a 500 rather than as the conflict it is (ADR-0018).
+        .onConflictDoNothing({ target: product.handle })
         .returning({ id: product.id });
-      if (!created) throw new Error("Inserting a Product returned no row.");
+      // Nothing else about this insert can decline it, so no row back *is* the conflict. It
+      // throws for the Variants' reason one statement down: a Product half created is the
+      // zero-Variant state this whole function exists to prevent.
+      if (!created) throw new HandleTaken(handle);
 
       const inserted = await tx
         .insert(variant)
@@ -184,6 +213,7 @@ export async function createProduct(
       return created.id;
     });
   } catch (cause) {
+    if (cause instanceof HandleTaken) return handleTaken(cause.handle);
     if (cause instanceof SkuTaken) return skuTaken(cause.skus);
     throw cause;
   }
@@ -384,6 +414,16 @@ function notThatVariant(variantId: string): PriceCreation {
     reason: "variant-not-found",
     detail: `No Variant ${JSON.stringify(variantId)} exists. A Price is set on the Variant, which is the sellable thing, and never on the Product.`,
   };
+}
+
+/** Thrown inside the transaction so the Variants go back with the Product that was refused. */
+class HandleTaken extends Error {
+  readonly handle: string;
+
+  constructor(handle: string) {
+    super(`Handle already taken: ${handle}`);
+    this.handle = handle;
+  }
 }
 
 /** Thrown inside the transaction so the Product goes back with the Variants that failed. */

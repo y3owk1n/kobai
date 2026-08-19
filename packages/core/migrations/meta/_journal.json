@@ -253,6 +253,27 @@
       "when": 1787159279079,
       "tag": "0035_famous_vin_gonzales",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787162141715,
+      "tag": "0036_secret_kulan_gath",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787162153665,
+      "tag": "0037_backfill_product_handles",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787162222113,
+      "tag": "0038_stiff_fenris",
+      "breakpoints": true
     }
   ]
 }

@@ -38,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { slugify } from "@/lib/handle";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { catalogReasonOf, orThrow, problemOf, Refused } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
@@ -126,6 +127,10 @@ export function Products() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Title</TableHead>
+                  {/* Beside the title rather than only on the Product screen: the address is
+                      what a storefront links to, so scanning for the one that is wrong is a
+                      thing a Merchant does across the whole catalog. */}
+                  <TableHead>Handle</TableHead>
                   {/* Named rather than empty: a column header with no text is a column a
                       screen reader announces as nothing at all. */}
                   <TableHead className="w-0">
@@ -137,6 +142,9 @@ export function Products() {
                 {products.map((product) => (
                   <TableRow key={product.id}>
                     <TableCell className="font-medium">{product.title}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      /{product.handle}
+                    </TableCell>
                     <TableCell>
                       <LinkButton
                         to={`/products/${product.id}`}
@@ -195,6 +203,10 @@ function ProductsLoading() {
  */
 const NewProductForm = z.object({
   title: z.string().min(1, "A Product needs a title."),
+  // No `min(1)`, and no shape: an empty box is a Merchant taking kobai's proposal, and what a
+  // handle may look like is a rule Core owns and may relax — one restated here would be a
+  // second, stale copy a Merchant could not appeal (ADR-0063).
+  handle: z.string(),
   sku: z.string().min(1, "A Variant is identified by its SKU, so it needs one."),
   amount: z
     .string()
@@ -241,15 +253,40 @@ function NewProduct() {
 
   const form = useForm<NewProductInput, unknown, NewProductValues>({
     resolver: zodResolver(NewProductForm),
-    defaultValues: { title: "", sku: "", amount: "" },
+    defaultValues: { title: "", handle: "", sku: "", amount: "" },
   });
 
+  // The proposal, and the whole of it: while the Merchant has not touched the handle box it
+  // shows what this title would be addressed at, and the moment they do it is theirs. It is an
+  // affordance rather than a rule — kobai proposes the same handle for a create that names
+  // none, and judges whatever is sent (`lib/handle.ts`).
+  //
+  // **On the title's own `onChange` rather than on a `watch`.** Typing is what causes it, so
+  // this is one write per keystroke in the handler that keystroke already runs, rather than a
+  // subscription plus a write during render — which is a store mutation mid-render and a
+  // correctness that rested on the re-render happening to come from the right place.
+  const proposeFromTitle = (typed: string) => {
+    // `shouldDirty: false`, so this stays the proposal rather than becoming an answer the
+    // Merchant is treated as having given — which is also what `isDirty` reads to know when to
+    // stop.
+    if (form.getFieldState("handle").isDirty) return;
+    form.setValue("handle", slugify(typed), { shouldDirty: false });
+  };
+
   const create = useMutation({
-    mutationFn: async ({ title, sku, amount }: NewProductValues) => {
+    mutationFn: async ({ title, handle, sku, amount }: NewProductValues) => {
       // A Product and its Variants are created together: a Product with no Variant is not a
       // state the API can produce, because a Product is never sellable in itself (ADR-0008).
       const product = orThrow(
-        await client.POST("/admin/products", { body: { title, variants: [{ sku }] } }),
+        await client.POST("/admin/products", {
+          body: {
+            title,
+            // Left out rather than sent empty when the box is empty, which is what asks kobai
+            // to propose one. `""` is a handle, and not one it would accept.
+            ...(handle === "" ? {} : { handle }),
+            variants: [{ sku }],
+          },
+        }),
       );
 
       const variant = product.variants[0];
@@ -283,9 +320,9 @@ function NewProduct() {
           Enter in a field by clicking this form's default button, which is the `ActionButton`
           below — so the one no-op covers both ways in. */}
       <form onSubmit={form.handleSubmit((values) => create.mutate(values))}>
-        <CardContent className="grid gap-4 sm:grid-cols-3">
+        <CardContent className="grid gap-4 sm:grid-cols-2">
           <Problem
-            className="sm:col-span-3"
+            className="sm:col-span-2"
             problem={create.isError ? whyNotCreated(create.error) : null}
           />
 
@@ -293,7 +330,17 @@ function NewProduct() {
             id="new-product-title"
             label="Title"
             error={form.formState.errors.title}
-            {...form.register("title")}
+            {...form.register("title", {
+              onChange: (event: { target: { value: string } }) =>
+                proposeFromTitle(event.target.value),
+            })}
+          />
+          <FormField
+            id="new-product-handle"
+            label="Handle"
+            description="The address a storefront reaches this Product at — /products/blue-poster. Proposed from the title as you type; change it and it is yours. Left empty, kobai proposes one itself."
+            error={form.formState.errors.handle}
+            {...form.register("handle")}
           />
           <FormField
             id="new-product-sku"
@@ -351,6 +398,12 @@ function whyNotCreated(thrown: unknown): string {
   switch (reason) {
     case "sku-taken":
       return "Another Variant already carries that SKU. A SKU is what identifies a Variant, so this one needs its own.";
+
+    case "handle-taken":
+      // Rendered where it was attempted, like every other refusal here — and it is the one a
+      // Merchant meets without asking for anything unusual, because two Products with the same
+      // title propose the same address.
+      return "Another Product is already reached at that handle. A handle is the address a storefront links to, so it cannot name two — give this one its own.";
 
     case "invalid":
     case "malformed-body":

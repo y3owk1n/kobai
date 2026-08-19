@@ -69,6 +69,10 @@ describe("counting a Variant that is being deleted", () => {
       Array.from({ length: CONTENDED_VARIANTS }, (_, index) =>
         seedTestCatalog(kobai, {
           merchant,
+          // A title each as well as a SKU each: a handle is proposed from the title and is
+          // unique across the Store, so six Products called `A poster` would be refused
+          // `handle-taken` in the arrangement of a test about racing deletes.
+          title: `A poster ${index}`,
           variants: [{ sku: `COUNTED-${index}` }, { sku: `SPARE-${index}` }],
         }),
       ),

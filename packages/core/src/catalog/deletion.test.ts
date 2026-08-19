@@ -206,7 +206,15 @@ describe("DELETE /admin/products/{id}", () => {
     await expect(
       (await kobai.request("/admin/products", { headers })).json(),
     ).resolves.toEqual({
-      products: [{ id: kept.productId, title: "A mug", description: null, metadata: {} }],
+      products: [
+        {
+          id: kept.productId,
+          title: "A mug",
+          description: null,
+          handle: "a-mug",
+          metadata: {},
+        },
+      ],
     });
   });
 
