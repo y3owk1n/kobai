@@ -34,6 +34,8 @@ written against this repository's lint configuration. Each one sits at the line 
 | `pagination.tsx` | `a11y/noRedundantRoles` | `role="navigation"` on a `<nav>`. Redundant, and harmless. |
 | `sidebar.tsx` | `suspicious/noDocumentCookie` | The sidebar remembers whether it is open in a cookie of its own. It is not kobai's session cookie and carries nothing (ADR-0032 is about the other one). |
 | `sidebar.tsx` | `correctness/useExhaustiveDependencies` (twice) | Two hooks list `setOpenMobile`, which React guarantees is stable, so the dependency is unnecessary rather than wrong. |
+| `input-group.tsx` | `a11y/useSemanticElements` (twice) | `InputGroup` and `InputGroupAddon` are `role="group"` on a `<div>`. A `<fieldset>` cannot be styled with the flex and `has-[…]` rules the variants need, which is the same reason `field.tsx` does it this way. |
+| `input-group.tsx` | `a11y/useKeyWithClickEvents` | `InputGroupAddon`'s `onClick` forwards a click on the addon to the input beside it — a larger hit area for a control that already has the keyboard, so there is no keyboard action to mirror. |
 
 Take an entry out when upstream does — `shadcn add <name> --overwrite` will tell you, because the
 suppression is one of the things it overwrites.

@@ -475,6 +475,10 @@ export async function hides(locator: Locator, what: string): Promise<void> {
 declare const document: {
   readonly activeElement: unknown;
   readonly documentElement: { readonly className: string };
+  getAnimations(): {
+    readonly finished: Promise<unknown>;
+    readonly effect: { getComputedTiming(): { readonly iterations?: number } } | null;
+  }[];
 };
 
 /** What has the keyboard, as something a failure can print. */
@@ -578,6 +582,8 @@ type AxeWindow = {
  * `where` is what the failure names, because "a violation on the page" is not a diagnosis.
  */
 export async function auditAccessibility(page: Page, where: string): Promise<void> {
+  await animationsFinished(page);
+
   // The whole of axe, evaluated into the page. Re-evaluating on a page already carrying it is
   // harmless, and a navigation throws it away — so this is per audit rather than per window.
   await page.evaluate(axe.source);
@@ -600,6 +606,38 @@ export async function auditAccessibility(page: Page, where: string): Promise<voi
     ),
     `axe-core found accessibility violations on ${where}.`,
   ).toEqual([]);
+}
+
+/**
+ * Waits for every animation that will ever end to have ended.
+ *
+ * The audit above is a **measurement of pixels**, and half-way through a fade it measures the
+ * wrong ones: #177's palette opens behind `fade-in-0 zoom-in-95`, and auditing it the moment it
+ * became visible read the group heading as `#7c7c7c` on `#fdfdfd` — 4.1:1 against a threshold
+ * of 4.5 — where the settled colours are the ones every other screen in this Admin passes with.
+ * A blend is not a contrast failure, and a case that reported one would be red about something
+ * no Merchant ever sees. Which frame it caught would also depend on the runner's load, so it
+ * would have been red *sometimes*, which is worse than either.
+ *
+ * **An animation that repeats for ever is skipped rather than waited on.** `Spinner` is
+ * `animate-spin`, the boot gate audits a screen whose only content is one, and its `finished`
+ * resolves never — so waiting on that would arrive as a hung test rather than as anything a
+ * reader could act on.
+ */
+async function animationsFinished(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const ending = document
+      .getAnimations()
+      .filter(
+        (animation) => animation.effect?.getComputedTiming().iterations !== Infinity,
+      );
+
+    // Cancelled rather than finished is still "no longer animating", and is what a closing
+    // overlay leaves behind.
+    await Promise.all(
+      ending.map((animation) => animation.finished.catch(() => undefined)),
+    );
+  });
 }
 
 /**

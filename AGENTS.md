@@ -930,13 +930,22 @@ implementation:
   states. **A case that a request-level test could have asked belongs there instead**, which
   is where screen behaviour has always been asserted.
 - **`axe-core` runs on every screen a case visits and any violation fails the build.** It is a
-  call per screen rather than per case, so a case that navigates twice audits twice.
+  call per screen rather than per case, so a case that navigates twice audits twice — and an
+  **overlay is a screen**, so a case that opens the command palette audits it open, which is a
+  different surface from the page under it. The audit waits for every animation that will end to
+  have ended, because it measures pixels: half way through the palette's fade its group heading
+  read 4.1:1 against a threshold of 4.5, on colours that pass everywhere once they have settled.
+  An animation that repeats for ever is skipped rather than waited on, or the boot gate — whose
+  only content is a `Spinner` — would hang instead of being audited.
 - **The keyboard assertions are not padding, because a scanner sees none of them.** Reaching a
   control is `tabTo`/`keyboardTo`, which press a key until the control has focus and fail
   naming where the keyboard got to instead — `Tab` walks the page, `ArrowDown` walks an open
-  menu. Focus after a re-sign-in, the command palette (#177) and the `aria-disabled` controls
-  that stay focusable so they can host the explanation of why they are unavailable (#178) are
-  all keyboard decisions, and all arrive here.
+  menu. Focus after a re-sign-in and the `aria-disabled` controls that stay focusable so they
+  can host the explanation of why they are unavailable (#178) are keyboard decisions, and all
+  arrive here. **The command palette is a combobox over a listbox**, so the arrow keys move the
+  *selection* while the keyboard stays in the input — its list is asserted on `aria-selected`,
+  which is what a screen reader announces, `tabTo` is for reaching its button, and where the
+  keyboard ends up after it closes is asked with `isFocused`.
 - **Arrange through the API and open a window per case.** Every case gets its own browser
   context — its own cookie jar, its own `localStorage` — so nothing one case leaves behind is
   reachable from another; the *catalog* is shared, because a boot per case is not affordable,
@@ -962,7 +971,7 @@ back-navigation callback out of context and handed them down as props are gone, 
 would be the pre-frame shape coming back. **A form field is
 `components/form-field.tsx`** — a label, an input and the schema's message, in one place because
 the invalid state has to be set twice (`Field` reads `data-invalid`, the `Input` announces
-`aria-invalid`) and an `id` is unique to the document rather than to the form it is in. Five
+`aria-invalid`) and an `id` is unique to the document rather than to the form it is in. Six
 further things about the screens are conventions rather than one screen's choice:
 
 - **Every list pages through the cursor, with the cursor in the URL** — Products, Orders and
@@ -987,6 +996,16 @@ further things about the screens are conventions rather than one screen's choice
   flows up rather than down: the layout owns the state and the screen writes it, because
   `GET /admin/orders/{id}` is what knows the number and a layout that fetched one would be
   fetching it twice.
+- **What the Admin's sections are is `lib/sections.ts`, and there is one of it** (#177). The
+  sidebar draws one entry per section and the command palette — ⌘K and Ctrl+K, built from
+  shadcn's `command` — offers one row per section, and a list living in either would have been
+  copied into the other. **That module is also where #178 hides the sections a Role cannot
+  read**: a narrowing of the one list, never a permission check inside each entry. The palette
+  is the one navigation affordance a Plugin-contributed screen could use without renegotiating
+  the sidebar (#71 is still open), which is why the list is data rather than markup. It closes
+  onto the button that opens it — `finalFocus` on the popup, which is why it composes `Dialog`
+  rather than taking `CommandDialog` whole — because choosing a section unmounts the screen
+  focus would otherwise return to.
 - **A contrast failure is fixed in the token layer.** `--destructive` is darker than shadcn's
   default because `text-destructive` on `bg-destructive/10` — every destructive control in this
   distribution — measured 3.99:1; `src/index.css` carries the measurement at the value. Tuning
