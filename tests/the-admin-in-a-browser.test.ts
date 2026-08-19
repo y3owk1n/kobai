@@ -83,9 +83,16 @@ function where(page: Page): string {
   return `${url.pathname.slice(ADMIN_PATH.length)}${url.search}`;
 }
 
-/** The rows of the Products table, which is what a page of a list looks like. */
-function productRows(page: Page) {
-  return page.getByRole("row").filter({ has: page.getByRole("link", { name: "Open" }) });
+/**
+ * The rows of whatever list is on screen, which is what a page of one looks like.
+ *
+ * A header row's cells are `th` and a body row's are `td`, so this is "the rows with data in
+ * them" without any list having to say how many columns it has or what its first one holds.
+ * Filtering on the Open link instead would have worked for Products and Orders and quietly
+ * counted zero on the API keys screen, whose rows carry a Revoke button rather than a link.
+ */
+function listRows(page: Page) {
+  return page.getByRole("row").filter({ has: page.locator("td") });
 }
 
 /**
@@ -121,11 +128,42 @@ async function createProductInTheAdmin(
  */
 async function holdsRows(page: Page, rows: number): Promise<void> {
   await expect
-    .poll(() => productRows(page).count(), {
+    .poll(() => listRows(page).count(), {
       timeout: LOCATOR_TIMEOUT,
-      message: `The Products list never settled at ${rows} rows.`,
+      message: `The list never settled at ${rows} rows.`,
     })
     .toBe(rows);
+}
+
+/**
+ * The first cell of every row on screen, which is what tells one page from another.
+ *
+ * A Product's title and an Order's number both live there, and both are unique in the fixtures
+ * these cases build — so comparing two pages' worth is how "these are different pages, and no
+ * row is on both" becomes something an assertion can see.
+ */
+async function firstCells(page: Page): Promise<string[]> {
+  const rows = await listRows(page).all();
+  return Promise.all(
+    rows.map(async (row) => (await row.locator("td").first().innerText()).trim()),
+  );
+}
+
+/**
+ * Waits for the rows on screen to be the ones the case is about.
+ *
+ * The other half of what `keepPreviousData` costs a test: the page you were reading stays up
+ * while the next one is fetched, so anything read the moment after a click reads the page you
+ * came from. `holdsRows` waits on how many; this waits on which.
+ */
+async function settlesOn(
+  page: Page,
+  rows: (cells: string[]) => boolean,
+  message = "The list never settled on the rows this case is about.",
+): Promise<void> {
+  await expect
+    .poll(async () => rows(await firstCells(page)), { timeout: LOCATOR_TIMEOUT, message })
+    .toBe(true);
 }
 
 /** Signs in through the form the way a Merchant does, keyboard only. */
@@ -302,6 +340,24 @@ describe("every screen has a URL", () => {
     );
     await auditAccessibility(page, "the not-found screen");
   });
+
+  it("says there is no such Product, rather than reporting a refusal", async () => {
+    const product = await seam.createProduct({ title: "A poster that was deleted" });
+    // Deleted rather than invented, so the address is one that genuinely worked a moment ago
+    // — which is the case a Merchant following somebody's link actually meets.
+    await seam.api("DELETE", `/admin/products/${product.id}`);
+
+    const page = await seam.signedIn(`/products/${product.id}`);
+
+    // Narrowed from kobai's `product-not-found` rather than read out of its prose (ADR-0063),
+    // and shown as a screen with a way out because leaving is the only useful next move.
+    await shows(page.getByText("No such Product"), "the no-such-Product screen");
+    await shows(
+      page.getByRole("link", { name: "Go to Products" }),
+      "the way back to the Products list",
+    );
+    await auditAccessibility(page, "the Product screen for a Product that is not there");
+  });
 });
 
 describe("paging through the cursor", () => {
@@ -330,7 +386,7 @@ describe("paging through the cursor", () => {
 
   it("puts the cursor in the URL, so a page is a link and a refresh lands on it", async () => {
     const page = await seam.signedIn("/products");
-    await shows(productRows(page).first(), "the first page of Products");
+    await shows(listRows(page).first(), "the first page of Products");
     await holdsRows(page, aPage);
 
     await page.getByRole("link", { name: "Next" }).click();
@@ -343,7 +399,7 @@ describe("paging through the cursor", () => {
 
     await page.reload();
     expect(where(page)).toBe(second);
-    await shows(productRows(page).first(), "the second page after a refresh");
+    await shows(listRows(page).first(), "the second page after a refresh");
     await holdsRows(page, theRest);
 
     await auditAccessibility(page, "a second page of Products");
@@ -384,7 +440,7 @@ describe("paging through the cursor", () => {
 describe("loading, empty, and refused", () => {
   it("shows a skeleton while the first page is in flight, and the table after it", async () => {
     const page = await seam.signedIn("/products");
-    await shows(productRows(page).first(), "a page of Products");
+    await shows(listRows(page).first(), "a page of Products");
 
     // Held long enough that the state between "asking" and "answered" is a thing a test can
     // see at all. Delaying the response is the only honest way to assert on it: the state is
@@ -404,7 +460,7 @@ describe("loading, empty, and refused", () => {
     // only place it exists is here.
     await auditAccessibility(page, "the Products screen while it is loading");
     await hides(skeleton, "the Products skeleton");
-    await shows(productRows(page).first(), "the Products, once they arrived");
+    await shows(listRows(page).first(), "the Products, once they arrived");
   });
 
   it("says there are none, rather than showing an empty table", async () => {
@@ -412,7 +468,7 @@ describe("loading, empty, and refused", () => {
     const page = await seam.signedIn("/products");
 
     await shows(page.getByText("No Products yet"), "the empty state");
-    await expect(productRows(page).count()).resolves.toBe(0);
+    await expect(listRows(page).count()).resolves.toBe(0);
     await auditAccessibility(page, "the Products screen with nothing on it");
   });
 
@@ -591,5 +647,324 @@ describe("the frame's own controls", () => {
 
     expect(where(page)).toBe("/api-keys");
     await auditAccessibility(page, "the API keys screen");
+  });
+});
+
+describe("the gate above every screen", () => {
+  it("says it is asking kobai who you are, and that screen is a screen", async () => {
+    const page = await seam.signedIn("/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    // The same delay the skeleton cases use, for the one state that is neither signed in nor
+    // signed out: `GET /admin/session` in flight. It lasts a few milliseconds against a
+    // database on the same machine, which is why nothing had ever looked at it — and it is a
+    // whole page, with no frame around it, because which frame to draw is exactly what is not
+    // known yet.
+    await page.route(
+      (url) => url.pathname === "/admin/session",
+      async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await route.continue();
+      },
+    );
+    await page.reload();
+
+    const asking = page.getByText("Asking kobai who you are…");
+    await shows(asking, "the boot gate");
+    // Audited *while it is up*: #175 named this screen and the Order screen as the two the
+    // browser cases never reached, so neither had ever been scanned.
+    await auditAccessibility(page, "the Admin while it is asking who you are");
+    await hides(asking, "the boot gate");
+    await shows(
+      page.getByText("Everything this Store sells"),
+      "the Products screen, once kobai answered",
+    );
+  });
+});
+
+describe("Orders", () => {
+  it("opens one from the list, and the Order has an address of its own", async () => {
+    const [placed] = await seam.placeOrders();
+    if (!placed) throw new Error("The seam placed no Order for this case to open.");
+
+    const page = await seam.signedIn("/orders");
+    await shows(
+      page.getByRole("row", { name: new RegExp(`#${placed.number}\\b`) }),
+      "the Order in the list",
+    );
+    await auditAccessibility(page, "the Orders screen");
+
+    await page
+      .getByRole("row", { name: new RegExp(`#${placed.number}\\b`) })
+      .getByRole("link", { name: "Open" })
+      .click();
+
+    expect(where(page)).toBe(`/orders/${placed.id}`);
+    await shows(
+      page.getByRole("heading", { name: `Order #${placed.number}` }),
+      "the Order's own heading",
+    );
+    // The crumb names the Order rather than repeating the identifier out of the URL — which
+    // is the one thing on this screen a Merchant cannot read aloud to anybody.
+    await shows(
+      page.getByRole("navigation", { name: "breadcrumb" }).getByText(`#${placed.number}`),
+      "the Order's breadcrumb",
+    );
+    await auditAccessibility(page, "the Order screen");
+  });
+
+  it("says there is no such Order, rather than reporting a refusal", async () => {
+    // A UUID this Store has certainly never issued. An Order is never deleted (ADR-0009), so
+    // this address has always been wrong rather than having stopped working.
+    const page = await seam.signedIn(`/orders/${crypto.randomUUID()}`);
+
+    await shows(page.getByText("No such Order"), "the no-such-Order screen");
+    await shows(
+      page.getByRole("link", { name: "Go to Orders" }),
+      "the way back to the Orders list",
+    );
+    await auditAccessibility(page, "the Order screen for an Order that is not there");
+  });
+});
+
+describe("paging through the Orders", () => {
+  /**
+   * A page of Orders and one more, so that there is a second page to reach.
+   *
+   * This is the list guaranteed to grow without bound, which is why it pages at all — and
+   * unlike the Products cases nothing here empties anything first: an Order cannot be deleted
+   * (ADR-0009), so a case that asserted an exact number of rows on the second page would be
+   * asserting on how many Orders every case before it happened to place. The first page is
+   * exactly full, the second holds at least one, and the two hold different Orders. All three
+   * are true however many Orders this file has left behind.
+   */
+  let aPage = 0;
+
+  beforeAll(async () => {
+    aPage = await defaultPageLimit("/admin/orders");
+    await seam.placeOrders(aPage + 1);
+  }, BROWSER_SEAM_TIMEOUT);
+
+  it("puts the cursor in the URL, so a page of Orders is a link", async () => {
+    const page = await seam.signedIn("/orders");
+    await shows(page.getByRole("link", { name: "Next" }), "the Next control");
+    await holdsRows(page, aPage);
+    const first = await firstCells(page);
+
+    await page.getByRole("link", { name: "Next" }).click();
+
+    // Opaque, so there is nothing to assert about the value — only that it is there, which is
+    // what makes the page a URL somebody can send (ADR-0064).
+    expect(where(page)).toMatch(/^\/orders\?after=.+/);
+    const second = where(page);
+    await settlesOn(page, (numbers) => numbers.join() !== first.join());
+
+    const beyond = await firstCells(page);
+    expect(beyond.length).toBeGreaterThan(0);
+    // Every Order exactly once, which is the whole argument for a cursor over an offset.
+    expect(beyond.filter((number) => first.includes(number))).toEqual([]);
+
+    await page.reload();
+
+    // The page a refresh lands on is the one that was on screen, because the cursor that
+    // located it is in the address rather than in this tab's memory.
+    expect(where(page)).toBe(second);
+    await settlesOn(page, (numbers) => numbers.join() === beyond.join());
+    await auditAccessibility(page, "a second page of Orders");
+  });
+
+  it("offers only the first page back when the cursor was arrived at cold", async () => {
+    const page = await seam.signedIn("/orders");
+    await shows(page.getByRole("link", { name: "Next" }), "the Next control");
+    await page.getByRole("link", { name: "Next" }).click();
+    const second = where(page);
+
+    // A fresh window at that address, which is what a Merchant sending the link produces —
+    // and it is deliberately *not* a reload, because a reload restores the history entry's
+    // own state and the trail of pages before this one with it.
+    const linked = await seam.signedIn(second);
+
+    // A cursor says what comes next and can say nothing about what came before it, so with no
+    // trail the page before this one is genuinely unknown. The first page is the one thing
+    // that can be offered truthfully, and it is labelled as itself (ADR-0064).
+    await shows(
+      linked.getByRole("link", { name: "First page" }),
+      "the way back to page one",
+    );
+    await expect(linked.getByRole("link", { name: "Previous" }).count()).resolves.toBe(0);
+
+    await linked.getByRole("link", { name: "First page" }).click();
+    expect(where(linked)).toBe("/orders");
+  });
+});
+
+describe("API keys", () => {
+  /**
+   * Two frame promises, on the one screen where they are both visible at once.
+   *
+   * That a key can be minted is a request-level fact and is asserted as one elsewhere. What is
+   * only true in a browser is that **the value is on screen exactly once**, in a response body
+   * nothing stores, and that the list under it is **re-read rather than patched** — ADR-0063's
+   * "no optimistic updates anywhere", which is a property of how the screen was built and not
+   * of what kobai answered.
+   */
+  it("shows a minted key once, and reads the list back rather than patching it", async () => {
+    const page = await seam.signedIn("/api-keys");
+    const name = `Minted in a browser ${Date.now()}`;
+
+    await page.getByLabel("Name").fill(name);
+    await page.getByRole("button", { name: "Mint" }).click();
+
+    await shows(
+      page.getByText("Copy this now — it is shown once."),
+      "the key, the once it is shown",
+    );
+    // Read back rather than predicted: there is no optimistic update anywhere in this Admin
+    // (ADR-0063), so what a key looks like once kobai has it is kobai's answer.
+    await shows(
+      page.getByRole("row", { name: new RegExp(name) }),
+      "the key kobai answered with, in the list",
+    );
+    await auditAccessibility(page, "the API keys screen showing a minted key");
+  });
+
+  it("checks the shape of the form without asking kobai", async () => {
+    const page = await seam.signedIn("/api-keys");
+
+    let asked = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/admin/api-keys"
+      ) {
+        asked += 1;
+      }
+    });
+
+    await page.getByRole("button", { name: "Mint" }).click();
+
+    await shows(
+      page.getByText("A key is told from another by its name"),
+      "the empty name's own message",
+    );
+    expect(
+      asked,
+      "A nameless key was sent to kobai rather than caught by the form's own schema.",
+    ).toBe(0);
+  });
+
+  it("revokes a key and reads the list back rather than crossing it out", async () => {
+    const name = `Revoked in a browser ${Date.now()}`;
+    await seam.api("POST", "/admin/api-keys", { name, kind: "publishable" });
+    const page = await seam.signedIn("/api-keys");
+
+    const row = page.getByRole("row", { name: new RegExp(name) });
+    await shows(row, "the key to revoke");
+    // `live` before, `revoked …` after, and the row still there: revoking is not a deletion,
+    // so a Merchant can still see the key existed and when it stopped working.
+    await shows(row.getByText("live"), "the key's state before revoking it");
+
+    await row.getByRole("button", { name: "Revoke" }).click();
+
+    await shows(row.getByText(/^revoked /), "the key's state, as kobai answered it");
+    // Revoke is the only destructive control on any of these screens, and its palette is what
+    // #176 had to fix for contrast — so it is audited with a revoked row on screen.
+    await auditAccessibility(page, "the API keys screen after a revocation");
+  });
+});
+
+describe("paging through the API keys", () => {
+  /**
+   * A page of keys and one more.
+   *
+   * The same shape as the Orders block above and for the same reason: a key is never deleted,
+   * so what the second page holds depends on how many keys the rest of this file happened to
+   * mint. A full first page, a non-empty second, and no key on both is true either way.
+   */
+  let aPage = 0;
+
+  beforeAll(async () => {
+    aPage = await defaultPageLimit("/admin/api-keys");
+    for (let key = 0; key < aPage + 1; key += 1) {
+      await seam.api("POST", "/admin/api-keys", {
+        name: `Paged key ${String(key).padStart(2, "0")}`,
+        kind: "publishable",
+      });
+    }
+  }, BROWSER_SEAM_TIMEOUT);
+
+  it("puts the cursor in the URL, so the older keys are reachable at all", async () => {
+    const page = await seam.signedIn("/api-keys");
+    await shows(page.getByRole("link", { name: "Next" }), "the Next control");
+    await holdsRows(page, aPage);
+    const first = await firstCells(page);
+
+    await page.getByRole("link", { name: "Next" }).click();
+
+    expect(where(page)).toMatch(/^\/api-keys\?after=.+/);
+    await settlesOn(page, (names) => names.join() !== first.join());
+
+    const beyond = await firstCells(page);
+    expect(beyond.length).toBeGreaterThan(0);
+    // The gap this closes: without a pager the keys on this page could never be revoked, and
+    // the Admin mints one for itself per browser session that has none.
+    expect(beyond.filter((name) => first.includes(name))).toEqual([]);
+  });
+});
+
+describe("the storefront price preview", () => {
+  /**
+   * The one screen whose whole subject is a request only a browser makes.
+   *
+   * ADR-0010 gives the Admin no privileged API, so "what price would a storefront receive" is
+   * answered by *being* a storefront — a second client, a publishable key, over `/store`
+   * (ADR-0020). Nothing about that is visible in a response body: the assertion is on the
+   * request the page itself made, which no other seam in this repository can see. What is on
+   * screen afterwards is asserted only as far as it takes to know the answer arrived rather
+   * than being swallowed.
+   */
+  it("answers by being a storefront, over a publishable key", async () => {
+    // Priced at 12.50, which this Project does not charge: `kobai.config.ts` fills Core's
+    // `select-price` slot with `everything-costs-one-cent`, so the answer is one cent and the
+    // difference is the whole point of the screen.
+    const product = await seam.createProduct({
+      title: "A poster with a preview",
+      amount: 1250,
+    });
+    const page = await seam.signedIn(`/products/${product.id}`);
+
+    const asked: { path: string; authorization: string }[] = [];
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      if (!pathname.startsWith("/store/")) return;
+      asked.push({
+        path: pathname,
+        authorization: request.headers().authorization ?? "",
+      });
+    });
+
+    await page.getByRole("button", { name: "What would a storefront receive?" }).click();
+
+    await shows(
+      page.getByText("This Project changed the price."),
+      "the difference between what was entered and what a storefront gets",
+    );
+    await shows(
+      page.getByText("everything-costs-one-cent"),
+      "the Step this Project put in the slot",
+    );
+
+    // The criterion itself (ADR-0020): the Admin found out what a storefront receives by
+    // *being* one — over `/store`, with a `kobai_pk_` key — rather than by asking the admin
+    // surface for a number no storefront could get. There is no such route and there must not
+    // be one.
+    expect(asked).toEqual([
+      {
+        path: `/store/variants/${product.variantId}/price`,
+        authorization: expect.stringMatching(/^Bearer kobai_pk_/),
+      },
+    ]);
+
+    await auditAccessibility(page, "the Product screen showing a resolved price");
   });
 });

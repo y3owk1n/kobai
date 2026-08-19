@@ -953,6 +953,46 @@ session query to be re-read on window focus *and* on navigation and only focus i
 `Pager`'s dead Next/Previous use real `disabled` rather than `aria-disabled`, deliberately,
 because there is no explanation to host on one.
 
+**Every screen is on the frame, and a screen takes no props** (#176). A screen is a component a
+route names and nothing else: it reads its identifier from the router (`lib/route.ts`'s
+`useRouteId`, which is where react-router's `string | undefined` is settled once), its client
+from `useKobaiClient`, and its data through TanStack Query. `app.tsx` therefore holds paths and
+components, with no adapter in between — the four wrappers that pulled a client and a
+back-navigation callback out of context and handed them down as props are gone, and a new one
+would be the pre-frame shape coming back. **A form field is
+`components/form-field.tsx`** — a label, an input and the schema's message, in one place because
+the invalid state has to be set twice (`Field` reads `data-invalid`, the `Input` announces
+`aria-invalid`) and an `id` is unique to the document rather than to the form it is in. Five
+further things about the screens are conventions rather than one screen's choice:
+
+- **Every list pages through the cursor, with the cursor in the URL** — Products, Orders and
+  API keys alike, through the one `components/pager.tsx`. A list route that took no page would
+  be a screen on which the older half of a Store cannot be reached, and API keys is the
+  non-obvious one: the storefront price preview mints a publishable key per browser session
+  that has none, so they accumulate without anybody minting one on purpose.
+- **A closed refusal family is narrowed, never matched on prose.** `lib/refusal.ts` holds one
+  `Record` per family keyed by that family's own union and a `narrowing()` built from it, so a
+  `reason` added in Core has no key, does not compile, and reddens the Admin in the same commit
+  (ADR-0063). The screen's `switch` ends in `const unreached: never`, which is what holds the
+  arms complete. `PriceRefusal` and `PlaceOrderRefusal` keep `reason` open and take `messageOf`
+  **by design** — closing them would close Extension Point 2.
+- **A refusal a Merchant can act on gets a screen; the rest get an `Alert`.**
+  `product-not-found` and `order-not-found` render an `Empty` with a way back to the list,
+  because the only useful next move is to leave the address. Nothing predicts a refusal: every
+  one is the answer to a request that was actually made.
+- **The document outline lives in the frame.** The layout's `h1` names the **section**, so a
+  detail screen's record title is an `h2`; the screens rendered *in place of* the routes —
+  sign-in and the boot gate — carry their own `h1`, because there is none above them to inherit.
+  A detail screen names its own breadcrumb through `lib/crumb.tsx`'s `useCrumbTitle`, which
+  flows up rather than down: the layout owns the state and the screen writes it, because
+  `GET /admin/orders/{id}` is what knows the number and a layout that fetched one would be
+  fetching it twice.
+- **A contrast failure is fixed in the token layer.** `--destructive` is darker than shadcn's
+  default because `text-destructive` on `bg-destructive/10` — every destructive control in this
+  distribution — measured 3.99:1; `src/index.css` carries the measurement at the value. Tuning
+  the two vendored components instead would have been undone by the next `shadcn add`, and
+  would not have reached the components not added yet.
+
 ### The scaffolder, and the two trees it keeps in step
 
 **`reference/` is the source; `packages/create-kobai/template/` is generated from it.** Edit

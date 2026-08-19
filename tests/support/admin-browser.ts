@@ -107,7 +107,15 @@ const MERCHANT = {
   password: "the-browser-seam-signs-in-with-this",
 } as const;
 
-export type CreatedProduct = { readonly id: string; readonly title: string };
+export type CreatedProduct = {
+  readonly id: string;
+  readonly title: string;
+  /** The one Variant it was created with — what a Price hangs on, and what a Cart names. */
+  readonly variantId: string;
+};
+
+/** An Order this seam placed, as much of it as a case has any business asserting on. */
+export type PlacedOrder = { readonly id: string; readonly number: number };
 
 export type AdminSeam = {
   /** Where the Project is serving, on a port the OS chose. */
@@ -124,10 +132,34 @@ export type AdminSeam = {
 
   /** One call against the public API, as the seeded Merchant. */
   api<T>(method: string, path: string, body?: unknown): Promise<T>;
-  /** A Product with one Variant, created through the API. */
-  createProduct(product: { title: string; sku?: string }): Promise<CreatedProduct>;
+  /**
+   * A Product with one Variant, created through the API — and a Price on it when asked.
+   *
+   * Nothing is priced by default, because most cases are about a list or an address rather
+   * than about money. A case that needs a sellable Variant — anything reaching `/store` —
+   * names an `amount`, in minor units, the way every price in kobai is written.
+   */
+  createProduct(product: {
+    title: string;
+    sku?: string;
+    amount?: number;
+  }): Promise<CreatedProduct>;
   /** Deletes every Product, for a case whose subject is a list with nothing in it. */
   emptyTheCatalog(): Promise<void>;
+  /**
+   * Places Orders, the only way there is: over `/store`, as a storefront.
+   *
+   * Nothing in the Admin can create one — an Order is a Shopper's, placed against a Cart with
+   * a secret API key (ADR-0020, ADR-0055) — so a case that wants Orders to look at cannot
+   * arrange them the way it arranges a catalog. This walks the storefront's whole path: a
+   * sellable Variant, a key that may place, then a Cart and a placement per Order.
+   *
+   * **A Product and a key of its own on every call**, rather than one kept for the file. The
+   * catalog is shared and `emptyTheCatalog` empties it, so anything cached here would be a
+   * Variant a later case had deleted — and a placement failing for *that* reason would name
+   * the Cart rather than the arrangement.
+   */
+  placeOrders(count?: number): Promise<readonly PlacedOrder[]>;
   /**
    * Winds every session's idle window back, so the next request meets `session-expired`.
    *
@@ -242,6 +274,28 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
   };
 
+  const createProduct: AdminSeam["createProduct"] = async ({
+    title,
+    sku = `SEAM-${randomSuffix()}`,
+    amount,
+  }) => {
+    const created = await api<{
+      id: string;
+      title: string;
+      variants: { id: string }[];
+    }>("POST", "/admin/products", { title, variants: [{ sku }] });
+
+    const variantId = created.variants[0]?.id;
+    if (variantId === undefined) {
+      throw new Error("kobai created a Product with no Variant.");
+    }
+    if (amount !== undefined) {
+      await api("POST", `/admin/variants/${variantId}/prices`, { amount });
+    }
+
+    return { id: created.id, title: created.title, variantId };
+  };
+
   return {
     origin,
     merchant: MERCHANT,
@@ -252,17 +306,7 @@ export async function startAdminSeam(): Promise<AdminSeam> {
 
     api,
 
-    async createProduct({ title, sku = `SEAM-${randomSuffix()}` }) {
-      const created = await api<{ id: string; title: string }>(
-        "POST",
-        "/admin/products",
-        {
-          title,
-          variants: [{ sku }],
-        },
-      );
-      return { id: created.id, title: created.title };
-    },
+    createProduct,
 
     async emptyTheCatalog() {
       for (;;) {
@@ -275,6 +319,71 @@ export async function startAdminSeam(): Promise<AdminSeam> {
           await api("DELETE", `/admin/products/${product.id}`);
         }
       }
+    },
+
+    async placeOrders(count = 1) {
+      // Nothing this seam sells is counted, so no Reservation is held and no case can be made
+      // to fail by another one having sold the last unit (ADR-0018).
+      const { variantId } = await createProduct({
+        title: `The browser seam's storefront ${randomSuffix()}`,
+        sku: `SEAM-SELLS-${randomSuffix()}`,
+        amount: 1250,
+      });
+
+      // Secret rather than publishable: placing is where money moves, and a publishable key
+      // is refused there with `secret-key-required` (ADR-0055).
+      const minted = await api<{ key: string }>("POST", "/admin/api-keys", {
+        name: `the browser seam's storefront ${randomSuffix()}`,
+        kind: "secret",
+      });
+      /**
+       * One call to the store surface, as a storefront makes it.
+       *
+       * Plain `fetch` with a bearer key, like `api` beside it: this is the test putting Orders
+       * in a database before a browser opens, and not the Admin doing anything — the Admin
+       * cannot place an Order and must not learn how.
+       */
+      const asAStorefront = async <T>(path: string, body: unknown): Promise<T> => {
+        const response = await fetch(new URL(path, origin), {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${minted.key}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          throw new Error(
+            `\`POST ${path}\` answered ${response.status} while arranging an Order for a browser case: ${await response.text()}`,
+          );
+        }
+        return (await response.json()) as T;
+      };
+
+      const place = async (): Promise<PlacedOrder> => {
+        // A Cart each, never one Cart placed twice: a Cart becomes exactly one Order.
+        const cart = await asAStorefront<{ id: string }>("/store/carts", {});
+        await asAStorefront(`/store/carts/${cart.id}/line-items`, {
+          variantId,
+          quantity: 1,
+        });
+        const order = await asAStorefront<{ id: string; number: number }>(
+          "/store/orders",
+          { cartId: cart.id },
+        );
+        return { id: order.id, number: order.number };
+      };
+
+      const placed: PlacedOrder[] = [];
+      // In batches rather than all at once: a page of Orders is twenty-odd placements, each
+      // three round trips, and queueing them all behind the Project's connection pool is
+      // slower than letting a few overlap. Nothing here is about contention — the two tests
+      // that are about that live beside the code they guard.
+      for (let from = 0; from < count; from += ORDERS_AT_ONCE) {
+        const batch = Math.min(ORDERS_AT_ONCE, count - from);
+        placed.push(...(await Promise.all(Array.from({ length: batch }, place))));
+      }
+      return placed;
     },
 
     async expireEverySession() {
@@ -553,3 +662,6 @@ async function signInOverFetch(origin: string): Promise<string> {
 function randomSuffix(): string {
   return crypto.randomUUID().slice(0, 8).toUpperCase();
 }
+
+/** How many placements overlap while a case arranges a page of Orders. */
+const ORDERS_AT_ONCE = 8;

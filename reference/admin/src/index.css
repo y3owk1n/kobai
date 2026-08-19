@@ -63,7 +63,19 @@
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  /* Darker than the shadcn default (`oklch(0.577 0.245 27.325)`), and it is a contrast fix
+     rather than a taste one. Every destructive control in this distribution draws itself as
+     `text-destructive` on `bg-destructive/10` — a Revoke button, a "secret" badge, a
+     destructive menu item — and at the default that is #e7000b on #fde5e7, which measures
+     3.99:1 and fails WCAG AA. At this value the same pair is 5.37:1. It is tuned here, in the
+     token, rather than in the two vendored components, because a value changed here reaches
+     every destructive component including the ones not added yet (ADR-0063) — and because
+     `shadcn add` would overwrite the components and never this file.
+     `tests/the-admin-in-a-browser.test.ts` is what found it, on the API keys screen, and what
+     would find it again: axe-core runs on every screen a case visits, and no case had reached
+     a destructive control until #176. The dark palette below needed no change — it measures
+     4.63:1 on its own `/20` tint over the card — and is deliberately left where it was. */
+  --destructive: oklch(0.505 0.21 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
