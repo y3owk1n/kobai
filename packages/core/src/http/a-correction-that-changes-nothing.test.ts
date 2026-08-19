@@ -69,6 +69,7 @@ const CORRECTIONS = [
   "/admin/products/{id}",
   "/admin/variants/{id}",
   "/admin/roles/{id}",
+  "/admin/merchants/{id}",
   "/store/carts/{id}",
   "/store/carts/{id}/line-items/{lineItemId}",
 ] as const;
@@ -94,12 +95,14 @@ type DescribedPaths = {
 };
 
 /**
- * One arrangement for all six, because none of them is about what it is correcting.
+ * One arrangement for all of them, because none of them is about what it is correcting.
  *
  * `seedTestCart` reaches furthest — it seeds a catalog, which signs a Merchant in and mints a
  * secret key — so a Cart and its line come free with the Product and the Variant. The Role is
  * the one thing nothing seeds, and it goes through `POST /admin/roles` like a Merchant's would
- * (#173), never through an insert.
+ * (#173), never through an insert. The Merchant this corrects is the seeded one itself: a body
+ * naming nothing is refused before anything reads a row, so which Merchant it addresses cannot
+ * matter — and it is the one Merchant that exists without a second request.
  */
 async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]> {
   const cart = await seedTestCart(kobai);
@@ -113,6 +116,10 @@ async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]>
   });
   expect(created.status, "the arrangement could not create a Role").toBe(201);
   const role = (await created.json()) as { readonly id: string };
+
+  const session = await kobai.request("/admin/session", { headers: merchant });
+  expect(session.status, "the arrangement could not read the session").toBe(200);
+  const who = (await session.json()) as { readonly merchant: { readonly id: string } };
 
   return [
     { described: "/admin/store", path: "/admin/store", headers: merchant },
@@ -129,6 +136,11 @@ async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]>
     {
       described: "/admin/roles/{id}",
       path: `/admin/roles/${role.id}`,
+      headers: merchant,
+    },
+    {
+      described: "/admin/merchants/{id}",
+      path: `/admin/merchants/${who.merchant.id}`,
       headers: merchant,
     },
     { described: "/store/carts/{id}", path: `/store/carts/${cart.id}`, headers: key },

@@ -322,7 +322,9 @@
               "invalid",
               "malformed-body",
               "unknown-role",
-              "email-taken"
+              "email-taken",
+              "merchant-not-found",
+              "last-administrator"
             ],
             "description": "Machine-readable. Branch on this."
           }
@@ -412,6 +414,15 @@
         "required": [
           "merchants"
         ]
+      },
+      "UpdateMerchantRequest": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "A Role by name — the one this Merchant is to hold. It takes effect on their very next request, signed in or not, because a Role is read on each one rather than copied into the session. Naming the Role they already hold is accepted and changes nothing."
+          }
+        }
       },
       "Role": {
         "type": "object",
@@ -2540,6 +2551,121 @@
         }
       }
     },
+    "/admin/merchants/{id}": {
+      "patch": {
+        "summary": "Move a Merchant onto another Role",
+        "description": "Changes which Role a Merchant holds, by name. It takes effect on their very next request, signed in or not — a Role is read on each one. Naming the Role they already hold changes nothing and is answered 200; a body naming nothing this route would change is refused at 400. Their address and password are not correctable over this API at all.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMerchantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Merchant, and the Role they now hold.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Merchant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, is not JSON at all, names a Role this deployment does not have, or names nothing this route would change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Merchant exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well formed, and still refused: `last-administrator`, this is the only Merchant who can administer Merchants and the Role named cannot, so the move would leave the deployment with nobody who could undo it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/roles": {
       "post": {
         "summary": "Create a Role",
@@ -2938,7 +3064,7 @@
       },
       "delete": {
         "summary": "Delete a Role",
-        "description": "A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `POST /admin/merchants` is how another Role gets a holder.",
+        "description": "A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `PATCH /admin/merchants/{id}` is how each of them stops holding it.",
         "security": [
           {
             "merchantSession": []

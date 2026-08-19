@@ -19,6 +19,8 @@ import {
   createMerchant,
   listMerchants,
   type MerchantCreation,
+  type MerchantUpdate,
+  updateMerchant,
 } from "../auth/merchant.ts";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import {
@@ -242,6 +244,59 @@ const listMerchantsRoute = createRoute({
 });
 
 /**
+ * Moves a Merchant onto another Role — and refuses the one move a deployment cannot come back
+ * from (#202, ADR-0066).
+ *
+ * **This is what makes `role-in-use` a step rather than a wall.** `DELETE /admin/roles/{id}`
+ * refuses while any Merchant holds the Role and points at the Merchants who do; until this
+ * route there was no way for any of them to stop holding it, so a Role somebody held was
+ * permanent and the only advice this API could honestly give was to narrow its Permissions
+ * instead. Both halves of ADR-0059's argument — refuse rather than cascade, because "the repair
+ * is one a Merchant can carry out themselves" — needed this route to be true.
+ *
+ * **Gated by `merchant:write`, and it needs no Permission of its own** (ADR-0066): a Merchant
+ * who may add a colleague may add one against `owner`, so that Permission is already the power
+ * to administer access entire, and moving a colleague between Roles confers nothing it did not.
+ *
+ * `last-administrator` is answered when this Merchant is the only one holding `merchant:write`
+ * and the Role named does not carry it. That is the same refusal `PATCH /admin/roles/{id}`
+ * makes and the same fact about the deployment; what differs is which act would have caused it,
+ * and both take one lock so that neither can slip past the other.
+ */
+const updateMerchantRoute = createRoute({
+  method: "patch",
+  path: "/merchants/{id}",
+  summary: "Move a Merchant onto another Role",
+  description:
+    "Changes which Role a Merchant holds, by name. It takes effect on their very next request, signed in or not — a Role is read on each one. Naming the Role they already hold changes nothing and is answered 200; a body naming nothing this route would change is refused at 400. Their address and password are not correctable over this API at all.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateMerchantRequest } },
+    },
+  },
+  responses: {
+    200: json("The Merchant, and the Role they now hold.", contract.Merchant),
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, names a Role this deployment does not have, or names nothing this route would change.",
+      contract.MerchantRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Merchant exists.", contract.MerchantRefusal),
+    422: json(
+      "Well formed, and still refused: `last-administrator`, this is the only Merchant who can administer Merchants and the Role named cannot, so the move would leave the deployment with nobody who could undo it.",
+      contract.MerchantRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Creates a Role — a name and the set of Permissions a Merchant created against it holds.
  *
  * The route that makes ADR-0027's permission model reachable. Exactly one Role existed before
@@ -330,7 +385,8 @@ const readRoleRoute = createRoute({
  * Merchant holding it anywhere. That is a lockout rather than a preference: the deployment
  * would have nobody who could put the Permission back and nobody who could sign a colleague up
  * to try, so the only way in would be the raw SQL this whole surface exists to remove
- * (ADR-0066).
+ * (ADR-0066). `PATCH /admin/merchants/{id}` can reach the same state from the other side and
+ * refuses it by the same name, under the same lock.
  *
  * **A change takes effect on the next request**, because the gate reads the Role on every one
  * (`auth/session.ts`) rather than copying it into the session — so a Merchant narrowed while
@@ -383,7 +439,7 @@ const deleteRoleRoute = createRoute({
   path: "/roles/{id}",
   summary: "Delete a Role",
   description:
-    "A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `POST /admin/merchants` is how another Role gets a holder.",
+    "A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `PATCH /admin/merchants/{id}` is how each of them stops holding it.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.merchantWrite)] as const,
   request: { params: contract.IdParam },
@@ -1179,6 +1235,16 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json({ merchants: page.items, nextCursor: page.nextCursor }, 200);
   });
 
+  guarded.openapi(updateMerchantRoute, async (c) => {
+    const moved = await updateMerchant(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!moved.ok) return refused(c, moved, MERCHANT_UPDATE_STATUS);
+    return c.json(moved.merchant, 200);
+  });
+
   guarded.openapi(createRoleRoute, async (c) => {
     const created = await createRole(deps.db, c.req.valid("json"));
     if (!created.ok) return refused(c, created, ROLE_STATUS);
@@ -1563,6 +1629,26 @@ const CREATION_STATUS = {
   "unknown-role": 400,
   "email-taken": 409,
 } as const satisfies Record<Exclude<MerchantCreation, { ok: true }>["reason"], 400 | 409>;
+
+/**
+ * 400 for a request that is wrong — `unknown-role` included, at the status the create route
+ * already answers it at, because one word on one surface should not mean two statuses — 404 for
+ * a Merchant who is not there, and 422 for the lockout.
+ *
+ * The lockout is 422 rather than 409 on ADR-0065's distinction, exactly as the Role surface's
+ * is: a 409 says somebody got there first and invites a retry, and this refusal never becomes
+ * possible by itself. What lifts it is a deliberate act somewhere else — another Role given
+ * `merchant:write`, and a Merchant given that Role.
+ */
+const MERCHANT_UPDATE_STATUS = {
+  invalid: 400,
+  "unknown-role": 400,
+  "merchant-not-found": 404,
+  "last-administrator": 422,
+} as const satisfies Record<
+  Exclude<MerchantUpdate, { ok: true }>["reason"],
+  400 | 404 | 422
+>;
 
 /** 400 for a request that is wrong, 409 for a name another Role answered first. */
 const ROLE_STATUS = {

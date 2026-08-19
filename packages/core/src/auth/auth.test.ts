@@ -169,6 +169,260 @@ describe("creating a Merchant", () => {
   });
 });
 
+/**
+ * Which Role a Merchant holds is correctable in place (#202, ADR-0062, ADR-0066).
+ *
+ * **The subject is a remedy rather than a route.** `DELETE /admin/roles/{id}` has refused
+ * `role-in-use` since #173 and pointed the Merchant at the colleagues who hold the Role — and
+ * nothing could move any of them off it, because `POST /admin/merchants` was the whole of what
+ * wrote `core_merchant`. So the refusal was permanent for as long as those Merchants existed,
+ * which is what ADR-0059's "the repair is one a Merchant can carry out themselves" had been
+ * promising and could not deliver. The last case here is the one that says it is delivered now:
+ * refused, moved, deleted.
+ *
+ * The lockout guard is asserted here one request at a time and **that proves nothing about the
+ * race** — `the-last-administrator.test.ts` is where two of these are dispatched at once, which
+ * is the only seam that can see write skew.
+ */
+describe("moving a Merchant onto another Role", () => {
+  const patch = (body: unknown, headers: Record<string, string>) =>
+    ({
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    }) satisfies RequestInit;
+
+  /** A Role holding exactly what it is given, made the way a Merchant makes one (#173). */
+  async function roleCarrying(
+    on: TestKobai,
+    owner: { headers: Record<string, string> },
+    name: string,
+    permissions: readonly string[],
+  ): Promise<string> {
+    const response = await on.request(
+      "/admin/roles",
+      json({ name, permissions }, owner.headers),
+    );
+    expect(response.status, `creating the ${name} Role`).toBe(201);
+    return ((await response.json()) as { id: string }).id;
+  }
+
+  /** A colleague on that Role, and the identifier they are addressed by. */
+  async function merchantOn(
+    on: TestKobai,
+    owner: { headers: Record<string, string> },
+    email: string,
+    role: string,
+  ): Promise<string> {
+    const response = await on.request(
+      "/admin/merchants",
+      json({ email, password: PASSWORD, role }, owner.headers),
+    );
+    expect(response.status, `adding ${email} to ${role}`).toBe(201);
+    return ((await response.json()) as { id: string }).id;
+  }
+
+  it("hands back the Role they now hold, and reaches their next request without a sign-out", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await roleCarrying(kobai, owner, "bookkeeper", [PERMISSIONS.orderRead]);
+    await roleCarrying(kobai, owner, "buyer", [PERMISSIONS.catalogRead]);
+    const colleague = await merchantOn(kobai, owner, "books@example.test", "bookkeeper");
+    const { headers } = sessionOf(
+      await kobai.request(
+        "/admin/session",
+        json({ email: "books@example.test", password: PASSWORD }),
+      ),
+    );
+
+    // Signed in *before* the move, and never again: a Role is joined on every authenticated
+    // request rather than copied into the session, so this is what "takes effect on their very
+    // next request" has to mean to be worth saying.
+    const before = await kobai.request("/admin/products", { headers });
+    const response = await kobai.request(
+      `/admin/merchants/${colleague}`,
+      patch({ role: "buyer" }, owner.headers),
+    );
+    const after = await kobai.request("/admin/products", { headers });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      id: colleague,
+      email: "books@example.test",
+      role: { name: "buyer", permissions: [PERMISSIONS.catalogRead] },
+    });
+    expect(before.status, "the bookkeeper could read the catalog before the move").toBe(
+      403,
+    );
+    expect(after.status, "the buyer still could not read it after").toBe(200);
+  });
+
+  it("accepts the Role they already hold, because a form round-tripping what it read has named something", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await roleCarrying(kobai, owner, "bookkeeper", [PERMISSIONS.orderRead]);
+    const colleague = await merchantOn(kobai, owner, "books@example.test", "bookkeeper");
+
+    const response = await kobai.request(
+      `/admin/merchants/${colleague}`,
+      patch({ role: "bookkeeper" }, owner.headers),
+    );
+
+    // The same judgement `PATCH /admin/store` makes about the currency it already prices in:
+    // naming it is not naming nothing, so it is an ordinary 200 rather than the no-op refusal.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      id: colleague,
+      email: "books@example.test",
+      role: { name: "bookkeeper", permissions: [PERMISSIONS.orderRead] },
+    });
+  });
+
+  it("refuses a Role this deployment does not have as a bad request, not a conflict", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await roleCarrying(kobai, owner, "bookkeeper", []);
+    const colleague = await merchantOn(kobai, owner, "books@example.test", "bookkeeper");
+
+    const response = await kobai.request(
+      `/admin/merchants/${colleague}`,
+      patch({ role: "no-such-role" }, owner.headers),
+    );
+
+    // 400 and the same word `POST /admin/merchants` answers with, because it is the same
+    // mistake: a Role is named by name, so one renamed since a picker was filled arrives here.
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "unknown-role" });
+  });
+
+  it("refuses a Merchant nobody has created, and an identifier that is not one at all", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await roleCarrying(kobai, owner, "bookkeeper", []);
+
+    const absent = await kobai.request(
+      "/admin/merchants/2f1a4bb0-0000-4000-8000-000000000000",
+      patch({ role: "bookkeeper" }, owner.headers),
+    );
+    const nonsense = await kobai.request(
+      "/admin/merchants/not-an-identifier",
+      patch({ role: "bookkeeper" }, owner.headers),
+    );
+
+    // Both 404, because "there is no such Merchant" is the same answer to the caller — the
+    // identifier is a plain string in the schema for exactly that reason.
+    expect([absent.status, nonsense.status]).toEqual([404, 404]);
+    await expect(absent.json()).resolves.toMatchObject({
+      reason: "merchant-not-found",
+    });
+    await expect(nonsense.json()).resolves.toMatchObject({
+      reason: "merchant-not-found",
+    });
+  });
+
+  it("refuses to move the last Merchant who can administer Merchants off that power", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await roleCarrying(kobai, owner, "bookkeeper", [PERMISSIONS.orderRead]);
+    const me = (
+      (await (
+        await kobai.request("/admin/session", { headers: owner.headers })
+      ).json()) as { merchant: { id: string } }
+    ).merchant;
+
+    const response = await kobai.request(
+      `/admin/merchants/${me.id}`,
+      patch({ role: "bookkeeper" }, owner.headers),
+    );
+
+    // 422 rather than 409, on ADR-0065's distinction: nothing about waiting makes this
+    // possible. What lifts it is a deliberate act somewhere else.
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "last-administrator",
+    });
+    // And the deployment still has its administrator, asked the way somebody locked out of it
+    // would find out — by trying to use the power, which is a write.
+    const still = await kobai.request(
+      "/admin/roles",
+      json({ name: "proof", permissions: [] }, owner.headers),
+    );
+    expect(still.status).toBe(201);
+  });
+
+  it("allows the move once somebody else holds the power, which is what makes the refusal a step", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    await roleCarrying(kobai, owner, "bookkeeper", [PERMISSIONS.orderRead]);
+    await roleCarrying(kobai, owner, "deputy", [
+      PERMISSIONS.merchantWrite,
+      PERMISSIONS.merchantRead,
+    ]);
+    const me = (
+      (await (
+        await kobai.request("/admin/session", { headers: owner.headers })
+      ).json()) as { merchant: { id: string } }
+    ).merchant;
+    await merchantOn(kobai, owner, "deputy@example.test", "deputy");
+
+    const response = await kobai.request(
+      `/admin/merchants/${me.id}`,
+      patch({ role: "bookkeeper" }, owner.headers),
+    );
+
+    expect(response.status).toBe(200);
+    // The mover has narrowed themselves out of the surface they used, which is allowed and is
+    // the point: somebody else can still administer access, and they are who puts it back.
+    const now = await kobai.request(
+      "/admin/roles",
+      json({ name: "proof", permissions: [] }, owner.headers),
+    );
+    expect(now.status).toBe(403);
+    const { headers } = sessionOf(
+      await kobai.request(
+        "/admin/session",
+        json({ email: "deputy@example.test", password: PASSWORD }),
+      ),
+    );
+    const deputy = await kobai.request(
+      "/admin/roles",
+      json({ name: "proof", permissions: [] }, headers),
+    );
+    expect(deputy.status).toBe(201);
+  });
+
+  it("is what lifts `role-in-use`, which had no remedy at all until it existed", async () => {
+    kobai = await createTestKobai();
+    const owner = await signInTestMerchant(kobai);
+    const bookkeeper = await roleCarrying(kobai, owner, "bookkeeper", [
+      PERMISSIONS.orderRead,
+    ]);
+    await roleCarrying(kobai, owner, "buyer", [PERMISSIONS.catalogRead]);
+    const colleague = await merchantOn(kobai, owner, "books@example.test", "bookkeeper");
+
+    const held = await kobai.request(`/admin/roles/${bookkeeper}`, {
+      method: "DELETE",
+      headers: owner.headers,
+    });
+    const moved = await kobai.request(
+      `/admin/merchants/${colleague}`,
+      patch({ role: "buyer" }, owner.headers),
+    );
+    const freed = await kobai.request(`/admin/roles/${bookkeeper}`, {
+      method: "DELETE",
+      headers: owner.headers,
+    });
+
+    // The whole of #202 in three requests: refused while somebody holds it, the holder moved,
+    // and then the very same deletion goes through. Before this route the first answer was
+    // also the last one there would ever be.
+    expect(held.status).toBe(422);
+    await expect(held.json()).resolves.toMatchObject({ reason: "role-in-use" });
+    expect(moved.status).toBe(200);
+    expect(freed.status).toBe(204);
+  });
+});
+
 describe("signing in", () => {
   it("issues a session, and says what it is good for", async () => {
     kobai = await createTestKobai();

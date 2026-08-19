@@ -401,7 +401,8 @@ and do not narrow the refusal to "when Prices exist"** — relaxing it later is 
 it is a break (ADR-0060), and the narrow version is a read of `core_price` followed by a write.
 
 **A Role is a row a Merchant can make, and one Permission administers every change to one**
-(ADR-0066). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are #173's six.
+(ADR-0066, ADR-0076). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are
+#173's six, and `PATCH /admin/merchants/{id}` is #202's seventh.
 The three **writes** sit behind **`merchant:write`** and there is deliberately no `role:write`
 beside it: a Merchant who may add a colleague may add one against `owner`, so that Permission is
 already the power to administer access entire, and a second word would name a boundary that does
@@ -415,25 +416,35 @@ with a write and no read. Four things about that surface are decisions and not i
 - **A read is `merchant:read` and a write is `merchant:write`, and neither moves.** Which gate a
   route sits behind is promised surface (ADR-0060), so a route added here takes the one its verb
   says — a new write, `DELETE /admin/merchants/{id}` included, needs no Permission of its own.
+  `PATCH /admin/merchants/{id}` is the one that has since been added, and it took `merchant:write`
+  on exactly that argument (ADR-0076).
 - **A Permission Core has never heard of is stored, not refused.** `permissions` is an array of
   non-empty strings and nothing checks *which* strings — a shape, not a vocabulary. `Session`'s
   own description already promises this ("a deployment may hold a permission this build of Core
   has never heard of"), and closing the set would foreclose a Plugin-supplied Permission before
   anybody has designed one. **Do not validate against `PERMISSIONS`**; the Admin's picker is
   where a typo is caught, as an affordance (ADR-0063).
-- **The last Merchant able to administer Merchants cannot be stripped.**
-  `PATCH /admin/roles/{id}` refuses at **422 `last-administrator`** when the change would leave
-  no Merchant holding `merchant:write`, because the first Merchant is seeded only while there is
-  none (ADR-0041) and the way back would be raw SQL. **The guard is a `pg_advisory_xact_lock`
-  taken before the read, not a conditional update** — the condition is about *other* rows, which
-  a subquery does not lock, so ADR-0018's one-statement answer does not reach it and two requests
-  each stripping a different last administrator would both commit.
-  `packages/core/src/auth/the-last-administrator.test.ts` is the concurrent test, and it has been
-  watched failing with that line removed.
+- **The last Merchant able to administer Merchants cannot be stripped, and cannot be moved off
+  the power either.** `PATCH /admin/roles/{id}` and `PATCH /admin/merchants/{id}` both refuse at
+  **422 `last-administrator`** — one word for one fact, reached by two acts — because the first
+  Merchant is seeded only while there is none (ADR-0041) and the way back would be raw SQL.
+  **The guard is a `pg_advisory_xact_lock` taken before the read, not a conditional update** —
+  the condition is about *other* rows, which a subquery does not lock, so ADR-0018's
+  one-statement answer does not reach it and two requests each removing a different last
+  administrator would both commit. It lives in `packages/core/src/auth/administrators.ts`
+  because **both routes must take the same key**: two correct guards on two keys serialise
+  nothing against each other, which is a lockout reached by two changes that each refused to
+  cause it alone. `packages/core/src/auth/the-last-administrator.test.ts` is the concurrent
+  test, it dispatches at both routes, and each case has been watched failing — the second
+  against a build with a second key.
 - **A Role Merchants hold is refused rather than cascaded or reassigned** — **422 `role-in-use`**,
   ADR-0059's shape reached through `core_merchant.role_id`'s `on delete restrict`. The delete is
   one statement and the violation is *read* (`violatesForeignKey`), not asked for first: a
   `select` then a `delete` lets a concurrent `POST /admin/merchants` slip a holder in between.
+  **Its remedy is `PATCH /admin/merchants/{id}` and it had none until #202** — the refusal
+  pointed at the Merchants holding the Role and nothing could move any of them off it, so
+  ADR-0059's "the repair is one a Merchant can carry out themselves" was not true on this table.
+  A refusal whose advice names no reachable control is the finding to raise, not to word around.
 
 **A route needing a Permission Core does not define yet brings one with it**, which is one edit
 and one migration. The new string goes **last** in `PERMISSIONS` (`auth/permissions.ts`), because

@@ -83,6 +83,12 @@ before its read, because "delete this Merchant" and "narrow this Role" can race 
 as two narrowings can. Adding one of those routes without extending the guard would reopen
 exactly the lockout this record closes, and no test here would notice.
 
+> **The reassigning route arrived, and this paragraph is what it was held to.**
+> [ADR-0076](./0076-a-merchants-role-is-corrected-in-place.md) adds
+> `PATCH /admin/merchants/{id}` (#202) — which is also what finally gives `role-in-use` below a
+> remedy — and the guard moved into `auth/administrators.ts` so that both routes take one key.
+> A `DELETE` is still not taken, and the note above still stands for whoever takes it.
+
 ### The guard is a lock taken before the read, and ADR-0018's usual answer does not reach it
 
 [ADR-0018](./0018-one-reservation-model-implemented-without-holds.md) requires a claim on

@@ -256,6 +256,75 @@ export interface paths {
       };
     };
   };
+  "/admin/merchants/{id}": {
+    /**
+     * Move a Merchant onto another Role
+     * @description Changes which Role a Merchant holds, by name. It takes effect on their very next request, signed in or not — a Role is read on each one. Naming the Role they already hold changes nothing and is answered 200; a body naming nothing this route would change is refused at 400. Their address and password are not correctable over this API at all.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateMerchantRequest"];
+        };
+      };
+      responses: {
+        /** @description The Merchant, and the Role they now hold. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Merchant"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, is not JSON at all, names a Role this deployment does not have, or names nothing this route would change. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["MerchantRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Merchant exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["MerchantRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: `last-administrator`, this is the only Merchant who can administer Merchants and the Role named cannot, so the move would leave the deployment with nobody who could undo it. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["MerchantRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/roles": {
     /**
      * List Roles
@@ -418,7 +487,7 @@ export interface paths {
     };
     /**
      * Delete a Role
-     * @description A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `POST /admin/merchants` is how another Role gets a holder.
+     * @description A Role no Merchant holds. One that Merchants do hold is refused rather than cascading onto them or moving them somewhere Core chose — `GET /admin/merchants` says who they are, and `PATCH /admin/merchants/{id}` is how each of them stops holding it.
      */
     delete: {
       parameters: {
@@ -2609,7 +2678,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "unknown-role" | "email-taken";
+      reason: "invalid" | "malformed-body" | "unknown-role" | "email-taken" | "merchant-not-found" | "last-administrator";
     };
     SessionRefusal: {
       error: string;
@@ -2633,6 +2702,10 @@ export interface components {
       merchants: components["schemas"]["Merchant"][];
       /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
       nextCursor?: string;
+    };
+    UpdateMerchantRequest: {
+      /** @description A Role by name — the one this Merchant is to hold. It takes effect on their very next request, signed in or not, because a Role is read on each one rather than copied into the session. Naming the Role they already hold is accepted and changes nothing. */
+      role?: string;
     };
     Role: {
       /** Format: uuid */

@@ -1,4 +1,4 @@
-import { desc, eq, ne, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { violatesForeignKey, violatesUniqueIndex } from "../db/errors.ts";
 import {
@@ -9,7 +9,7 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { merchant, role } from "../db/schema.ts";
+import { role } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { trimmed } from "../input.ts";
 import {
@@ -21,6 +21,11 @@ import {
   openData,
   text,
 } from "../patch.ts";
+import {
+  administers,
+  isTheLastAdministeringRole,
+  lockAdministrators,
+} from "./administrators.ts";
 import { PERMISSIONS } from "./permissions.ts";
 
 /**
@@ -39,7 +44,9 @@ import { PERMISSIONS } from "./permissions.ts";
  *   is a non-empty string, which is a shape rather than a vocabulary.
  * - **The deployment keeps at least one Merchant able to administer Merchants.** That is a
  *   lockout rather than a preference: a deployment with nobody holding `merchant:write` has
- *   no way back in short of the SQL this whole surface exists to remove.
+ *   no way back in short of the SQL this whole surface exists to remove. The guard itself lives
+ *   in `./administrators.ts`, because `PATCH /admin/merchants/{id}` can reach the same state
+ *   from the other side and the two must take one lock (#202).
  */
 
 /** A Role as the admin surface reports it — the whole row, minus the columns nobody reads. */
@@ -101,25 +108,6 @@ export type CreateRoleInput = {
 };
 
 export type UpdateRoleInput = CreateRoleInput;
-
-/**
- * The advisory-lock key every change that could remove the last administrator serialises on.
- *
- * Arbitrary but fixed, exactly as `createFirstMerchant`'s is, and held for the length of the
- * transaction however that transaction ends.
- *
- * **A conditional update cannot do this job**, which is the one place this surface departs
- * from ADR-0018's usual answer. Inventory claims a scarce thing with
- * `update … where on_hand - reserved >= n` because the condition is about *the row being
- * written*, so Postgres takes the row lock before evaluating it and the loser re-evaluates
- * against what the winner left. The lockout condition is about **other rows** — is there any
- * other Merchant, on any other Role, still holding `merchant:write` — and a subquery reads
- * those rows without locking them. So two requests each stripping a different last
- * administrator would each see the other's Role and both commit, which is write skew and is
- * precisely the state this refusal exists to prevent. The lock is taken *before* the read, so
- * the second request re-reads a database the first has already changed.
- */
-const ADMINISTRATOR_LOCK_KEY = 4_113_050_002;
 
 /**
  * The unique constraint on a Role's name, as `0002` created it — a `UNIQUE` constraint rather
@@ -244,10 +232,8 @@ export async function updateRole(
   const asked = changes.permissions;
 
   return db.transaction(async (tx) => {
-    // Before the read, and for the length of the transaction: see ADMINISTRATOR_LOCK_KEY.
-    if (asked !== undefined) {
-      await tx.execute(sql`select pg_advisory_xact_lock(${ADMINISTRATOR_LOCK_KEY})`);
-    }
+    // Before the read, and for the length of the transaction: see `administrators.ts`.
+    if (asked !== undefined) await lockAdministrators(tx);
 
     const [current] = await tx
       .select({ id: role.id, permissions: role.permissions })
@@ -265,7 +251,7 @@ export async function updateRole(
       return {
         ok: false,
         reason: "last-administrator",
-        detail: `Every Merchant able to administer Merchants holds this Role, so taking ${PERMISSIONS.merchantWrite} off it would leave this deployment with nobody who could put it back — including nobody who could sign a colleague up to try. Give another Role ${PERMISSIONS.merchantWrite}, and a Merchant that Role, before narrowing this one.`,
+        detail: `Every Merchant able to administer Merchants holds this Role, so taking ${PERMISSIONS.merchantWrite} off it would leave this deployment with nobody who could put it back — including nobody who could sign a colleague up to try. Give another Role ${PERMISSIONS.merchantWrite} first, and then either add a Merchant against it or move one there with \`PATCH /admin/merchants/{id}\`.`,
       } as const;
     }
 
@@ -297,6 +283,11 @@ export async function updateRole(
  * them to some other Role would be Core choosing who a colleague becomes. Both are worse than
  * being told to reassign them first, and only being told is reversible.
  *
+ * **The repair it names is now one a Merchant can actually carry out** (#202).
+ * `PATCH /admin/merchants/{id}` moves a Merchant onto another Role, so this refusal is a step
+ * rather than the wall it was for as long as `POST /admin/merchants` was the only thing that
+ * wrote `core_merchant`: a Role somebody held could not be deleted at all, by anybody, ever.
+ *
  * **One statement, and the refusal is read off Postgres rather than asked for first.** A
  * `select` for Merchants followed by a `delete` would let `POST /admin/merchants` slip a new
  * Merchant onto the Role in between, and the foreign key would then answer what this function
@@ -318,50 +309,11 @@ export async function deleteRole(db: Database, id: string): Promise<RoleDeletion
         ok: false,
         reason: "role-in-use",
         detail:
-          "Merchants hold this Role, and deleting it would leave them signed in holding nothing at all. Move them to another Role first — `GET /admin/merchants` says who they are.",
+          "Merchants hold this Role, and deleting it would leave them signed in holding nothing at all. Move them onto another Role first — `GET /admin/merchants` says who they are, and `PATCH /admin/merchants/{id}` is what moves one.",
       };
     }
     throw cause;
   }
-}
-
-/**
- * Whether this Role is the only thing standing between the deployment and a lockout: some
- * Merchant holds it, and no Merchant holds any *other* Role carrying `merchant:write`.
- *
- * Both halves are needed. A Role nobody holds carries nobody's access, so narrowing it takes
- * nothing away; and a deployment that already has no administrator at all is not one this
- * refusal can repair, so it must not be one this refusal freezes.
- *
- * Only ever called with {@link ADMINISTRATOR_LOCK_KEY} held — a plain read of other rows locks
- * nothing, which is the whole reason that lock exists.
- */
-async function isTheLastAdministeringRole(tx: Transaction, id: string): Promise<boolean> {
-  const [held] = await tx
-    .select({ id: merchant.id })
-    .from(merchant)
-    .where(eq(merchant.roleId, id))
-    .limit(1);
-  if (!held) return false;
-
-  const [elsewhere] = await tx
-    .select({ id: merchant.id })
-    .from(merchant)
-    .innerJoin(role, eq(role.id, merchant.roleId))
-    .where(
-      sql`${ne(role.id, id)} and ${role.permissions} @> array[${PERMISSIONS.merchantWrite}]::text[]`,
-    )
-    .limit(1);
-
-  return elsewhere === undefined;
-}
-
-/** One transaction, as the query builder hands it over. */
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-/** Whether a permission set carries the one Permission a lockout is measured in. */
-function administers(permissions: readonly string[]): boolean {
-  return permissions.includes(PERMISSIONS.merchantWrite);
 }
 
 /**

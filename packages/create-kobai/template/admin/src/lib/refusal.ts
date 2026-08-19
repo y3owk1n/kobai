@@ -208,21 +208,29 @@ const ROLE_REASONS: Record<RoleRefusal["reason"], true> = {
 export const roleReasonOf = narrowing(ROLE_REASONS);
 
 /**
- * Every `reason` creating a Merchant can be refused with.
+ * Every `reason` a Merchant operation can be refused with — creating one, and moving one onto
+ * another Role (#202).
  *
  * `unknown-role` is the one worth reading twice: a Role is named on the way in **by name**, so
- * this arrives when the Role a colleague was to be created against has been renamed or deleted
- * since the picker offering it was filled. That is a race rather than a typo, and the sentence
- * for it has to say so.
+ * this arrives when the Role a colleague was to be created against, or moved onto, has been
+ * renamed or deleted since the picker offering it was filled. That is a race rather than a typo,
+ * and the sentence for it has to say so.
+ *
+ * **`last-administrator` is in this family as well as in {@link RoleRefusal}'s**, and it is the
+ * same word for the same fact: moving the only Merchant who can administer Merchants onto a Role
+ * that cannot is the lockout, reached from the other side. Two screens narrow it, and each says
+ * what to do rather than only what happened.
  */
 const MERCHANT_REASONS: Record<MerchantRefusal["reason"], true> = {
   invalid: true,
   "malformed-body": true,
   "unknown-role": true,
   "email-taken": true,
+  "merchant-not-found": true,
+  "last-administrator": true,
 };
 
-/** Which refusal creating a Merchant met. */
+/** Which refusal a Merchant operation met. */
 export const merchantReasonOf = narrowing(MERCHANT_REASONS);
 
 /**

@@ -2137,6 +2137,54 @@ describe("Merchants, Roles and the Store", () => {
     await auditAccessibility(page, "the Roles screen showing a refused creation");
   });
 
+  it("moves a Merchant onto another Role from the roster, and that is what lifts `role-in-use`", async () => {
+    // The state #202 was filed about: a Role somebody holds, which `DELETE /admin/roles/{id}`
+    // refuses. Two Roles that administer nobody, deliberately — see this describe's header.
+    const holder = await seam.merchantOnARole(["catalog:read"]);
+    const elsewhere = await createRole({
+      name: `somewhere else ${Date.now()}`,
+      permissions: ["order:read"],
+    });
+    const target = await seam.api<{ name: string }>(
+      "GET",
+      `/admin/roles/${elsewhere.id}`,
+    );
+
+    const page = await seam.signedIn("/merchants");
+    // Newest first (ADR-0064), so the colleague this case just made is on the first page.
+    const row = page.getByRole("row").filter({ hasText: holder.email });
+    await shows(row, "the colleague's row");
+
+    // The picker is labelled per row and the label is `sr-only`: a column heading is not
+    // programmatically the label of a control inside a cell, so this is the name a screen
+    // reader hears and the name this case asks by.
+    const picker = row.getByRole("combobox", { name: `Role for ${holder.email}` });
+    await shows(picker, "the Role picker in the colleague's row");
+    const move = row.getByRole("button", { name: "Move" });
+    // Dead while the picker still shows the Role they hold, with a real `disabled` because
+    // there is nothing to explain — `Pager`'s judgement, not `ActionButton`'s.
+    await expect(move.isDisabled()).resolves.toBe(true);
+
+    await picker.click();
+    await page.getByRole("option", { name: target.name }).click();
+    await expect.poll(() => move.isDisabled()).toBe(false);
+    await move.click();
+
+    // Read back off the refetched roster rather than patched in — there are no optimistic
+    // updates here (ADR-0063), so this is the list kobai answered after the move.
+    await shows(row.getByText("order:read"), "the Permissions of the Role they now hold");
+    await auditAccessibility(page, "the Merchants roster after a move");
+
+    // And the whole of #202: the deletion the case above is refused now goes through, because
+    // nobody holds that Role any more. Asked as "it is gone" rather than as "the call did not
+    // reject" — `seam.api` throws on any non-2xx, so the read is what says which of the two
+    // this was.
+    await seam.api("DELETE", `/admin/roles/${holder.roleId}`);
+    await expect(seam.api("GET", `/admin/roles/${holder.roleId}`)).rejects.toThrow(
+      /answered 404/,
+    );
+  });
+
   it("refuses to delete a Role Merchants hold, and stays in the dialog saying so", async () => {
     // A Role somebody actually holds, which is the state `role-in-use` exists for: kobai
     // refuses rather than cascading onto the Merchant or moving them somewhere it chose.
