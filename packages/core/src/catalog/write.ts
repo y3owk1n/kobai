@@ -8,6 +8,7 @@ import {
   fulfilmentStrategyNames,
 } from "../fulfilment/strategy.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
+import { text } from "../patch.ts";
 import { readStore } from "../store/read.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
 import {
@@ -43,6 +44,7 @@ import {
 /** Unvalidated: it arrives as a JSON body, and everything below narrows it in one place. */
 export type CreateProductInput = {
   readonly title?: unknown;
+  readonly description?: unknown;
   readonly metadata?: unknown;
   readonly variants?: unknown;
 };
@@ -116,6 +118,17 @@ export async function createProduct(
     };
   }
 
+  // Absent is `null` and not `""`: a Product created without copy has none, which is a
+  // different fact from one whose copy is an empty string. Anything else goes through the very
+  // narrowing `PATCH /admin/products/{id}` reads the same field with, so the same mistake is
+  // refused in the same words whichever route a Merchant made it on.
+  let description: string | null = null;
+  if (input.description !== undefined) {
+    const written = text("description")(input.description);
+    if (!written.ok) return written;
+    description = written.value;
+  }
+
   const metadata = asMetadata(input.metadata);
   if (metadata === undefined) {
     return { ok: false, reason: "invalid", detail: metadataDetail("`metadata`") };
@@ -139,7 +152,7 @@ export async function createProduct(
     productId = await db.transaction(async (tx) => {
       const [created] = await tx
         .insert(product)
-        .values({ title, metadata })
+        .values({ title, description, metadata })
         .returning({ id: product.id });
       if (!created) throw new Error("Inserting a Product returned no row.");
 

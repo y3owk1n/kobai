@@ -271,6 +271,22 @@ export const product = pgTable(
      * a cart and an order history reference it.
      */
     title: text("title").notNull(),
+    /**
+     * What a Merchant says about this Product, for a Shopper to read — or `null`, which is
+     * what a Product nobody has written copy for holds.
+     *
+     * **Nullable, and that is the whole of the migration this column cost.** A `NOT NULL`
+     * would have needed ADR-0038's three steps and a backfill, and there is no value a
+     * backfill could honestly write: an empty string says a Merchant wrote nothing down,
+     * which is a different fact from nobody having been asked. So absence is spelled the way
+     * the column already spells it.
+     *
+     * A column, for `title`'s reason one line up and no other: a Translation table is what
+     * ADR-0022 and `CONTEXT.md` say translatable text eventually wants, this slice has no
+     * Translation in it, and moving both columns at once is the migration that ADR pays for
+     * by having been written before a catalog referenced either.
+     */
+    description: text("description"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

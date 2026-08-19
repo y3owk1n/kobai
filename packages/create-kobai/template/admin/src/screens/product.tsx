@@ -13,6 +13,7 @@ import { FulfilmentStrategyField } from "@/components/fulfilment-strategy-field"
 import { LinkButton } from "@/components/link-button";
 import { Problem } from "@/components/problem";
 import { StorefrontPrice } from "@/components/storefront-price";
+import { TextareaField } from "@/components/textarea-field";
 import {
   Card,
   CardAction,
@@ -141,7 +142,11 @@ export function ProductScreen() {
           under it rather than a second first-level one. */}
       <h2 className="font-medium text-xl">{product.data.title}</h2>
 
-      <ProductIdentity id={id} title={product.data.title} />
+      <ProductIdentity
+        id={id}
+        title={product.data.title}
+        description={product.data.description}
+      />
 
       {product.data.variants.map((variant) => (
         <VariantCard key={variant.id} productId={id} variant={variant} />
@@ -153,13 +158,30 @@ export function ProductScreen() {
 }
 
 /**
- * The Product itself: what it is called, and the way to take it out of the catalog.
+ * The Product itself: what it is called, what it says for itself, and the way to take it out of
+ * the catalog.
  *
- * A `PATCH` naming only the title, because `metadata` is *replaced* rather than merged and a
- * form that sent an empty object would silently discard whatever a Project stashed there
- * (ADR-0062). Editing metadata is a screen nobody has asked for; sending it blank is data loss.
+ * A `PATCH` naming the title and the description and **not** `metadata`, because that bag is
+ * *replaced* rather than merged and a form that sent an empty object would silently discard
+ * whatever a Project stashed there (ADR-0062). Editing metadata is a screen nobody has asked
+ * for; sending it blank is data loss.
+ *
+ * **An empty description box is sent as `null`, which is what takes the copy back off.** The
+ * two are one state in kobai — a Product nobody has written about holds `null` and never `""`
+ * — so a box a Merchant emptied has to say so in the one spelling the route accepts, and a
+ * `""` would be refused rather than stored. It is also why the box shows `""` for a Product
+ * with no description: a `null` in a text field is React's uncontrolled-input warning, and
+ * what a Merchant sees either way is an empty box.
  */
-function ProductIdentity({ id, title }: { readonly id: string; readonly title: string }) {
+function ProductIdentity({
+  id,
+  title,
+  description,
+}: {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string | null;
+}) {
   const client = useKobaiClient();
   // Both, because deleting a Product invalidates more than the Product: the list behind it is
   // stale too, and that is the whole `[PRODUCT]` family rather than this one's key.
@@ -169,18 +191,23 @@ function ProductIdentity({ id, title }: { readonly id: string; readonly title: s
   const unavailable = useCannotWrite();
 
   const form = useForm({
-    resolver: zodResolver(RenameForm),
-    // Keyed by the value it was opened with, so a rename that landed leaves the field showing
+    resolver: zodResolver(ProductForm),
+    // Keyed by the values it was opened with, so a change that landed leaves the fields showing
     // what kobai now holds rather than what was typed.
-    values: { title },
+    values: { title, description: description ?? "" },
   });
 
-  const rename = useMutation({
-    mutationFn: async (values: { title: string }) =>
+  const save = useMutation({
+    mutationFn: async (values: { title: string; description: string }) =>
       orThrow(
         await client.PATCH("/admin/products/{id}", {
           params: { path: { id } },
-          body: { title: values.title },
+          body: {
+            title: values.title,
+            // Emptied means removed, and `null` is the only way to say it: an absent field
+            // means "leave it" on every `PATCH` in kobai (ADR-0062).
+            description: values.description.trim() === "" ? null : values.description,
+          },
         }),
       ),
     onSuccess: reread,
@@ -194,7 +221,8 @@ function ProductIdentity({ id, title }: { readonly id: string; readonly title: s
         </CardTitle>
         <CardDescription>
           A title is what a Product is called and not what identifies it, so two may share
-          one and correcting a typo rewrites nothing already sold (ADR-0009).
+          one and correcting a typo rewrites nothing already sold (ADR-0009). The
+          description is what a Shopper reads: a storefront is served it beside the title.
         </CardDescription>
         <CardAction>
           <ConfirmDelete
@@ -216,11 +244,11 @@ function ProductIdentity({ id, title }: { readonly id: string; readonly title: s
           />
         </CardAction>
       </CardHeader>
-      <form onSubmit={form.handleSubmit((values) => rename.mutate(values))}>
+      <form onSubmit={form.handleSubmit((values) => save.mutate(values))}>
         <CardContent className="grid gap-4">
           <Problem
-            problem={rename.isError ? whyNotChanged(rename.error) : null}
-            title="The Product was not renamed."
+            problem={save.isError ? whyNotChanged(save.error) : null}
+            title="The Product was not changed."
           />
           <FormField
             id="product-title"
@@ -228,15 +256,19 @@ function ProductIdentity({ id, title }: { readonly id: string; readonly title: s
             error={form.formState.errors.title}
             {...form.register("title")}
           />
+          <TextareaField
+            id="product-description"
+            label="Description"
+            rows={4}
+            error={form.formState.errors.description}
+            description="What this Product says for itself, in your own words. Optional: a Product with an empty box here has no description at all, and emptying it removes the one it had."
+            {...form.register("description")}
+          />
         </CardContent>
         <CardFooter className="mt-4">
-          <ActionButton
-            type="submit"
-            unavailable={unavailable}
-            disabled={rename.isPending}
-          >
-            {rename.isPending ? <Spinner /> : null}
-            Rename
+          <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>
+            {save.isPending ? <Spinner /> : null}
+            Save Product
           </ActionButton>
         </CardFooter>
       </form>
@@ -245,14 +277,16 @@ function ProductIdentity({ id, title }: { readonly id: string; readonly title: s
 }
 
 /**
- * The shape of a title, and only the shape (ADR-0063).
+ * The shape of what a Product says about itself, and only the shape (ADR-0063).
  *
- * `min(1)` is the field being required and not a claim about what kobai will accept. Whether a
- * title is any good is not a rule Core has, and one invented here would be one a Merchant
- * could not appeal.
+ * `min(1)` on the title is the field being required and not a claim about what kobai will
+ * accept. Whether a title is any good is not a rule Core has, and one invented here would be
+ * one a Merchant could not appeal — which is also why the description carries no length at
+ * either end: an empty box is a Product with no description, not a form error.
  */
-const RenameForm = z.object({
+const ProductForm = z.object({
   title: z.string().min(1, "A Product needs a title."),
+  description: z.string(),
 });
 
 /**

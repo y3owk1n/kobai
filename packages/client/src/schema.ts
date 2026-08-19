@@ -2907,6 +2907,8 @@ export interface components {
       /** Format: uuid */
       id: string;
       title: string;
+      /** @description What this Product says for itself, in a Merchant's own words, or `null` where none has been written. Never an empty string: a Product nobody has written copy for has no description rather than a blank one. */
+      description: string | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -2923,6 +2925,8 @@ export interface components {
     };
     CreateProductRequest: {
       title: string;
+      /** @description What this Product says for itself, in a Merchant's own words. Left out, the Product has no description — `null` rather than an empty string, because a Product nobody has written copy for is a different thing from one described as nothing at all. Correct it later with `PATCH /admin/products/{id}`. */
+      description?: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -2945,6 +2949,8 @@ export interface components {
     UpdateProductRequest: {
       /** @description A new title for this Product. Free to change: an Order's Line Items snapshot the title they were bought under (ADR-0009), so nothing already sold is rewritten. Two Products may share a title — it is what a Product is called, not what identifies it. */
       title?: string;
+      /** @description New copy for this Product, or `null` to take what is there back off — which is the state a Product created without one is already in. Absent leaves whatever is stored, exactly as every other field here does. */
+      description?: string | null;
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
@@ -3209,6 +3215,8 @@ export interface components {
       /** Format: uuid */
       id: string;
       title: string;
+      /** @description What this Product says for itself, in a Merchant's own words, or `null` where none has been written. Never an empty string: a Product nobody has written copy for has no description rather than a blank one. */
+      description: string | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;

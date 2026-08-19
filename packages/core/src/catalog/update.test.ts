@@ -283,6 +283,71 @@ describe("PATCH /admin/products/{id}", () => {
     expect(corrected.metadata).toEqual({ shelf: "B" });
   });
 
+  it("writes a description, corrects it, and takes it back off again", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const headers = { ...catalog.merchant.headers, "content-type": "application/json" };
+    const address = `/admin/products/${catalog.productId}`;
+
+    /** What this Product says about itself after one `PATCH` of the body given. */
+    const patch = async (body: Record<string, unknown>) => {
+      const response = await kobai?.request(address, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(response?.status, JSON.stringify(body)).toBe(200);
+      return (await response?.json()) as { title: string; description: string | null };
+    };
+
+    // A Product seeded without one holds none, which is the state `null` puts it back into
+    // below — so this is the assertion the last one is measured against.
+    const before = await patch({ title: "A poster" });
+    expect(before.description).toBeNull();
+
+    expect((await patch({ description: "Printed on 200gsm stock." })).description).toBe(
+      "Printed on 200gsm stock.",
+    );
+
+    // Absent means "leave it", exactly as it does for the title beside it: correcting one
+    // must not silently clear the other.
+    const renamed = await patch({ title: "A poster, second edition" });
+    expect(renamed.title).toBe("A poster, second edition");
+    expect(renamed.description).toBe("Printed on 200gsm stock.");
+
+    expect((await patch({ description: "Printed on 300gsm stock." })).description).toBe(
+      "Printed on 300gsm stock.",
+    );
+
+    // `null` is how copy is taken back off, and there is no other way: an absent field means
+    // "leave it" and an empty string is refused, so without this a description a Merchant
+    // wrote by mistake could be rewritten for ever and never removed.
+    expect((await patch({ description: null })).description).toBeNull();
+
+    // And through the route a Merchant reads it back with, rather than only through what the
+    // correction answered.
+    await expect(
+      (await kobai.request(address, { headers: catalog.merchant.headers })).json(),
+    ).resolves.toMatchObject({ description: null });
+  });
+
+  it("refuses an empty description rather than storing one", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    // `""` is not how a description is removed — `null` is. Storing it would leave the two
+    // spellings of "there is no copy here" both reachable, and a storefront branching on one
+    // of them would render an empty paragraph for the other.
+    const response = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ description: "   " }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
+  });
+
   it("refuses a body that names nothing it could change", async () => {
     kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);

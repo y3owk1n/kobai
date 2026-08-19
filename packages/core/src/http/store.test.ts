@@ -273,8 +273,9 @@ describe("resolving a price", () => {
 
 describe("browsing the catalog", () => {
   /**
-   * A Product a Shopper can be shown something about: a title, a `metadata` bag carrying the
-   * copy a Project attached through ADR-0004's escape hatch, and a counted, priced Variant.
+   * A Product a Shopper can be shown something about: a title, the description a Merchant
+   * wrote, a `metadata` bag carrying whatever else a Project attached through ADR-0004's
+   * escape hatch, and a counted, priced Variant.
    *
    * The count and the Price are the arrangement rather than the subject. They are here so that
    * the negative assertions below are about a response *omitting* something the Store actually
@@ -290,7 +291,10 @@ describe("browsing the catalog", () => {
     const described = await instance.request(`/admin/products/${catalog.productId}`, {
       method: "PATCH",
       headers: { ...catalog.merchant.headers, "content-type": "application/json" },
-      body: JSON.stringify({ metadata: { blurb: "Printed on heavy stock." } }),
+      body: JSON.stringify({
+        description: "Printed on 200gsm uncoated stock.",
+        metadata: { blurb: "Printed on heavy stock." },
+      }),
     });
     expect(described.status).toBe(200);
 
@@ -323,6 +327,9 @@ describe("browsing the catalog", () => {
         {
           id: catalog.productId,
           title: "A poster",
+          // Published on purpose: it is copy a Merchant wrote *for a Shopper*, so a
+          // storefront that could not read it would be missing the thing it was written for.
+          description: "Printed on 200gsm uncoated stock.",
           metadata: { blurb: "Printed on heavy stock." },
         },
       ],
@@ -341,6 +348,7 @@ describe("browsing the catalog", () => {
     await expect(response.json()).resolves.toEqual({
       id: catalog.productId,
       title: "A poster",
+      description: "Printed on 200gsm uncoated stock.",
       metadata: { blurb: "Printed on heavy stock." },
       variants: [
         {
