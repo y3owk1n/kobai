@@ -500,8 +500,11 @@ function whyNotCreated(thrown: unknown): string {
     case "price-not-found":
     case "last-variant":
     case "stock-is-reserved":
-      // Not reachable from this form as it stands. Reported as kobai said it rather than as a
-      // sentence written here for a case nobody has seen.
+    case "variant-options-mismatch":
+      // Not reachable from this form as it stands — it declares no options, so the Variant it
+      // creates answers none. Options are declared on the Product screen, where a Variant is
+      // also where its values are given. Reported as kobai said it rather than as a sentence
+      // written here for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:

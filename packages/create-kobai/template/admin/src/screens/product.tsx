@@ -1,9 +1,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { Price, ProductStatus, Variant } from "@kobai/client";
+import type {
+  Price,
+  ProductOption,
+  ProductStatus,
+  Variant,
+  VariantOptionValue,
+} from "@kobai/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackageXIcon } from "lucide-react";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
@@ -19,6 +25,7 @@ import {
 } from "@/components/product-status-badge";
 import { StorefrontPrice } from "@/components/storefront-price";
 import { TextareaField } from "@/components/textarea-field";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -155,11 +162,18 @@ export function ProductScreen() {
         status={product.data.status}
       />
 
+      <ProductOptions id={id} options={product.data.options} />
+
       {product.data.variants.map((variant) => (
-        <VariantCard key={variant.id} productId={id} variant={variant} />
+        <VariantCard
+          key={variant.id}
+          productId={id}
+          variant={variant}
+          options={product.data.options}
+        />
       ))}
 
-      <NewVariant productId={id} />
+      <NewVariant productId={id} options={product.data.options} />
     </div>
   );
 }
@@ -347,6 +361,245 @@ const ProductForm = z.object({
 });
 
 /**
+ * The options this Product is chosen by — Size, Colour — and the order they are offered in.
+ *
+ * **One form over the whole list, because kobai takes the whole list.** `PATCH
+ * /admin/products/{id}` reads `options` as what the Product's options should now *be*: an entry
+ * carrying an `id` is the option that already has it, one without is new, and one this Product
+ * has that the list does not name is removed with every Variant's value for it. So renaming,
+ * reordering, adding and removing are the same request, and this screen is a list a Merchant
+ * edits rather than four controls.
+ *
+ * **Adding one leaves every Variant below it unanswered, and that is not hidden.** kobai does
+ * not refuse the addition — refusing it would be a dead end, since the only way out would be to
+ * rebuild the Product — so the Variant cards are where each one is given its value, and each
+ * says so with an empty required field. Nothing here predicts that: the list is saved and the
+ * Variants re-read, exactly as every other write on this screen does (ADR-0063).
+ *
+ * **The order is the list's own order**, so there is no position to type and nothing to keep in
+ * step: Move up and Move down rearrange the rows, and saving is what makes that the Product's
+ * order.
+ */
+function ProductOptions({
+  id,
+  options,
+}: {
+  readonly id: string;
+  readonly options: readonly ProductOption[];
+}) {
+  const client = useKobaiClient();
+  const reread = useRereadProduct(id);
+  const unavailable = useCannotWrite();
+
+  const form = useForm({
+    resolver: zodResolver(OptionsForm),
+    // Keyed by what kobai holds, so a save that landed leaves the rows showing the Product's
+    // options rather than what was typed — including the identifiers kobai assigned to the ones
+    // that were new a moment ago.
+    values: { options: options.map((one) => ({ optionId: one.id, name: one.name })) },
+  });
+  // `optionId` rather than `id`, deliberately: `useFieldArray` writes a key of its own onto each
+  // field object and that key is called `id`, so an option's real identifier under that name
+  // would be the one thing this list cannot afford to lose.
+  const rows = useFieldArray({ control: form.control, name: "options" });
+
+  const save = useMutation({
+    mutationFn: async (values: OptionsValues) =>
+      orThrow(
+        await client.PATCH("/admin/products/{id}", {
+          params: { path: { id } },
+          body: {
+            options: values.options.map((one) =>
+              // Left out entirely rather than sent as `undefined`, which is what tells kobai
+              // this is a new option rather than one it should already know.
+              one.optionId === undefined
+                ? { name: one.name }
+                : { id: one.optionId, name: one.name },
+            ),
+          },
+        }),
+      ),
+    onSuccess: reread,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h3>Options</h3>
+        </CardTitle>
+        <CardDescription>
+          What a Shopper chooses this Product by, in the order a storefront should offer
+          them — Size before Colour is your decision, not the storefront's. A Product sold
+          as one thing needs none. Adding one leaves every Variant below without a value
+          for it until you give it one.
+        </CardDescription>
+      </CardHeader>
+      <form onSubmit={form.handleSubmit((values) => save.mutate(values))}>
+        <CardContent className="grid gap-4">
+          <Problem
+            problem={save.isError ? whyNotChanged(save.error) : null}
+            title="The options were not changed."
+          />
+
+          {rows.fields.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              This Product declares no options, so it is sold as one thing and its
+              Variants say nothing about size or colour.
+            </p>
+          ) : null}
+
+          {rows.fields.map((row, index) => (
+            <div key={row.id} className="grid items-end gap-2 sm:grid-cols-[1fr_auto]">
+              <FormField
+                id={`product-option-${row.id}`}
+                label={`Option ${index + 1}`}
+                error={form.formState.errors.options?.[index]?.name}
+                {...form.register(`options.${index}.name`)}
+              />
+              <div className="flex gap-2">
+                {/* Plain buttons rather than `ActionButton`s: these rearrange the form and
+                    call kobai nothing, so there is no permission to explain — the one
+                    control that writes is the submit below. `disabled` rather than
+                    `aria-disabled` for the two that run out of list, on `Pager`'s reason:
+                    there is no explanation to host on one.
+
+                    Each says which row it is for in an `sr-only` span rather than in an
+                    `aria-label`, because four buttons all announcing "Up" tell a screen
+                    reader nothing about which — and a label that *replaced* the visible
+                    word would leave the two names disagreeing, which is what a Merchant
+                    driving this by voice would trip over. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={index === 0}
+                  onClick={() => rows.move(index, index - 1)}
+                >
+                  Up<span className="sr-only"> — option {index + 1}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={index === rows.fields.length - 1}
+                  onClick={() => rows.move(index, index + 1)}
+                >
+                  Down<span className="sr-only"> — option {index + 1}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => rows.remove(index)}
+                >
+                  Remove<span className="sr-only"> — option {index + 1}</span>
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => rows.append({ name: "" })}
+            >
+              Add an option
+            </Button>
+          </div>
+        </CardContent>
+        <CardFooter className="mt-4">
+          <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>
+            {save.isPending ? <Spinner /> : null}
+            Save options
+          </ActionButton>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * The shape of a Product's option list, and only the shape (ADR-0063).
+ *
+ * `min(1)` on the name is the field being required. Whether two options may share a name, and
+ * whether an identifier names an option of this Product, are kobai's rules and arrive as
+ * refusals — restated here they would be a second, stale copy a Merchant could not appeal.
+ */
+const OptionsForm = z.object({
+  options: z.array(
+    z.object({
+      optionId: z.string().optional(),
+      name: z.string().min(1, "An option needs a name — Size, Colour."),
+    }),
+  ),
+});
+
+type OptionsValues = z.output<typeof OptionsForm>;
+
+/**
+ * What a Variant's option fields start out holding — one entry per option the **Product**
+ * declares, filled in from whatever that Variant already answers.
+ *
+ * Built from the Product's list rather than from the Variant's own values, which is what makes
+ * an option declared since this Variant was written show up as an empty required field rather
+ * than not at all. That is the repair kobai points at, rendered. A Variant being *created*
+ * answers nothing yet and passes `[]`, which is the same walk with every value empty.
+ */
+function optionValuesFor(
+  options: readonly ProductOption[],
+  answered: readonly VariantOptionValue[],
+): { name: string; value: string }[] {
+  return options.map((one) => ({
+    name: one.name,
+    value: answered.find((held) => held.name === one.name)?.value ?? "",
+  }));
+}
+
+/**
+ * The fields a Variant answers its Product's options with — one text box per declared option.
+ *
+ * One component because there are two Variant forms on this screen and they render this
+ * identically: correcting a Variant, and adding one. `listbox-field.tsx`'s lesson is the reason
+ * it is a component on the second rather than on the third — the third is what gets to
+ * reintroduce every defect the first two had fixed by hand (#245).
+ *
+ * **It takes the registration and the error for a row rather than the form**, which is
+ * `components/form-field.tsx`'s bargain one level up: the two forms here have different
+ * react-hook-form generics — and a zod `transform` makes a third shape wherever one appears — so
+ * a component holding the form object would have to be generic over all of it to render two text
+ * boxes. `errorFor` is a lookup rather than the array for the same reason: what
+ * `formState.errors` holds for an array field is react-hook-form's own merged type, and naming
+ * it here would be this component knowing the library rather than the field.
+ *
+ * The `id` prefix is the caller's because an `id` is unique to the **document** rather than to
+ * the form it is in, and two Variant cards would otherwise point both labels at whichever input
+ * rendered last.
+ */
+function VariantOptionFields({
+  idPrefix,
+  options,
+  register,
+  errorFor,
+}: {
+  readonly idPrefix: string;
+  readonly options: readonly ProductOption[];
+  readonly register: (name: `options.${number}.value`) => object;
+  readonly errorFor: (index: number) => { readonly message?: string } | undefined;
+}) {
+  return options.map((option, index) => (
+    <FormField
+      key={option.id}
+      id={`${idPrefix}-${option.id}`}
+      label={option.name}
+      error={errorFor(index)}
+      {...register(`options.${index}.value`)}
+    />
+  ));
+}
+
+/**
  * One Variant: what it is, what is counted, what it costs, and what it previews at.
  *
  * A Variant is the sellable thing (ADR-0008), so every operation that is not about the Product
@@ -356,9 +609,12 @@ const ProductForm = z.object({
 function VariantCard({
   productId,
   variant,
+  options,
 }: {
   readonly productId: string;
   readonly variant: Variant;
+  /** The **Product's** declared options, which is what this Variant has to answer. */
+  readonly options: readonly ProductOption[];
 }) {
   const client = useKobaiClient();
   const reread = useRereadProduct(productId);
@@ -398,7 +654,7 @@ function VariantCard({
         </CardAction>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <VariantIdentity productId={productId} variant={variant} />
+        <VariantIdentity productId={productId} variant={variant} options={options} />
 
         <Separator />
 
@@ -436,9 +692,11 @@ function VariantCard({
 function VariantIdentity({
   productId,
   variant,
+  options,
 }: {
   readonly productId: string;
   readonly variant: Variant;
+  readonly options: readonly ProductOption[];
 }) {
   const client = useKobaiClient();
   const reread = useRereadProduct(productId);
@@ -446,17 +704,30 @@ function VariantIdentity({
 
   const form = useForm({
     resolver: zodResolver(IdentityForm),
-    // `values` rather than `defaultValues`, so a correction that landed leaves both fields
-    // showing what kobai now holds rather than what was typed at it.
-    values: { sku: variant.sku, strategy: variant.fulfilment.strategy },
+    // `values` rather than `defaultValues`, so a correction that landed leaves every field
+    // showing what kobai now holds rather than what was typed at it — and so that an option
+    // declared on the Product a moment ago appears here as a field to fill in.
+    values: {
+      sku: variant.sku,
+      strategy: variant.fulfilment.strategy,
+      options: optionValuesFor(options, variant.options),
+    },
   });
 
   const correct = useMutation({
-    mutationFn: async (values: { sku: string; strategy: string }) =>
+    mutationFn: async (values: IdentityValues) =>
       orThrow(
         await client.PATCH("/admin/variants/{id}", {
           params: { path: { id: variant.id } },
-          body: { sku: values.sku, fulfilment: { strategy: values.strategy } },
+          body: {
+            sku: values.sku,
+            fulfilment: { strategy: values.strategy },
+            // Always sent, because kobai **replaces** what is stored with what is named —
+            // exactly as it does for `metadata` — so a form that sent some of them would take
+            // the rest away. For a Product declaring no options this is `[]`, which is what
+            // such a Variant already holds.
+            options: values.options,
+          },
         }),
       ),
     onSuccess: reread,
@@ -484,6 +755,12 @@ function VariantIdentity({
             control={form.control}
             name="strategy"
             description="How this Variant is delivered. Swapping it is how a poster becomes a download; whatever stock has been counted stays counted (ADR-0062)."
+          />
+          <VariantOptionFields
+            idPrefix={`variant-option-${variant.id}`}
+            options={options}
+            register={form.register}
+            errorFor={(index) => form.formState.errors.options?.[index]?.value}
           />
         </div>
 
@@ -513,7 +790,21 @@ function VariantIdentity({
 const IdentityForm = z.object({
   sku: z.string().min(1, "A Variant is identified by its SKU, so it needs one."),
   strategy: z.string().min(1, "A Variant is delivered by some Fulfilment Strategy."),
+  /**
+   * One entry per option the **Product** declares, which is what kobai requires of a Variant:
+   * every declared option answered, and no option that is not declared. `min(1)` is the field
+   * being required — an option added on the Product since this Variant was written arrives here
+   * empty, and this is what says so before the round trip that would refuse it.
+   */
+  options: z.array(
+    z.object({
+      name: z.string(),
+      value: z.string().min(1, "This Variant needs a value for every option."),
+    }),
+  ),
 });
+
+type IdentityValues = z.output<typeof IdentityForm>;
 
 /**
  * Every Price on this Variant, the way to add one, and the way to take one away.
@@ -911,22 +1202,38 @@ type CountValues = z.output<typeof CountForm>;
  * else to hang it. It carries no Price: a Price is a row on the Variant, added after it exists,
  * which is the same two steps creating a Product takes.
  */
-function NewVariant({ productId }: { readonly productId: string }) {
+function NewVariant({
+  productId,
+  options,
+}: {
+  readonly productId: string;
+  readonly options: readonly ProductOption[];
+}) {
   const client = useKobaiClient();
   const reread = useRereadProduct(productId);
   const unavailable = useCannotWrite();
 
   const form = useForm({
     resolver: zodResolver(IdentityForm),
-    defaultValues: { sku: "", strategy: DEFAULT_STRATEGY },
+    // `values` rather than `defaultValues`, so declaring an option on the Product puts a field
+    // for it here too — a new Variant has to answer every one of them or kobai refuses it.
+    values: {
+      sku: "",
+      strategy: DEFAULT_STRATEGY,
+      options: optionValuesFor(options, []),
+    },
   });
 
   const add = useMutation({
-    mutationFn: async (values: { sku: string; strategy: string }) =>
+    mutationFn: async (values: IdentityValues) =>
       orThrow(
         await client.POST("/admin/products/{id}/variants", {
           params: { path: { id: productId } },
-          body: { sku: values.sku, fulfilment: { strategy: values.strategy } },
+          body: {
+            sku: values.sku,
+            fulfilment: { strategy: values.strategy },
+            options: values.options,
+          },
         }),
       ),
     onSuccess: () => form.reset(),
@@ -961,6 +1268,12 @@ function NewVariant({ productId }: { readonly productId: string }) {
             id="new-variant-strategy"
             control={form.control}
             name="strategy"
+          />
+          <VariantOptionFields
+            idPrefix="new-variant-option"
+            options={options}
+            register={form.register}
+            errorFor={(index) => form.formState.errors.options?.[index]?.value}
           />
         </CardContent>
         <CardFooter className="mt-4">
@@ -1059,6 +1372,7 @@ function isNoSuchProduct(thrown: unknown): boolean {
     case "stock-is-reserved":
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
+    case "variant-options-mismatch":
       // Not reachable from a read of one Product as it stands, so kobai's own prose is shown
       // rather than a sentence written here for a case nobody has seen.
       return false;
@@ -1108,9 +1422,10 @@ function whyNotDeleted(thrown: unknown, fallback: string): string {
     case "handle-taken":
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
-      // Not reachable from a delete, which sends no body and names no SKU, handle, currency or
-      // Strategy. Reported as kobai said it rather than as a sentence written for a case
-      // nobody has seen.
+    case "variant-options-mismatch":
+      // Not reachable from a delete, which sends no body and names no SKU, handle, currency,
+      // Strategy or option value. Reported as kobai said it rather than as a sentence written
+      // for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:
@@ -1149,6 +1464,14 @@ function whyNotChanged(thrown: unknown): string {
       // kobai's prose lists the ones it *does* have, which is exactly what is wanted here and
       // is a set this browser could be holding a stale copy of.
       return problemOf(thrown, fallback);
+
+    case "variant-options-mismatch":
+      // The one refusal on this screen a Merchant reaches by doing two things in the right
+      // order and the second one late: an option was declared on the Product, and this Variant
+      // is being saved without a value for it — or with a value for one that has since gone.
+      // kobai's prose names the options, which this form knows and the message may as well not
+      // repeat; what it adds is where the answer is given.
+      return "This Variant must say what it is for every option this Product declares, and for no other. Its Product's options may have changed since this page was opened — reload it, then fill in the value for each.";
 
     case "product-not-found":
     case "variant-not-found":

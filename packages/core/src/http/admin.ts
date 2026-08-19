@@ -605,7 +605,7 @@ const createProductRoute = createRoute({
   path: "/products",
   summary: "Create a Product",
   description:
-    "A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.",
+    "A Product, the options it is chosen by and the Variants that make it sellable, created together in one transaction. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce — and `options` is declared here for the same reason, so a Variant naming an option its Product has not declared is not one either. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -624,7 +624,7 @@ const createProductRoute = createRoute({
       contract.CatalogRefusal,
     ),
     422: json(
-      "A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
+      "A Variant names a Fulfilment Strategy this deployment has not wired — Core ships `physical` and `digital`, a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it — or a Variant's `options` are not exactly the ones this body declares: `variant-options-mismatch`, naming what it left unanswered and what it named that was never declared.",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -686,7 +686,7 @@ const updateProductRoute = createRoute({
   path: "/products/{id}",
   summary: "Correct a Product",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -727,7 +727,7 @@ const addVariantRoute = createRoute({
   path: "/products/{id}/variants",
   summary: "Add a Variant",
   description:
-    "A second size, colour or format for a Product a Merchant already has. It answers with the new Variant, which starts with no Price and no stock count — `POST /admin/variants/{id}/prices` sets the first, and `PUT /admin/variants/{id}/inventory` counts it. Every Variant already on the Product is untouched, which is the point: recreating the Product to add one would discard their Prices and their counts.",
+    "A second size, colour or format for a Product a Merchant already has. Its `options` must answer every option that Product declares and only those, exactly as a Variant of a create must. It answers with the new Variant, which starts with no Price and no stock count — `POST /admin/variants/{id}/prices` sets the first, and `PUT /admin/variants/{id}/inventory` counts it. Every Variant already on the Product is untouched, which is the point: recreating the Product to add one would discard their Prices and their counts.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -748,7 +748,7 @@ const addVariantRoute = createRoute({
       contract.CatalogRefusal,
     ),
     422: json(
-      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
+      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Product declares (`variant-options-mismatch`).",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -839,7 +839,7 @@ const updateVariantRoute = createRoute({
   path: "/variants/{id}",
   summary: "Correct a Variant",
   description:
-    "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
+    "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. **`options` is where this Variant says what it is** — its value for each option its Product declares — and it **replaces** every value stored rather than merging into them, so it must answer every declared option and only those. That is also how a Variant is given a value for an option declared on the Product since this Variant was written. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -860,7 +860,7 @@ const updateVariantRoute = createRoute({
       contract.CatalogRefusal,
     ),
     422: json(
-      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it.",
+      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Variant's Product declares (`variant-options-mismatch`).",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1497,6 +1497,13 @@ const PRODUCT_STATUS = {
   "handle-taken": 409,
   "sku-taken": 409,
   "unknown-fulfilment-strategy": 422,
+  // 422 and not 400, and it is the same word wherever a Variant is written. The body is well
+  // formed — every field is the type it should be — and what refuses it is what the *Product*
+  // declares: a value for an option it does not have, or none for one it does. That is
+  // `unknown-fulfilment-strategy`'s distinction one column along, and it is deliberately the
+  // same status at a create, where the options are declared in the same body, because it is one
+  // fact about a Variant and its Product either way.
+  "variant-options-mismatch": 422,
 } as const satisfies Record<
   Exclude<ProductCreation, { ok: true }>["reason"],
   400 | 409 | 422
@@ -1544,6 +1551,9 @@ const VARIANT_CREATION_STATUS = {
   "product-not-found": 404,
   "sku-taken": 409,
   "unknown-fulfilment-strategy": 422,
+  // 422 for the same reason and with the same word, wherever a Variant is written — see
+  // `PRODUCT_STATUS` above.
+  "variant-options-mismatch": 422,
 } as const satisfies Record<
   Exclude<VariantCreation, { ok: true }>["reason"],
   400 | 404 | 409 | 422
@@ -1595,6 +1605,9 @@ const VARIANT_UPDATE_STATUS = {
   "variant-not-found": 404,
   "sku-taken": 409,
   "unknown-fulfilment-strategy": 422,
+  // 422 for the same reason and with the same word, wherever a Variant is written — see
+  // `PRODUCT_STATUS` above.
+  "variant-options-mismatch": 422,
 } as const satisfies Record<
   Exclude<VariantUpdate, { ok: true }>["reason"],
   400 | 404 | 409 | 422

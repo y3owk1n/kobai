@@ -11,6 +11,12 @@ import {
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
+import {
+  type ProductOption,
+  readProductOptions,
+  readVariantOptionValues,
+  type VariantOptionValue,
+} from "./options.ts";
 import type { ProductStatus } from "./status.ts";
 
 /**
@@ -60,6 +66,17 @@ export type Variant = {
   readonly sku: string;
   /** The Fulfilment Strategy this Variant points at — `physical` unless it was created saying. */
   readonly fulfilment: VariantFulfilment;
+  /**
+   * What this Variant is, in its Product's own words — `Size` is `M`, `Colour` is `Red` —
+   * **in the order its Product declared those options**, so a picker is drawn from the pair.
+   *
+   * Empty for a Variant of a Product that declares no options, which is the ordinary case
+   * rather than the exception. A Variant that leaves one of its Product's options unanswered
+   * is refused by every route that writes one; a Product that grew an option after its
+   * Variants were written is the one way to arrive at a short list here, and correcting each
+   * Variant is what ends it (`catalog/options.ts`).
+   */
+  readonly options: readonly VariantOptionValue[];
   readonly metadata: Record<string, unknown>;
   readonly prices: readonly Price[];
   /**
@@ -108,7 +125,18 @@ export type Product = {
 };
 
 /** A Product opened — its Variants and their Prices, which is the whole sellable picture. */
-export type ProductDetail = Product & { readonly variants: readonly Variant[] };
+export type ProductDetail = Product & {
+  /**
+   * The options a Shopper chooses this Product by — Size, Colour — **in the order the Merchant
+   * put them in**, because Size before Colour is a decision a storefront should not have to
+   * invent (story 11).
+   *
+   * On the detail shape and not on {@link Product}, deliberately: a list is not a detail view,
+   * and the options are only useful beside the Variants that answer them.
+   */
+  readonly options: readonly ProductOption[];
+  readonly variants: readonly Variant[];
+};
 
 /**
  * What the Product list was asked for: a page, and the one status it may be narrowed to.
@@ -209,7 +237,11 @@ export async function readProduct(
     .limit(1);
   if (!row) return undefined;
 
-  return { ...row, variants: await readVariants(db, row.id) };
+  return {
+    ...row,
+    options: await readProductOptions(db, row.id),
+    variants: await readVariants(db, row.id),
+  };
 }
 
 /**
@@ -272,9 +304,17 @@ export async function readVariants(db: Queryable, productId: string): Promise<Va
     variants.map((row) => row.id),
   );
 
+  // A fourth, and the same reason a third time: a Variant of a Product that declares no options
+  // has no row here at all, and that is the ordinary Product rather than the exception.
+  const chosenBy = await readVariantOptionValues(
+    db,
+    variants.map((row) => row.id),
+  );
+
   return variants.map(({ fulfilmentStrategy, ...row }) => ({
     ...row,
     fulfilment: { strategy: fulfilmentStrategy },
+    options: chosenBy.get(row.id) ?? [],
     prices: byVariant.get(row.id) ?? [],
     inventory: stock.get(row.id) ?? null,
   }));

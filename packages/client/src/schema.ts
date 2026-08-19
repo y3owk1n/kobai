@@ -805,7 +805,7 @@ export interface paths {
     };
     /**
      * Create a Product
-     * @description A Product and its Variants are created together. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.
+     * @description A Product, the options it is chosen by and the Variants that make it sellable, created together in one transaction. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce — and `options` is declared here for the same reason, so a Variant naming an option its Product has not declared is not one either. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.
      */
     post: {
       requestBody: {
@@ -844,7 +844,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description A Variant names a Fulfilment Strategy this deployment has not wired. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it. */
+        /** @description A Variant names a Fulfilment Strategy this deployment has not wired — Core ships `physical` and `digital`, a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it — or a Variant's `options` are not exactly the ones this body declares: `variant-options-mismatch`, naming what it left unanswered and what it named that was never declared. */
         422: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -972,7 +972,7 @@ export interface paths {
     };
     /**
      * Correct a Product
-     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`.
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written.
      */
     patch: {
       parameters: {
@@ -1041,7 +1041,7 @@ export interface paths {
   "/admin/products/{id}/variants": {
     /**
      * Add a Variant
-     * @description A second size, colour or format for a Product a Merchant already has. It answers with the new Variant, which starts with no Price and no stock count — `POST /admin/variants/{id}/prices` sets the first, and `PUT /admin/variants/{id}/inventory` counts it. Every Variant already on the Product is untouched, which is the point: recreating the Product to add one would discard their Prices and their counts.
+     * @description A second size, colour or format for a Product a Merchant already has. Its `options` must answer every option that Product declares and only those, exactly as a Variant of a create must. It answers with the new Variant, which starts with no Price and no stock count — `POST /admin/variants/{id}/prices` sets the first, and `PUT /admin/variants/{id}/inventory` counts it. Every Variant already on the Product is untouched, which is the point: recreating the Product to add one would discard their Prices and their counts.
      */
     post: {
       parameters: {
@@ -1092,7 +1092,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it. */
+        /** @description Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Product declares (`variant-options-mismatch`). */
         422: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -1170,7 +1170,7 @@ export interface paths {
     };
     /**
      * Correct a Variant
-     * @description Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.
+     * @description Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. **`options` is where this Variant says what it is** — its value for each option its Product declares — and it **replaces** every value stored rather than merging into them, so it must answer every declared option and only those. That is also how a Variant is given a value for an option declared on the Product since this Variant was written. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.
      */
     patch: {
       parameters: {
@@ -1221,7 +1221,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name. Core ships `physical` and `digital`; a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it. */
+        /** @description Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Variant's Product declares (`variant-options-mismatch`). */
         422: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -1854,7 +1854,7 @@ export interface paths {
   "/store/products/{idOrHandle}": {
     /**
      * Read a Product
-     * @description One Product with its Variants, so a product page is one request rather than one per Variant. **Addressed by its identifier or by its handle** — a UUID is read as the first and anything else as the second, so `/store/products/blue-poster` is the request behind a readable storefront URL. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.
+     * @description One Product with its Variants, so a product page is one request rather than one per Variant. **Addressed by its identifier or by its handle** — a UUID is read as the first and anything else as the second, so `/store/products/blue-poster` is the request behind a readable storefront URL. **This is everything a picker needs**: the Product's `options` in the order the Merchant put them in, and each Variant's value for each — so a chosen combination maps to a SKU in the storefront, and a combination no Variant answers is simply absent rather than an error. There is no route that takes a combination and answers a Variant, deliberately. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.
      */
     get: {
       parameters: {
@@ -2870,15 +2870,25 @@ export interface components {
       name: string;
     };
     ProductDetail: components["schemas"]["Product"] & {
+      /** @description The options a Shopper chooses this Product by — Size, Colour — **in the order the Merchant put them in**, because Size before Colour is a decision a storefront should not have to invent. Empty for a Product sold as one thing. On the detail shape and not on the list, which is not a detail view. */
+      options: components["schemas"]["ProductOption"][];
       variants: components["schemas"]["Variant"][];
     };
     /** @enum {string} */
     ProductStatus: "draft" | "published" | "archived";
+    ProductOption: {
+      /** Format: uuid */
+      id: string;
+      /** @description What this option is called — `Size`, `Colour`. Unique within its Product, because it is what a Variant's values are keyed by. */
+      name: string;
+    };
     Variant: {
       /** Format: uuid */
       id: string;
       sku: string;
       fulfilment: components["schemas"]["VariantFulfilment"];
+      /** @description This Variant's value for each option its Product declares, **in the Product's own option order** — so a storefront zips the two lists to map a chosen combination to a SKU. Empty for a Product that declares no options, which is the ordinary Product. Short of the Product's list only where an option was declared after this Variant was written; correcting the Variant is what ends that. */
+      options: components["schemas"]["VariantOptionValue"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -2890,6 +2900,12 @@ export interface components {
     VariantFulfilment: {
       /** @description The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. What that Strategy answers about shipping, stock and Lead Time is recorded on an Order's Fulfilments, where it is a snapshot rather than a live decision. */
       strategy: string;
+    };
+    VariantOptionValue: {
+      /** @description The option this answers, as its Product names it — `Size`. */
+      name: string;
+      /** @description What this Variant is, for that option — `M`. Never empty, and never normalised: `M` and `Medium` are two different values because a Merchant said two different things. */
+      value: string;
     };
     Price: {
       /** Format: uuid */
@@ -2934,7 +2950,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy";
+      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch";
     };
     CreateProductRequest: {
       title: string;
@@ -2942,15 +2958,23 @@ export interface components {
       description?: string;
       /** @description The address this Product is to be known by — lower-case letters and digits in groups separated by single hyphens, e.g. "blue-poster". **Left out, kobai proposes one from the title**, so a Merchant need not invent one for every Product. Either way a handle another Product already answers to is refused at 409 rather than quietly suffixed, and one that reads as a UUID is refused at 400: `GET /store/products/{idOrHandle}` resolves a UUID as an identifier, so a Product whose handle were one could not be reached by it. */
       handle?: string;
+      /** @description The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values. */
+      options?: components["schemas"]["ProductOptionDeclaration"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
       };
       variants: components["schemas"]["CreateVariantRequest"][];
     };
+    ProductOptionDeclaration: {
+      /** @description What this option is called — `Size`. Named twice in one list is refused. */
+      name: string;
+    };
     CreateVariantRequest: {
       sku: string;
       fulfilment?: components["schemas"]["VariantFulfilment"];
+      /** @description This Variant's value for each option its Product declares, by the option's name. It must answer **every** one and **only** those: a value for an option the Product never declared, or a declared option left unanswered, is refused at 422 with `variant-options-mismatch`. Left out entirely is the same as an empty list, which is what a Product declaring no options wants. */
+      options?: components["schemas"]["VariantOptionValue"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -2969,15 +2993,28 @@ export interface components {
       /** @description A new address for this Product — the storefront URL it is reached at moves with it, so anything already linking to the old one stops resolving. There is no `null` here as there is for the description: a Product with no address is not a state that exists. One another Product answers to is refused at 409. */
       handle?: string;
       status?: components["schemas"]["ProductStatus"];
+      /** @description **The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for. */
+      options?: components["schemas"]["ProductOptionCorrection"][];
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
       };
     };
+    ProductOptionCorrection: {
+      /**
+       * Format: uuid
+       * @description The option this entry **is**, as a read of this Product reported it. Left out, this is a new option — and every Variant already on the Product then leaves it unanswered until each one is corrected.
+       */
+      id?: string;
+      /** @description What it should now be called. */
+      name: string;
+    };
     UpdateVariantRequest: {
       /** @description A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused. */
       sku?: string;
       fulfilment?: components["schemas"]["VariantFulfilment"];
+      /** @description This Variant's value for each option its Product declares, **replacing** every value it holds rather than merging into them — the rule `metadata` follows, for the reason it follows it. Named, it must answer every declared option and only those, or it is refused at 422 with `variant-options-mismatch`. Absent leaves what is stored, so a Variant left unanswered by an option added since is still free to have its SKU corrected. */
+      options?: components["schemas"]["VariantOptionValue"][];
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
@@ -3248,13 +3285,21 @@ export interface components {
       reason: "api-key-missing" | "api-key-malformed" | "api-key-unknown" | "api-key-revoked";
     };
     StoreProductDetail: components["schemas"]["StoreProduct"] & {
+      /** @description The options a Shopper chooses this Product by — Size, Colour — **in the order the Merchant put them in**, which is the order a picker should offer them in. Together with each Variant's `options` this is everything a storefront needs to map a chosen combination to a SKU **client-side**: a combination no Variant answers is simply absent, which is what makes it unavailable rather than an error. There is deliberately no route that takes a combination and answers a Variant. */
+      options: components["schemas"]["StoreProductOption"][];
       variants: components["schemas"]["StoreVariant"][];
+    };
+    StoreProductOption: {
+      /** @description What this option is called — `Size`, `Colour`. Unique within the Product, and what each Variant's values are keyed by. */
+      name: string;
     };
     StoreVariant: {
       /** Format: uuid */
       id: string;
       sku: string;
       fulfilment: components["schemas"]["StoreVariantFulfilment"];
+      /** @description What this Variant is, for each option its Product declares, **in the Product's option order** — the storefront's half of the pair that makes a picker possible. */
+      options: components["schemas"]["StoreVariantOptionValue"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -3263,6 +3308,12 @@ export interface components {
     StoreVariantFulfilment: {
       /** @description The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. A storefront reads it to know that a download is a download; what the Strategy *answers* about shipping, stock and Lead Time is not published here, and is snapshotted onto an Order's Fulfilments at Capture. */
       strategy: string;
+    };
+    StoreVariantOptionValue: {
+      /** @description The option this answers, as its Product names it — `Size`. */
+      name: string;
+      /** @description What this Variant is, for that option — `M`. */
+      value: string;
     };
     StoreCatalogRefusal: {
       /** @description What went wrong, in prose. */

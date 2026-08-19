@@ -95,11 +95,16 @@ export function notUsable(detail: string): NotUsable {
  * however the body named it — the route's schema has already stripped it, and its arriving here
  * is exactly the empty body {@link changesNothing} is for.
  *
- * **`whenNothing` is optional because two callers cannot use it.** `updateStore` must wait: a
- * body naming only the currency it already prices in has named something, and whether *that*
- * changes nothing is a question about the row. `readRoleInput` is shared with `createRole`,
- * where an empty result is a missing `name` rather than a no-op. Both ask afterwards, and both
- * answer with {@link changesNothing} like everyone else.
+ * **`whenNothing` is optional because four callers cannot use it**, each for its own reason, and
+ * they have one shape in common: what the body named is not all the route may change.
+ * `updateStore` must wait, because a body naming only the currency it already prices in has
+ * named something and whether *that* changes nothing is a question about the row.
+ * `readRoleInput` is shared with `createRole`, where an empty result is a missing `name` rather
+ * than a no-op. And `updateProduct` and `updateVariant` each carry a field that is **rows rather
+ * than a column** — a Product's options and a Variant's values for them (#253) — so it is read
+ * beside this table rather than through it, and a body naming only that one leaves the changes
+ * here empty while having asked for plenty. All four ask afterwards, and all four answer with
+ * {@link changesNothing} like everyone else.
  */
 export function changesFrom<C extends object, R extends string = never>(
   // `NoInfer`, because every value here is `unknown` and a body is what a route was *sent*:

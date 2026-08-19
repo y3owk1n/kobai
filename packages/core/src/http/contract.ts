@@ -943,11 +943,57 @@ export const VariantFulfilment = z
   })
   .openapi("VariantFulfilment");
 
+/**
+ * One option a Product is chosen by, as a read reports it.
+ *
+ * **The identifier is here because `PATCH /admin/products/{id}` addresses one by it**, and that
+ * is the only thing it is for: an entry of that body carrying this `id` is the option that
+ * already has it, renamed or moved, so a typo fix keeps every Variant's answer attached to it
+ * instead of reading as a removal and an addition. {@link StoreProductOption} carries no `id`
+ * for exactly that reason — a storefront addresses nothing.
+ *
+ * There is no `position`: the order of the array **is** the order, so nothing has to agree with
+ * anything, and a Merchant reorders by sending the list in another order.
+ */
+export const ProductOption = z
+  .object({
+    id: z.uuid(),
+    name: z.string().meta({
+      description:
+        "What this option is called — `Size`, `Colour`. Unique within its Product, because it is what a Variant's values are keyed by.",
+    }),
+  })
+  .openapi("ProductOption");
+
+/**
+ * A Variant's value for one of its Product's options — `Size` is `M`.
+ *
+ * Keyed by the option's **name** rather than by its identifier, on both the way in and the way
+ * out. A name is unique within a Product and is what a Merchant and a storefront both read, and
+ * it means a create can declare a Product's options and answer them in the same body, where no
+ * identifier exists yet.
+ */
+export const VariantOptionValue = z
+  .object({
+    name: z.string().meta({
+      description: "The option this answers, as its Product names it — `Size`.",
+    }),
+    value: z.string().meta({
+      description:
+        "What this Variant is, for that option — `M`. Never empty, and never normalised: `M` and `Medium` are two different values because a Merchant said two different things.",
+    }),
+  })
+  .openapi("VariantOptionValue");
+
 export const Variant = z
   .object({
     id: z.uuid(),
     sku: z.string(),
     fulfilment: VariantFulfilment,
+    options: z.array(VariantOptionValue).readonly().meta({
+      description:
+        "This Variant's value for each option its Product declares, **in the Product's own option order** — so a storefront zips the two lists to map a chosen combination to a SKU. Empty for a Product that declares no options, which is the ordinary Product. Short of the Product's list only where an option was declared after this Variant was written; correcting the Variant is what ends that.",
+    }),
     metadata: Metadata,
     prices: z.array(Price).readonly().meta({
       description:
@@ -1033,6 +1079,10 @@ export const Product = z
   .openapi("Product");
 
 export const ProductDetail = Product.extend({
+  options: z.array(ProductOption).readonly().meta({
+    description:
+      "The options a Shopper chooses this Product by — Size, Colour — **in the order the Merchant put them in**, because Size before Colour is a decision a storefront should not have to invent. Empty for a Product sold as one thing. On the detail shape and not on the list, which is not a detail view.",
+  }),
   variants: z.array(Variant).readonly(),
 }).openapi("ProductDetail");
 
@@ -1114,9 +1164,46 @@ export const CreateVariantRequest = z
       description:
         "The Fulfilment Strategy this Variant is delivered by. Defaults to `physical`. Naming one this deployment has not wired is refused: a Plugin's Strategy is wired in the Project's `kobai.config.ts`, and installing the Plugin does not do it.",
     }),
+    options: z.array(VariantOptionValue).optional().meta({
+      description:
+        "This Variant's value for each option its Product declares, by the option's name. It must answer **every** one and **only** those: a value for an option the Product never declared, or a declared option left unanswered, is refused at 422 with `variant-options-mismatch`. Left out entirely is the same as an empty list, which is what a Product declaring no options wants.",
+    }),
     metadata: Metadata.optional(),
   })
   .openapi("CreateVariantRequest");
+
+/**
+ * One option a create declares — a name, and its place in the list it arrived in.
+ *
+ * No identifier, because there is none yet: what a Variant of the same body answers by is the
+ * **name**. No `position` either, for {@link ProductOption}'s reason — the array is the order.
+ */
+export const ProductOptionDeclaration = z
+  .object({
+    name: z.string().meta({
+      description:
+        "What this option is called — `Size`. Named twice in one list is refused.",
+    }),
+  })
+  .openapi("ProductOptionDeclaration");
+
+/**
+ * One entry of a correction to a Product's options — which existing option it is, and what it
+ * should now be called.
+ *
+ * **`id` present is identity and `id` absent is a new option.** A rename that dropped the
+ * identifier would read as a removal and an addition, and would take every Variant's answer to
+ * that option with it — which is the one thing a typo fix must not do.
+ */
+export const ProductOptionCorrection = z
+  .object({
+    id: z.uuid().optional().meta({
+      description:
+        "The option this entry **is**, as a read of this Product reported it. Left out, this is a new option — and every Variant already on the Product then leaves it unanswered until each one is corrected.",
+    }),
+    name: z.string().meta({ description: "What it should now be called." }),
+  })
+  .openapi("ProductOptionCorrection");
 
 /**
  * A Product and the Variants that make it sellable, created together.
@@ -1140,6 +1227,10 @@ export const CreateProductRequest = z
     handle: z.string().optional().meta({
       description:
         'The address this Product is to be known by — lower-case letters and digits in groups separated by single hyphens, e.g. "blue-poster". **Left out, kobai proposes one from the title**, so a Merchant need not invent one for every Product. Either way a handle another Product already answers to is refused at 409 rather than quietly suffixed, and one that reads as a UUID is refused at 400: `GET /store/products/{idOrHandle}` resolves a UUID as an identifier, so a Product whose handle were one could not be reached by it.',
+    }),
+    options: z.array(ProductOptionDeclaration).optional().meta({
+      description:
+        "The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values.",
     }),
     metadata: Metadata.optional(),
     variants: z.array(CreateVariantRequest).min(1),
@@ -1179,6 +1270,10 @@ export const UpdateProductRequest = z
       description:
         "**Where a Product is published and where it is archived.** `published` puts it on the storefront, `archived` takes it off without touching the Orders that reference it — an Order's Line Items are a snapshot (ADR-0009) — and `draft` puts it back into preparation. There is no `null`: a Product with no status is not a state kobai has.",
     }),
+    options: z.array(ProductOptionCorrection).optional().meta({
+      description:
+        "**The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for.",
+    }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
     }),
@@ -1209,6 +1304,10 @@ export const UpdateVariantRequest = z
     fulfilment: VariantFulfilment.optional().meta({
       description:
         "The Fulfilment Strategy this Variant is delivered by, replacing the one it points at — how a poster becomes a download. Naming one this deployment has not wired is refused. Whatever stock has been counted for this Variant stays counted either way: the Strategy answers whether selling one takes something off a shelf, and the count only ever said how many.",
+    }),
+    options: z.array(VariantOptionValue).optional().meta({
+      description:
+        "This Variant's value for each option its Product declares, **replacing** every value it holds rather than merging into them — the rule `metadata` follows, for the reason it follows it. Named, it must answer every declared option and only those, or it is refused at 422 with `variant-options-mismatch`. Absent leaves what is stored, so a Variant left unanswered by an option added since is still free to have its SKU corrected.",
     }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
@@ -1266,6 +1365,7 @@ const CATALOG_REASONS = {
   "stock-is-reserved": "stock-is-reserved",
   "unsupported-currency": "unsupported-currency",
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+  "variant-options-mismatch": "variant-options-mismatch",
 } as const satisfies {
   [R in
     | Refused<ProductCreation>
@@ -1318,22 +1418,66 @@ export const StoreVariantFulfilment = z
   .openapi("StoreVariantFulfilment");
 
 /**
+ * One option a Product is chosen by, as a storefront sees it — the name, and no identifier.
+ *
+ * **Declared apart from {@link ProductOption}, and the `id` is what it drops.** A storefront
+ * addresses nothing by an option's identifier: it zips the Product's options against each
+ * Variant's values, both keyed by **name**, which is unique within a Product. The identifier
+ * exists so that `PATCH /admin/products/{id}` can rename an option without losing its values,
+ * which is a Merchant's problem and not a Shopper's — and under ADR-0060 a field published here
+ * could not be taken back out without a major.
+ */
+export const StoreProductOption = z
+  .object({
+    name: z.string().meta({
+      description:
+        "What this option is called — `Size`, `Colour`. Unique within the Product, and what each Variant's values are keyed by.",
+    }),
+  })
+  .openapi("StoreProductOption");
+
+/**
+ * A Variant's value for one option, as a storefront sees it.
+ *
+ * The same two fields {@link VariantOptionValue} carries, and deliberately a schema of its own
+ * for {@link StoreVariantFulfilment}'s reason: two schemas that happen to agree is the cheap
+ * half of #207's split, and one schema two surfaces share is the expensive half, arriving later
+ * and as a major.
+ */
+export const StoreVariantOptionValue = z
+  .object({
+    name: z.string().meta({
+      description: "The option this answers, as its Product names it — `Size`.",
+    }),
+    value: z
+      .string()
+      .meta({ description: "What this Variant is, for that option — `M`." }),
+  })
+  .openapi("StoreVariantOptionValue");
+
+/**
  * A Variant as a storefront sees it: no count, and no Prices.
  *
  * **`fulfilment` is {@link StoreVariantFulfilment} and deliberately not {@link
- * VariantFulfilment}**, though the two carry the same one field today. Referencing the admin
- * schema would have reopened the hole this whole section closes from the inside: both are
- * objects designed to grow — "so that the next thing a Variant needs to say about how it is
- * fulfilled arrives beside this one" — and a field added to the shared one for a Merchant would
- * be published to every publishable key on the next deploy, which is the failure the split
- * exists to prevent. Two schemas that happen to agree is the cheap half of the decision; one
- * schema two surfaces share is the expensive half, arriving later and as a major.
+ * VariantFulfilment}**, though the two carry the same one field today — and `options` is
+ * {@link StoreVariantOptionValue} rather than {@link VariantOptionValue} for exactly the same
+ * reason, though those two agree field for field. Referencing the admin schema would have
+ * reopened the hole this whole section closes from the inside: both are objects designed to
+ * grow — "so that the next thing a Variant needs to say about how it is fulfilled arrives beside
+ * this one" — and a field added to the shared one for a Merchant would be published to every
+ * publishable key on the next deploy, which is the failure the split exists to prevent. Two
+ * schemas that happen to agree is the cheap half of the decision; one schema two surfaces share
+ * is the expensive half, arriving later and as a major.
  */
 export const StoreVariant = z
   .object({
     id: z.uuid(),
     sku: z.string(),
     fulfilment: StoreVariantFulfilment,
+    options: z.array(StoreVariantOptionValue).readonly().meta({
+      description:
+        "What this Variant is, for each option its Product declares, **in the Product's option order** — the storefront's half of the pair that makes a picker possible.",
+    }),
     metadata: Metadata,
   })
   .openapi("StoreVariant");
@@ -1369,6 +1513,10 @@ export const StoreProduct = z
  * for everyone and expensively for the Store.
  */
 export const StoreProductDetail = StoreProduct.extend({
+  options: z.array(StoreProductOption).readonly().meta({
+    description:
+      "The options a Shopper chooses this Product by — Size, Colour — **in the order the Merchant put them in**, which is the order a picker should offer them in. Together with each Variant's `options` this is everything a storefront needs to map a chosen combination to a SKU **client-side**: a combination no Variant answers is simply absent, which is what makes it unavailable rather than an error. There is deliberately no route that takes a combination and answers a Variant.",
+  }),
   variants: z.array(StoreVariant).readonly(),
 }).openapi("StoreProductDetail");
 

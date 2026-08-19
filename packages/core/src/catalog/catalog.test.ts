@@ -610,6 +610,10 @@ describe("GET /admin/products/:id", () => {
         // `physical` because nothing said otherwise, which is what a Variant with no opinion
         // about how it is delivered is (ADR-0014).
         fulfilment: { strategy: "physical" },
+        // Empty because this Product declares no options, which is the ordinary Product: a
+        // poster sold as one thing still reports the field, so a client draws no picker
+        // without having to ask whether it may (#253).
+        options: [],
         metadata: {},
         prices: [],
         inventory: null,

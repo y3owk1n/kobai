@@ -158,6 +158,16 @@ The sellable thing, carrying the SKU. Every Product has at least one, including 
 with no options at all.
 _Avoid_: SKU, option, child product, item, article
 
+**Option**:
+Something a Product is chosen **by** — Size, Colour. A Product declares them, **in an order the
+Merchant sets**, because Size before Colour is a decision a storefront should not have to invent;
+a Variant carries one **value** for each, and a Variant that answers an option its Product never
+declared, or leaves a declared one unanswered, is refused. Together those two are everything a
+storefront needs to map a chosen combination to a SKU by itself, which is why there is no route
+that takes a combination and answers a Variant — and why a combination no Variant answers is
+simply **absent** rather than an error.
+_Avoid_: attribute, property, facet (that is search's), specification, modifier, variant axis
+
 **Price**:
 An amount in a currency for a Variant, optionally constrained by Region, Channel,
 quantity, or customer group. A **row, not a column** — several may exist per Variant and

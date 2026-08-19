@@ -339,6 +339,53 @@ store shape**: it is a Merchant's field, so #207's split is what keeps it off a 
 responses, and its absence from both is asserted directly in `store.test.ts` beside `inventory`
 and `prices`.
 
+**A Product declares its options and a Variant names its value for each, and the pair is the
+whole picker** (#253). `ProductDetail` and `StoreProductDetail` carry the options **in the order
+the Merchant declared them**; `Variant` and `StoreVariant` carry a value for each, in that same
+order. Five things about it are decisions rather than implementation:
+
+- **There is no route that takes a combination and answers a Variant, and that is the decision.**
+  The detail payload already settles it — a storefront zips the two lists and a combination no
+  Variant answers is `undefined` rather than a refusal to interpret, which is story 21 falling out
+  of the shape. A route would be a second answer to a settled question, and one that could
+  disagree. `catalog/options.test.ts` writes that mapping out once and runs it against what
+  `/store` really answered, which is the closest a test gets to being the storefront.
+- **Options are declared with the Product and corrected on it.** They are in `POST
+  /admin/products`'s body and are written in the same transaction as the Product and its Variants,
+  so a Variant naming an option its Product has not declared is not a state that exists for an
+  instant. `PATCH /admin/products/{id}` takes `options` as **the whole list, in the order it should
+  end up in**: an entry carrying an `id` is the option that already has it — renamed, moved, or
+  both, with its Variants' values still attached — one without is new, and one the Product has that
+  the list does not name is removed with every value for it. **Identity on the wire is what makes a
+  rename a rename**; reconciling by name instead was watched taking every value with it.
+- **One word, one status, three routes.** A Variant whose values are not exactly its Product's
+  declared options is refused **422 `variant-options-mismatch`** at the create, at `POST
+  /admin/products/{id}/variants` and at `PATCH /admin/variants/{id}` alike, naming what it left
+  unanswered and what it named that was never declared. It is one fact about a Variant and its
+  Product, and where the Product happens to have been declared in the same body changes neither
+  what is wrong nor how it is fixed — the argument `unknown-fulfilment-strategy` already makes for
+  saying one thing in one way.
+- **Adding an option leaves the Variants under it unanswered, deliberately.** Judging them at the
+  Product's `PATCH` would refuse the correction for every Variant at once, and the only way out
+  would be to rebuild the Product — a refusal whose advice names no reachable control, which this
+  file says is a finding rather than something to word around. So the short list reads back
+  truthfully and `PATCH /admin/variants/{id}` is the repair, which is also why an absent `options`
+  there still means "leave it": the *route* leaves a Variant left short correctable in its other
+  fields. The Admin's Variant form does send them every time and so does ask for the missing
+  value — that is a decision about the form rather than about the route, and
+  [the Admin](the-admin.md) is where it is argued.
+- **Nothing refuses two Variants answering the same combination**, and that is a **gap** rather
+  than one of these decisions. The unique index is `(variant_id, option_id)`: it makes one
+  Variant's answer to one option single and says nothing about two Variants agreeing on every
+  option, and such a Product is one the payload above cannot be chosen from. `catalog/options.ts`
+  carries it in full, at the head of the module, because the rule that would close it is about a
+  Variant against its *siblings* rather than against its Product.
+- **The store shape drops the option's identifier and nothing else.** A storefront addresses
+  nothing by it — both lists are keyed by **name**, unique within a Product — and it exists so a
+  Merchant can rename one without losing its values. `StoreProductOption` and
+  `StoreVariantOptionValue` are declared apart from their admin twins for `StoreVariantFulfilment`'s
+  reason, though `StoreVariantOptionValue` happens to carry the same two fields.
+
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.
 `packages/core/src/http/openapi.test.ts` regenerates the description and compares;

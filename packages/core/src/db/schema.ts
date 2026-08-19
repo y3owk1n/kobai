@@ -5,6 +5,7 @@ import {
   boolean,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -412,6 +413,99 @@ export const variant = pgTable(
 );
 
 export type VariantRow = typeof variant.$inferSelect;
+
+/**
+ * An **option** a Product is chosen by — Size, Colour — in the order a Merchant put them in.
+ *
+ * A row rather than a column for ADR-0008's reason one table up: a Product that comes in three
+ * sizes and two colours is five rows here, and a Product that comes in one thing is none. A pair
+ * of `option_1`/`option_2` columns would have been a migration the first time somebody sold a
+ * poster in a size, a colour and a finish, and a `jsonb` array would have been the same fact
+ * with nothing able to point at one of them — which {@link variantOptionValue} has to.
+ *
+ * **`position` is a column because the order is a Merchant's decision** (story 11). Size before
+ * Colour is how a storefront draws the picker, and a storefront that had to invent the order
+ * would draw a different one from the Admin. It is rewritten from the list a request carries
+ * every time the set is declared or corrected, so it is dense and zero-based by construction
+ * rather than by constraint — the ordering below ends in `id` all the same, because a total
+ * order is not something a convention should be trusted for.
+ *
+ * **No unique index on `(product_id, name)`, and that is a decision rather than an oversight.**
+ * Postgres checks a unique constraint per statement, so renaming Size to Colour while a Colour
+ * is still there — a swap, which is a cycle — would be refused halfway through a correction
+ * that is perfectly well formed. What keeps the names distinct instead is that every write here
+ * replaces the whole list, from a list `catalog/options.ts` has already refused a repeat in, and
+ * does it under that module's `lockProductOptions` — a `pg_advisory_xact_lock` per Product, so
+ * two corrections serialise rather than both reading the old list. A **row** lock cannot stand in
+ * for it: `lockProduct` is `for share`, and two `FOR SHARE` holders do not conflict.
+ */
+export const productOption = pgTable(
+  "core_product_option",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      // A deleted Product takes its options with it, and their values after them — an option
+      // belonging to no Product is a question nothing asks.
+      .references(() => product.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** Zero-based, and rewritten from the request's own order every time the list is declared. */
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // How every read of a Product asks for them: its options, in the order it declared them.
+    index("core_product_option_product_position_idx").on(table.productId, table.position),
+  ],
+);
+
+export type ProductOptionRow = typeof productOption.$inferSelect;
+
+/**
+ * A Variant's **value** for one of its Product's options — `Size` is `M`, `Colour` is `Red`.
+ *
+ * One row per Variant per option, which is what lets a storefront map a chosen combination to a
+ * SKU: it has the Product's options in order and each Variant's value for each, so the
+ * combination that no Variant answers is simply absent (story 21) rather than an error to
+ * interpret.
+ *
+ * **The unique index is what makes a Variant's answer single.** Two rows for one Variant and one
+ * option would be two answers to "what size is this", and nothing reading them could say which
+ * was meant. It is safe to declare here in the way `(product_id, name)` above is not: a Variant's
+ * values are written by deleting every row it has and inserting the new set, so no rename can
+ * collide with a row on its way out.
+ *
+ * The value is `text` and Core has no opinion about it. `M`, `Medium` and `medium` are three
+ * different values because a Merchant said three different things, and a normalisation here
+ * would be a rule about a Store's own vocabulary in the one place it could not be relaxed.
+ */
+export const variantOptionValue = pgTable(
+  "core_variant_option_value",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    variantId: uuid("variant_id")
+      .notNull()
+      // A deleted Variant takes its answers with it.
+      .references(() => variant.id, { onDelete: "cascade" }),
+    optionId: uuid("option_id")
+      .notNull()
+      // An option a Product no longer declares takes every Variant's answer to it with it,
+      // which is what makes removing one an ordinary correction rather than a cleanup.
+      .references(() => productOption.id, { onDelete: "cascade" }),
+    value: text("value").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("core_variant_option_value_variant_option_idx").on(
+      table.variantId,
+      table.optionId,
+    ),
+  ],
+);
+
+export type VariantOptionValueRow = typeof variantOptionValue.$inferSelect;
 
 /**
  * A Price — **a row, not a column** (ADR-0008).

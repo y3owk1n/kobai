@@ -355,6 +355,10 @@ describe("browsing the catalog", () => {
       description: "Printed on 200gsm uncoated stock.",
       handle: "a-poster",
       metadata: { blurb: "Printed on heavy stock." },
+      // The options a Shopper chooses by, in the Merchant's order — empty for a Product sold
+      // as one thing, and carrying **no identifier** when it is not, which is the one field
+      // this shape drops from the Merchant's `ProductOption` (#253).
+      options: [],
       variants: [
         {
           id: catalog.variantId,
@@ -363,6 +367,10 @@ describe("browsing the catalog", () => {
           // download is a download. ADR-0014 makes the set open, so it is a name rather than
           // an enum.
           fulfilment: { strategy: "physical" },
+          // Kept, and it is what makes a picker possible at all — empty here because this
+          // Product declares no options. `catalog/options.test.ts` is where a Product that
+          // does is followed all the way to a Shopper choosing a combination (#253).
+          options: [],
           metadata: {},
         },
       ],
@@ -382,6 +390,7 @@ describe("browsing the catalog", () => {
       id: catalog.variantId,
       sku: "POSTER-A2",
       fulfilment: { strategy: "physical" },
+      options: [],
       metadata: {},
     });
   });
