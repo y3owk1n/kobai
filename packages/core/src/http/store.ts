@@ -28,6 +28,7 @@ import type {
   PriceResolutionRefusal,
   PriceResolutionWorkflow,
 } from "../pricing/resolve-price.ts";
+import { holdCartReservations } from "../reservation/hold-cart.ts";
 import {
   openMetadata,
   openMetadataWithBody,
@@ -439,6 +440,67 @@ const removeLineItemRoute = createRoute({
   },
 });
 
+// ---- Holding a Cart's stock ---------------------------------------------------------------
+
+/**
+ * The refusals holding a Cart's stock may declare, and the whole of what its handler may answer.
+ *
+ * Four statuses for six reasons, and each grouping is the one the Cart routes already use: a
+ * Cart that is not there is a 404, a Cart that can no longer be claimed against or a Store that
+ * has not got it is a 409, and an empty Cart is a well-formed request the Store declines.
+ */
+const CART_RESERVATION_REFUSALS = {
+  noCart: json("No such Cart exists.", contract.CartReservationRefusal),
+  notHoldable: json(
+    "Nothing was held. This Cart can no longer be claimed against — it has expired, or it has already been placed — or the Store has not got enough of something in it left to sell, or something in it names a Fulfilment Strategy this deployment no longer has wired.",
+    contract.CartReservationRefusal,
+  ),
+  nothingToHold: json(
+    "Well formed, and still refused: this Cart has nothing in it, so there is nothing to hold.",
+    contract.CartReservationRefusal,
+  ),
+} as const;
+
+/**
+ * **Holding a Cart's stock before the Shopper is sent to their bank** (ADR-0070).
+ *
+ * The route a storefront calls in front of a redirect payment method. FPX and its kind take the
+ * money *at the bank*, so a Shopper who authorises and comes back to `insufficient-inventory`
+ * has paid for something they will not get — and until this existed nothing held stock while
+ * they were away, because `hold-reservations` runs inside `place-order`.
+ *
+ * **A secret key, on ADR-0055's argument.** Holding stock is a resource, and a publishable key
+ * is shipped to a browser and therefore public: a route that claimed inventory for anybody
+ * holding one is a denial-of-service primitive with a `curl` command for a payload. That is the
+ * same reasoning that keeps placing off the browser's key, so it is the same gate — unconditional,
+ * registered in `GATE_REFUSALS`, and held to the declaration below by `openapi.test.ts`.
+ *
+ * **200 and never 201, although it may have created Reservations.** Holding twice for one Cart
+ * adopts the hold it already has rather than claiming again, so "how much is held and until
+ * when" is the whole of the answer and is the same answer either way. A storefront retrying
+ * after a timeout has nothing to tell apart, which is the property that makes a retry safe.
+ */
+const holdCartRoute = createRoute({
+  method: "post",
+  path: "/carts/{id}/reservations",
+  summary: "Hold this Cart's stock",
+  middleware: [requireSecretApiKey()] as const,
+  security: API_KEY,
+  description:
+    "Claims stock for every line whose Fulfilment Strategy tracks Inventory, and answers what is held and until when. Call it before sending a Shopper to a payment method they complete somewhere else — a bank redirect takes the money there, so a Shopper who returns to `insufficient-inventory` has already paid. All of it or none of it: a Cart that can hold the last poster but not the last mug holds neither. Calling it again for the same Cart adopts the hold rather than taking a second, so a retry is safe, and `POST /store/orders` then uses that hold rather than claiming again. Requires a **secret** key: holding stock is a resource a browser's key could exhaust (ADR-0055).",
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("What this Cart is holding, and until when.", contract.CartReservations),
+    401: REFUSALS.noApiKey,
+    403: REFUSALS.secretKeyRequired,
+    404: CART_RESERVATION_REFUSALS.noCart,
+    409: CART_RESERVATION_REFUSALS.notHoldable,
+    422: CART_RESERVATION_REFUSALS.nothingToHold,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 // ---- Orders -------------------------------------------------------------------------------
 
 /**
@@ -647,6 +709,35 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     return c.json(removed.cart, 200);
   });
 
+  store.openapi(holdCartRoute, async (c) => {
+    const held = await holdCartReservations(
+      deps.db,
+      c.req.valid("param").id,
+      deps.fulfilment,
+      // This deployment's window, threaded like everything else on the context above: a route
+      // that reached for Core's default would hold for fifteen minutes whatever the Project
+      // configured, and that failure is silent (ADR-0075).
+      deps.holdWindowMs,
+    );
+    if (!held.ok) {
+      return c.json(
+        { error: held.detail, reason: held.reason },
+        HOLD_CART_STATUS[held.reason],
+      );
+    }
+
+    return c.json(
+      {
+        cartId: held.hold.cartId,
+        reservations: held.hold.reservations,
+        // Absent rather than null when nothing is held — `JSON.stringify` drops the key, which
+        // is the same wire shape `nextCursor` uses for the same reason (ADR-0064).
+        expiresAt: held.hold.expiresAt?.toISOString(),
+      },
+      200,
+    );
+  });
+
   store.openapi(placeOrderRoute, async (c) => {
     const body = c.req.valid("json");
 
@@ -838,6 +929,24 @@ const REMOVE_LINE_ITEM_STATUS = {
   ...NOT_CHANGEABLE_STATUS,
   "line-item-not-found": 404,
 } as const satisfies StatusesFor<typeof removeLineItem>;
+
+/**
+ * What each refusal of a hold means, and the same `satisfies` every map on this surface has.
+ *
+ * The four statuses are the ones the Cart and the placement already use for these words, which
+ * is the property worth keeping: a storefront meets `cart-expired` at 409 whether it was holding
+ * stock or placing an Order. `insufficient-inventory` is a 409 for the placement's reason too —
+ * the request was fine and the state of the Store refuses it, and retrying changes nothing until
+ * somebody restocks or a hold somebody else is holding lapses.
+ */
+const HOLD_CART_STATUS = {
+  "cart-not-found": 404,
+  "cart-expired": 409,
+  "cart-placed": 409,
+  "cart-empty": 422,
+  "unknown-fulfilment-strategy": 409,
+  "insufficient-inventory": 409,
+} as const satisfies StatusesFor<typeof holdCartReservations>;
 
 /**
  * Reading a Cart is the one Cart operation with no write behind it, so it is the one place the

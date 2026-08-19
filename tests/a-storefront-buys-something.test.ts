@@ -41,14 +41,14 @@ import { describe, expect, it } from "vitest";
  * The sentence being walked, from ADR-0069, with what passes today in **bold**:
  *
  * > A Shopper **browses** a Collection, **opens a product page** and picks an option, **adds it
- * > to a Cart**, has the stock held, pays through a bank redirect, and **the Order exists** once
+ * > to a Cart**, **has the stock held**, pays through a bank redirect, and **the Order exists** once
  * > the bank has answered — whether or not the Shopper came back to the tab. The Merchant
  * > dispatches it, and **the Shopper reads it back** dispatched. And the same purchase completes
  * > through the hosted Checkout as through a Developer's own.
  *
  * So the journey walks as far as today's surface allows: browse, open a product page, read a
- * Variant on its own, ask what it costs, fill a Cart and change its mind twice, sign in, place
- * the Order, read it back. It walks **every** operation `/store` serves, and that is derived
+ * Variant on its own, ask what it costs, fill a Cart and change its mind twice, sign in, hold the
+ * stock, place the Order, read it back. It walks **every** operation `/store` serves, and that is derived
  * from the description rather than believed — a route added here without a clause in the
  * journey reddens the build, which is what "later specs extend it" has to mean to be worth
  * anything. Each
@@ -105,6 +105,19 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
   });
   expect(described.status, "describing the poster").toBe(200);
 
+  // Counted, because the journey holds this stock before it buys it and a Variant nobody has
+  // counted holds nothing at all (ADR-0014). A Merchant counting a shelf is arrangement like
+  // everything else above the marker.
+  const counted = await kobai.request(
+    `/admin/variants/${posters.variant(THE_SKU).id}/inventory`,
+    {
+      method: "PUT",
+      headers: { ...posters.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ onHand: ON_THE_SHELF }),
+    },
+  );
+  expect(counted.status, "counting the posters").toBe(200);
+
   const publishable = await createTestApiKey(kobai, posters.merchant, {
     name: "the browser's",
     kind: "publishable",
@@ -139,6 +152,8 @@ const THE_OTHER_SKU = "POSTER-A3";
 const THE_PRICE = 1250;
 const BLURB = "Printed on heavy stock.";
 const HOW_MANY = 2;
+/** What the Store has of it — more than the Shopper takes, so what is held is visible. */
+const ON_THE_SHELF = 5;
 /** Who the Cart turns out to belong to, once the guest signs in half way through. */
 const THE_SHOPPER = "shopper@example.test";
 
@@ -417,9 +432,28 @@ describe("a Shopper buys something", () => {
     expect(reread.placed).toBe(false);
     expect(reread.lineItems).toHaveLength(1);
 
+    // The stock held, before anybody is sent anywhere to pay (ADR-0070). This is the clause a
+    // redirect payment method needs: FPX and its kind take the money at the *bank*, so a
+    // Shopper who authorises and comes back to `insufficient-inventory` has paid for something
+    // they will not get. A secret key again, for ADR-0055's reason applied to stock: a
+    // publishable key in a page could otherwise exhaust a Store's inventory.
+    const heldStock = answered(
+      await server.POST("/store/carts/{id}/reservations", {
+        params: { path: { id: started.id } },
+      }),
+      "holding the stock",
+    );
+    expect(heldStock.reservations).toEqual([
+      { provider: "inventory", subject: variantId, quantity: HOW_MANY },
+    ]);
+    // Until when, so a storefront can tell the Shopper how long they have at their bank.
+    expect(new Date(heldStock.expiresAt ?? "").getTime()).toBeGreaterThan(Date.now());
+
     // The purchase leg, on the **secret** key: this is where money and stock move, and a
     // publishable key is refused here (ADR-0055). The browser built the Cart and the server
-    // places it, which is the storefront pattern rather than a convenience of the test.
+    // places it, which is the storefront pattern rather than a convenience of the test. It
+    // **adopts** the hold above rather than claiming a second one, which is what makes holding
+    // early worth anything: the stock the storefront reserved is the stock the Order gets.
     const placed = answered(
       await server.POST("/store/orders", {
         params: { header: { "idempotency-key": "the-journey-buys-a-poster" } },

@@ -25,6 +25,7 @@ import {
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
+import type { HoldCartRefusal } from "../reservation/hold-cart.ts";
 import type { InventoryUpdate } from "../reservation/inventory.ts";
 import type { StoreUpdate } from "../store/write.ts";
 
@@ -1416,6 +1417,72 @@ export const CartRefusal = z
     }),
   })
   .openapi("CartRefusal");
+
+// ---- Holding a Cart's stock -------------------------------------------------------------
+
+/** One claim a Cart is holding, as the Reservation record keeps it. */
+const HeldClaim = z
+  .object({
+    provider: z.string().meta({
+      description:
+        "Which kind of scarce thing this claims — `inventory` is the one Core has (ADR-0018).",
+    }),
+    subject: z.string().meta({
+      description:
+        "What is claimed, in that provider's own terms. For `inventory` it is the Variant's identifier.",
+    }),
+    quantity: z.int().meta({ description: "How much of it is held." }),
+  })
+  .openapi("HeldClaim");
+
+/**
+ * What a Cart is holding, and until when.
+ *
+ * **There are no Reservation identifiers here, deliberately.** A hold is given back by placing
+ * the Order, by changing the Cart, or by lapsing — there is no route that releases one, and a
+ * handle a storefront could quote at such a route would be the beginning of releasing a hold out
+ * from under a Shopper who is mid-payment (ADR-0071).
+ */
+export const CartReservations = z
+  .object({
+    cartId: z.uuid(),
+    reservations: z.array(HeldClaim).readonly().meta({
+      description:
+        "Empty for a Cart of Variants nothing is counting: a Store selling downloads holds nothing, and that is a 200 rather than a refusal (ADR-0014).",
+    }),
+    expiresAt: z.iso.datetime().optional().meta({
+      description:
+        "When this hold lapses and the units go back on the shelf. Absent when nothing is held, because then there is no deadline. Holding again does not push it out — how long a hold stands is the deployment's setting (ADR-0075), not a thing a caller can extend by asking twice.",
+    }),
+  })
+  .openapi("CartReservations");
+
+/**
+ * Holding a Cart's stock, refused — a **closed** set, unlike `PlaceOrderRefusal`'s.
+ *
+ * Nothing a Project or a Plugin supplies runs on this path: no Workflow is invoked, so every
+ * refusal is Core's own and a storefront can narrow on the lot. The keys are held to
+ * `reservation/hold-cart.ts`'s union by the mapped `satisfies`, so a Reservation provider that
+ * brings a new way of saying "the Store has not got it" turns this red naming the word rather
+ * than answering it under some other one.
+ */
+const CART_RESERVATION_REASONS = {
+  "cart-not-found": "cart-not-found",
+  "cart-expired": "cart-expired",
+  "cart-placed": "cart-placed",
+  "cart-empty": "cart-empty",
+  "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+  "insufficient-inventory": "insufficient-inventory",
+} as const satisfies { [R in HoldCartRefusal]: R };
+
+export const CartReservationRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(CART_RESERVATION_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("CartReservationRefusal");
 
 // ---- Orders ----------------------------------------------------------------------------
 

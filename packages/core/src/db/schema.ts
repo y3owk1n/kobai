@@ -1012,6 +1012,28 @@ export const reservation = pgTable(
   "core_reservation",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * The Cart this claim is held for, so that a second request holding it can **adopt** the
+     * hold rather than take another (ADR-0070).
+     *
+     * There was no such column until a storefront could hold a Cart's stock before sending a
+     * Shopper to their bank: `hold-reservations` ran only inside `place-order`, which claimed
+     * once and consumed in the same request, so nothing ever had to find a hold again. Adopting
+     * is finding one, and `provider` and `subject` cannot say which Cart asked.
+     *
+     * **Nullable, and that is a fact rather than a shortcut** (ADR-0038). Every Reservation
+     * written from here on carries a Cart, because both callers hold for one; the rows an
+     * upgrading deployment already has were written when nothing recorded it, and no backfill
+     * value could say which Cart without inventing one. `null` says the Cart was never
+     * recorded, which is the truth about exactly those rows — and a hold with no Cart is simply
+     * one nothing will adopt.
+     *
+     * **`set null` rather than `cascade`**, for `order_id`'s reason turned around: the units are
+     * claimed whether or not the Cart row survives, and a Reservation that vanished with its
+     * Cart would leave `core_inventory.reserved` holding stock with no row left to release it
+     * by. Nothing in Core deletes a Cart; this is what the column means if anything ever does.
+     */
+    cartId: uuid("cart_id").references(() => cart.id, { onDelete: "set null" }),
     /** Which provider owns this claim — `inventory` today, and Capacity's when it arrives. */
     provider: text("provider").notNull(),
     /** What the claim is on, in that provider's own terms. A Variant's id, for Inventory. */
@@ -1046,6 +1068,8 @@ export const reservation = pgTable(
     index("core_reservation_expires_idx").on(table.expiresAt),
     // Reading an Order's claims, and what a consumed Reservation is found by.
     index("core_reservation_order_idx").on(table.orderId),
+    // What claim-or-adopt looks a Cart's live hold up by, on every hold and every placement.
+    index("core_reservation_cart_idx").on(table.cartId),
     check("core_reservation_quantity_is_positive", sql`${table.quantity} > 0`),
   ],
 );
