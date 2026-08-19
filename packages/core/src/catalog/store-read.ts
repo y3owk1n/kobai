@@ -24,9 +24,13 @@ import { isUuid } from "../db/uuid.ts";
  *
  * What a Shopper is shown, and what they are not:
  *
- * - **`metadata`, kept**, on both a Product and a Variant. Until catalog breadth lands, ADR-0004's
- *   escape hatch is a Project's only way to attach a description, imagery or copy, and a product
- *   page with nothing but a title is not a product page.
+ * - **`description`, kept**, and it is the first field this reader gained after the split. It is
+ *   copy a Merchant writes *for a Shopper to read*, so a storefront that could not read it would
+ *   be missing the thing it was written for — which is what makes publishing it a decision taken
+ *   here rather than a field inherited by accident.
+ * - **`metadata`, kept**, on both a Product and a Variant. Until the rest of catalog breadth
+ *   lands, ADR-0004's escape hatch is a Project's only way to attach imagery and the rest of the
+ *   copy, and a product page with nothing but a title is not a product page.
  * - **`inventory`, dropped.** The admin `Variant` carries a count. Publishing exact stock levels
  *   to any key a browser holds is a business-information leak, and ADR-0018 makes availability a
  *   conditional write rather than a readable fact anyway — an `available` a storefront rendered
@@ -71,6 +75,8 @@ export type StoreVariant = {
 export type StoreProduct = {
   readonly id: string;
   readonly title: string;
+  /** What a Merchant wrote about it, or `null` where nobody has written anything. */
+  readonly description: string | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -95,6 +101,7 @@ export async function listStoreProducts(
     .select({
       id: product.id,
       title: product.title,
+      description: product.description,
       metadata: product.metadata,
       cursorAt: cursorAt(product.createdAt),
     })
@@ -108,9 +115,14 @@ export async function listStoreProducts(
   const { rows: found, nextCursor } = takePage(rows, page);
 
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
-  // response by being forgotten about. A Product reports three fields here and these are them.
+  // response by being forgotten about. A Product reports four fields here and these are them.
   return {
-    items: found.map((row) => ({ id: row.id, title: row.title, metadata: row.metadata })),
+    items: found.map((row) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      metadata: row.metadata,
+    })),
     nextCursor,
   };
 }
@@ -127,7 +139,12 @@ export async function readStoreProduct(
   if (!isUuid(id)) return undefined;
 
   const [row] = await db
-    .select({ id: product.id, title: product.title, metadata: product.metadata })
+    .select({
+      id: product.id,
+      title: product.title,
+      description: product.description,
+      metadata: product.metadata,
+    })
     .from(product)
     .where(eq(product.id, id))
     .limit(1);

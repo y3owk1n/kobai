@@ -1859,7 +1859,7 @@ describe("the catalog screens", () => {
     const page = await openAProduct(product);
 
     await page.getByLabel("Title").fill("A poster, corrected");
-    await page.getByRole("button", { name: "Rename" }).click();
+    await page.getByRole("button", { name: "Save Product" }).click();
 
     // The heading and the breadcrumb both come from the re-read, not from the field: there is
     // no optimistic update anywhere in this Admin (ADR-0063).

@@ -7,7 +7,7 @@ import {
   type FulfilmentStrategies,
   fulfilmentStrategyFor,
 } from "../fulfilment/strategy.ts";
-import { changesFrom, changesNothing, openData, text } from "../patch.ts";
+import { changesFrom, changesNothing, type Field, openData, text } from "../patch.ts";
 import { type ProductDetail, readVariants, type Variant } from "./read.ts";
 import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 
@@ -41,6 +41,7 @@ import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 /** Unvalidated: it arrives as a JSON body, and everything below narrows it in one place. */
 export type UpdateProductInput = {
   readonly title?: unknown;
+  readonly description?: unknown;
   readonly metadata?: unknown;
 };
 
@@ -94,6 +95,24 @@ export type VariantUpdate =
     };
 
 /**
+ * A Product's description: `text`'s ordinary narrowing, plus `null` to take the copy back off.
+ *
+ * **The only field on this surface a correction may *remove*, and the reason it needs to be.**
+ * An absent field means "leave it" (ADR-0062), so a field with no way to say *remove* can be
+ * rewritten for ever and never cleared — which is fine for a `title`, where there is no state
+ * of having none, and wrong for copy a Merchant wrote by mistake. `""` is refused rather than
+ * stored, because that would leave two spellings of "there is no copy here" and a storefront
+ * branching on one of them renders an empty paragraph for the other.
+ *
+ * It composes {@link text} rather than restating it, so the words a Merchant is told when they
+ * send a number are the words every other corrected string is refused with. It stays here
+ * rather than in `patch.ts` because nothing else wants it yet: a second clearable field is when
+ * it moves, and one caller is not a shared helper.
+ */
+const clearableDescription: Field<string | null> = (value) =>
+  value === null ? { ok: true, value: null } : text("description")(value);
+
+/**
  * Changes what this Product says about itself, and leaves its Variants alone.
  *
  * **One statement decides everything, so this takes no lock either** — `updateVariant`'s
@@ -113,14 +132,18 @@ export async function updateProduct(
   input: UpdateProductInput,
 ): Promise<ProductUpdate> {
   const usable = changesFrom(
-    { title: input.title, metadata: input.metadata },
-    { title: text("title"), metadata: openData("metadata") },
+    { title: input.title, description: input.description, metadata: input.metadata },
+    {
+      title: text("title"),
+      description: clearableDescription,
+      metadata: openData("metadata"),
+    },
     // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
     // in one place since #185. It does a second job here — the schema strips a field this route
     // does not carry, so a body naming `variants` is this body, and the refusal is where a
     // Merchant who tried to add one is told which route adds one.
     changesNothing(
-      "a `title`, a `metadata`, or both",
+      "a `title`, a `description`, a `metadata`, or any of them",
       "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
     ),
   );
@@ -137,6 +160,7 @@ export async function updateProduct(
       .returning({
         id: product.id,
         title: product.title,
+        description: product.description,
         metadata: product.metadata,
       });
     if (!updated) return noSuchProduct(productId);

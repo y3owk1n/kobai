@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
 import { Problem } from "@/components/problem";
+import { TextareaField } from "@/components/textarea-field";
 import {
   Card,
   CardContent,
@@ -13,11 +14,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { orThrow, problemOf, storeReasonOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
@@ -200,24 +200,23 @@ function StoreSettings({
             </FieldDescription>
           </Field>
 
-          <Field data-invalid={form.formState.errors.metadata !== undefined}>
-            <FieldLabel htmlFor="store-metadata">Metadata</FieldLabel>
-            <Textarea
-              id="store-metadata"
-              rows={6}
-              spellCheck={false}
-              aria-invalid={form.formState.errors.metadata !== undefined}
-              className="font-mono text-sm"
-              {...form.register("metadata")}
-            />
-            <FieldDescription>
-              Unindexed, untyped JSON owned by you and by this Project — kobai stores it
-              and reads nothing in it. Saving <strong>replaces</strong> what is stored
-              rather than merging into it, so what is in the box is what the Store will
-              have.
-            </FieldDescription>
-            <FieldError errors={[form.formState.errors.metadata]} />
-          </Field>
+          <TextareaField
+            id="store-metadata"
+            label="Metadata"
+            rows={6}
+            spellCheck={false}
+            className="font-mono text-sm"
+            error={form.formState.errors.metadata}
+            description={
+              <>
+                Unindexed, untyped JSON owned by you and by this Project — kobai stores it
+                and reads nothing in it. Saving <strong>replaces</strong> what is stored
+                rather than merging into it, so what is in the box is what the Store will
+                have.
+              </>
+            }
+            {...form.register("metadata")}
+          />
         </CardContent>
         <CardFooter className="mt-4">
           <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>

@@ -959,9 +959,34 @@ export const Variant = z
   })
   .openapi("Variant");
 
+/**
+ * What a Merchant wrote about a Product, or `null` where nobody has written anything.
+ *
+ * **Nullable rather than optional**, so the field is always there and a client reads one
+ * answer to "is there copy for this" rather than two. `null` and `""` are different facts —
+ * a Product waiting for its copy against one deliberately described as nothing — and only
+ * the first is what a Product created without a description holds.
+ *
+ * **Shared by {@link Product} and {@link StoreProduct}, which the shapes around it are
+ * deliberately not.** What that split rules out is a shared *object* designed to grow, where
+ * a field added for a Merchant is published to every publishable key by the next deploy. A
+ * leaf cannot grow a field, {@link Metadata} is already shared by both for that reason, and
+ * each surface still names this one itself — which is where the decision to publish it was
+ * taken.
+ */
+export const ProductDescription = z.string().nullable().meta({
+  description:
+    "What this Product says for itself, in a Merchant's own words, or `null` where none has been written. Never an empty string: a Product nobody has written copy for has no description rather than a blank one.",
+});
+
 /** As a list reports it: no Variants, because a list is not a detail view. */
 export const Product = z
-  .object({ id: z.uuid(), title: z.string(), metadata: Metadata })
+  .object({
+    id: z.uuid(),
+    title: z.string(),
+    description: ProductDescription,
+    metadata: Metadata,
+  })
   .openapi("Product");
 
 export const ProductDetail = Product.extend({
@@ -1041,6 +1066,10 @@ export const CreateVariantRequest = z
 export const CreateProductRequest = z
   .object({
     title: z.string(),
+    description: z.string().optional().meta({
+      description:
+        "What this Product says for itself, in a Merchant's own words. Left out, the Product has no description — `null` rather than an empty string, because a Product nobody has written copy for is a different thing from one described as nothing at all. Correct it later with `PATCH /admin/products/{id}`.",
+    }),
     metadata: Metadata.optional(),
     variants: z.array(CreateVariantRequest).min(1),
   })
@@ -1066,6 +1095,10 @@ export const UpdateProductRequest = z
     title: z.string().optional().meta({
       description:
         "A new title for this Product. Free to change: an Order's Line Items snapshot the title they were bought under (ADR-0009), so nothing already sold is rewritten. Two Products may share a title — it is what a Product is called, not what identifies it.",
+    }),
+    description: z.string().nullable().optional().meta({
+      description:
+        "New copy for this Product, or `null` to take what is there back off — which is the state a Product created without one is already in. Absent leaves whatever is stored, exactly as every other field here does.",
     }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
@@ -1227,7 +1260,19 @@ export const StoreVariant = z
 
 /** As a list reports it: no Variants, because a list is not a detail view. */
 export const StoreProduct = z
-  .object({ id: z.uuid(), title: z.string(), metadata: Metadata })
+  .object({
+    id: z.uuid(),
+    title: z.string(),
+    /**
+     * **Published deliberately, and it is the one admin field this section adds by hand.**
+     * A description is copy a Merchant writes *for a Shopper to read*, so a storefront that
+     * could not read it would be missing the thing it was written for — which is why the
+     * schema names it here rather than inheriting it from {@link Product}, exactly as this
+     * section's whole argument requires: a field is public because somebody said so here.
+     */
+    description: ProductDescription,
+    metadata: Metadata,
+  })
   .openapi("StoreProduct");
 
 /**

@@ -24,6 +24,7 @@ async function merchantHeaders(harness: TestKobai): Promise<Record<string, strin
 type CreatedProduct = {
   id: string;
   title: string;
+  description: string | null;
   metadata: Record<string, unknown>;
   variants: {
     id: string;
@@ -80,6 +81,66 @@ describe("POST /admin/products", () => {
     // whatever a bug left there (#186, docs/agents/writing-tests.md).
     expect(created.metadata).toEqual({});
     expect(created.variants[0]?.metadata).toEqual({});
+  });
+
+  it("keeps the description a Merchant wrote, and answers `null` where they wrote none", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const described = await createProduct(kobai, headers, {
+      title: "A2 poster",
+      description: "Printed on 200gsm uncoated stock.",
+      variants: [{ sku: "POSTER-A2" }],
+    });
+    const bare = await createProduct(kobai, headers, {
+      title: "A3 poster",
+      variants: [{ sku: "POSTER-A3" }],
+    });
+
+    expect(described.description).toBe("Printed on 200gsm uncoated stock.");
+    // `null` and not `""`: a Product nobody has written copy for has no description, and a
+    // storefront told it has an empty one renders an empty paragraph under every title.
+    expect(bare.description).toBeNull();
+
+    // Read back through the route a Merchant opens a Product with, because a create that
+    // assembled the answer itself would report a field the reader had never learned to select.
+    const opened = await kobai.request(`/admin/products/${described.id}`, { headers });
+    await expect(opened.json()).resolves.toMatchObject({
+      description: "Printed on 200gsm uncoated stock.",
+    });
+
+    // And on the list shape too, which is a different projection of the same column: a
+    // Merchant scanning the catalog reads the copy they wrote without opening each entry.
+    const listed = await kobai.request("/admin/products", { headers });
+    const page = (await listed.json()) as { products: CreatedProduct[] };
+    expect(page.products.map((one) => one.description)).toEqual([
+      null,
+      "Printed on 200gsm uncoated stock.",
+    ]);
+  });
+
+  it("refuses an empty description rather than creating a Product with a blank one", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "A2 poster",
+        description: "   ",
+        variants: [{ sku: "POSTER-A2" }],
+      }),
+    });
+
+    // The same answer `PATCH /admin/products/{id}` gives the same mistake, because both read
+    // the field through `text`: leaving a Product without a description is what leaving it out
+    // does, and a blank one would be a second spelling of that.
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
+    await expect(kobai.database.query("select id from core_product")).resolves.toEqual(
+      [],
+    );
   });
 
   it("refuses a Product with no Variant, and stores nothing", async () => {

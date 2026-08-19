@@ -76,6 +76,14 @@ export type Variant = {
 export type Product = {
   readonly id: string;
   readonly title: string;
+  /**
+   * What a Merchant wrote about this Product, or `null` where nobody has written anything.
+   *
+   * `null` rather than `""`, because the two are different facts: a Merchant who has not got
+   * to the copy yet and one who deliberately says nothing are told apart by exactly this, and
+   * a storefront handed an empty string draws an empty paragraph under every such title.
+   */
+  readonly description: string | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -99,6 +107,7 @@ export async function listProducts(
     .select({
       id: product.id,
       title: product.title,
+      description: product.description,
       metadata: product.metadata,
       cursorAt: cursorAt(product.createdAt),
     })
@@ -114,9 +123,14 @@ export async function listProducts(
 
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
   // response by being forgotten about — the same reason a Payment is rebuilt rather than
-  // spread. A Product reports three fields, and these are them.
+  // spread. A Product reports four fields, and these are them.
   return {
-    items: found.map((row) => ({ id: row.id, title: row.title, metadata: row.metadata })),
+    items: found.map((row) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      metadata: row.metadata,
+    })),
     nextCursor,
   };
 }
@@ -133,7 +147,12 @@ export async function readProduct(
   if (!isUuid(id)) return undefined;
 
   const [row] = await db
-    .select({ id: product.id, title: product.title, metadata: product.metadata })
+    .select({
+      id: product.id,
+      title: product.title,
+      description: product.description,
+      metadata: product.metadata,
+    })
     .from(product)
     .where(eq(product.id, id))
     .limit(1);
