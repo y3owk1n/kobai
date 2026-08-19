@@ -1,5 +1,6 @@
 import type { OpenAPIHono, RouteConfig, z } from "@hono/zod-openapi";
 import type { Context, Env } from "hono";
+import { MAX_PAGE_LIMIT } from "../db/page.ts";
 import * as contract from "./contract.ts";
 
 /**
@@ -133,6 +134,37 @@ export const REFUSALS = {
   ),
   serverError: json("Something failed inside kobai.", contract.ServerError),
 } as const;
+
+/**
+ * The 400 every list route answers, and the only one any of them has.
+ *
+ * `InvalidRequest` rather than the family schema each list otherwise belongs to, because a
+ * paging parameter is the whole of what these routes can refuse: they take no body, so there
+ * is no `malformed-body` to reach them and no Merchant's rule for them to break. It is one
+ * constant across every family a list belongs to for the same reason `contract.pageQuery` is
+ * one function — they refuse the identical things, and a client that learned it once has
+ * learned it everywhere.
+ *
+ * It sits here beside {@link REFUSALS} rather than on either surface, because **both** of them
+ * page now: `GET /store/products` refuses a bad page query in the same words a Merchant's list
+ * does, and a second copy of this sentence is the drift the shared constant exists to prevent.
+ * It is not *in* `REFUSALS` because that object is the refusals made **above** a route, by a
+ * gate — this one is the route's own, and `openapi.test.ts` reads that distinction off the
+ * chain rather than off a name.
+ *
+ * **A `limit` over the ceiling is here rather than clamped**, which is the decision ADR-0064
+ * makes and the reason this response exists at all: a caller that asked for 5,000 and received
+ * a hundred would read the short page as the end of the list.
+ *
+ * **A cursor from another list is here too, rather than under a `reason` of its own** (#183).
+ * Both mean *this value is not usable on this endpoint*, which is what `invalid` says, and a
+ * new `reason` would be permanent under ADR-0060 for a distinction no client can act on. The
+ * argument is in `db/page.ts`, beside `decodeCursor`.
+ */
+export const PAGE_QUERY_INVALID = json(
+  `\`limit\` is not a whole number between 1 and ${MAX_PAGE_LIMIT}, or \`after\` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A \`limit\` above the ceiling is refused rather than reduced to it.`,
+  contract.InvalidRequest,
+);
 
 /**
  * What a request that does not fit its schema is answered with.

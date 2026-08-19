@@ -303,8 +303,15 @@ describe("what the generated types refuse", () => {
   });
 
   it("rejects a path that is not on the surface", () => {
+    // `/store/products` used to be the example here, and it stopped being one the day the
+    // store surface grew a catalog — which is what this assertion is for rather than against.
+    // The check is that the generated types refuse a path kobai does not serve, so it is
+    // repointed at one kobai has *decided* not to serve: the description itself. `/store`
+    // refuses an unauthenticated request before saying whether a path exists, and an endpoint
+    // handing out the whole surface anonymously would undo that, so this one will not arrive
+    // later the way a catalog route did (ADR-0040).
     // @ts-expect-error there is no such route, so there is no such call.
-    const read = async () => client.GET("/store/products");
+    const read = async () => client.GET("/openapi.json");
 
     expect(read).toBeDefined();
   });

@@ -122,6 +122,18 @@ export type Store = components["schemas"]["Store"];
 export type Product = components["schemas"]["Product"];
 export type ProductDetail = components["schemas"]["ProductDetail"];
 export type Variant = components["schemas"]["Variant"];
+/**
+ * What a **storefront** is shown, which is deliberately less than a Merchant is.
+ *
+ * Declared apart from {@link Product}, {@link ProductDetail} and {@link Variant} rather than
+ * reusing them: a publishable key is shipped to a browser, so these three are public, and a
+ * field a Merchant needs must not be published by the deploy that adds it. A `StoreVariant`
+ * therefore carries no stock count and no Price rows — ask `GET /store/variants/{id}/price`
+ * for what one costs, because a Price is resolved by a Workflow rather than read off a row.
+ */
+export type StoreProduct = components["schemas"]["StoreProduct"];
+export type StoreProductDetail = components["schemas"]["StoreProductDetail"];
+export type StoreVariant = components["schemas"]["StoreVariant"];
 export type FulfilmentStrategySummary =
   components["schemas"]["FulfilmentStrategySummary"];
 export type Price = components["schemas"]["Price"];
@@ -146,6 +158,7 @@ export type MerchantRefusal = components["schemas"]["MerchantRefusal"];
 export type RoleRefusal = components["schemas"]["RoleRefusal"];
 export type StoreRefusal = components["schemas"]["StoreRefusal"];
 export type CatalogRefusal = components["schemas"]["CatalogRefusal"];
+export type StoreCatalogRefusal = components["schemas"]["StoreCatalogRefusal"];
 export type CartRefusal = components["schemas"]["CartRefusal"];
 export type OrderRefusal = components["schemas"]["OrderRefusal"];
 export type PlaceOrderRequestRefusal = components["schemas"]["PlaceOrderRequestRefusal"];

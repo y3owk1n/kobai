@@ -62,7 +62,7 @@ import {
   type VariantCreation,
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
-import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
+import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
 import {
   type FulfilmentStrategies,
   fulfilmentStrategyNames,
@@ -72,7 +72,13 @@ import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts"
 import { readStore } from "../store/read.ts";
 import { type StoreUpdate, updateStore } from "../store/write.ts";
 import * as contract from "./contract.ts";
-import { invalidRequestHook, json, MERCHANT_SESSION, REFUSALS } from "./openapi.ts";
+import {
+  invalidRequestHook,
+  json,
+  MERCHANT_SESSION,
+  PAGE_QUERY_INVALID,
+  REFUSALS,
+} from "./openapi.ts";
 
 /**
  * The admin surface — everything a Merchant reaches, and the only thing the Admin consumes
@@ -165,30 +171,6 @@ const signInRoute = (Session: contract.SessionSchema) =>
 const CATALOG_INVALID_REQUEST = json(
   "The request does not fit this endpoint's schema, or is not JSON at all.",
   contract.CatalogRefusal,
-);
-
-/**
- * The 400 every list route answers, and the only one any of them has.
- *
- * `InvalidRequest` rather than the family schema each list otherwise belongs to, because a
- * paging parameter is the whole of what these routes can refuse: they take no body, so there
- * is no `malformed-body` to reach them and no Merchant's rule for them to break. It is one
- * constant across every family a list belongs to for the same reason `contract.pageQuery` is
- * one function — they refuse the identical things, and a client that learned it once has
- * learned it everywhere.
- *
- * **A `limit` over the ceiling is here rather than clamped**, which is the decision ADR-0064
- * makes and the reason this response exists at all: a caller that asked for 5,000 and received
- * a hundred would read the short page as the end of the list.
- *
- * **A cursor from another list is here too, rather than under a `reason` of its own** (#183).
- * Both mean *this value is not usable on this endpoint*, which is what `invalid` says, and a
- * new `reason` would be permanent under ADR-0060 for a distinction no client can act on. The
- * argument is in `db/page.ts`, beside {@link decodeCursor}.
- */
-const PAGE_QUERY_INVALID = json(
-  `\`limit\` is not a whole number between 1 and ${MAX_PAGE_LIMIT}, or \`after\` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A \`limit\` above the ceiling is refused rather than reduced to it.`,
-  contract.InvalidRequest,
 );
 
 /**
