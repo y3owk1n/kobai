@@ -9,6 +9,7 @@ import type {
   ProductDeletion,
   VariantDeletion,
 } from "../catalog/delete.ts";
+import type { StoreCatalogRefusal as StoreCatalogReason } from "../catalog/store-read.ts";
 import type { ProductUpdate, VariantUpdate } from "../catalog/update.ts";
 import type {
   PriceCreation,
@@ -1108,6 +1109,79 @@ export const CatalogRefusal = z
     }),
   })
   .openapi("CatalogRefusal");
+
+// ---- The catalog, as a storefront sees it ----------------------------------------------
+
+/**
+ * The store surface's own catalog shapes, and the reason there are four of them rather than a
+ * reuse of the four above.
+ *
+ * **This is the load-bearing decision of the store catalog.** {@link Product},
+ * {@link ProductDetail} and {@link Variant} are what a *Merchant* is shown, behind a session and
+ * a `catalog:read` Permission. A publishable key is shipped to a browser, so anything these
+ * schemas carry is public — and under ADR-0060 a field added here is promised, while taking one
+ * back out is a major. Reusing the admin shapes would make every future field a Merchant needs
+ * public on the deploy that adds it, with a review as the only thing in the way; declaring them
+ * apart makes publishing a field an edit somebody made in this section, deliberately.
+ *
+ * The two `metadata` bags are the same escape hatch (ADR-0004) and are kept for that reason: a
+ * Project's description, imagery and copy live there until catalog breadth models them, and a
+ * product page with only a title is not a product page. What is dropped, and why, is beside
+ * each field and in `catalog/store-read.ts`.
+ */
+export const StoreVariant = z
+  .object({
+    id: z.uuid(),
+    sku: z.string(),
+    fulfilment: VariantFulfilment,
+    metadata: Metadata,
+  })
+  .openapi("StoreVariant");
+
+/** As a list reports it: no Variants, because a list is not a detail view. */
+export const StoreProduct = z
+  .object({ id: z.uuid(), title: z.string(), metadata: Metadata })
+  .openapi("StoreProduct");
+
+/**
+ * A Product opened, with the Variants a Shopper chooses between.
+ *
+ * Inline rather than a second request per Variant: rendering a product page is the one place a
+ * storefront needs them all, and N+1 requests over a public API is a page that renders slowly
+ * for everyone and expensively for the Store.
+ */
+export const StoreProductDetail = StoreProduct.extend({
+  variants: z.array(StoreVariant).readonly(),
+}).openapi("StoreProductDetail");
+
+/** The list, in an envelope — the same shape, and the same reason, as {@link ProductList}. */
+export const StoreProductList = z
+  .object({ products: z.array(StoreProduct).readonly(), nextCursor: NextCursor })
+  .openapi("StoreProductList");
+
+/**
+ * Reading a Product or a Variant that is not there.
+ *
+ * Two words, and **not** {@link CatalogRefusal}'s two of the same spelling. That set is nine
+ * reasons wide because it covers nine admin routes, and a storefront branching on it would be
+ * handed `sku-taken` and `last-variant` as things a catalog read might answer — which it never
+ * can. Each module owns its own vocabulary (ADR-0060), and the mapped `satisfies` below is what
+ * holds this one to exactly what `catalog/store-read.ts` can refuse: a rename there turns this
+ * red naming the word, and a reason with no key does not compile.
+ */
+const STORE_CATALOG_REASONS = {
+  "product-not-found": "product-not-found",
+  "variant-not-found": "variant-not-found",
+} as const satisfies { [R in StoreCatalogReason]: R };
+
+export const StoreCatalogRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(STORE_CATALOG_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("StoreCatalogRefusal");
 
 // ---- Price resolution -----------------------------------------------------------------
 

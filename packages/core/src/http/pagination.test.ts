@@ -7,6 +7,7 @@ import {
   seedTestCatalog,
   seedTestOrder,
   signInTestMerchant,
+  type TestApiKey,
   type TestKobai,
   type TestSession,
 } from "../testing/index.ts";
@@ -42,29 +43,65 @@ type Paged<Item> = {
 };
 
 /**
- * The lists, each as "how to ask for a page of it" and "what its rows are called".
+ * The lists, each as "how to ask for a page of it", "what its rows are called", and **which
+ * credential opens it**.
  *
  * A table rather than a copy of each assertion per list, so a list added later is one entry
  * here and is held to the same contract — which is what ADR-0064 means by uniformly. #173's two
  * were exactly that: two entries, and everything below covered them.
+ *
+ * The third column arrived with the first paged list on the **store** surface, which is a
+ * bearer API key's rather than a Merchant session's (ADR-0020). Every entry names its own
+ * rather than the file assuming one, because "some lists take a session" is exactly the shape
+ * of thing that goes wrong silently: a store list read with a cookie answers 401, and a 401 is
+ * a plausible-looking failure in a file that is not about credentials at all.
+ *
+ * `/store/products` and `/admin/products` page the same rows and are two entries, not one. They
+ * are two *lists* — two shapes behind two gates, and two cursor names — and the sweep at the
+ * foot of this file is what holds that apart: each one's cursor must be refused by the other.
  */
 const LISTS = [
-  { path: "/admin/products", key: "products" },
-  { path: "/admin/orders", key: "orders" },
-  { path: "/admin/api-keys", key: "apiKeys" },
-  { path: "/admin/roles", key: "roles" },
-  { path: "/admin/merchants", key: "merchants" },
+  { path: "/admin/products", key: "products", credential: "session" },
+  { path: "/admin/orders", key: "orders", credential: "session" },
+  { path: "/admin/api-keys", key: "apiKeys", credential: "session" },
+  { path: "/admin/roles", key: "roles", credential: "session" },
+  { path: "/admin/merchants", key: "merchants", credential: "session" },
+  { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
+
+type List = (typeof LISTS)[number];
+
+/**
+ * The headers a list is read with, minted on demand from the one Merchant a deployment has.
+ *
+ * **Lazily, and that is not a micro-optimisation.** Minting an API key writes a row to
+ * `/admin/api-keys`, which is itself one of the lists below — so a key minted for every test
+ * would put a fourth row in a list three of these cases seed exactly three rows into and assert
+ * every one of them back. The key is created the first time a store list asks for one, which is
+ * never in the deployments that are paging `/admin/api-keys`.
+ */
+function credentials(kobai: TestKobai, merchant: TestSession) {
+  let storefront: Promise<TestApiKey> | undefined;
+
+  return async (list: List): Promise<Record<string, string>> => {
+    if (list.credential === "session") return { ...merchant.headers };
+    storefront ??= createTestApiKey(kobai, merchant, { name: "a storefront" });
+    return (await storefront).headers;
+  };
+}
+
+/** What {@link credentials} hands back: the headers for whichever list is being read. */
+type Opener = ReturnType<typeof credentials>;
 
 /** One page of one list, with the item key normalised away so the assertions can be shared. */
 async function fetchPage(
   kobai: TestKobai,
-  list: (typeof LISTS)[number],
-  merchant: TestSession,
+  list: List,
+  open: Opener,
   query = "",
 ): Promise<{ readonly status: number } & Paged<{ readonly id: string }>> {
   const response = await kobai.request(`${list.path}${query}`, {
-    headers: merchant.headers,
+    headers: await open(list),
   });
   const body = (await response.json()) as Record<string, unknown>;
   return {
@@ -77,8 +114,8 @@ async function fetchPage(
 /** Every page of a list, followed to the end — and the ids in the order they arrived. */
 async function readToTheEnd(
   kobai: TestKobai,
-  list: (typeof LISTS)[number],
-  merchant: TestSession,
+  list: List,
+  open: Opener,
   limit: number,
 ): Promise<string[]> {
   const seen: string[] = [];
@@ -86,7 +123,7 @@ async function readToTheEnd(
   // A bound, so a cursor that never advanced fails here rather than hanging the suite.
   for (let page = 0; page < 20; page += 1) {
     const query = `?limit=${limit}${cursor === undefined ? "" : `&after=${encodeURIComponent(cursor)}`}`;
-    const answered = await fetchPage(kobai, list, merchant, query);
+    const answered = await fetchPage(kobai, list, open, query);
     expect(answered.status, `${list.path} page ${page}`).toBe(200);
     seen.push(...answered.items.map((one) => one.id));
     if (answered.nextCursor === undefined) return seen;
@@ -95,11 +132,19 @@ async function readToTheEnd(
   throw new Error(`${list.path} never reported a last page`);
 }
 
-/** `count` Products, oldest first — created one at a time, so `created_at` orders them. */
+/**
+ * `count` Products, oldest first — created one at a time, so `created_at` orders them.
+ *
+ * `mark` distinguishes one batch's SKUs from another's, and it is not decoration: a SKU is
+ * unique across the Store, and the cursor sweep at the foot of this file seeds **both** Product
+ * lists into one deployment. Two unmarked batches collide on `POSTER-0` and the second is
+ * refused `sku-taken`, which is a 409 in the arrangement of a test about paging.
+ */
 async function seedProducts(
   kobai: TestKobai,
   merchant: TestSession,
   count: number,
+  mark = "POSTER",
 ): Promise<string[]> {
   const created: string[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -107,11 +152,11 @@ async function seedProducts(
       method: "POST",
       headers: { ...merchant.headers, "content-type": "application/json" },
       body: JSON.stringify({
-        title: `Poster ${index}`,
-        variants: [{ sku: `POSTER-${index}` }],
+        title: `Poster ${mark} ${index}`,
+        variants: [{ sku: `${mark}-${index}` }],
       }),
     });
-    expect(response.status, `creating Poster ${index}`).toBe(201);
+    expect(response.status, `creating ${mark} ${index}`).toBe(201);
     created.push(((await response.json()) as { id: string }).id);
   }
   return created;
@@ -177,9 +222,10 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = credentials(kobai, merchant);
       const seeded = await seedThree(kobai, merchant, list);
 
-      const first = await fetchPage(kobai, list, merchant, "?limit=2");
+      const first = await fetchPage(kobai, list, open, "?limit=2");
 
       expect(first.status).toBe(200);
       // Newest first, which is what all three of these lists promise — so the page is the
@@ -190,7 +236,7 @@ describe("every list route pages, and pages the same way", () => {
       const rest = await fetchPage(
         kobai,
         list,
-        merchant,
+        open,
         `?limit=2&after=${encodeURIComponent(first.nextCursor ?? "")}`,
       );
 
@@ -204,9 +250,10 @@ describe("every list route pages, and pages the same way", () => {
   it.each(LISTS)("$path reports no cursor when everything fits", async (list) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = credentials(kobai, merchant);
     await seedThree(kobai, merchant, list);
 
-    const page = await fetchPage(kobai, list, merchant, "?limit=3");
+    const page = await fetchPage(kobai, list, open, "?limit=3");
 
     // Exactly as many rows as there are, which is the case a `limit + 1` fetch exists to tell
     // from a full page with more behind it.
@@ -219,9 +266,10 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = credentials(kobai, merchant);
       await seedThree(kobai, merchant, list);
 
-      const page = await fetchPage(kobai, list, merchant);
+      const page = await fetchPage(kobai, list, open);
 
       // Both parameters are optional, which is what made adding them additive: a client written
       // before this existed sends neither and is answered rather than refused.
@@ -235,10 +283,11 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = credentials(kobai, merchant);
       await seedThree(kobai, merchant, list);
 
       const response = await kobai.request(`${list.path}?limit=${MAX_PAGE_LIMIT + 1}`, {
-        headers: merchant.headers,
+        headers: await open(list),
       });
 
       // Refused, not clamped. A caller that asked for 5,000 and received a hundred reads the
@@ -252,9 +301,10 @@ describe("every list route pages, and pages the same way", () => {
   it.each(LISTS)("$path refuses an `after` it did not issue", async (list) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = credentials(kobai, merchant);
 
     const response = await kobai.request(`${list.path}?after=not-a-cursor`, {
-      headers: merchant.headers,
+      headers: await open(list),
     });
 
     // Refused rather than treated as the first page: a caller handed a cursor kobai will not
@@ -268,10 +318,11 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = credentials(kobai, merchant);
 
       for (const limit of ["0", "-1", "2.5", "many"]) {
         const response = await kobai.request(`${list.path}?limit=${limit}`, {
-          headers: merchant.headers,
+          headers: await open(list),
         });
 
         expect(response.status, `limit=${limit}`).toBe(400);
@@ -288,7 +339,7 @@ describe("the default page size", () => {
     // from "everything there is" — the assertion this file would otherwise not be making.
     await seedProducts(kobai, merchant, DEFAULT_PAGE_LIMIT + 1);
 
-    const page = await fetchPage(kobai, LISTS[0], merchant);
+    const page = await fetchPage(kobai, LISTS[0], credentials(kobai, merchant));
 
     expect(page.items).toHaveLength(DEFAULT_PAGE_LIMIT);
     expect(page.nextCursor).toEqual(expect.any(String));
@@ -321,13 +372,13 @@ describe("a page fetched across a concurrent insert", () => {
   it("shows every Order that already existed exactly once", async () => {
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
-    const merchant = catalog.merchant;
+    const open = credentials(kobai, catalog.merchant);
     const seeded: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       seeded.push((await seedTestOrder(kobai, { catalog })).id);
     }
 
-    const first = await fetchPage(kobai, LISTS[1], merchant, "?limit=2");
+    const first = await fetchPage(kobai, LISTS[1], open, "?limit=2");
     expect(first.items.map((one) => one.id)).toEqual([seeded[4], seeded[3]]);
 
     // The busy hour, in one line: a Shopper places an Order while the Merchant is reading.
@@ -339,7 +390,7 @@ describe("a page fetched across a concurrent insert", () => {
       const next = await fetchPage(
         kobai,
         LISTS[1],
-        merchant,
+        open,
         `?limit=2&after=${encodeURIComponent(cursor)}`,
       );
       seen.push(...next.items.map((one) => one.id));
@@ -360,9 +411,10 @@ describe("paging is stable when the row a cursor names is deleted", () => {
   it("still answers what followed it", async () => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = credentials(kobai, merchant);
     const seeded = await seedProducts(kobai, merchant, 3);
 
-    const first = await fetchPage(kobai, LISTS[0], merchant, "?limit=2");
+    const first = await fetchPage(kobai, LISTS[0], open, "?limit=2");
     expect(first.items.map((one) => one.id)).toEqual([seeded[2], seeded[1]]);
 
     // The row the cursor was cut from, gone. A cursor that named a row by identifier and looked
@@ -378,7 +430,7 @@ describe("paging is stable when the row a cursor names is deleted", () => {
     const rest = await fetchPage(
       kobai,
       LISTS[0],
-      merchant,
+      open,
       `?limit=2&after=${encodeURIComponent(first.nextCursor ?? "")}`,
     );
 
@@ -390,12 +442,13 @@ describe("reading a whole list one page at a time", () => {
   it.each(LISTS)("$path reaches every row of it and stops", async (list) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = credentials(kobai, merchant);
     const seeded = await seedThree(kobai, merchant, list);
 
     // A page size of one, so every boundary in the list is a boundary between two pages —
     // which is where a cursor that ties, or an `order by` that does not end in `id`, goes
     // wrong. Three rows and three pages, and the last one is what says there is no fourth.
-    const seen = await readToTheEnd(kobai, list, merchant, 1);
+    const seen = await readToTheEnd(kobai, list, open, 1);
 
     expect(seen).toEqual([...seeded].reverse());
   });
@@ -423,15 +476,22 @@ describe("a cursor is bound to the list that issued it", () => {
    * a Product's position was older than every row of those lists: the caller is told the list
    * has **ended**. Neither answer is distinguishable from a correct one by the client holding
    * it, which is why nothing but a test from outside was ever going to find this.
+   *
+   * **Watched failing again** when `/store/products` joined the table, against that route
+   * declaring `pageQuery("products")` — the name the Merchant's Product list already uses. One
+   * pair went red: `/admin/products`'s cursor answered a 200 page of `/store/products`. Two
+   * lists over one table is the most tempting collision there is, and this is the only thing
+   * that can see it.
    */
   it("is refused by every other list rather than answering a page of it", async () => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = credentials(kobai, merchant);
 
     const cursors = new Map<string, string>();
     for (const list of LISTS) {
       await seedThree(kobai, merchant, list);
-      const page = await fetchPage(kobai, list, merchant, "?limit=1");
+      const page = await fetchPage(kobai, list, open, "?limit=1");
       // The arrangement rather than the subject, so it is asserted rather than assumed: a list
       // that issued no cursor would make every pair below vacuously green.
       expect(page.nextCursor, `${list.path} issued no cursor to offer elsewhere`).toEqual(
@@ -447,7 +507,7 @@ describe("a cursor is bound to the list that issued it", () => {
 
         const response = await kobai.request(
           `${reader.path}?limit=1&after=${encodeURIComponent(cursor)}`,
-          { headers: merchant.headers },
+          { headers: await open(reader) },
         );
 
         const where = `${issuer.path}'s cursor offered to ${reader.path}`;
@@ -468,7 +528,7 @@ describe("a cursor is bound to the list that issued it", () => {
       const own = await fetchPage(
         kobai,
         list,
-        merchant,
+        open,
         `?limit=1&after=${encodeURIComponent(cursors.get(list.path) ?? "")}`,
       );
 
@@ -536,9 +596,19 @@ describe("a cursor is bound to the list that issued it", () => {
 async function seedThree(
   kobai: TestKobai,
   merchant: TestSession,
-  list: (typeof LISTS)[number],
+  list: List,
 ): Promise<string[]> {
-  if (list.key === "products") return seedProducts(kobai, merchant, 3);
+  // Both Product lists seed through `/admin/products`, because that is the only way to make a
+  // Product — the store surface reads the catalog and writes none of it. They take a mark each
+  // so that the two batches the cursor sweep seeds into one deployment do not collide on a SKU.
+  if (list.key === "products") {
+    return seedProducts(
+      kobai,
+      merchant,
+      3,
+      list.path.startsWith("/store") ? "STOREFRONT" : "POSTER",
+    );
+  }
 
   // Two of these lists start with a row already in them — the `owner` Role a migration seeds
   // and the first Merchant a boot does — so they get **two** more rather than three, and the

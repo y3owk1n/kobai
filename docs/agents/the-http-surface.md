@@ -169,6 +169,35 @@ looks like one, whether a SKU is taken, whether this Store prices in that curren
 that moved into a schema would be one a client could be told about but Core could no longer
 change.
 
+**The store surface's catalog shapes are its own, and reusing the admin surface's is the
+mistake to watch for** (#207). `StoreProduct`, `StoreProductDetail` and `StoreVariant` are
+declared apart from `Product`, `ProductDetail` and `Variant`, and `catalog/store-read.ts` is a
+second reader beside `catalog/read.ts` rather than the same one with a flag. The reason is
+asymmetric risk: `/store` is opened by a **publishable** key, which is shipped to a browser, so
+anything these schemas carry is public — and under ADR-0060 a field added here is promised while
+taking one back out is a major. Share the shape and every field a Merchant later needs is
+published by the deploy that adds it, with a review as the only thing in the way. What the store
+shapes drop, each for its own reason, is beside the fields in `catalog/store-read.ts`:
+**`inventory`**, because exact stock is a business fact and ADR-0018 makes availability a
+conditional write rather than a readable one; and **`prices`**, because a storefront that read
+the rows would pick one itself and bypass `resolve-price`, which is the Workflow that decides and
+one a Project may have replaced (ADR-0017) — `GET /store/variants/{id}/price` is the question.
+`fulfilment.strategy` and both `metadata` bags are kept. **The two absences are asserted
+directly** in `store.test.ts`, against a Variant that really is counted and really is priced,
+because a promise about what is *not* in a response is one nothing else notices going missing.
+The same split runs through the refusals: `StoreCatalogRefusal` is two words where
+`CatalogRefusal` is nine, bound by its own mapped `satisfies`, because a storefront must not be
+handed `sku-taken` as something a catalog read might answer.
+
+**Two routes over one table are two lists.** `GET /store/products` and `GET /admin/products` page
+the same rows in the same order and take **different** `PagedList` names — `store-products` and
+`products` — so neither will read the other's cursor. Sharing a name is the most tempting
+collision the scheme has, and `pagination.test.ts` has been watched catching it: with both on
+`products`, a Merchant's cursor answered a 200 page of the store list. That file's `LISTS` table
+also carries **which credential opens each list** now, because the store surface's gate is a
+bearer API key rather than a session (ADR-0020) — a store list read with a cookie answers 401,
+which looks like an ordinary failure in a file that is not about credentials.
+
 **One schema and two routes are built per instance, and only these.** `Session`'s description
 carries the deployment's own session lifetimes, which a Project may set (ADR-0050), so
 `contract.sessionSchema(policy)` is a function and `admin.ts`'s two `/admin/session` routes

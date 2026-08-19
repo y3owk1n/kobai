@@ -11,7 +11,13 @@ import {
   updateCart,
   updateLineItem,
 } from "../cart/write.ts";
+import {
+  listStoreProducts,
+  readStoreProduct,
+  readStoreVariant,
+} from "../catalog/store-read.ts";
 import type { Database } from "../db/client.ts";
+import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
@@ -28,7 +34,13 @@ import {
 } from "../workflow/context.ts";
 import type { WorkflowRun } from "../workflow/run.ts";
 import * as contract from "./contract.ts";
-import { API_KEY, invalidRequestHook, json, REFUSALS } from "./openapi.ts";
+import {
+  API_KEY,
+  invalidRequestHook,
+  json,
+  PAGE_QUERY_INVALID,
+  REFUSALS,
+} from "./openapi.ts";
 
 /**
  * The store surface — what a storefront calls, and the second of kobai's two authenticated
@@ -85,6 +97,88 @@ export type StoreDependencies = {
    */
   readonly paymentProvider: PaymentProvider | undefined;
 };
+
+// ---- The catalog -------------------------------------------------------------------------
+
+/**
+ * The refusals the three catalog reads may declare, and the whole of what their handlers may
+ * answer.
+ *
+ * A 404 each, and the two are separate entries for the reason the Cart's three are: a client
+ * reading the description of `GET /store/variants/{id}` should be told that a 404 there means
+ * the Variant, without having to work out which of two nouns the shared prose meant.
+ */
+const STORE_CATALOG_REFUSALS = {
+  noProduct: json("No such Product exists.", contract.StoreCatalogRefusal),
+  noVariant: json("No such Variant exists.", contract.StoreCatalogRefusal),
+} as const;
+
+/**
+ * The catalog a storefront can read — the three routes a product page is built from.
+ *
+ * They answer {@link contract.StoreProduct} and friends rather than the admin surface's
+ * `Product`, which is the load-bearing decision of this surface and is argued where those
+ * schemas are declared: a publishable key is shipped to a browser, so a field a Merchant needs
+ * must not be published by the deploy that adds it. What is dropped and why is in
+ * `catalog/store-read.ts`.
+ *
+ * **A publishable key is enough**, and no route here declares a 403. ADR-0055's secret-key
+ * requirement is about placing an Order and reading one back — where money moves and where the
+ * answer names a Shopper. These are reads of what the Store sells, which is what a browser is
+ * for.
+ */
+const listStoreProductsRoute = createRoute({
+  method: "get",
+  path: "/products",
+  summary: "List what the Store sells",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064). A Product carries no Variants here: open one for those. What each Variant costs is \`GET /store/variants/{id}/price\`, because a Price is resolved by a Workflow rather than read off a row.`,
+  security: API_KEY,
+  request: { query: contract.pageQuery("store-products") },
+  responses: {
+    200: json("A page of Products.", contract.StoreProductList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noApiKey,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readStoreProductRoute = createRoute({
+  method: "get",
+  path: "/products/{id}",
+  summary: "Read a Product",
+  description:
+    "One Product with its Variants, so a product page is one request rather than one per Variant. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.",
+  security: API_KEY,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json(
+      "The Product, with the Variants a Shopper chooses between.",
+      contract.StoreProductDetail,
+    ),
+    401: REFUSALS.noApiKey,
+    404: STORE_CATALOG_REFUSALS.noProduct,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readStoreVariantRoute = createRoute({
+  method: "get",
+  path: "/variants/{id}",
+  summary: "Read a Variant",
+  description:
+    "The Variant a Cart line names, without its Product. What a storefront rebuilding a Cart line asks: a line carries a `variantId` and nothing else, and fetching the whole Product to render one row is a request for everything else that Product sells.",
+  security: API_KEY,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Variant.", contract.StoreVariant),
+    401: REFUSALS.noApiKey,
+    404: STORE_CATALOG_REFUSALS.noVariant,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
 
 /**
  * What a Variant costs.
@@ -419,6 +513,43 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     workflows: deps.workflows,
     paymentProvider: deps.paymentProvider,
     fulfilment: deps.fulfilment,
+  });
+
+  store.openapi(listStoreProductsRoute, async (c) => {
+    const page = await listStoreProducts(deps.db, c.req.valid("query"));
+    // `undefined` rather than `null`, and `JSON.stringify` drops the key — the wire shape
+    // ADR-0064 asks for: absent means there is no further page.
+    return c.json({ products: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  store.openapi(readStoreProductRoute, async (c) => {
+    const found = await readStoreProduct(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Product exists. A Product is addressed by the identifier `GET /store/products` reports, and a Product removed from the catalog is gone from here too.",
+          reason: "product-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  store.openapi(readStoreVariantRoute, async (c) => {
+    const found = await readStoreVariant(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Variant exists. A Variant is addressed by the identifier its Product reports, which is also the `variantId` a Cart line carries.",
+          reason: "variant-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
   });
 
   store.openapi(resolvePriceRoute, async (c) => {

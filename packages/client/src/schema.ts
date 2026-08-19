@@ -1614,6 +1614,158 @@ export interface paths {
       };
     };
   };
+  "/store/products": {
+    /**
+     * List what the Store sells
+     * @description Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064). A Product carries no Variants here: open one for those. What each Variant costs is `GET /store/variants/{id}/price`, because a Price is resolved by a Workflow rather than read off a row.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Products. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["StoreProductList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/products/{id}": {
+    /**
+     * Read a Product
+     * @description One Product with its Variants, so a product page is one request rather than one per Variant. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Product, with the Variants a Shopper chooses between. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["StoreProductDetail"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Product exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["StoreCatalogRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/variants/{id}": {
+    /**
+     * Read a Variant
+     * @description The Variant a Cart line names, without its Product. What a storefront rebuilding a Cart line asks: a line carries a `variantId` and nothing else, and fetching the whole Product to render one row is a request for everything else that Product sells.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Variant. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["StoreVariant"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Variant exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["StoreCatalogRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/store/variants/{id}/price": {
     /**
      * What a Variant costs
@@ -2664,6 +2816,47 @@ export interface components {
        */
       reason: "api-key-not-found";
     };
+    StoreProductList: {
+      products: components["schemas"]["StoreProduct"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    StoreProduct: {
+      /** Format: uuid */
+      id: string;
+      title: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    ApiKeyRefusal: {
+      error: string;
+      /** @enum {string} */
+      reason: "api-key-missing" | "api-key-malformed" | "api-key-unknown" | "api-key-revoked";
+    };
+    StoreProductDetail: components["schemas"]["StoreProduct"] & {
+      variants: components["schemas"]["StoreVariant"][];
+    };
+    StoreVariant: {
+      /** Format: uuid */
+      id: string;
+      sku: string;
+      fulfilment: components["schemas"]["VariantFulfilment"];
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    StoreCatalogRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "product-not-found" | "variant-not-found";
+    };
     ResolvedPrice: {
       variant: components["schemas"]["VariantIdentity"];
       price: {
@@ -2687,11 +2880,6 @@ export interface components {
       step: string;
       /** @description The Step that filled it. Differs when a Project replaced it. */
       implementation: string;
-    };
-    ApiKeyRefusal: {
-      error: string;
-      /** @enum {string} */
-      reason: "api-key-missing" | "api-key-malformed" | "api-key-unknown" | "api-key-revoked";
     };
     PriceRefusal: {
       error: string;

@@ -53,8 +53,25 @@ import type { PgColumn } from "drizzle-orm/pg-core";
  *
  * **A name carries no space**, because {@link encodeCursor} joins the parts with one. That holds
  * by inspection of this line, which is the other reason the line is worth being able to read.
+ *
+ * **A list is a route, not a table**, which is what `store-products` is here to say. It and
+ * `products` page the same rows in the same order — `GET /store/products` and
+ * `GET /admin/products` — and they are still two lists, because they answer two *shapes* behind
+ * two credentials and a cursor names the list that issued it. Naming them both `products` would
+ * make each accept the other's cursor, which is the collision this union exists to keep
+ * readable; and it would promise a storefront that a Merchant's cursor is portable onto the
+ * store surface, which is a promise nothing else here makes. When one of them grows a filter the
+ * other has not got, the pair stops being an accident of two names for one query and becomes two
+ * genuinely different traversals — so the split is where it will be wanted rather than where it
+ * merely costs nothing today.
  */
-export type PagedList = "products" | "orders" | "api-keys" | "roles" | "merchants";
+export type PagedList =
+  | "products"
+  | "orders"
+  | "api-keys"
+  | "roles"
+  | "merchants"
+  | "store-products";
 
 /** What a caller asked for: how many, and what they have already seen. */
 export type PageRequest = {

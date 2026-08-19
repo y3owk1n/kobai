@@ -1413,6 +1413,135 @@
           "reason"
         ]
       },
+      "StoreProductList": {
+        "type": "object",
+        "properties": {
+          "products": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreProduct"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one."
+          }
+        },
+        "required": [
+          "products"
+        ]
+      },
+      "StoreProduct": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "metadata"
+        ]
+      },
+      "ApiKeyRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "api-key-missing",
+              "api-key-malformed",
+              "api-key-unknown",
+              "api-key-revoked"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "StoreProductDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/StoreProduct"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "variants": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StoreVariant"
+                }
+              }
+            },
+            "required": [
+              "variants"
+            ]
+          }
+        ]
+      },
+      "StoreVariant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "fulfilment": {
+            "$ref": "#/components/schemas/VariantFulfilment"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "sku",
+          "fulfilment",
+          "metadata"
+        ]
+      },
+      "StoreCatalogRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "product-not-found",
+              "variant-not-found"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "ResolvedPrice": {
         "type": "object",
         "properties": {
@@ -1495,27 +1624,6 @@
         "required": [
           "step",
           "implementation"
-        ]
-      },
-      "ApiKeyRefusal": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "api-key-missing",
-              "api-key-malformed",
-              "api-key-unknown",
-              "api-key-revoked"
-            ]
-          }
-        },
-        "required": [
-          "error",
-          "reason"
         ]
       },
       "PriceRefusal": {
@@ -4547,6 +4655,283 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiKeyNotFound"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/products": {
+      "get": {
+        "summary": "List what the Store sells",
+        "description": "Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064). A Product carries no Variants here: open one for those. What each Variant costs is `GET /store/variants/{id}/price`, because a Price is resolved by a Workflow rather than read off a row.",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list."
+            },
+            "required": false,
+            "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page."
+            },
+            "required": false,
+            "description": "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page.",
+            "name": "after",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of Products.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreProductList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/products/{id}": {
+      "get": {
+        "summary": "Read a Product",
+        "description": "One Product with its Variants, so a product page is one request rather than one per Variant. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Product, with the Variants a Shopper chooses between.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreProductDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Product exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreCatalogRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/store/variants/{id}": {
+      "get": {
+        "summary": "Read a Variant",
+        "description": "The Variant a Cart line names, without its Product. What a storefront rebuilding a Cart line asks: a line carries a `variantId` and nothing else, and fetching the whole Product to render one row is a request for everything else that Product sells.",
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Variant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreVariant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live API key was presented.",
+            "headers": {
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "description": "The scheme the request failed to satisfy."
+                },
+                "required": true,
+                "description": "The scheme the request failed to satisfy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Variant exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreCatalogRefusal"
                 }
               }
             }

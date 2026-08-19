@@ -137,15 +137,18 @@ describe("the store surface exposes no Merchant-only capability", () => {
     }
   });
 
-  it("serves the price and nothing else about the catalog", async () => {
-    // What a key reaches is a Shopper's path through the Store — a price, a Cart, an Order —
-    // and nothing else about the catalog. Anything a Merchant does — creating a Product,
-    // listing the catalog, minting a key — is not reachable with a key at all. The paths
-    // below are the ones a caller would most plausibly guess, and each is a 404.
+  it("serves what a Shopper buys and nothing a Merchant administers", async () => {
+    // What a key reaches is a Shopper's path through the Store — the catalog, a price, a
+    // Cart, an Order. Anything a Merchant *does* — minting a key, editing the Store record —
+    // is not reachable with a key at all. The paths below are the ones a caller would most
+    // plausibly guess, and each is a 404.
+    //
+    // `/store/products` used to be on this list, and it moving off is this spec: the reason
+    // it was here was never that a Shopper may not browse, it was that nothing served it.
     kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
 
-    for (const path of ["/store/products", "/store/api-keys", "/store/store"]) {
+    for (const path of ["/store/api-keys", "/store/store", "/store/merchants"]) {
       const response = await kobai.request(path, { headers: catalog.apiKey.headers });
       expect(response.status, path).toBe(404);
     }
@@ -265,5 +268,278 @@ describe("resolving a price", () => {
         reason: "variant-not-found",
       });
     }
+  });
+});
+
+describe("browsing the catalog", () => {
+  /**
+   * A Product a Shopper can be shown something about: a title, a `metadata` bag carrying the
+   * copy a Project attached through ADR-0004's escape hatch, and a counted, priced Variant.
+   *
+   * The count and the Price are the arrangement rather than the subject. They are here so that
+   * the negative assertions below are about a response *omitting* something the Store actually
+   * holds — a Variant nobody counted would satisfy `not.toHaveProperty("inventory")` while
+   * proving nothing at all.
+   */
+  async function seedSomethingToBrowse(instance: TestKobai) {
+    const catalog = await seedTestCatalog(instance, {
+      title: "A poster",
+      variants: [{ sku: "POSTER-A2", prices: [1250] }],
+    });
+
+    const described = await instance.request(`/admin/products/${catalog.productId}`, {
+      method: "PATCH",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { blurb: "Printed on heavy stock." } }),
+    });
+    expect(described.status).toBe(200);
+
+    const counted = await instance.request(
+      `/admin/variants/${catalog.variantId}/inventory`,
+      {
+        method: "PUT",
+        headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify({ onHand: 7 }),
+      },
+    );
+    expect(counted.status).toBe(200);
+
+    return catalog;
+  }
+
+  it("lists the Products the Store sells", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedSomethingToBrowse(kobai);
+
+    const response = await kobai.request("/store/products", {
+      headers: catalog.apiKey.headers,
+    });
+
+    expect(response.status).toBe(200);
+    // The whole body, so every field in the answer comes from this test — a list is where an
+    // extra field would be published to every browser most quietly.
+    await expect(response.json()).resolves.toEqual({
+      products: [
+        {
+          id: catalog.productId,
+          title: "A poster",
+          metadata: { blurb: "Printed on heavy stock." },
+        },
+      ],
+    });
+  });
+
+  it("opens a Product onto the Variants a Shopper chooses between", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedSomethingToBrowse(kobai);
+
+    const response = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      id: catalog.productId,
+      title: "A poster",
+      metadata: { blurb: "Printed on heavy stock." },
+      variants: [
+        {
+          id: catalog.variantId,
+          sku: "POSTER-A2",
+          // Kept, and the one thing about delivery a storefront needs: it is what says a
+          // download is a download. ADR-0014 makes the set open, so it is a name rather than
+          // an enum.
+          fulfilment: { strategy: "physical" },
+          metadata: {},
+        },
+      ],
+    });
+  });
+
+  it("reads one Variant, for a Cart line that carries nothing else", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedSomethingToBrowse(kobai);
+
+    const response = await kobai.request(`/store/variants/${catalog.variantId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      id: catalog.variantId,
+      sku: "POSTER-A2",
+      fulfilment: { strategy: "physical" },
+      metadata: {},
+    });
+  });
+
+  /**
+   * The two promises about what a store response does **not** carry, asserted directly.
+   *
+   * `toEqual` above already fails if either appears, but only for as long as somebody keeps
+   * writing whole-body assertions there — and the failure would read as an unexpected key
+   * rather than as a leak. This says what the promise is, so a later refactor reaching for the
+   * admin schema because it is already there fails on a test that names the reason.
+   *
+   * Both are arranged to exist: the Variant has seven on the shelf and a Price of 1250, and
+   * `GET /admin/variants/{id}` is asked in the same test to prove the Store really is holding
+   * them. An assertion that something is absent is worth nothing until the thing is present
+   * somewhere.
+   */
+  it("publishes neither the stock count nor the Price rows", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedSomethingToBrowse(kobai);
+
+    const merchant = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    const shown = (await merchant.json()) as {
+      variants: { inventory: { onHand: number } | null; prices: unknown[] }[];
+    };
+    // The arrangement, asserted: the Store is holding both of the things the store surface is
+    // about to be held to omitting.
+    expect(shown.variants[0]?.inventory?.onHand).toBe(7);
+    expect(shown.variants[0]?.prices).toHaveLength(1);
+
+    const detail = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+    const variant = await kobai.request(`/store/variants/${catalog.variantId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    const [inProduct] = ((await detail.json()) as { variants: object[] }).variants;
+    const onItsOwn = (await variant.json()) as object;
+
+    for (const [where, shape] of [
+      ["inside its Product", inProduct],
+      ["read on its own", onItsOwn],
+    ] as const) {
+      // Exact stock levels are the Store's business, and ADR-0018 makes availability a
+      // conditional write rather than a readable fact — an `available` rendered by a
+      // storefront is stale before it is painted.
+      expect(shape, `${where}: stock`).not.toHaveProperty("inventory");
+      // `resolve-price` decides what a Variant costs, and a Project may have replaced the Step
+      // that chooses. A storefront reading the rows would pick one itself and bypass it.
+      expect(shape, `${where}: prices`).not.toHaveProperty("prices");
+    }
+  });
+
+  it("carries every Variant of a Product, in SKU order", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai, {
+      // Asked for out of order, so what comes back is the route's ordering rather than the
+      // order they were created in.
+      variants: [{ sku: "POSTER-A3" }, { sku: "MUG" }, { sku: "POSTER-A2" }],
+    });
+
+    const response = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    const body = (await response.json()) as { variants: { sku: string }[] };
+    expect(body.variants.map((one) => one.sku)).toEqual([
+      "MUG",
+      "POSTER-A2",
+      "POSTER-A3",
+    ]);
+  });
+
+  it("accepts a publishable key, which is the key a browser holds", async () => {
+    // Browsing is what a publishable key is for: ADR-0055's secret-key requirement is about
+    // placing an Order and reading one back, not about what the Store sells.
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const publishable = await createTestApiKey(kobai, catalog.merchant, {
+      name: "browser",
+      kind: "publishable",
+    });
+
+    for (const path of [
+      "/store/products",
+      `/store/products/${catalog.productId}`,
+      `/store/variants/${catalog.variantId}`,
+    ]) {
+      const response = await kobai.request(path, { headers: publishable.headers });
+      expect(response.status, path).toBe(200);
+    }
+  });
+
+  it("refuses a request carrying no key before saying whether the thing exists", async () => {
+    // The gate is mounted on the sub-app, so it answers first: an anonymous caller learns
+    // nothing about the catalog, including whether a given identifier names anything.
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    for (const path of [
+      "/store/products",
+      `/store/products/${catalog.productId}`,
+      `/store/variants/${catalog.variantId}`,
+    ]) {
+      const response = await kobai.request(path);
+
+      expect(response.status, path).toBe(401);
+      await expect(response.json(), path).resolves.toMatchObject({
+        reason: "api-key-missing",
+      });
+    }
+  });
+
+  it("names the Product it could not find, and says so as a reason", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    // An identifier nobody issued, and a value that is not an identifier at all — the same
+    // answer for a caller, and the second one never reaches a cast Postgres would refuse.
+    for (const id of ["00000000-0000-4000-8000-000000000000", "not-an-id"]) {
+      const response = await kobai.request(`/store/products/${id}`, {
+        headers: catalog.apiKey.headers,
+      });
+
+      expect(response.status, id).toBe(404);
+      await expect(response.json(), id).resolves.toMatchObject({
+        reason: "product-not-found",
+      });
+    }
+  });
+
+  it("names the Variant it could not find, so a stale link renders a page", async () => {
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    for (const id of ["00000000-0000-4000-8000-000000000000", "not-an-id"]) {
+      const response = await kobai.request(`/store/variants/${id}`, {
+        headers: catalog.apiKey.headers,
+      });
+
+      expect(response.status, id).toBe(404);
+      await expect(response.json(), id).resolves.toMatchObject({
+        reason: "variant-not-found",
+      });
+    }
+  });
+
+  it("stops listing a Product the Merchant deleted", async () => {
+    // The catalog a Shopper browses is the catalog as it is, not a copy of it — which is worth
+    // one assertion because these are the first store routes that read the Merchant's tables
+    // rather than resolving something through a Workflow.
+    kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    const deleted = await kobai.request(`/admin/products/${catalog.productId}`, {
+      method: "DELETE",
+      headers: catalog.merchant.headers,
+    });
+    expect(deleted.status).toBe(204);
+
+    const listed = await kobai.request("/store/products", {
+      headers: catalog.apiKey.headers,
+    });
+    const opened = await kobai.request(`/store/products/${catalog.productId}`, {
+      headers: catalog.apiKey.headers,
+    });
+
+    await expect(listed.json()).resolves.toEqual({ products: [] });
+    expect(opened.status).toBe(404);
   });
 });

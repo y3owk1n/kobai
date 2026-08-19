@@ -505,6 +505,32 @@ keyboard assertions beside it. It
 asserts no screen behaviour: **a case a request could have asked belongs in the HTTP seam.**
 [The Admin](the-admin.md) has the rest of it.
 
+The **journey seam** is ADR-0069's, and it is the one that says whether kobai is *done*.
+`tests/a-storefront-buys-something.test.ts` walks a Shopper from browsing to a placed Order over
+`/store`, driving `@kobai/client` against an in-process kobai — `createKobaiClient` takes a
+`fetch`, so the client dispatches at a really-booted application with no port and no process, and
+the whole journey is typechecked against the published surface. kobai's release target is one
+Shopper journey written out in that ADR, and **a spec is finished when its clause of that
+sentence passes in this file**, not when its routes exist. So a spec on ADR-0069's list extends
+this file; it does not add a second one, and it does not get to call its clause green by
+asserting it somewhere else.
+
+Three rules carry to the next clause added:
+
+- **After arrangement it may reach `/store` and nothing else.** No `/admin`, no
+  `kobai.database`, no Core internals — the completeness proof the admin surface has had since
+  ADR-0010 and the store surface never had. It is a **static ban in the same file**, scanning
+  this file's own source from a marker comment down, rather than a separate scanner like
+  `admin-uses-only-the-public-api.test.ts`: that one reads a whole source tree, this one governs
+  one file, and splitting it would put the rule further from what it governs. It has been watched
+  failing against a `kobai.request("/admin/products", …)` spliced into the journey.
+- **Arrangement is free, and the line is the marker.** Stocking a Store is a Merchant's job, so
+  `/admin` and the harness are used freely above it, exactly as `seedTestCatalog` does.
+- **Two keys, because that is the storefront pattern** (ADR-0055). The browser browses and builds
+  the Cart on a **publishable** key and the server places the Order on a **secret** one, and the
+  journey asserts the browser's key is *refused* at the purchase leg — otherwise carrying two
+  reads as ceremony rather than as a requirement.
+
 The **image seam** is the last one, and its rule is: **ask the built image, never the
 Dockerfile.** Both Dockerfiles ran `pnpm install --prod` in their runtime stage, which looks
 exactly like the thing that drops devDependencies and is not — run over an existing
