@@ -11,7 +11,16 @@ import {
 } from "../db/page.ts";
 import { merchant, role } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
-import { asMetadata, metadataDetail, trimmed } from "../input.ts";
+import { trimmed } from "../input.ts";
+import {
+  type Changes,
+  changesFrom,
+  changesNothing,
+  mustBeText,
+  notUsable,
+  openData,
+  text,
+} from "../patch.ts";
 import { PERMISSIONS } from "./permissions.ts";
 
 /**
@@ -125,8 +134,12 @@ const MERCHANT_ROLE_FOREIGN_KEY = "core_merchant_role_id_core_role_id_fk";
 /**
  * Said once, because two paths reach it: creating a Role with no `name` at all, and either path
  * given one that is blank. A caller sees the same sentence for the same mistake.
+ *
+ * From `patch.ts` since #185, so that "the same mistake" now spans every field on the surface
+ * that has to be a non-empty string and not only this one — {@link text} is where the blank
+ * half is said, and this is the absent half, which no narrowing is ever asked about.
  */
-const NAME_MUST_BE_A_NAME = "`name` must be a non-empty string.";
+const NAME_MUST_BE_A_NAME = mustBeText("name");
 
 /** The columns a Role is reported by. Named once, because five queries answer with them. */
 const REPORTED = {
@@ -144,9 +157,7 @@ export async function createRole(
   if (!usable.ok) return usable;
 
   const { name, permissions = [], metadata = {} } = usable.changes;
-  if (name === undefined) {
-    return { ok: false, reason: "invalid", detail: NAME_MUST_BE_A_NAME };
-  }
+  if (name === undefined) return notUsable(NAME_MUST_BE_A_NAME);
 
   // No select-then-insert: two requests offering the same name would both find nothing and
   // the loser's insert would surface as a 500 rather than as the conflict it is. The unique
@@ -219,13 +230,10 @@ export async function updateRole(
   if (!usable.ok) return usable;
 
   const changes = usable.changes;
+  // Asked here rather than inside `readRoleInput`, which `createRole` shares: there an empty
+  // result is a missing `name` rather than a no-op, and it is answered as one.
   if (Object.keys(changes).length === 0) {
-    return {
-      ok: false,
-      reason: "invalid",
-      detail:
-        "Name a `name`, a `permissions`, a `metadata`, or any of them. A request that changes nothing is more likely a mistake than an intention.",
-    };
+    return changesNothing("a `name`, a `permissions`, a `metadata`, or any of them");
   }
 
   if (!isUuid(id)) return notFound(id);
@@ -363,57 +371,39 @@ function administers(permissions: readonly string[]): boolean {
  * An absent key is absent from the result, which is what makes the caller's "leave it alone"
  * and this module's `set` the same object.
  */
-function readRoleInput(
-  input: CreateRoleInput,
-):
-  | { readonly ok: true; readonly changes: RoleChanges }
-  | { readonly ok: false; readonly reason: "invalid"; readonly detail: string } {
-  const changes: {
-    name?: string;
-    permissions?: string[];
-    metadata?: Record<string, unknown>;
-  } = {};
-
-  if (input.name !== undefined) {
-    const name = trimmed(input.name);
-    if (name === undefined) {
-      return {
-        ok: false,
-        reason: "invalid",
-        detail: NAME_MUST_BE_A_NAME,
-      };
-    }
-    changes.name = name;
-  }
-
-  if (input.permissions !== undefined) {
-    const permissions = readPermissions(input.permissions);
-    if (permissions === undefined) {
-      return {
-        ok: false,
-        reason: "invalid",
-        detail:
-          "`permissions` must be an array of non-empty strings. Which strings is not checked: a Role may hold a Permission this build of Core has never heard of, because a Plugin's is a string like any other.",
-      };
-    }
-    changes.permissions = permissions;
-  }
-
-  if (input.metadata !== undefined) {
-    const metadata = asMetadata(input.metadata);
-    if (metadata === undefined) {
-      return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
-    }
-    changes.metadata = metadata;
-  }
-
-  return { ok: true, changes };
+function readRoleInput(input: CreateRoleInput): Changes<RoleColumns> {
+  return changesFrom(
+    {
+      name: input.name,
+      permissions: input.permissions,
+      metadata: input.metadata,
+    },
+    {
+      name: text("name"),
+      permissions: (value) => {
+        const permissions = readPermissions(value);
+        return permissions === undefined
+          ? notUsable(
+              "`permissions` must be an array of non-empty strings. Which strings is not checked: a Role may hold a Permission this build of Core has never heard of, because a Plugin's is a string like any other.",
+            )
+          : { ok: true, value: permissions };
+      },
+      metadata: openData("metadata"),
+    },
+  );
 }
 
-type RoleChanges = {
-  readonly name?: string;
-  readonly permissions?: string[];
-  readonly metadata?: Record<string, unknown>;
+/**
+ * The columns a body names, of which a `PATCH` names some and a create names all it means to.
+ *
+ * The **column** names, which is what `changesFrom` asks to be keyed by so that the result is
+ * the object `set` takes — here they are also the wire's, a Role having no field whose two names
+ * differ the way a Variant's Strategy does.
+ */
+type RoleColumns = {
+  name: string;
+  permissions: string[];
+  metadata: Record<string, unknown>;
 };
 
 /**

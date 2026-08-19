@@ -1,6 +1,7 @@
 import type { Database } from "../db/client.ts";
 import { store } from "../db/schema.ts";
-import { asMetadata, metadataDetail, trimmed } from "../input.ts";
+import { trimmed } from "../input.ts";
+import { changesFrom, changesNothing, openData, text } from "../patch.ts";
 import { readStore, type Store } from "./read.ts";
 
 /**
@@ -51,27 +52,15 @@ export async function updateStore(
   db: Database,
   input: UpdateStoreInput,
 ): Promise<StoreUpdate> {
-  const changes: { name?: string; metadata?: Record<string, unknown> } = {};
-
-  if (input.name !== undefined) {
-    const name = trimmed(input.name);
-    if (name === undefined) {
-      return {
-        ok: false,
-        reason: "invalid",
-        detail: "`name` must be a non-empty string.",
-      };
-    }
-    changes.name = name;
-  }
-
-  if (input.metadata !== undefined) {
-    const metadata = asMetadata(input.metadata);
-    if (metadata === undefined) {
-      return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
-    }
-    changes.metadata = metadata;
-  }
+  // No `whenNothing`, deliberately: a body naming only `defaultCurrency` has named something,
+  // and whether *that* changes nothing is a question about the row rather than about the body.
+  // So this route asks twice, below, and both times with the same words.
+  const usable = changesFrom(
+    { name: input.name, metadata: input.metadata },
+    { name: text("name"), metadata: openData("metadata") },
+  );
+  if (!usable.ok) return usable;
+  const changes = usable.changes;
 
   let asked: string | undefined;
   if (input.defaultCurrency !== undefined) {
@@ -91,7 +80,7 @@ export async function updateStore(
   // A body naming only `defaultCurrency` is left to the transaction below, because *there* the
   // answer depends on what the Store holds — a different code is a refusal of its own, and the
   // one it already prices in is this same nothing.
-  if (asked === undefined && Object.keys(changes).length === 0) return changesNothing();
+  if (asked === undefined && Object.keys(changes).length === 0) return CHANGES_NOTHING;
 
   return db.transaction(async (tx) => {
     const current = await readStore(tx);
@@ -110,7 +99,7 @@ export async function updateStore(
     // Reached when the body named the currency this Store already prices in and nothing else.
     // Refused rather than answered 200, because it is the same request as `{}`: a request that
     // changes nothing is more likely a mistake than an intention.
-    if (Object.keys(changes).length === 0) return changesNothing();
+    if (Object.keys(changes).length === 0) return CHANGES_NOTHING;
 
     const [updated] = await tx.update(store).set(changes).returning({
       name: store.name,
@@ -126,12 +115,11 @@ export async function updateStore(
 /**
  * What a body naming nothing this route would change is told — and where the currency is
  * answered, because that is the one field a Merchant may have been reaching for.
+ *
+ * A constant rather than a call at each of the two sites that reach it, so the sentence is
+ * written once here as well as once in `patch.ts`.
  */
-function changesNothing(): StoreUpdate {
-  return {
-    ok: false,
-    reason: "invalid",
-    detail:
-      "Name a `name`, a `metadata`, or both. A request that changes nothing is more likely a mistake than an intention. `defaultCurrency` is not changed here: naming the one this Store already prices in changes nothing, and naming another is refused — every Price already set carries the current one.",
-  };
-}
+const CHANGES_NOTHING = changesNothing(
+  "a `name`, a `metadata`, or both",
+  "`defaultCurrency` is not changed here: naming the one this Store already prices in changes nothing, and naming another is refused — every Price already set carries the current one.",
+);

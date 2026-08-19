@@ -5,6 +5,7 @@ import type { Database, Queryable, Transaction } from "../db/client.ts";
 import { cart, cartLineItem, price } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
+import { changesFrom, changesNothing, openData } from "../patch.ts";
 import { type Cart, cartHasBeenPlaced, cartHasExpired, readCart } from "./read.ts";
 
 /**
@@ -149,8 +150,16 @@ export async function updateCart(
   input: CartInput,
   keyKind: ApiKeyKind,
 ): Promise<CartResult<"invalid" | "secret-key-required" | NotChangeable>> {
+  // Asked of the **keys the body carried** rather than of a narrowed set of changes, which is
+  // the one `PATCH` on this surface that does it that way round and is deliberate (#185). A
+  // Cart's fields do not narrow into columns one for one: `shopper` is three-valued and fills
+  // *two*, and it is read by `parseCartInput`, which `createCart` shares and where an empty
+  // result means a guest's Cart rather than a request that asks for nothing. The two orders are
+  // indistinguishable to a caller — a body naming nothing is refused either way, and a body
+  // naming something unusable reaches its own refusal either way — so what would be bought by
+  // forcing the shape is a reading of `shopper` that two routes no longer agree on.
   if (input.shopper === undefined && input.metadata === undefined) {
-    return changesNothing("a `shopper`, a `metadata`");
+    return changesNothing("a `shopper`, a `metadata`, or both");
   }
 
   const parsed = parseCartInput(input, keyKind);
@@ -258,28 +267,27 @@ export async function updateLineItem(
   lineItemId: string,
   input: UpdateLineItemInput,
 ): Promise<CartResult<"invalid" | "line-item-not-found" | NotChangeable>> {
-  if (input.quantity === undefined && input.metadata === undefined) {
-    return changesNothing("a `quantity`, a `metadata`");
-  }
-
-  const quantity =
-    input.quantity === undefined ? undefined : parseQuantity(input.quantity);
-  if (quantity !== undefined && !quantity.ok) return quantity;
-
-  const metadata = input.metadata === undefined ? undefined : asMetadata(input.metadata);
-  if (input.metadata !== undefined && metadata === undefined) {
-    return invalid(metadataDetail("`metadata`"));
-  }
+  // Unlike `updateCart` above, this one's two fields do narrow into columns one for one, so it
+  // reads them the way every other `PATCH` on the surface does — and `changes` is then the very
+  // object the `update` sets, which is what the spread below used to assemble by hand.
+  //
+  // `parseQuantity` is creation's, so one field is read one way. Its `undefined` branch — the
+  // default of one — is unreachable from here, because a field the body did not name is never
+  // narrowed at all: that absence means "leave it", where on an add it means "one of them".
+  const usable = changesFrom(
+    { quantity: input.quantity, metadata: input.metadata },
+    { quantity: parseQuantity, metadata: openData("metadata") },
+    changesNothing("a `quantity`, a `metadata`, or both"),
+  );
+  if (!usable.ok) return usable;
+  const changes = usable.changes;
 
   return mutate<"line-item-not-found">(db, cartId, async (tx) => {
     if (!isUuid(lineItemId)) return noSuchLineItem(lineItemId);
 
     const changed = await tx
       .update(cartLineItem)
-      .set({
-        ...(quantity === undefined ? {} : { quantity: quantity.value }),
-        ...(metadata === undefined ? {} : { metadata }),
-      })
+      .set(changes)
       // Both, so a Line Item of *another* Cart is not reachable by naming it here — holding a
       // Cart's identifier is authority over that Cart and over nothing else.
       .where(and(eq(cartLineItem.id, lineItemId), eq(cartLineItem.cartId, cartId)))
@@ -468,13 +476,6 @@ function parseQuantity(value: unknown): ParsedQuantity {
 
 function invalid(detail: string): BadRequest {
   return { ok: false, reason: "invalid", detail };
-}
-
-/** Both PATCHes refuse a body that names nothing, and they say so the same way. */
-function changesNothing(fields: string): BadRequest {
-  return invalid(
-    `Name ${fields}, or both. A request that changes nothing is more likely a mistake than an intention.`,
-  );
 }
 
 function noSuchCart(cartId: string): CartRefused<"cart-not-found"> {

@@ -7,7 +7,7 @@ import {
   type FulfilmentStrategies,
   fulfilmentStrategyFor,
 } from "../fulfilment/strategy.ts";
-import { asMetadata, metadataDetail, trimmed } from "../input.ts";
+import { changesFrom, changesNothing, openData, text } from "../patch.ts";
 import { type ProductDetail, readVariants, type Variant } from "./read.ts";
 import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 
@@ -67,6 +67,17 @@ export type UpdateVariantInput = {
 };
 
 /**
+ * The columns a body may correct, of which it names some — the **column** names, which is where
+ * this differs from {@link UpdateVariantInput} in more than its types: a Variant's Strategy
+ * arrives as `fulfilment` and is stored as `fulfilment_strategy`.
+ */
+type VariantColumns = {
+  sku: string;
+  fulfilmentStrategy: string;
+  metadata: Record<string, unknown>;
+};
+
+/**
  * Correcting a Variant refuses in four ways, and every one of them is a word creation already
  * answers with.
  */
@@ -101,43 +112,20 @@ export async function updateProduct(
   productId: string,
   input: UpdateProductInput,
 ): Promise<ProductUpdate> {
-  const changes: { title?: string; metadata?: Record<string, unknown> } = {};
-
-  if (input.title !== undefined) {
-    const title = trimmed(input.title);
-    if (title === undefined) {
-      return {
-        ok: false,
-        reason: "invalid",
-        detail: "`title` must be a non-empty string.",
-      };
-    }
-    changes.title = title;
-  }
-
-  if (input.metadata !== undefined) {
-    const metadata = asMetadata(input.metadata);
-    if (metadata === undefined) {
-      return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
-    }
-    // Replaced whole rather than merged, for the reason a Variant's is: a merge leaves no way
-    // to remove a key a Merchant put there by mistake.
-    changes.metadata = metadata;
-  }
-
-  // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first: a
-  // request that changes nothing is likelier a mistake than an intention. It does the same
-  // second job here — the schema strips a field this route does not carry, so a body naming
-  // `variants` is this body, and the refusal is where a Merchant who tried to add one is told
-  // which route adds one.
-  if (Object.keys(changes).length === 0) {
-    return {
-      ok: false,
-      reason: "invalid",
-      detail:
-        "Name a `title`, a `metadata`, or both. A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
-    };
-  }
+  const usable = changesFrom(
+    { title: input.title, metadata: input.metadata },
+    { title: text("title"), metadata: openData("metadata") },
+    // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
+    // in one place since #185. It does a second job here — the schema strips a field this route
+    // does not carry, so a body naming `variants` is this body, and the refusal is where a
+    // Merchant who tried to add one is told which route adds one.
+    changesNothing(
+      "a `title`, a `metadata`, or both",
+      "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
+    ),
+  );
+  if (!usable.ok) return usable;
+  const changes = usable.changes;
 
   if (!isUuid(productId)) return noSuchProduct(productId);
 
@@ -201,66 +189,46 @@ export async function updateVariant(
   input: UpdateVariantInput,
   strategies: FulfilmentStrategies,
 ): Promise<VariantUpdate> {
-  const changes: {
-    sku?: string;
-    fulfilmentStrategy?: string;
-    metadata?: Record<string, unknown>;
-  } = {};
+  // Keyed by the column and not by the wire, which is what `changesFrom` asks for and why the
+  // literal below reads `input.fulfilment` into `fulfilmentStrategy`: the result is the very
+  // object the `update` sets.
+  const usable = changesFrom<VariantColumns, "unknown-fulfilment-strategy">(
+    { sku: input.sku, fulfilmentStrategy: input.fulfilment, metadata: input.metadata },
+    {
+      sku: text("sku"),
+      // Reached only when the key is there — `changesFrom` narrows nothing a body did not name
+      // — because absent means "leave it", where on a create the same absence means `physical`.
+      // The parse is creation's, so one body shape is read one way.
+      fulfilmentStrategy: (value) => {
+        const fulfilment = parseFulfilment(value, "`fulfilment`");
+        if (!fulfilment.ok) return fulfilment;
 
-  if (input.sku !== undefined) {
-    const sku = trimmed(input.sku);
-    if (sku === undefined) {
-      return {
-        ok: false,
-        reason: "invalid",
-        detail: "`sku` must be a non-empty string.",
-      };
-    }
-    changes.sku = sku;
-  }
-
-  if (input.fulfilment !== undefined) {
-    // Only when the key is there: absent means "leave it", where on a create the same absence
-    // means `physical`. The parse is creation's, so one body shape is read one way.
-    const fulfilment = parseFulfilment(input.fulfilment, "`fulfilment`");
-    if (!fulfilment.ok) return fulfilment;
-
-    // The same question `createProduct` asks, at the same moment and for the same reason: a
-    // Variant pointing at a Strategy this deployment has not wired is one nothing can answer
-    // the three questions about, so it cannot be sold — and it is what `place-order` already
-    // refuses a purchase over. Repairing that is this route's headline case, so it must not be
-    // possible to *arrive* at it here.
-    if (!fulfilmentStrategyFor(strategies, fulfilment.value)) {
-      return unknownFulfilmentStrategy(strategies, fulfilment.value);
-    }
-    changes.fulfilmentStrategy = fulfilment.value;
-  }
-
-  if (input.metadata !== undefined) {
-    const metadata = asMetadata(input.metadata);
-    if (metadata === undefined) {
-      return { ok: false, reason: "invalid", detail: metadataDetail("metadata") };
-    }
-    // Replaced whole rather than merged. A merge would leave no way to remove a key a
-    // Merchant put there by mistake, and "send the object you want" is the only rule that
-    // does not need the caller to know what is already stored.
-    changes.metadata = metadata;
-  }
-
-  // A `PATCH` naming no field is refused rather than answered 200 with the row unchanged —
-  // the judgement `cart/write.ts`'s two `PATCH`es already make, in the same words: a request
-  // that changes nothing is likelier a mistake than an intention. Here it is also the shape a
-  // body naming a field this route does not carry collapses to, a Price above all, because the
-  // schema strips it before the handler sees it. So the refusal says both halves: what may be
-  // changed, and where a Price is set instead.
-  if (Object.keys(changes).length === 0) {
-    return {
-      ok: false,
-      reason: "invalid",
-      detail:
-        "Name at least one of `sku`, `fulfilment` or `metadata`. A Price is not changed here: set another with `POST /admin/variants/{id}/prices`, which supersedes it, and remove the old one with `DELETE /admin/variants/{id}/prices/{priceId}`.",
-    };
-  }
+        // The same question `createProduct` asks, at the same moment and for the same reason: a
+        // Variant pointing at a Strategy this deployment has not wired is one nothing can
+        // answer the three questions about, so it cannot be sold — and it is what `place-order`
+        // already refuses a purchase over. Repairing that is this route's headline case, so it
+        // must not be possible to *arrive* at it here.
+        //
+        // It is also the one field on this surface that refuses something other than `invalid`,
+        // which is what the second type argument above is for: it widens `changesFrom`'s
+        // refusal rather than replacing it, so `VariantUpdate` still binds under ADR-0060.
+        if (!fulfilmentStrategyFor(strategies, fulfilment.value)) {
+          return unknownFulfilmentStrategy(strategies, fulfilment.value);
+        }
+        return fulfilment;
+      },
+      metadata: openData("metadata"),
+    },
+    // Here the no-op refusal is also the shape a body naming a field this route does not carry
+    // collapses to, a Price above all, because the schema strips it before the handler sees it.
+    // So the refusal says both halves: what may be changed, and where a Price is set instead.
+    changesNothing(
+      "at least one of `sku`, `fulfilment` or `metadata`",
+      "A Price is not changed here: set another with `POST /admin/variants/{id}/prices`, which supersedes it, and remove the old one with `DELETE /admin/variants/{id}/prices/{priceId}`.",
+    ),
+  );
+  if (!usable.ok) return usable;
+  const changes = usable.changes;
 
   // Asked after the body and before the database, exactly as `setPrice` asks it: a request
   // that is wrong in itself is wrong whatever the Store holds, so nothing is looked up to
