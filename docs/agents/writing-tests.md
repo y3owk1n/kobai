@@ -466,9 +466,10 @@ await using kobai = await createTestKobai({
 
 That is the same `kobai.config.ts` shape a Developer writes, so a test of the override
 mechanism is a test of the thing they actually do. **Every key of that file the harness
-accepts works the same way**, `session: { idleWindowMs }` included (ADR-0050) — and a value
-Core will not serve rejects the `createTestKobai` promise rather than booting, because
-`createKobai` refuses it. Time is passed by winding the row back rather than by waiting; the
+accepts works the same way**, `session: { idleWindowMs }` (ADR-0050) and
+`reservations: { holdWindowMs }` (ADR-0075) included — and a value Core will not serve rejects
+the `createTestKobai` promise rather than booting, because `createKobai` refuses it. Those two
+are the keys that can do that, and a test whose subject is one asserts on the rejection. Time is passed by winding the row back rather than by waiting; the
 helpers at the foot of `auth.test.ts` are the only honest way to test a window measured in
 minutes.
 

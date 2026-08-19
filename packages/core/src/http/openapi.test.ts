@@ -5,6 +5,7 @@ import { CORE_FULFILMENT_STRATEGIES } from "../fulfilment/strategy.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
 import { placeOrderWorkflow } from "../order/place-order.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
+import { DEFAULT_RESERVATION_HOLD_WINDOW_MS } from "../reservation/reservation.ts";
 import { silentLogger } from "../testing/kobai.ts";
 import { coreVersion, createHttpApp, describeHttpApp } from "./app.ts";
 import { GATE_REFUSALS, type GateRefusal, refusalAnsweredBy } from "./gate-refusals.ts";
@@ -50,6 +51,9 @@ function describeCore() {
     // What a *configured* window does to it is asserted through the running application, in
     // `auth/auth.test.ts`.
     sessionPolicy: DEFAULT_SESSION_POLICY,
+    // The default likewise, and unlike the session's it reaches no schema at all: no route
+    // reports a hold's deadline, so nothing here moves with it (ADR-0075).
+    holdWindowMs: DEFAULT_RESERVATION_HOLD_WINDOW_MS,
   });
   return { app, document: describeHttpApp(app) };
 }

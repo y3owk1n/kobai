@@ -100,6 +100,7 @@ New to the project? These five carry the shape of everything else:
 | [0072](./0072-an-address-is-cores-and-validating-one-is-not.md) | An Address is Core's, and validating one is not | Accepted — clarifies 0015 |
 | [0073](./0073-the-checkout-is-hosted-optional-and-not-vendored.md) | The Checkout is hosted, optional, and not vendored | Accepted — **amends 0002**; deliberately not 0033's shape |
 | [0074](./0074-currencies-are-enabled-by-the-store-and-selected-by-the-region.md) | Currencies are enabled by the Store and selected by the Region | Accepted — completes 0008; **narrows 0005 and 0065's argument** |
+| [0075](./0075-the-hold-window-is-a-projects-and-core-keeps-no-ceiling.md) | The hold window is a Project's, and Core keeps no ceiling over it | Accepted — 0050's shape, **without its cap**; carries out 0070 |
 
 ## Prototypes
 

@@ -161,16 +161,24 @@ export {
   selectPrice,
 } from "./pricing/resolve-price.ts";
 /**
- * A Reservation as the Workflow carries one, and nothing else about Reservations.
+ * A Reservation as the Workflow carries one, and what a Project may say about how long one
+ * stands.
  *
  * `HeldReservation` sits on `ReservedLines`, which is the type a replaced `take-payment` or
- * `capture-order` is measured against, so it has to be nameable. The provider interface behind it
- * is deliberately **not** here: ADR-0018 promises one interface with two providers and both are
- * Core's own — Inventory today, Capacity later — so exporting it would promise a shape nothing
- * lets a Project supply. The day a deployment may bring its own kind of scarcity is a decision
- * with a config key and an ADR behind it, and this is where it would show up.
+ * `capture-order` is measured against, so it has to be nameable. `ReservationsOptions` is the
+ * shape of the `reservations` key in `kobai.config.ts` (ADR-0075).
+ *
+ * The provider interface behind them is deliberately **not** here: ADR-0018 promises one
+ * interface with two providers and both are Core's own — Inventory today, Capacity later — so
+ * exporting it would promise a shape nothing lets a Project supply. The day a deployment may
+ * bring its own kind of scarcity is a decision with a config key and an ADR behind it, and this
+ * is where it would show up. That day is not this one: `reservations` says how long a claim
+ * lasts, not who may make one.
  */
-export type { HeldReservation } from "./reservation/reservation.ts";
+export type {
+  HeldReservation,
+  ReservationsOptions,
+} from "./reservation/reservation.ts";
 export type { Store } from "./store/read.ts";
 /**
  * The background sweep (`sweep.ts`): what a Project starts at boot, and what one run of it did.

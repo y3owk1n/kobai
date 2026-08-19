@@ -14,6 +14,7 @@ import type {
   ReservationClaim,
   ReservationProvider,
 } from "./provider.ts";
+import { MINIMUM_RESERVATION_HOLD_WINDOW_MS } from "./reservation.ts";
 
 /**
  * A **Reservation** through the Workflow that makes one: held while an Order is being placed,
@@ -214,6 +215,101 @@ describe("stock, while an Order is being placed", () => {
 });
 
 /**
+ * **How long a hold stands, and who decides it** (ADR-0075, on ADR-0050's shape).
+ *
+ * The seam is `createTestKobai`, which takes the same `kobai.config.ts` shape a Developer
+ * writes — so these assert the deployment a Project actually gets rather than a function
+ * called with an argument. What the window decided is read off the row it wrote, because
+ * `expires_at` is the whole of what a hold's lifetime is: the sweeper compares that column
+ * against `now()` and nothing else.
+ */
+describe("how long a hold stands", () => {
+  it("is fifteen minutes for a Project that configures nothing", async () => {
+    await using kobai = await createTestKobai();
+
+    // The literal rather than the constant: a test that read the constant would agree with
+    // any default at all, and this is the assertion that fifteen minutes is still what a
+    // Project gets for free.
+    await expect(holdWindowInMinutes(kobai)).resolves.toBe(15);
+  });
+
+  it("is what the Project set, when it set one", async () => {
+    await using kobai = await createTestKobai({
+      reservations: { holdWindowMs: 45 * 60_000 },
+    });
+
+    await expect(holdWindowInMinutes(kobai)).resolves.toBe(45);
+  });
+});
+
+/**
+ * **A hold window Core will not enforce stops the boot, and one it merely would not have
+ * chosen does not** (ADR-0075).
+ *
+ * The seam is `createTestKobai`, which is `createKobai` with a database in front of it — so
+ * these assert the very thing a Project's `server.ts` does on the way up. **Nothing is
+ * clamped**: every refusal here is a boot that failed rather than a number quietly moved to
+ * the nearest legal one.
+ *
+ * The last case is the one that carries a decision rather than a bound. Core keeps a floor and
+ * **no ceiling**, because a hold is never renewed and so its window already is the bound —
+ * unlike `session.idleWindowMs`, where the cap is the only thing standing between a stolen
+ * token and forever. A test that only ever asked for reasonable numbers would pass just as
+ * happily against a ceiling somebody added later.
+ */
+describe("a hold window Core will not enforce", () => {
+  const bootWith = (holdWindowMs: number) =>
+    createTestKobai({ reservations: { holdWindowMs } });
+
+  it("is refused at zero, which is a hold that has lapsed before the payment starts", async () => {
+    await expect(bootWith(0)).rejects.toThrow(/`reservations\.holdWindowMs`.*at least/s);
+  });
+
+  it("is refused when negative, rather than read as its absolute value", async () => {
+    await expect(bootWith(-15 * 60_000)).rejects.toThrow(
+      /`reservations\.holdWindowMs`.*at least.*-900000/s,
+    );
+  });
+
+  it("is refused below the floor a placement needs", async () => {
+    // Thirty seconds looks like a perfectly ordinary number and is one a placement can
+    // overrun: taking payment happens inside the window, and a hold released from under its
+    // own run fails Capture after the money has moved.
+    await expect(bootWith(30_000)).rejects.toThrow(/at least 60000.*30000/s);
+  });
+
+  it("is refused when it is not a whole number of milliseconds", async () => {
+    await expect(bootWith(900_000.5)).rejects.toThrow(
+      /whole number of milliseconds.*900000\.5/s,
+    );
+  });
+
+  it("is refused when it is not a number at all, which is what a bad environment gives", async () => {
+    // `Number(process.env.KOBAI_HOLD_WINDOW_MS)` with the variable unset is `NaN`, and it
+    // typechecks as a `number` all the way in. Left alone it puts an `Invalid Date` in
+    // `expires_at`, which is a hold Postgres cannot compare and the sweeper never gives back.
+    await expect(bootWith(Number("nonsense"))).rejects.toThrow(
+      /whole number of milliseconds.*NaN/s,
+    );
+  });
+
+  it("is accepted at the floor itself, so the bound is a bound and not an off-by-one", async () => {
+    await using booted = await bootWith(MINIMUM_RESERVATION_HOLD_WINDOW_MS);
+
+    await expect(holdWindowInMinutes(booted)).resolves.toBe(1);
+  });
+
+  it("is accepted far above anything Core would have chosen, because there is no ceiling", async () => {
+    // A day. Nothing above a hold's window bounds it, because nothing renews a hold — so what
+    // a long one costs is this Store's own stock left unsellable, which is the Merchant's
+    // decision to make and not Core's (ADR-0075).
+    await using booted = await bootWith(24 * 60 * 60_000);
+
+    await expect(holdWindowInMinutes(booted)).resolves.toBe(24 * 60);
+  });
+});
+
+/**
  * **What the compiler refuses to accept as a Reservation provider** (#127).
  *
  * `ReservationProvider` is not exported from `@kobai/core` and no config key takes one, so
@@ -340,6 +436,41 @@ async function stockOf(kobai: TestKobai, catalog: TestCatalog, variantId: string
   return found === null || found === undefined
     ? found
     : { onHand: found.onHand, reserved: found.reserved, available: found.available };
+}
+
+/**
+ * The window the hold this deployment takes is written with, to the nearest minute.
+ *
+ * A hold's `expires_at` is fixed as the row is written — `now` plus the window — so
+ * subtracting the instant just before the placement recovers the window plus however long the
+ * placement took, which is a few hundred milliseconds against a window measured in minutes.
+ * Rounding to a minute is what lets the assertion be the number a Project wrote rather than a
+ * tolerance nobody chose; every window this file configures is a whole number of minutes, and
+ * so is the floor Core enforces.
+ *
+ * It reads the column rather than a response body because nothing on the HTTP surface reports
+ * a hold's deadline yet — the route that will is the next ticket of this spec.
+ */
+async function holdWindowInMinutes(kobai: TestKobai): Promise<number> {
+  const catalog = await seedTestCatalog(kobai);
+  await countStock(kobai, catalog, catalog.variantId, 3);
+  const cart = await seedTestCart(kobai, { catalog, quantity: 2 });
+
+  const before = Date.now();
+  const placed = await place(kobai, cart.apiKey.headers, cart.id);
+  expect(placed.status).toBe(201);
+
+  // Through `text`, because a `numeric` arrives from pg as a string anyway and an implicit
+  // conversion is a place for a rounding nobody asked for to hide.
+  const rows = await kobai.database.query<{ expires_ms: string }>(
+    `select (extract(epoch from expires_at) * 1000)::text as expires_ms
+     from core_reservation`,
+  );
+  const [row] = rows;
+  if (!row) throw new Error("The placement wrote no Reservation to read a window off.");
+  expect(rows).toHaveLength(1);
+
+  return Math.round((Number(row.expires_ms) - before) / 60_000);
 }
 
 async function reservationCount(kobai: TestKobai): Promise<number> {

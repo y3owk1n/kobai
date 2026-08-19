@@ -26,6 +26,7 @@ import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import type { ReservationRefusal } from "../reservation/provider.ts";
 import {
   consumeReservations,
+  DEFAULT_RESERVATION_HOLD_WINDOW_MS,
   type HeldReservation,
   holdReservations as holdReservationsFor,
   releaseReservations,
@@ -593,6 +594,10 @@ export const holdReservations = defineStep(
         metadata: line.metadata,
         fulfilment: line.fulfilment,
       })),
+      // What this deployment decided a hold is worth, or Core's default for a context that
+      // was assembled without one — the same reading `fulfilment` gets a line above
+      // (ADR-0075).
+      context.holdWindowMs ?? DEFAULT_RESERVATION_HOLD_WINDOW_MS,
     );
     // A provider's refusal is a refusal of the Order, with the provider's own reason — so a
     // Store that is out of stock says so, and Capacity will say its own thing here without this

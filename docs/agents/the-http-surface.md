@@ -46,9 +46,17 @@ queue brings retry, visibility and failure semantics that deserve their own spec
 spec will have to migrate this (#98). `packages/core/src/sweep.ts` releases lapsed holds and deletes expired
 `core_idempotency_key` rows in the same pass; a Project starts it with `kobai.startSweeper()`
 **after** `migrate()`, exactly as it seeds its first Merchant, and `kobai.close()` stops it.
-**Test it by winding rows back and calling `kobai.sweep()`** — never by waiting for a
-fifteen-minute hold — the way `packages/core/src/sweep.test.ts` does; the one test that waits is
-the one whose subject is the timer itself.
+**Test it by winding rows back and calling `kobai.sweep()`** — never by waiting a hold window
+out — the way `packages/core/src/sweep.test.ts` does; the one test that waits is the one whose
+subject is the timer itself.
+
+**How long a hold stands is the deployment's, not this module's** (ADR-0075).
+`reservations.holdWindowMs` in `kobai.config.ts` decides it, fifteen minutes if a Project says
+nothing, and `holdReservations` takes the number as an argument rather than reading a constant —
+so **a second thing that claims stock takes the deployment's window too**, which is the ticket
+ADR-0070 is about to bring. Core keeps a floor of one minute and deliberately **no ceiling**;
+that asymmetry with `session.idleWindowMs` is argued on the config key itself. A test that
+configures a window boots with the key, exactly as `session` does.
 
 ## A Variant points at a Fulfilment Strategy, and never carries a flag
 

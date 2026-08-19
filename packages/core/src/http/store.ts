@@ -97,6 +97,14 @@ export type StoreDependencies = {
    * refuses with `no-payment-provider` and nothing else on this surface is affected.
    */
   readonly paymentProvider: PaymentProvider | undefined;
+  /**
+   * How long this deployment holds a Cart's stock, for the Step that claims it (ADR-0075).
+   *
+   * It goes on the context of every Workflow this surface runs, exactly as `workflows` does
+   * and for the same reason: a route that built its context without it would hold stock for
+   * Core's fifteen minutes whatever the Project had configured, and that failure is silent.
+   */
+  readonly holdWindowMs: number;
 };
 
 // ---- The catalog -------------------------------------------------------------------------
@@ -536,6 +544,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     workflows: deps.workflows,
     paymentProvider: deps.paymentProvider,
     fulfilment: deps.fulfilment,
+    holdWindowMs: deps.holdWindowMs,
   });
 
   store.openapi(listStoreProductsRoute, async (c) => {
