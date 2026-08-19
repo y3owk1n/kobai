@@ -123,6 +123,18 @@ export {
   priceLines,
   takePayment,
 } from "./order/place-order.ts";
+/**
+ * **Quoting a Cart is deliberately absent from this surface** (ADR-0077).
+ *
+ * `POST /store/carts/{id}/quote` is a route, and a Project asks it the way a storefront does —
+ * `kobai.request(…)` in a Project's own route, or `@kobai/client` from anywhere else — so what
+ * it needs to name the answer with is the *wire* shape, which `@kobai/client` already carries as
+ * `Quote`. `quote-cart.ts`'s own types are Core's internals: `quotedAt` is a `Date` there and an
+ * ISO string on the wire, and a name here would put that difference under ADR-0019's promise
+ * forever in exchange for nothing. Nothing a Project supplies is measured against them either —
+ * a replaced pricing Step is measured against `PricedLines` and the rest, above, and the quote
+ * runs whatever that produced. `CartHold` is absent for the same reason.
+ */
 export type {
   Order,
   OrderAdjustment,

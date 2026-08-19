@@ -23,6 +23,11 @@ import { isUuid } from "../db/uuid.ts";
  * Shopper pays is resolved at Capture, by the `place-order` Workflow, through the same
  * `resolve-price` a storefront reads a price with. A total on this shape would be a figure
  * nothing stands behind, and the first thing anybody would mistake for one.
+ *
+ * **There is a route that answers what a Cart comes to, and it is not this** (ADR-0077).
+ * `POST /store/carts/{id}/quote` runs the pricing half of this deployment's own `place-order`
+ * and says when it did — a question asked and answered at an instant, rather than a field on a
+ * mutable object. The rule above is unchanged and is what decides where that figure lives.
  */
 
 /**

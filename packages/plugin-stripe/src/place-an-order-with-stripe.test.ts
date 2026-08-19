@@ -140,3 +140,98 @@ describe("an Order placed through this Plugin", () => {
     await expect(ordersIn(kobai)).resolves.toEqual([]);
   });
 });
+
+/**
+ * **The loop ADR-0077 closes, at the only seam where both halves are visible at once.**
+ *
+ * `payments.test.ts` asks the adapter what it answers when the figures disagree, and
+ * `quote-cart.test.ts` in Core asks what a quote comes to. Neither says the two fit together:
+ * that a storefront which starts a payment for the figure kobai quoted is *not* refused, and
+ * that one whose Cart moved underneath it *is*, are facts about the pair.
+ */
+describe("a payment started for what kobai quoted", () => {
+  /** What a storefront asks before it sends a Shopper to their bank. */
+  async function quote(
+    kobai: TestKobai,
+    headers: Record<string, string>,
+    cartId: string,
+  ) {
+    const response = await kobai.request(`/store/carts/${cartId}/quote`, {
+      method: "POST",
+      headers,
+    });
+    return (await response.json()) as { total: number; currency: string };
+  }
+
+  it("is taken, because the intent was started for the figure the route answered", async () => {
+    const stripe = stripeStub({
+      "POST /v1/payment_intents": {
+        id: "pi_redirect",
+        client_secret: "pi_redirect_secret",
+        status: "requires_payment_method",
+      },
+      // The intent as Stripe reports it once the Shopper has authorised at their bank, for the
+      // amount it was created with.
+      "GET /v1/payment_intents/pi_redirect": intent("succeeded", 1250),
+    });
+    const provider = stripePayments({ secretKey: "sk_test_123", fetch: stripe });
+    await using kobai = await createTestKobai({ payments: { provider } });
+    const cart = await seedTestCart(kobai);
+
+    const quoted = await quote(kobai, cart.apiKey.headers, cart.id);
+    await provider.startPayment({
+      cartId: cart.id,
+      amount: quoted.total,
+      currency: quoted.currency,
+    });
+    const response = await place(kobai, cart.apiKey.headers, cart.id);
+
+    expect(quoted.total).toBe(1250);
+    expect(response.status).toBe(201);
+  });
+
+  it("is refused when the Cart moved after the Shopper left, and no Order is written", async () => {
+    // The failure the whole ticket exists for, and it is an ordinary sequence rather than a
+    // contrived one: a Cart is mutable by design (ADR-0009), so a second tab adding a line
+    // while the Shopper is in a banking app is a thing that happens. Without the check the
+    // Shopper pays for one poster, Core records an Order for two, and the books balance
+    // against money that never arrived.
+    const stripe = stripeStub({
+      "POST /v1/payment_intents": {
+        id: "pi_redirect",
+        client_secret: "pi_redirect_secret",
+        status: "requires_payment_method",
+      },
+      "GET /v1/payment_intents/pi_redirect": intent("succeeded", 1250),
+    });
+    const provider = stripePayments({ secretKey: "sk_test_123", fetch: stripe });
+    await using kobai = await createTestKobai({ payments: { provider } });
+    const cart = await seedTestCart(kobai);
+    const quoted = await quote(kobai, cart.apiKey.headers, cart.id);
+    await provider.startPayment({
+      cartId: cart.id,
+      amount: quoted.total,
+      currency: quoted.currency,
+    });
+
+    // A second of the same Variant, after the payment was started.
+    await kobai.request(
+      `/store/carts/${cart.id}/line-items/${cart.lineItem("POSTER-A2").id}`,
+      {
+        method: "PATCH",
+        headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+        body: JSON.stringify({ quantity: 2 }),
+      },
+    );
+    const response = await place(kobai, cart.apiKey.headers, cart.id);
+
+    expect(response.status).toBe(402);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "payment-declined",
+      // The words are the Plugin's, and they name both figures because the person who can act
+      // on this is the Developer wiring the storefront.
+      error: expect.stringContaining("this Order comes to 2500 USD"),
+    });
+    await expect(ordersIn(kobai)).resolves.toEqual([]);
+  });
+});

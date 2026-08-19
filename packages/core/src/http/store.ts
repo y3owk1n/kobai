@@ -22,6 +22,7 @@ import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
+import { type QuoteCartRefusal, quoteCart } from "../order/quote-cart.ts";
 import { type Order, readOrder, readOrderPlacedFrom } from "../order/read.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import type {
@@ -501,6 +502,70 @@ const holdCartRoute = createRoute({
   },
 });
 
+// ---- Quoting a Cart -----------------------------------------------------------------------
+
+/**
+ * **What this Cart comes to** — the question a storefront has to answer before it starts a
+ * payment (ADR-0077).
+ *
+ * ADR-0070's redirect flow has the *Project* create the payment, which means creating it for an
+ * amount, and until this route existed there was no kobai-supplied figure to create it for: a
+ * Cart carries no totals on purpose (ADR-0009) and `place-order` works the total out at Capture.
+ * So the amount was a storefront's arithmetic over prices it had read, and a wrong one buys an
+ * expensive Cart with a cheap payment.
+ *
+ * **It sits behind an ordinary API key, and that is the same reasoning the Cart routes beside it
+ * use** (ADR-0055). The two `/store` routes that demand a *secret* key demand it because they
+ * consume something a public credential could exhaust or move — stock, and money. This claims
+ * nothing, charges nothing and writes nothing; everything it answers is derived from a Cart whose
+ * identifier the browser already holds and prices `GET /store/variants/{id}/price` already
+ * resolves for a publishable key. Gating it would push every cart-summary render through a
+ * Project's own server for no boundary in return.
+ *
+ * **A `POST` for a question, because the open context has two halves** (#138). A quote has to run
+ * with the same `metadata` the placement will run with — a lead time, a customer tier — or a
+ * deployment whose `apply-adjustments` reads one quotes a figure it will not charge. The body
+ * half cannot be sent on a `GET`, so this takes a body, merges it with the query string exactly
+ * as `POST /store/orders` does, and refuses a key that arrived in both.
+ */
+const quoteCartRoute = createRoute({
+  method: "post",
+  path: "/carts/{id}/quote",
+  summary: "What this Cart comes to",
+  security: API_KEY,
+  description:
+    "Runs the pricing half of this deployment's own `place-order` — the same `resolve-price`, the same Adjustments, the same tax Step — and stops before anything is claimed, charged or written. So a Project that replaced a pricing Step quotes the prices it will charge, and the figure here is what placing this Cart unchanged would cost. It is a **quote at an instant**, not an offer: nothing is held, nothing binds a placement to it, `quotedAt` says when it was worked out, and there is nothing here to send back. Hold the stock with `POST /store/carts/{id}/reservations` — this does not. Send the same `metadata` you will place with, on the body or the query string, so that a Step reading it sees the same context both times.",
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: false,
+      content: { "application/json": { schema: contract.QuoteRequest } },
+    },
+  },
+  responses: {
+    200: json(
+      "What this Cart comes to, and the Steps that worked it out.",
+      contract.Quote,
+    ),
+    400: json(
+      "The request does not fit this endpoint's schema, or a key arrived in both the query string and `metadata`.",
+      contract.QuoteRequestRefusal,
+    ),
+    401: REFUSALS.noApiKey,
+    404: json("A Step refused: there is no such Cart.", contract.QuoteRefusal),
+    409: json(
+      "Nothing was quoted. The Cart can no longer produce an Order — it has expired, or it has already been placed — or something in it names a Fulfilment Strategy this deployment no longer has wired.",
+      contract.QuoteRefusal,
+    ),
+    422: json(
+      "A Step refused. The request was well formed and the Workflow declined it — the Cart is empty, a line can no longer be priced, or a Step this build of Core does not know said no.",
+      contract.QuoteRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 // ---- Orders -------------------------------------------------------------------------------
 
 /**
@@ -738,6 +803,42 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     );
   });
 
+  store.openapi(quoteCartRoute, async (c) => {
+    // Both halves of the open context, or the keys that arrived in both — the same reading
+    // `POST /store/orders` makes, because a quote that ran against a different context from the
+    // placement would answer a different question from the one that gets charged (#121).
+    const open = openMetadataWithBody(new URL(c.req.url), c.req.valid("json")?.metadata);
+    if (!open.ok) return c.json(metadataInBoth(open.collided), 400);
+
+    // The *declaration this deployment runs*, handed in like every other Workflow on this
+    // surface: a route that imported Core's own would quote Core's prices to a Project that
+    // replaced a pricing Step, which is the bug this route exists to close (ADR-0077).
+    const run = await quoteCart(
+      deps.placeOrderWorkflow,
+      { cartId: c.req.valid("param").id },
+      contextFor(open.metadata),
+    );
+
+    if (!run.ok) {
+      return c.json(
+        refusal(run, deps.placeOrderWorkflow.name),
+        quoteStatusFor(run.reason),
+      );
+    }
+
+    return c.json(
+      {
+        ...run.output,
+        quotedAt: run.output.quotedAt.toISOString(),
+        // The slots this deployment ran and what filled each — the same field, and the same
+        // reason, as a resolved price: a Developer who replaced a pricing Step sees theirs here,
+        // which is what makes "it prices the way it charges" visible rather than asserted.
+        workflow: { name: deps.placeOrderWorkflow.name, steps: run.steps },
+      },
+      200,
+    );
+  });
+
   store.openapi(placeOrderRoute, async (c) => {
     const body = c.req.valid("json");
 
@@ -746,15 +847,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     // a purchase, and claiming a key for it would spend the storefront's one safe retry on a
     // request that never reached the Cart.
     const open = openMetadataWithBody(new URL(c.req.url), body.metadata);
-    if (!open.ok) {
-      return c.json(
-        {
-          error: `${open.collided.map((key) => JSON.stringify(key)).join(", ")} arrived in both the query string and \`metadata\`, and kobai reads no key out of either — so it cannot know which one this deployment's Steps meant. Send each key in one place.`,
-          reason: "metadata-in-both" as const,
-        },
-        400,
-      );
-    }
+    if (!open.ok) return c.json(metadataInBoth(open.collided), 400);
 
     // Claimed before the Workflow runs, so a retry of a request that is still being served
     // never reaches the Cart at all — and released below unless an Order comes of it, because
@@ -947,6 +1040,54 @@ const HOLD_CART_STATUS = {
   "unknown-fulfilment-strategy": 409,
   "insufficient-inventory": 409,
 } as const satisfies StatusesFor<typeof holdCartReservations>;
+
+/**
+ * How a Step refusing to quote a Cart becomes a status — the same shape, and the same
+ * `satisfies`, as the two maps below it.
+ *
+ * **Each entry is the status that word already means elsewhere on this surface**, which is what
+ * to keep true when one is added: a storefront meets `cart-expired` at 409 whether it was
+ * reading a Cart, holding its stock, quoting it or placing it, so `reason` is what it branches
+ * on and the status never tells it which route it was on. Written out rather than spread from
+ * `NOT_CHANGEABLE_STATUS`, exactly as {@link HOLD_CART_STATUS} is: that constant is the set
+ * every Cart *mutation* refuses with, and neither of these routes mutates anything.
+ *
+ * It covers two unions for {@link PLACE_ORDER_REFUSAL_STATUS}'s reason — the Cart read's and
+ * `resolve-price`'s, whose refusals travel out of `price-lines` as themselves.
+ */
+const QUOTE_REFUSAL_STATUS = {
+  "cart-not-found": 404,
+  "cart-expired": 409,
+  "cart-placed": 409,
+  "cart-empty": 422,
+  "unknown-fulfilment-strategy": 409,
+  "variant-not-found": 422,
+  "price-not-set": 422,
+} as const satisfies Record<
+  QuoteCartRefusal | PriceResolutionRefusal,
+  QuoteRefusalStatus
+>;
+
+/** The three statuses a refused quote can carry. The route declares exactly these. */
+type QuoteRefusalStatus = 404 | 409 | 422;
+
+const quoteStatusFor = statusMapper<QuoteRefusalStatus>(QUOTE_REFUSAL_STATUS);
+
+/**
+ * A key that arrived in both halves of the open context, refused rather than resolved (#121).
+ *
+ * Written once for the two routes that can meet it — the placement and the quote — because the
+ * two must say the same thing: they read the same context through the same function, and a
+ * storefront that meets this on one and then the other should not have to work out whether it
+ * is the same mistake. The prose is `error` and is promised to nobody (ADR-0060), which is
+ * precisely why two copies of it would drift.
+ */
+function metadataInBoth(collided: readonly string[]) {
+  return {
+    error: `${collided.map((key) => JSON.stringify(key)).join(", ")} arrived in both the query string and \`metadata\`, and kobai reads no key out of either — so it cannot know which one this deployment's Steps meant. Send each key in one place.`,
+    reason: "metadata-in-both" as const,
+  };
+}
 
 /**
  * Reading a Cart is the one Cart operation with no write behind it, so it is the one place the

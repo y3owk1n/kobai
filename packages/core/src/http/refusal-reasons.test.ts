@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import type { PaidOrder } from "../order/place-order.ts";
+import type { AdjustedLines, PaidOrder } from "../order/place-order.ts";
 import type { LoadedPrices, ResolvedPrice } from "../pricing/resolve-price.ts";
 import {
   createTestKobai,
@@ -200,9 +200,15 @@ async function addressable(kobai: TestKobai) {
  * reaches the caller unchanged.
  *
  * Asserted on **both** Workflows a Project can put a Step into, and asserted twice over: that
- * the word travels, and that the description still leaves those two `reason`s an open string —
+ * the word travels, and that the description still leaves those `reason`s an open string —
  * because a narrowing that reached them would make the first assertion a lie the moment a
  * client believed the second.
+ *
+ * There are **three** open families rather than two since ADR-0077, and the third is the same
+ * two Workflows arriving at a second route: `POST /store/carts/{id}/quote` runs the pricing half
+ * of `place-order`, so a Step a Project supplied refuses a quote in its own words exactly as it
+ * refuses a placement. The list below is named rather than counted for that reason — a fourth is
+ * a decision somebody has to take on purpose.
  */
 describe("a Step Core has never heard of may still refuse", () => {
   it("carries a resolve-price Step's own reason out at 422", async () => {
@@ -262,12 +268,43 @@ describe("a Step Core has never heard of may still refuse", () => {
     await expect(response.json()).resolves.toMatchObject({ reason: "not-today" });
   });
 
-  it("leaves those two reasons an open string in the description", async () => {
-    // Every other refusal schema on the surface is a closed set (ADR-0060). These two are the
+  it("carries a place-order pricing Step's own reason out of a quote at 422", async () => {
+    // The same Step, on the route that runs the pricing half of the same declaration — so the
+    // openness is a property of the Workflow rather than of one route that happens to run it.
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": {
+          before: {
+            "calculate-tax": [
+              defineStep("no-quotes-today", (_lines: AdjustedLines): AdjustedLines => {
+                throw new StepFailure(
+                  "not-today",
+                  "This Store is not quoting anything today.",
+                );
+              }),
+            ],
+          },
+        },
+      },
+    });
+    const cart = await seedTestCart(kobai);
+
+    const response = await kobai.request(`/store/carts/${cart.id}/quote`, {
+      method: "POST",
+      headers: cart.apiKey.headers,
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({ reason: "not-today" });
+  });
+
+  it("leaves those three reasons an open string in the description", async () => {
+    // Every other refusal schema on the surface is a closed set (ADR-0060). These three are the
     // exception, and the exception is Extension Point 2 — so it is named rather than counted.
     await expect(openReasonSchemas()).resolves.toEqual([
       "PlaceOrderRefusal",
       "PriceRefusal",
+      "QuoteRefusal",
     ]);
   });
 });

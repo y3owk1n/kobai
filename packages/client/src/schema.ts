@@ -2441,6 +2441,79 @@ export interface paths {
       };
     };
   };
+  "/store/carts/{id}/quote": {
+    /**
+     * What this Cart comes to
+     * @description Runs the pricing half of this deployment's own `place-order` — the same `resolve-price`, the same Adjustments, the same tax Step — and stops before anything is claimed, charged or written. So a Project that replaced a pricing Step quotes the prices it will charge, and the figure here is what placing this Cart unchanged would cost. It is a **quote at an instant**, not an offer: nothing is held, nothing binds a placement to it, `quotedAt` says when it was worked out, and there is nothing here to send back. Hold the stock with `POST /store/carts/{id}/reservations` — this does not. Send the same `metadata` you will place with, on the body or the query string, so that a Step reading it sees the same context both times.
+     */
+    post: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody?: {
+        content: {
+          "application/json": components["schemas"]["QuoteRequest"];
+        };
+      };
+      responses: {
+        /** @description What this Cart comes to, and the Steps that worked it out. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Quote"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or a key arrived in both the query string and `metadata`. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["QuoteRequestRefusal"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description A Step refused: there is no such Cart. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["QuoteRefusal"];
+          };
+        };
+        /** @description Nothing was quoted. The Cart can no longer produce an Order — it has expired, or it has already been placed — or something in it names a Fulfilment Strategy this deployment no longer has wired. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["QuoteRefusal"];
+          };
+        };
+        /** @description A Step refused. The request was well formed and the Workflow declined it — the Cart is empty, a line can no longer be priced, or a Step this build of Core does not know said no. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["QuoteRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/store/orders": {
     /**
      * Turn a Cart into an Order
@@ -3274,6 +3347,88 @@ export interface components {
        */
       reason: "cart-not-found" | "cart-expired" | "cart-placed" | "cart-empty" | "unknown-fulfilment-strategy" | "insufficient-inventory";
     };
+    Quote: {
+      /** Format: uuid */
+      cartId: string;
+      /** @description ISO 4217. Every amount here is in it. */
+      currency: string;
+      /** @description In the Cart's own order — the order `GET /store/carts/{id}` reports its lines in, and **not** the SKU order an Order reports Line Items in. Read a line by its `sku` rather than by position if you are comparing the two. */
+      lineItems: components["schemas"]["QuoteLineItem"][];
+      /** @description The Adjustments belonging to no single line — a basket-wide voucher, a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own. */
+      adjustments: components["schemas"]["QuoteLevelAdjustment"][];
+      /** @description What the whole Cart comes to, in minor units: every line total, plus these Adjustments and the tax on each of them. This is the figure a placement of this Cart, unchanged, would charge. */
+      total: number;
+      /**
+       * Format: date-time
+       * @description When this was worked out. Nothing is bound to it and nothing expires with it — it is here so the answer reads as a moment rather than as an offer.
+       */
+      quotedAt: string;
+      workflow: {
+        name: string;
+        /** @description The Steps that produced this, in order — the pricing half of `place-order`, stopping before the Step that claims stock. A Project that replaced one sees its own here. */
+        steps: components["schemas"]["StepReport"][];
+      };
+    };
+    QuoteLineItem: {
+      /**
+       * Format: uuid
+       * @description The **Cart's** Line Item this prices. Named rather than `id` because nothing was created: there is no Order here and no Line Item of one.
+       */
+      lineItemId: string;
+      /** Format: uuid */
+      variantId: string;
+      /** @description The Variant's SKU **now**, not a snapshot. */
+      sku: string;
+      quantity: number;
+      /** @description What one of it costs, in minor units — resolved through this deployment's `resolve-price`, exactly as placing would resolve it. */
+      unitAmount: number;
+      /** @description Tax on this line, in minor units. Zero until a tax Step is wired, the way an Order's is. */
+      tax: number;
+      /** @description The discounts and surcharges on this line, in the order they were applied. `unitAmount` above is untouched by them; `total` below accounts for all of them. */
+      adjustments: components["schemas"]["QuoteAdjustment"][];
+      /** @description What this line comes to: `unitAmount` × `quantity`, plus its Adjustments, plus `tax`. */
+      total: number;
+    };
+    QuoteAdjustment: {
+      /** @description Machine-readable, and chosen by the Step that added it — `lead-time-surcharge`, `loyalty-discount`. Core defines none of its own, so this is not a closed set. */
+      code: string;
+      /** @description For a person to read. */
+      description: string;
+      /** @description **Signed** minor units: negative discounts, positive surcharges. The totals account for it either way. */
+      amount: number;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    QuoteLevelAdjustment: components["schemas"]["QuoteAdjustment"] & {
+      /** @description Tax on this Adjustment, in minor units, signed with `amount`. Zero until a tax Step is wired. */
+      tax: number;
+    };
+    QuoteRequestRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /** @enum {string} */
+      reason: "invalid" | "malformed-body" | "metadata-in-both";
+    };
+    QuoteRefusal: {
+      error: string;
+      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
+      reason: string;
+      workflow: {
+        name: string;
+        /** @description The slot that refused. */
+        failed: string;
+        steps: components["schemas"]["StepReport"][];
+      };
+    };
+    QuoteRequest: {
+      metadata?: components["schemas"]["OpenMetadata"];
+    };
+    /** @description Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either. */
+    OpenMetadata: {
+      [key: string]: unknown;
+    };
     PlacedOrder: components["schemas"]["Order"] & {
       workflow: {
         name: string;
@@ -3302,10 +3457,6 @@ export interface components {
       /** @description The Cart to place. Holding its identifier is the whole of the authority to act on it (ADR-0020). */
       cartId: string;
       metadata?: components["schemas"]["OpenMetadata"];
-    };
-    /** @description Optional. The open half of the Workflow this request runs — whatever that deployment's Steps need and Core does not model: a card token for the Payment Provider, a lead time, a customer tier. It reaches every Step verbatim and is **never stored**; an entity's own `metadata` column is a different thing. Core reads no key out of it (ADR-0013). This request's query string reaches the same place and works the same way; send a key in only one of them, because a key in both is refused at 400 rather than resolved in favour of either. */
-    OpenMetadata: {
-      [key: string]: unknown;
     };
   };
   responses: never;

@@ -449,10 +449,16 @@ A storefront fills the open context in either of two places, and both land on th
 | A **`metadata` object on the request body** | Anything a URL may not: a card token, a completed bank authorisation, anything you would not want in a log. Values arrive as the **JSON you wrote** — a number stays a number, and a nested object stays nested. |
 
 **Only a route that runs a Workflow has an open context at all**, because a Step is the only
-thing that reads one. There are two of them: `GET /store/variants/{id}/price`, which has no
-body to grow and so has the query-string half alone, and `POST /store/orders`, which has both.
-A Cart route takes a body and runs no Workflow, so neither half of a request to one reaches
-anything — `POST /store/carts?tier=gold` is a parameter kobai discards.
+thing that reads one. There are three of them: `GET /store/variants/{id}/price`, which has no
+body to grow and so has the query-string half alone, and `POST /store/orders` and
+`POST /store/carts/{id}/quote`, which have both. An ordinary Cart route takes a body and runs no
+Workflow, so neither half of a request to one reaches anything — `POST /store/carts?tier=gold`
+is a parameter kobai discards.
+
+**Send a quote the same context you will place with.** `POST /store/carts/{id}/quote` runs the
+*pricing* half of `place-order` — your `resolve-price`, your `apply-adjustments`, your
+`calculate-tax` — so a Step of yours that reads `leadTimeDays` reads it there too, and quoting
+without it answers a different question from the one that gets charged (ADR-0077).
 
 **Do not confuse this `metadata` with the column of the same name.** The one on `POST
 /store/orders` is **never stored** — it lives for the length of the request and is gone. The
