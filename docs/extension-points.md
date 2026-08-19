@@ -188,18 +188,24 @@ export default defineKobaiConfig({
 });
 ```
 
-**Five keys today**, and every one of them names a *subject* rather than a scalar — a key
+**Six keys today**, and every one of them names a *subject* rather than a scalar — a key
 holding one setting is how a file gets a second top-level key the day it needs to say
 anything else about the same thing
 ([ADR-0050](./adr/0050-the-idle-window-is-a-projects-the-cap-is-cores.md)):
 
 - `migrationSets` — the Plugin tables your Project has agreed to have.
 - `workflows` — the next section, and the flagship.
-- `session` — how long a signed-in Merchant stays signed in, as `{ idleWindowMs }`. The one
-  key the example above does not use, because this Project is content with Core's default;
+- `session` — how long a signed-in Merchant stays signed in, as `{ idleWindowMs }`. One of the
+  two keys the example above does not use, because this Project is content with Core's default;
   a window Core will not enforce stops the boot rather than being quietly clamped.
 - `payments` — the Payment Provider, of which Core ships none. Section 3.
 - `fulfilment` — the Strategies your Variants may point at. Section 3 as well.
+- `reservations` — how long a Cart's stock is held while an Order is being placed, as
+  `{ holdWindowMs }`, defaulting to fifteen minutes. The other key the example leaves out.
+  Set it to whatever your Shoppers' payment methods need: **Core keeps a floor of one minute
+  and no ceiling at all**, because nothing renews a hold, so its window already is the bound
+  — the asymmetry with `session` is
+  [ADR-0075](./adr/0075-the-hold-window-is-a-projects-and-core-keeps-no-ceiling.md).
 
 **Installing a Plugin does nothing.** `@kobai/plugin-price-log` above is an ordinary npm
 dependency, and adding it to `package.json` creates no table and runs no code. The two lines

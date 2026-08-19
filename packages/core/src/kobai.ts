@@ -20,6 +20,7 @@ import type { MigrationSet } from "./migrations/set.ts";
 import { createMigrationStateHolder, type MigrationState } from "./migrations/state.ts";
 import { placeOrderWorkflow } from "./order/place-order.ts";
 import { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
+import { resolveHoldWindowMs } from "./reservation/reservation.ts";
 import {
   type SweeperOptions,
   type SweepOutcome,
@@ -148,6 +149,9 @@ export function createKobai(options: KobaiOptions): Kobai {
   // boot here rather than at the first Merchant who notices their sessions are the wrong
   // length. Nothing is clamped, and the message names the key and the bound it missed.
   const sessionPolicy = resolveSessionPolicy(options.session);
+  // And beside it, for the same reason: a hold window a placement could overrun is a
+  // deployment that takes money and then cannot write the Order (ADR-0075).
+  const holdWindowMs = resolveHoldWindowMs(options.reservations);
   const logger = options.logger ?? consoleLogger;
   const database = createDatabaseHandle(options.databaseUrl);
   const migrations = createMigrationStateHolder();
@@ -202,6 +206,7 @@ export function createKobai(options: KobaiOptions): Kobai {
     placeOrderWorkflow: placeOrder,
     workflows,
     sessionPolicy,
+    holdWindowMs,
   });
 
   return {

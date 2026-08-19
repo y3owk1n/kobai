@@ -70,6 +70,20 @@ export type WorkflowContext = {
    * behaves as that deployment does rather than as one where no Variant can be fulfilled.
    */
   readonly fulfilment?: FulfilmentStrategies;
+  /**
+   * How long this deployment holds a Cart's stock, for the Step that claims it (ADR-0075).
+   *
+   * It reaches a Step the way the database, the Payment Provider and the Strategies do, and
+   * for the same reason: a Step is a module-level declaration a Project may replace, so there
+   * is nothing to hand a dependency to at construction time.
+   *
+   * **Optional, and absent means Core's fifteen minutes** rather than no window at all — a
+   * context assembled without this key behaves as a deployment that configured nothing does,
+   * which is what a Workflow put together in a test wants and is exactly wrong for a
+   * deployment. Whatever builds a context for a request fills it from what `createKobai`
+   * resolved.
+   */
+  readonly holdWindowMs?: number;
 };
 
 /**

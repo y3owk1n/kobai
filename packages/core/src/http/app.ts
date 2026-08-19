@@ -56,6 +56,13 @@ export type HttpDependencies = {
    * description of *these* numbers.
    */
   readonly sessionPolicy: SessionPolicy;
+  /**
+   * How long this deployment holds a Cart's stock while an Order is being placed — the
+   * default, or what its `kobai.config.ts` said (ADR-0075). Threaded through for
+   * `sessionPolicy`'s reason: it is a property of the instance, and the Step that claims
+   * stock reads it off the Workflow context this surface builds.
+   */
+  readonly holdWindowMs: number;
 };
 
 /** Where `coreVersion` reads from — `@kobai/core`'s own manifest, beside its `dist`. */
@@ -282,6 +289,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       placeOrderWorkflow: deps.placeOrderWorkflow,
       workflows: deps.workflows,
       paymentProvider: deps.paymentProvider,
+      holdWindowMs: deps.holdWindowMs,
     }),
   );
   app.route("/store", store);

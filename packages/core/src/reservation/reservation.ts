@@ -38,15 +38,114 @@ import type {
 export const RESERVATION_PROVIDERS: readonly ReservationProvider[] = [inventoryProvider];
 
 /**
- * How long a hold stands before the sweeper may give it back.
+ * **How long a hold stands before the sweeper may give it back, for a Project that says
+ * nothing.**
  *
  * Generous against how long placing an Order takes, deliberately: releasing a hold out from
  * under a run that is still going is the worse of the two mistakes, because that one oversells,
- * while a hold outliving a dead process only makes stock unsellable for a few minutes. It is a
- * Core constant rather than a `kobai.config.ts` key because no deployment has yet needed to say
- * anything different, and a key is a promise (ADR-0050).
+ * while a hold outliving a dead process only makes stock unsellable for a few minutes.
+ *
+ * It used to be Core's whole answer, on the argument that no deployment had yet needed to say
+ * anything different. ADR-0070 is a deployment needing to: a hold now spans a Shopper walking
+ * into their banking app, and how long that takes is a fact about a Store's Shoppers and their
+ * banks that Core cannot know. So it is a *default* now rather than the rule — a deployment
+ * sets its own as {@link ReservationsOptions.holdWindowMs}, and one that says nothing gets
+ * exactly this (ADR-0075).
  */
-export const RESERVATION_HOLD_WINDOW_MS = 15 * 60 * 1000;
+export const DEFAULT_RESERVATION_HOLD_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * The shortest hold window a Project may set — a minute, and the reason is that a hold has to
+ * outlive the placement that took it.
+ *
+ * Everything between `hold-reservations` and `capture-order` happens inside the window,
+ * including `take-payment`, which is a round trip into somebody else's system. A window the
+ * run overruns is released by the sweeper from under itself, and `consumeReservations` then
+ * raises **after the money has moved** — the one failure in this module that costs a Shopper
+ * rather than costing the Store a few minutes of unsellable stock.
+ *
+ * A minute is also the granularity at which a lapsed hold is noticed at all: the sweeper runs
+ * on `SWEEP_INTERVAL_MS`, so a window below one sweep asks for a precision nothing acts on.
+ *
+ * **There is deliberately no ceiling above it.** See {@link ReservationsOptions.holdWindowMs}.
+ */
+export const MINIMUM_RESERVATION_HOLD_WINDOW_MS = 60 * 1000;
+
+/**
+ * What a Project says about its Reservations in `kobai.config.ts` — a subject, not a scalar
+ * (ADR-0050).
+ *
+ * Declared here rather than in `config.ts` because this module owns the number and the rules
+ * about it; `config.ts` is the shape of the file, not the authority on what a hold is.
+ */
+export type ReservationsOptions = {
+  /**
+   * **How long a hold stands before the sweeper may give it back.** Defaults to fifteen
+   * minutes.
+   *
+   * At least {@link MINIMUM_RESERVATION_HOLD_WINDOW_MS}, as a whole number of milliseconds. A
+   * value below that stops the boot rather than being clamped to fit — see
+   * {@link resolveHoldWindowMs}.
+   *
+   * ```ts
+   * reservations: { holdWindowMs: 30 * 60 * 1000 }
+   * ```
+   *
+   * **Core keeps a floor and no ceiling, and that asymmetry with `session.idleWindowMs` is a
+   * decision rather than an omission** (ADR-0075). ADR-0050 caps an idle window because that
+   * window is *renewed by traffic*, so it bounds an abandoned browser and nothing at all a
+   * thief who keeps clicking — the cap is the only bound left. Nothing renews a hold: it is
+   * written once with a deadline and the sweeper gives it back at that deadline, so the window
+   * **is** the bound and there is no gap above it for a ceiling to fill. What a long one costs
+   * is the Store's own stock left unsellable after a Shopper walked away, which is this
+   * deployment's inventory, this deployment's Shoppers and this deployment's money — and how
+   * long a Shopper takes in a banking app is precisely the fact ADR-0070 says Core cannot know.
+   * A ceiling would be Core guessing at the one number it has just admitted it cannot guess.
+   *
+   * So set this as long as your Shoppers' banks need. A ceiling stays addable later at no cost
+   * to a Project under it; a deployment that wants one today enforces it where it builds this
+   * config, which is a line of its own code rather than an argument with Core.
+   */
+  readonly holdWindowMs?: number;
+};
+
+/**
+ * Turns what a Project wrote into the window this module writes onto a hold, or **stops the
+ * boot**.
+ *
+ * Called by `createKobai` before anything is opened, so an unusable window is a process that
+ * never serves rather than one holding stock for a length nobody chose. Throwing is right where
+ * a failed migration returns an outcome (#2): a migration fails for reasons a running
+ * deployment can meet, whereas this is a value in a file a Developer just wrote, wrong on every
+ * boot until it is fixed. The message names the key, the value it was given and the bound it
+ * missed, because "invalid configuration" is not a diagnosis.
+ *
+ * **Nothing is clamped**, for ADR-0050's reason: a deployment whose holds quietly last
+ * something other than what its config file says is a bug found by a Shopper who paid at their
+ * bank and came back to `insufficient-stock`.
+ */
+export function resolveHoldWindowMs(options?: ReservationsOptions): number {
+  /** Where a Developer has to go to fix it, spelled the way they wrote it. */
+  const HOLD_WINDOW_SETTING = "`reservations.holdWindowMs` in kobai.config.ts";
+
+  const holdWindowMs = options?.holdWindowMs;
+  if (holdWindowMs === undefined) return DEFAULT_RESERVATION_HOLD_WINDOW_MS;
+
+  if (!Number.isSafeInteger(holdWindowMs)) {
+    throw new Error(
+      `${HOLD_WINDOW_SETTING} must be a whole number of milliseconds, and is ${holdWindowMs}.`,
+    );
+  }
+  if (holdWindowMs < MINIMUM_RESERVATION_HOLD_WINDOW_MS) {
+    throw new Error(
+      `${HOLD_WINDOW_SETTING} must be at least ${MINIMUM_RESERVATION_HOLD_WINDOW_MS} (one minute), and is ${holdWindowMs}. A hold has to outlive the placement that took it — taking payment happens inside the window — and the sweeper only notices a lapsed one once a minute, so a window shorter than this is one a placement can overrun before the Order is written.`,
+    );
+  }
+
+  // No upper bound, deliberately, and not for want of asking: how long a hold should stand is
+  // a fact about this Store's Shoppers that Core cannot know (ADR-0075).
+  return holdWindowMs;
+}
 
 /**
  * A Reservation as its holder carries it — the claim, plus the row that authorises undoing it.
@@ -75,12 +174,18 @@ export type HoldResult =
  * provider's atomic claim and Core's record of it a single fact — a row saying units are held
  * that were not, or units held with no row to release them by, are the two failures this shape
  * removes.
+ *
+ * **The window is passed in rather than read from the constant**, because it belongs to the
+ * deployment rather than to this module (ADR-0075) — and required rather than defaulted, so a
+ * caller that forgot it is a compile error instead of a second answer to how long this Store
+ * holds stock.
  */
 export async function holdReservations(
   db: Database,
   lines: readonly ReservableLine[],
+  holdWindowMs: number,
 ): Promise<HoldResult> {
-  const expiresAt = new Date(Date.now() + RESERVATION_HOLD_WINDOW_MS);
+  const expiresAt = new Date(Date.now() + holdWindowMs);
 
   try {
     return await db.transaction(async (tx: Transaction): Promise<HoldResult> => {
@@ -130,8 +235,9 @@ export async function holdReservations(
  *
  * A Reservation that is no longer held raises rather than being skipped. The only way to reach
  * that is a run that outlived its own hold window, which is a deployment placing Orders more
- * slowly than {@link RESERVATION_HOLD_WINDOW_MS} allows; consuming anyway would sell units the
- * Store has already offered to somebody else. It travels as a bug rather than as a refusal for
+ * slowly than {@link ReservationsOptions.holdWindowMs} allows; consuming anyway would sell
+ * units the Store has already offered to somebody else. It travels as a bug rather than as a
+ * refusal for
  * the same reason a fraction of a penny does — the request was fine, and what is wrong is this
  * deployment.
  */
@@ -164,7 +270,11 @@ export async function consumeReservations(
 
   if (taken.length !== held.length) {
     throw new Error(
-      `${held.length - taken.length} of this Order's Reservations were no longer held when it was captured, so the stock they claimed could not be consumed. A hold lapses after ${RESERVATION_HOLD_WINDOW_MS}ms, and this placement took longer than that.`,
+      // The key rather than the number, deliberately. This runs inside the Capture transaction
+      // and is handed no window, and a message quoting Core's fifteen minutes to a deployment
+      // that configured forty-five would send a Developer looking for a bug in the wrong place
+      // — worse than a message that names where the number lives and lets them read it.
+      `${held.length - taken.length} of this Order's Reservations were no longer held when it was captured, so the stock they claimed could not be consumed. This placement outlived its own hold window — \`reservations.holdWindowMs\` in kobai.config.ts, or Core's default if that says nothing.`,
     );
   }
 

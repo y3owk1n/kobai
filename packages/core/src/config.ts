@@ -4,6 +4,7 @@ import type { MigrationSet } from "./migrations/set.ts";
 import type { placeOrderWorkflow } from "./order/place-order.ts";
 import type { PaymentsOptions } from "./payment/provider.ts";
 import type { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
+import type { ReservationsOptions } from "./reservation/reservation.ts";
 import type { WorkflowOverrides } from "./workflow/workflow.ts";
 
 /**
@@ -100,6 +101,29 @@ export type KobaiProjectConfig = {
    * thing a deployment needs to say about how it fulfils goes.
    */
   readonly fulfilment?: FulfilmentOptions;
+  /**
+   * What this Project has changed about how long a Cart's stock is held while an Order is
+   * being placed.
+   *
+   * ```ts
+   * reservations: { holdWindowMs: 30 * 60 * 1000 }
+   * ```
+   *
+   * **A subject, not a scalar**, for `session`'s reason above.
+   *
+   * Fifteen minutes if this key is absent, which is what every deployment had before this key
+   * existed. It is a Project's because a hold now spans a Shopper walking into their banking
+   * app, and how long that takes is a fact about a Store's Shoppers and their banks
+   * (ADR-0070).
+   *
+   * Note what is deliberately *not* here: a ceiling. Unlike `session.idleWindowMs`, nothing
+   * bounds this from above — a hold is never renewed, so its window already **is** the bound,
+   * and what a long one costs is this Store's own stock. The floor is Core's, and it is about
+   * kobai working rather than about inventory policy: a window a placement can overrun is one
+   * that takes a Shopper's money and then fails to write their Order. A window Core will not
+   * enforce stops the boot, with a message naming this key, and nothing is clamped (ADR-0075).
+   */
+  readonly reservations?: ReservationsOptions;
 };
 
 /**

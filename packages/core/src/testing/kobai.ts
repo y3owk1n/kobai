@@ -74,6 +74,10 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
       // boots with the same key a `kobai.config.ts` carries, and an unusable one is refused
       // here exactly as it would be at a Project's boot.
       session: options?.session,
+      // And for a deployment that sets its own hold window (ADR-0075), which is the same
+      // story one key along: the number a test boots with is the number a placement writes
+      // onto the row, and one Core will not enforce is refused here rather than served.
+      reservations: options?.reservations,
       // A provider that pays, unless the test said otherwise — the same courtesy as
       // `silentLogger`, and for the same reason: Core ships none (ADR-0053), so without one
       // every test that places an Order would be a test about not having a Payment Provider.
