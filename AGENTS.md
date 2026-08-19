@@ -619,6 +619,16 @@ Four things follow, and each is a decision rather than an implementation detail:
   business is what a provider is for — Capacity will read `hasLeadTime` there in the same place.
   A digital Variant therefore needs no Inventory row, and sells freely even if somebody counted
   it: the Strategy says whether stock is involved and the row only says how many.
+- **The wired set is readable, and that is a route rather than a constant** (ADR-0067, #179).
+  `GET /admin/fulfilment-strategies` answers every name a Variant may point at — Core's two and
+  whatever the Project wired beside them — built from `fulfilmentStrategyNames`, the same helper
+  the `unknown-fulfilment-strategy` refusals list the known names with, so the answer and the
+  refusal cannot drift. It exists because a client offering a choice had no other honest source:
+  hard-coding `physical` and `digital` is the closed set ADR-0014 exists to rule out, moved into
+  every client and wrong on the first deployment that wires a Plugin's. **It answers a name and
+  nothing else** — the three questions are asked *of a Variant*, so there is no answer to carry
+  without one — and it deliberately **does not page**, which is the one departure from ADR-0064
+  on the whole surface.
 
 **Fulfilment is its own entity** — `core_fulfilment`, one row per way an Order is delivered,
 with `core_order_line_item.fulfilment_id` pointing at it — because one Order has many on
@@ -751,6 +761,18 @@ lists**: `LISTS` is a table of path and item key, so a new list added there inhe
 contract rather than a copy of it. Its last case is the one that matters and the one nothing
 else can see — a page fetched across a concurrent insert — and it was watched failing against
 an offset implementation first, which is the discipline the two race tests already use.
+
+**One route answers a list and does not page, and the boundary is written down** (ADR-0067).
+`GET /admin/fulfilment-strategies` hands back every Strategy this deployment has wired, in one
+response, with no `limit`, no `after` and no `nextCursor`. It is the only exception there is and
+it is not a precedent to copy loosely: ADR-0064's whole argument is about **rows arriving
+between one page and the next**, and this set is `Object.keys` of what `kobai.config.ts` wired —
+decided at boot, unable to change while the process runs, with no `created_at` a cursor could be
+built over. **The test is "can this set change under a reader", not "is it small"**:
+`GET /admin/roles` pages although a deployment may have three Roles, because a Merchant can
+create a fourth over HTTP while somebody is paging. **A borderline case is a list route**, since
+paging something that did not need it costs a parameter nobody sends and the reverse costs a
+break. Adding a second unpaged plural route means reopening ADR-0067, not following it.
 
 **A correction is a `PATCH`, and there is one way to do that too** (ADR-0062). Three routes
 correct a record that already exists — `PATCH /admin/products/{id}`,
@@ -929,7 +951,18 @@ implementation:
   they were, a refusal rendering where it was attempted, skeleton, spinner and empty states,
   and what a narrow Role is offered — which sections, which actions, and that an unavailable
   one really does nothing (`seam.merchantOnARole`, `seam.signedInAs`). **A case that a request-level test could have asked belongs there instead**, which
-  is where screen behaviour has always been asserted.
+  is where screen behaviour has always been asserted. The catalog cases (#179) are the same
+  test applied to a busier screen: a **refused** deletion staying in its dialog, a delete
+  control offered although the deletion is about to be refused, and — the one nothing else in
+  this repository can ask — **which requests the Admin made and in what order**, which is how
+  "superseding a Price adds the new one before removing the old" becomes an assertion rather
+  than a claim in a comment.
+- **A visible overlay is not the same as a settled one, and an assertion about a dialog goes
+  after the audit.** A closing dialog *fades*, so it stays mounted and visible for the length of
+  `data-closed:animate-out` — long enough that "the dialog is still open" passed against a
+  `ConfirmDelete` that closed on every answer. `auditAccessibility` waits for every animation
+  that will end to have ended, so putting it first is what makes the line after it mean
+  something. **Assert on a dialog's presence only once something has waited for the animation.**
 - **`axe-core` runs on every screen a case visits and any violation fails the build.** It is a
   call per screen rather than per case, so a case that navigates twice audits twice — and an
   **overlay is a screen**, so a case that opens the command palette audits it open, which is a
@@ -1034,6 +1067,37 @@ further things about the screens are conventions rather than one screen's choice
   distribution — measured 3.99:1; `src/index.css` carries the measurement at the value. Tuning
   the two vendored components instead would have been undone by the next `shadcn add`, and
   would not have reached the components not added yet.
+- **A deletion is `components/confirm-delete.tsx`, and it stays open when it is refused** (#179,
+  ADR-0059). Catalog deletion refuses rather than cascading — `last-variant`,
+  `stock-is-reserved` — so a delete control that looks perfectly available can still come back
+  turned down, with the Merchant standing in the modal. So there is one component and it gets
+  four things right on everybody's behalf: **only success closes it**, the refusal renders
+  **inside** it, the previous attempt's refusal is cleared **when it is reopened** rather than
+  when it closes, and its trigger is an `ActionButton` rather than an `AlertDialogTrigger`, so
+  an unavailable delete opens nothing. **There is no `canDelete` prop and there must not be
+  one**: whether stock is reserved is a rule living in Core that a Project may already have
+  changed through a replaced Step, so the Admin attempts and renders the answer.
+- **A picker over a set kobai can name is read from kobai, never written down here.** The
+  Fulfilment Strategy field reads ADR-0067's route, because `physical` and `digital` in a
+  `const` is ADR-0014's closed set moved into the client. It is the same rule as
+  `lib/refusal.ts`'s `Record`s one step out: the Admin may hold what kobai's *types* close, and
+  must ask about what a deployment decides.
+- **A `<select>` is native, and this is the one place the Admin leaves shadcn.** shadcn's
+  `Select` is a listbox in a **portal**, so its options sit at the end of `<body>` outside every
+  landmark, and `axe-core` fails the build on it as `region` the moment a case audits a screen
+  with one open — which the browser seam does, because an overlay is a screen. The tooltip's
+  portal is excused by being hidden from the accessibility tree (`components/action-button.tsx`);
+  a list of options a Merchant chooses from cannot be. `shadcn add select` is therefore
+  deliberately **not** vendored here. `Field`, `FieldLabel`, `FieldDescription` and `FieldError`
+  are still shadcn's and the control carries `Input`'s own classes, so it is tuned by the same
+  tokens as everything else — and react-hook-form can `register` it, which a listbox cannot be.
+  **A second one factors this out of `components/fulfilment-strategy-field.tsx`**; reaching for
+  the vendored `Select` instead means answering the landmark question first.
+- **Card titles are headings on the Product screen and on no other.** The frame's `h1` names the
+  section and a detail screen's `h2` names the record, so the cards under it are `h3` — but only
+  where the cards are *sections of one record*, which is the Product screen and its repeated
+  Variants. A screen whose cards are a list of records is right to have none. `CardTitle` is a
+  `div` in this distribution and is left alone; the heading is an element inside it.
 
 ### The scaffolder, and the two trees it keeps in step
 

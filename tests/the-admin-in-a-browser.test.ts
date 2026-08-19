@@ -1402,3 +1402,301 @@ describe("what a Role may do", () => {
     await expect.poll(() => sections(page)).toEqual(["Products", "Orders"]);
   });
 });
+
+/**
+ * The catalog screens, and the promises only a browser can be asked about (#179).
+ *
+ * Everything a Merchant can do to a catalog entry is on the Product screen, and almost all of
+ * it is asserted through the API in `packages/core/src/catalog/`. What is here is the handful
+ * of things a request cannot ask: that a refused deletion is answered **inside the dialog it
+ * was attempted from**, that the delete control is offered even when the deletion is about to
+ * be refused, that superseding a Price really is an add followed by a remove *in that order*,
+ * and that deleting a Product leaves the address that no longer resolves.
+ */
+describe("the catalog screens", () => {
+  /** The Product screen for something this case made, opened. */
+  async function openAProduct(product: { id: string }): Promise<Page> {
+    const page = await seam.signedIn(`/products/${product.id}`);
+    await shows(page.getByRole("heading", { level: 2 }), "the Product's title");
+    return page;
+  }
+
+  /** The Stock section's table, named by the column only it has. */
+  function stockTable(page: Page) {
+    return page
+      .getByRole("table")
+      .filter({ has: page.getByRole("columnheader", { name: "Reserved" }) });
+  }
+
+  /** The Prices table, named the same way. */
+  function priceTable(page: Page) {
+    return page
+      .getByRole("table")
+      .filter({ has: page.getByRole("columnheader", { name: "Minor units" }) });
+  }
+
+  it("renames a Product, and reads the new title back rather than keeping the typed one", async () => {
+    const product = await seam.createProduct({ title: "A poster with a typo" });
+    const page = await openAProduct(product);
+
+    await page.getByLabel("Title").fill("A poster, corrected");
+    await page.getByRole("button", { name: "Rename" }).click();
+
+    // The heading and the breadcrumb both come from the re-read, not from the field: there is
+    // no optimistic update anywhere in this Admin (ADR-0063).
+    await shows(
+      page.getByRole("heading", { name: "A poster, corrected" }),
+      "the renamed Product's heading",
+    );
+    await auditAccessibility(page, "the Product screen after a rename");
+  });
+
+  it("adds a Variant to a Product that already exists", async () => {
+    const product = await seam.createProduct({ title: "A poster wanting a second size" });
+    const page = await openAProduct(product);
+
+    const form = page.locator("form").filter({ hasText: "Add Variant" });
+    await form.getByLabel("SKU").fill(`SECOND-${Date.now()}`);
+    await form.getByRole("button", { name: "Add Variant" }).click();
+
+    // Two Variant cards where there was one, read back off kobai.
+    await expect
+      .poll(() => page.getByRole("heading", { level: 3, name: /^Variant/ }).count(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The second Variant never appeared on the Product screen.",
+      })
+      .toBe(2);
+    await auditAccessibility(page, "the Product screen with two Variants");
+  });
+
+  it("counts stock, and shows on hand, reserved and available separately", async () => {
+    const product = await seam.createProduct({ title: "A poster to be counted" });
+    const page = await openAProduct(product);
+
+    // Untracked is not none left, and the screen says so in words before anybody counts.
+    await shows(
+      page.getByText(/Nobody is counting this Variant/),
+      "the untracked explanation",
+    );
+
+    await page.getByLabel(/On hand/).fill("7");
+    await page.getByRole("button", { name: "Set count" }).click();
+
+    // Three numbers rather than one: stock that is gone and stock that is spoken for are
+    // different facts a Merchant acts on differently. `available` is `onHand - reserved`, a
+    // subtraction this browser cannot do, so it is read back rather than predicted.
+    const cells = stockTable(page).getByRole("cell");
+    await shows(cells.first(), "the stock table");
+    await expect
+      .poll(() => cells.allInnerTexts(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The stock count never settled at what was entered.",
+      })
+      .toEqual(["7", "0", "7"]);
+    await auditAccessibility(page, "the Product screen showing a stock count");
+  });
+
+  it("offers the Strategies this deployment wired, and swaps the Variant onto one", async () => {
+    const product = await seam.createProduct({ title: "A poster becoming a download" });
+    const page = await openAProduct(product);
+
+    // The picker is fed by `GET /admin/fulfilment-strategies` (ADR-0067) — the route this
+    // ticket added because the Admin had no way to learn the set, and hard-coding Core's two
+    // is the closed set ADR-0014 exists to prevent, written into the client.
+    const picker = page.getByLabel("Fulfilment Strategy").first();
+    await shows(picker, "the Fulfilment Strategy picker");
+
+    // Exactly what this deployment wired, asked of kobai rather than written down here: a case
+    // that spelled `physical` and `digital` would be the same closed set in a third place, and
+    // would go red on the first deployment that wires a Plugin's Strategy.
+    const wired = (
+      await seam.api<{ strategies: { name: string }[] }>(
+        "GET",
+        "/admin/fulfilment-strategies",
+      )
+    ).strategies.map((strategy) => strategy.name);
+    await expect
+      .poll(() => picker.locator("option").allInnerTexts(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The Strategy picker never filled in from kobai.",
+      })
+      .toEqual(wired);
+
+    await picker.selectOption("digital");
+    await page.getByRole("button", { name: "Save Variant" }).click();
+
+    await expect
+      .poll(() => picker.inputValue(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The Variant never settled on the Strategy it was swapped onto.",
+      })
+      .toBe("digital");
+    // The count under it does not move, which is ADR-0062's decision and the one thing a swap
+    // must not quietly do.
+    await expect(
+      seam.api<{ variants: { inventory: unknown }[] }>(
+        "GET",
+        `/admin/products/${product.id}`,
+      ),
+    ).resolves.toMatchObject({ variants: [{ inventory: null }] });
+  });
+
+  it("supersedes a Price by adding the new one before removing the old, and never edits one", async () => {
+    const product = await seam.createProduct({
+      title: "A poster whose price was wrong",
+      amount: 1250,
+    });
+    const page = await openAProduct(product);
+
+    /**
+     * Every write this screen makes, in the order it made them.
+     *
+     * The whole subject of the case. There is deliberately no route that edits a Price's
+     * amount (ADR-0062), so what "supersede" has to be is `POST` then `DELETE` — and in that
+     * order, because the reverse leaves the Variant carrying no Price at all for as long as
+     * the second request takes, which is a Shopper mid-checkout getting no quote.
+     */
+    const writes: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "GET") return;
+      writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    });
+
+    await page.getByRole("button", { name: "Supersede" }).click();
+    await page.getByLabel(/New amount/).fill("900");
+    await page.getByRole("button", { name: "Replace Price" }).click();
+
+    await expect
+      .poll(() => priceTable(page).getByRole("row").count(), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The superseded Price never settled to a single row.",
+      })
+      // The header row and one Price: the new one is there and the old one is gone.
+      .toBe(2);
+    await shows(priceTable(page).getByText("900"), "the Price it was superseded to");
+
+    expect(
+      writes,
+      "superseding did not add the new Price before removing the old.",
+    ).toEqual([
+      `POST /admin/variants/${product.variantId}/prices`,
+      expect.stringMatching(
+        new RegExp(`^DELETE /admin/variants/${product.variantId}/prices/`),
+      ),
+    ]);
+    // And the Admin implies no edit route exists, because it does not: nothing here ever
+    // `PATCH`es or `PUT`s a Price.
+    expect(writes.filter((write) => /^(PATCH|PUT) .*\/prices/.test(write))).toEqual([]);
+  });
+
+  it("keeps the dialog open and renders a refused deletion inside it", async () => {
+    // A Product with exactly one Variant, which is the state `last-variant` exists for: a
+    // Product is only sellable through a Variant, so kobai refuses to remove its last one.
+    const product = await seam.createProduct({ title: "A poster with one Variant" });
+    const page = await openAProduct(product);
+
+    const trigger = page.getByRole("button", { name: "Delete Variant" });
+    // Nothing is predicted: the control is offered, not greyed out by an Admin that decided
+    // for itself that this deletion would be refused. That rule lives in Core, Core may
+    // change it, and a Developer's Project may already have (ADR-0059, ADR-0063).
+    await expect(trigger.getAttribute("aria-disabled")).resolves.toBeNull();
+    await trigger.click();
+
+    const dialog = page.getByRole("alertdialog");
+    await shows(dialog, "the Delete Variant confirmation");
+    await dialog.getByRole("button", { name: "Delete Variant" }).click();
+
+    // The refusal is *inside the dialog the Merchant is still looking at*. Closing it and
+    // announcing the failure elsewhere would put the explanation where they no longer are —
+    // and the Variant would still be on screen, so the screen would read as though nothing
+    // had happened at all.
+    await shows(
+      dialog.getByText(/kobai will not remove its last one/),
+      "the refusal, inside the dialog it was attempted from",
+    );
+
+    // Audited *while it is up*: an overlay is a screen, and this one is the only place this
+    // sentence is ever rendered. It also waits for every animation to have finished, which is
+    // what the assertion below needs and could not do for itself.
+    await auditAccessibility(page, "the Delete Variant dialog showing a refusal");
+
+    // **After** the audit, deliberately. A closing dialog fades rather than vanishing, so it
+    // stays mounted and visible for the length of `data-closed:animate-out` — long enough that
+    // this assertion, made the moment the refusal appeared, passed against a `ConfirmDelete`
+    // that closed on every answer. Watched failing that way: with `onSettled: () => setOpen(false)`
+    // the refusal still flashes on screen and only this line goes red.
+    expect(
+      await dialog.isVisible(),
+      "The dialog closed on a refusal, which puts the explanation where the Merchant is not.",
+    ).toBe(true);
+
+    // And nothing was deleted, which is the other half of "it was refused".
+    await expect(
+      seam.api<{ variants: unknown[] }>("GET", `/admin/products/${product.id}`),
+    ).resolves.toMatchObject({ variants: [{}] });
+  });
+
+  it("deletes a Variant a Product can spare, and reads the Product back", async () => {
+    const product = await seam.createProduct({ title: "A poster with a spare Variant" });
+    const spare = `SPARE-${Date.now()}`;
+    await seam.api("POST", `/admin/products/${product.id}/variants`, { sku: spare });
+    const page = await openAProduct(product);
+
+    const card = page.locator("[data-slot=card]").filter({ hasText: spare });
+    await card.getByRole("button", { name: "Delete Variant" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await auditAccessibility(page, "the Delete Variant dialog before it is confirmed");
+    await dialog.getByRole("button", { name: "Delete Variant" }).click();
+
+    await hides(dialog, "the Delete Variant dialog");
+    await hides(card, "the deleted Variant's card");
+  });
+
+  it("deletes a Product, and leaves the address that no longer resolves", async () => {
+    const product = await seam.createProduct({ title: "A poster nobody wants" });
+    const page = await openAProduct(product);
+
+    await page.getByRole("button", { name: "Delete Product" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await shows(dialog, "the Delete Product confirmation");
+    await dialog.getByRole("button", { name: "Delete Product" }).click();
+
+    // Away from an address that would now answer `product-not-found`, and `replace`, so the
+    // back button does not walk straight back onto a deleted Product.
+    await expect
+      .poll(() => where(page), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "Deleting the Product left the browser on the Product's own address.",
+      })
+      .toBe("/products");
+    await shows(page.getByRole("heading", { name: "Products" }), "the Products list");
+    await auditAccessibility(page, "the Products list after a Product was deleted");
+  });
+
+  it("offers no delete at all to a Role that cannot write the catalog, and says why", async () => {
+    const product = await seam.createProduct({
+      title: "A poster a reader is looking at",
+    });
+    const reader = await seam.merchantOnARole(["catalog:read"]);
+    const page = await seam.signedInAs(reader, `/products/${product.id}`);
+    await shows(page.getByRole("heading", { level: 2 }), "the Product's title");
+
+    const trigger = page.getByRole("button", { name: "Delete Product" });
+    // Shown rather than hidden, `aria-disabled` rather than `disabled`, and reachable by
+    // keyboard so the sentence can be heard (ADR-0063, #178).
+    await expect(trigger.getAttribute("aria-disabled")).resolves.toBe("true");
+    await tabTo(page, trigger, "the Delete Product button");
+
+    const watching = watchForWrites(page);
+    // Forced past Playwright's own refusal to click something `aria-disabled`, because a
+    // browser has no such refusal — and `press` is the keyboard's way in, which is the one a
+    // Merchant who reached this control with Tab would use.
+    await trigger.click({ force: true });
+    await trigger.press("Enter");
+    // No dialog, and no request: `aria-disabled` does not prevent activation, so the handler
+    // has to genuinely no-op — which is the half a scanner cannot see.
+    await expect(page.getByRole("alertdialog").count()).resolves.toBe(0);
+    await expect(watching.settled()).resolves.toEqual([]);
+    await auditAccessibility(page, "the Product screen on a read-only Role");
+  });
+});
