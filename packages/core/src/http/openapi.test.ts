@@ -95,13 +95,30 @@ function operationOf(route: RouteEntry): string {
 const METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 
 /**
- * How many operations this surface has.
+ * How many operations this surface has, **asked of the router rather than written down**.
  *
- * Written down because a scan that silently found none would pass every assertion made over
- * it. Each check below asserts it, so a loop that stopped finding the operations fails rather
- * than quietly stops checking them.
+ * Every scan below reads the *description*, and a scan that silently found none would pass
+ * every assertion made over it — so each one is held to a length, and the length has to come
+ * from somewhere the scan is not reading. Hono's own route table is that somewhere: it is the
+ * thing dispatch consults, it is the other half of the comparison the first check in this file
+ * already makes, and it moves when a route is added whether or not anybody regenerated
+ * anything.
+ *
+ * This used to be `const OPERATIONS = 39`, bumped by hand in this file and again in
+ * `auth/auth.test.ts` by every ticket that added a route — three counts across two files, and
+ * #171, #172 and #173 each moved all three. ADR-0049 ruled on exactly that tax for migration
+ * counts and its answer is the one applied here: derive it, but never from the side the
+ * assertion is checking, and keep the pairing the count cannot make on its own.
+ *
+ * The emptiness guard is the other half, and it is not redundant: a derived count agrees with
+ * itself, so two empty lists compare equal. `servedOperations` returning nothing means the app
+ * registered no routes, and every check in this file would then pass by scanning nothing.
  */
-const OPERATIONS = 39;
+function servedOperationCount(routes: readonly RouteEntry[]): number {
+  const served = servedOperations(routes);
+  expect(served.length, "the router registered no routes at all").toBeGreaterThan(0);
+  return served.length;
+}
 
 /**
  * Every operation the description carries, paired with what the description says about it.
@@ -218,7 +235,7 @@ describe("the description covers both surfaces, including how each is opened", (
   });
 
   it("names a scheme on every operation, and the right one for its surface", () => {
-    const { document } = describeCore();
+    const { app, document } = describeCore();
 
     // Per operation rather than per surface: a union over `/admin` would stay unchanged
     // when one guarded route simply forgot to name its scheme, and that omission is
@@ -232,7 +249,7 @@ describe("the description covers both surfaces, including how each is opened", (
       expect(named, operation).toEqual(expectedSchemes(operation));
     }
 
-    expect(schemes).toHaveLength(OPERATIONS);
+    expect(schemes).toHaveLength(servedOperationCount(app.routes));
   });
 
   it("describes the refusal each gate makes, so a client can tell them apart", () => {
@@ -424,7 +441,7 @@ describe("a declared refusal is one a gate actually makes", () => {
       ).toEqual({ declaredWithNoGate: [], gatedButNotDeclared: [] });
     }
 
-    expect(operations).toHaveLength(OPERATIONS);
+    expect(operations).toHaveLength(servedOperationCount(app.routes));
   });
 
   it("reads the whole chain, not just the route's own middleware", () => {
@@ -441,7 +458,7 @@ describe("a declared refusal is one a gate actually makes", () => {
   });
 
   it("puts no permission gate above the session gate that feeds it", () => {
-    const { app } = describeCore();
+    const { app, document } = describeCore();
 
     // The one way a declared 403 can still be a promise nothing keeps after the check above:
     // `requirePermission` reads the Merchant off the context, and `authenticated` throws when
@@ -456,9 +473,33 @@ describe("a declared refusal is one a gate actually makes", () => {
       expect(refusals, operation).toContain(labelled(GATE_REFUSALS.noSession));
     }
 
-    // The twenty-six routes that name a permission — every admin route but `POST
-    // /admin/session`, which mints the session the other twenty-six are read through, and
-    // `GET`/`DELETE /admin/session`, which need only a live one.
-    expect(gated).toHaveLength(26);
+    // Every admin route names a permission except the three that manage the session itself:
+    // `POST /admin/session` mints the one the others are read through, and `GET`/`DELETE`
+    // need only a live one. That sentence used to end in `toHaveLength(26)`, which meant
+    // every ticket adding an admin route came here to bump a number that says nothing the
+    // sentence does not (#188).
+    //
+    // So the expectation is the sentence, and the two sides stay independent: `gated` is read
+    // off Hono's route table, and what it is held to is read off the *description*. Naming the
+    // three exceptions rather than subtracting three is what keeps it honest — a fourth
+    // ungated admin route makes this fail instead of quietly moving the arithmetic along.
+    const UNGATED_ADMIN_OPERATIONS = [
+      "post /admin/session",
+      "get /admin/session",
+      "delete /admin/session",
+    ];
+    const adminOperations = documentedOperations(document.paths ?? {})
+      .map(({ operation }) => operation)
+      .filter((operation) => operation.split(" ")[1]?.startsWith("/admin"));
+
+    expect(
+      adminOperations.length,
+      "the description carries no admin operations",
+    ).toBeGreaterThan(UNGATED_ADMIN_OPERATIONS.length);
+    expect(gated.map(([operation]) => operation).sort()).toEqual(
+      adminOperations
+        .filter((operation) => !UNGATED_ADMIN_OPERATIONS.includes(operation))
+        .sort(),
+    );
   });
 });
