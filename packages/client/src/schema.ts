@@ -2842,11 +2842,15 @@ export interface components {
       /** Format: uuid */
       id: string;
       sku: string;
-      fulfilment: components["schemas"]["VariantFulfilment"];
+      fulfilment: components["schemas"]["StoreVariantFulfilment"];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
       };
+    };
+    StoreVariantFulfilment: {
+      /** @description The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. A storefront reads it to know that a download is a download; what the Strategy *answers* about shipping, stock and Lead Time is not published here, and is snapshotted onto an Order's Fulfilments at Capture. */
+      strategy: string;
     };
     StoreCatalogRefusal: {
       /** @description What went wrong, in prose. */

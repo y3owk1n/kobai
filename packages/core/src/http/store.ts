@@ -15,6 +15,7 @@ import {
   listStoreProducts,
   readStoreProduct,
   readStoreVariant,
+  type StoreCatalogRefusal,
 } from "../catalog/store-read.ts";
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
@@ -112,6 +113,28 @@ const STORE_CATALOG_REFUSALS = {
   noProduct: json("No such Product exists.", contract.StoreCatalogRefusal),
   noVariant: json("No such Variant exists.", contract.StoreCatalogRefusal),
 } as const;
+
+/**
+ * The bodies those two 404s carry, written once each.
+ *
+ * A table rather than an object built inside each handler, for the reason every other refusal
+ * map on this surface is one: `satisfies` holds the keys to what `catalog/store-read.ts` says
+ * these reads can refuse with, so a reason renamed there turns this red naming the word, and a
+ * reason with no entry does not compile. The prose is `error` and is promised to nobody
+ * (ADR-0060); the `reason` beside it is.
+ */
+const STORE_CATALOG_NOT_FOUND = {
+  product: {
+    error:
+      "No such Product exists. A Product is addressed by the identifier `GET /store/products` reports, and one taken out of the catalog is gone from here too.",
+    reason: "product-not-found",
+  },
+  variant: {
+    error:
+      "No such Variant exists. A Variant is addressed by the identifier its Product reports, which is also the `variantId` a Cart line carries.",
+    reason: "variant-not-found",
+  },
+} as const satisfies Record<string, { error: string; reason: StoreCatalogRefusal }>;
 
 /**
  * The catalog a storefront can read — the three routes a product page is built from.
@@ -524,31 +547,13 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
 
   store.openapi(readStoreProductRoute, async (c) => {
     const found = await readStoreProduct(deps.db, c.req.valid("param").id);
-    if (!found) {
-      return c.json(
-        {
-          error:
-            "No such Product exists. A Product is addressed by the identifier `GET /store/products` reports, and a Product removed from the catalog is gone from here too.",
-          reason: "product-not-found" as const,
-        },
-        404,
-      );
-    }
+    if (!found) return c.json(STORE_CATALOG_NOT_FOUND.product, 404);
     return c.json(found, 200);
   });
 
   store.openapi(readStoreVariantRoute, async (c) => {
     const found = await readStoreVariant(deps.db, c.req.valid("param").id);
-    if (!found) {
-      return c.json(
-        {
-          error:
-            "No such Variant exists. A Variant is addressed by the identifier its Product reports, which is also the `variantId` a Cart line carries.",
-          reason: "variant-not-found" as const,
-        },
-        404,
-      );
-    }
+    if (!found) return c.json(STORE_CATALOG_NOT_FOUND.variant, 404);
     return c.json(found, 200);
   });
 

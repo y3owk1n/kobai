@@ -1506,7 +1506,7 @@
             "type": "string"
           },
           "fulfilment": {
-            "$ref": "#/components/schemas/VariantFulfilment"
+            "$ref": "#/components/schemas/StoreVariantFulfilment"
           },
           "metadata": {
             "type": "object",
@@ -1519,6 +1519,18 @@
           "sku",
           "fulfilment",
           "metadata"
+        ]
+      },
+      "StoreVariantFulfilment": {
+        "type": "object",
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "description": "The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. A storefront reads it to know that a download is a download; what the Strategy *answers* about shipping, stock and Lead Time is not published here, and is snapshotted onto an Order's Fulfilments at Capture."
+          }
+        },
+        "required": [
+          "strategy"
         ]
       },
       "StoreCatalogRefusal": {

@@ -80,7 +80,7 @@ type List = (typeof LISTS)[number];
  * every one of them back. The key is created the first time a store list asks for one, which is
  * never in the deployments that are paging `/admin/api-keys`.
  */
-function credentials(kobai: TestKobai, merchant: TestSession) {
+function opener(kobai: TestKobai, merchant: TestSession) {
   let storefront: Promise<TestApiKey> | undefined;
 
   return async (list: List): Promise<Record<string, string>> => {
@@ -90,8 +90,8 @@ function credentials(kobai: TestKobai, merchant: TestSession) {
   };
 }
 
-/** What {@link credentials} hands back: the headers for whichever list is being read. */
-type Opener = ReturnType<typeof credentials>;
+/** What {@link opener} hands back: the headers for whichever list is being read. */
+type Opener = ReturnType<typeof opener>;
 
 /** One page of one list, with the item key normalised away so the assertions can be shared. */
 async function fetchPage(
@@ -222,7 +222,7 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
-      const open = credentials(kobai, merchant);
+      const open = opener(kobai, merchant);
       const seeded = await seedThree(kobai, merchant, list);
 
       const first = await fetchPage(kobai, list, open, "?limit=2");
@@ -250,7 +250,7 @@ describe("every list route pages, and pages the same way", () => {
   it.each(LISTS)("$path reports no cursor when everything fits", async (list) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
-    const open = credentials(kobai, merchant);
+    const open = opener(kobai, merchant);
     await seedThree(kobai, merchant, list);
 
     const page = await fetchPage(kobai, list, open, "?limit=3");
@@ -266,7 +266,7 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
-      const open = credentials(kobai, merchant);
+      const open = opener(kobai, merchant);
       await seedThree(kobai, merchant, list);
 
       const page = await fetchPage(kobai, list, open);
@@ -283,7 +283,7 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
-      const open = credentials(kobai, merchant);
+      const open = opener(kobai, merchant);
       await seedThree(kobai, merchant, list);
 
       const response = await kobai.request(`${list.path}?limit=${MAX_PAGE_LIMIT + 1}`, {
@@ -301,7 +301,7 @@ describe("every list route pages, and pages the same way", () => {
   it.each(LISTS)("$path refuses an `after` it did not issue", async (list) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
-    const open = credentials(kobai, merchant);
+    const open = opener(kobai, merchant);
 
     const response = await kobai.request(`${list.path}?after=not-a-cursor`, {
       headers: await open(list),
@@ -318,7 +318,7 @@ describe("every list route pages, and pages the same way", () => {
     async (list) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
-      const open = credentials(kobai, merchant);
+      const open = opener(kobai, merchant);
 
       for (const limit of ["0", "-1", "2.5", "many"]) {
         const response = await kobai.request(`${list.path}?limit=${limit}`, {
@@ -339,7 +339,7 @@ describe("the default page size", () => {
     // from "everything there is" — the assertion this file would otherwise not be making.
     await seedProducts(kobai, merchant, DEFAULT_PAGE_LIMIT + 1);
 
-    const page = await fetchPage(kobai, LISTS[0], credentials(kobai, merchant));
+    const page = await fetchPage(kobai, LISTS[0], opener(kobai, merchant));
 
     expect(page.items).toHaveLength(DEFAULT_PAGE_LIMIT);
     expect(page.nextCursor).toEqual(expect.any(String));
@@ -372,7 +372,7 @@ describe("a page fetched across a concurrent insert", () => {
   it("shows every Order that already existed exactly once", async () => {
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);
-    const open = credentials(kobai, catalog.merchant);
+    const open = opener(kobai, catalog.merchant);
     const seeded: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       seeded.push((await seedTestOrder(kobai, { catalog })).id);
@@ -411,7 +411,7 @@ describe("paging is stable when the row a cursor names is deleted", () => {
   it("still answers what followed it", async () => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
-    const open = credentials(kobai, merchant);
+    const open = opener(kobai, merchant);
     const seeded = await seedProducts(kobai, merchant, 3);
 
     const first = await fetchPage(kobai, LISTS[0], open, "?limit=2");
@@ -442,7 +442,7 @@ describe("reading a whole list one page at a time", () => {
   it.each(LISTS)("$path reaches every row of it and stops", async (list) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
-    const open = credentials(kobai, merchant);
+    const open = opener(kobai, merchant);
     const seeded = await seedThree(kobai, merchant, list);
 
     // A page size of one, so every boundary in the list is a boundary between two pages —
@@ -486,7 +486,7 @@ describe("a cursor is bound to the list that issued it", () => {
   it("is refused by every other list rather than answering a page of it", async () => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
-    const open = credentials(kobai, merchant);
+    const open = opener(kobai, merchant);
 
     const cursors = new Map<string, string>();
     for (const list of LISTS) {

@@ -134,19 +134,14 @@ export async function readStoreProduct(
   if (!row) return undefined;
 
   const variants = await db
-    .select({
-      id: variant.id,
-      sku: variant.sku,
-      fulfilmentStrategy: variant.fulfilmentStrategy,
-      metadata: variant.metadata,
-    })
+    .select(STORE_VARIANT_COLUMNS)
     .from(variant)
     .where(eq(variant.productId, row.id))
     // By SKU, as the admin surface reports them: it is unique, so the order is total and
     // stable, where `created_at` ties for Variants created together — and they always are.
     .orderBy(asc(variant.sku));
 
-  return { ...row, variants: variants.map(reported) };
+  return { ...row, variants: variants.map(asStoreVariant) };
 }
 
 /**
@@ -163,24 +158,34 @@ export async function readStoreVariant(
   if (!isUuid(id)) return undefined;
 
   const [row] = await db
-    .select({
-      id: variant.id,
-      sku: variant.sku,
-      fulfilmentStrategy: variant.fulfilmentStrategy,
-      metadata: variant.metadata,
-    })
+    .select(STORE_VARIANT_COLUMNS)
     .from(variant)
     .where(eq(variant.id, id))
     .limit(1);
 
-  return row && reported(row);
+  return row && asStoreVariant(row);
 }
 
 /**
- * One Variant row as the store surface reports it — the one place the column names become
- * response fields, so both readers above answer in the same shape by construction.
+ * The columns a Variant is read from, and the one place they are named.
+ *
+ * Both readers above select this rather than each writing the list out, because the projection
+ * is the half that can actually drift: two copies that fell out of step would answer two shapes
+ * from one surface, and only whichever route a test happened to assert on would say so. What
+ * turns these columns into a response is {@link asStoreVariant}, and there is one of that too.
  */
-function reported(row: {
+const STORE_VARIANT_COLUMNS = {
+  id: variant.id,
+  sku: variant.sku,
+  fulfilmentStrategy: variant.fulfilmentStrategy,
+  metadata: variant.metadata,
+} as const;
+
+/**
+ * One Variant row as the store surface reports it — the one place a column name becomes a
+ * response field, so both readers above answer in the same shape by construction.
+ */
+function asStoreVariant(row: {
   readonly id: string;
   readonly sku: string;
   readonly fulfilmentStrategy: string;

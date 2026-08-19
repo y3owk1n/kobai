@@ -1129,11 +1129,32 @@ export const CatalogRefusal = z
  * product page with only a title is not a product page. What is dropped, and why, is beside
  * each field and in `catalog/store-read.ts`.
  */
+export const StoreVariantFulfilment = z
+  .object({
+    strategy: z.string().meta({
+      description:
+        "The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. A storefront reads it to know that a download is a download; what the Strategy *answers* about shipping, stock and Lead Time is not published here, and is snapshotted onto an Order's Fulfilments at Capture.",
+    }),
+  })
+  .openapi("StoreVariantFulfilment");
+
+/**
+ * A Variant as a storefront sees it: no count, and no Prices.
+ *
+ * **`fulfilment` is {@link StoreVariantFulfilment} and deliberately not {@link
+ * VariantFulfilment}**, though the two carry the same one field today. Referencing the admin
+ * schema would have reopened the hole this whole section closes from the inside: both are
+ * objects designed to grow — "so that the next thing a Variant needs to say about how it is
+ * fulfilled arrives beside this one" — and a field added to the shared one for a Merchant would
+ * be published to every publishable key on the next deploy, which is the failure the split
+ * exists to prevent. Two schemas that happen to agree is the cheap half of the decision; one
+ * schema two surfaces share is the expensive half, arriving later and as a major.
+ */
 export const StoreVariant = z
   .object({
     id: z.uuid(),
     sku: z.string(),
-    fulfilment: VariantFulfilment,
+    fulfilment: StoreVariantFulfilment,
     metadata: Metadata,
   })
   .openapi("StoreVariant");

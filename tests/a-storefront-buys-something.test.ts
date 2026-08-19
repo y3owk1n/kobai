@@ -47,7 +47,11 @@ import { describe, expect, it } from "vitest";
  * > through the hosted Checkout as through a Developer's own.
  *
  * So the journey walks as far as today's surface allows: browse, open a product page, read a
- * Variant on its own, ask what it costs, build a Cart, place the Order, read it back. Each
+ * Variant on its own, ask what it costs, fill a Cart and change its mind twice, sign in, place
+ * the Order, read it back. It walks **every** operation `/store` serves, and that is derived
+ * from the description rather than believed — a route added here without a clause in the
+ * journey reddens the build, which is what "later specs extend it" has to mean to be worth
+ * anything. Each
  * clause still in plain type is a spec on ADR-0069's list, and **that spec turns its own clause
  * green here** — by extending this file, not by adding a second one and not by asserting it
  * somewhere else. That is what makes "done" a passing test rather than a judgement call.
@@ -55,6 +59,9 @@ import { describe, expect, it } from "vitest";
 
 /** Where the client thinks kobai is. Nothing dials it: `fetch` below answers in-process. */
 const BASE_URL = "http://kobai.test";
+
+/** The checked-in description, which `openapi.test.ts` holds to being what this build serves. */
+const DESCRIPTION = new URL("../packages/core/openapi.json", import.meta.url);
 
 /**
  * A Store with two Products in it, and the two keys a storefront actually holds.
@@ -76,7 +83,7 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
     title: THE_PRODUCT,
     variants: [
       { sku: THE_SKU, prices: [THE_PRICE] },
-      { sku: "POSTER-A3", prices: [900] },
+      { sku: THE_OTHER_SKU, prices: [900] },
     ],
   });
 
@@ -126,10 +133,14 @@ function clientCarrying(kobai: TestKobai, apiKey: string): KobaiClient {
  */
 const THE_PRODUCT = "A poster";
 const THE_SKU = "POSTER-A2";
+/** The other size, which the Shopper below adds to the Cart and then thinks better of. */
+const THE_OTHER_SKU = "POSTER-A3";
 /** Minor units — USD 12.50, and the amount the Order below has to come to twice over. */
 const THE_PRICE = 1250;
 const BLURB = "Printed on heavy stock.";
 const HOW_MANY = 2;
+/** Who the Cart turns out to belong to, once the guest signs in half way through. */
+const THE_SHOPPER = "shopper@example.test";
 
 /** What a call answered, or a failure naming the step of the journey that did not complete. */
 function answered<Data>(
@@ -180,6 +191,31 @@ async function theShoppersHalfOfThisFile(): Promise<string> {
   return source.slice(marker);
 }
 
+/** As much of the description as this file reads: which operations the store surface serves. */
+type DescribedPaths = {
+  readonly paths: Record<string, Record<string, unknown>>;
+};
+
+/** Every operation on `/store`, as `get /store/products` — from the description, not from here. */
+async function everyStoreOperation(): Promise<string[]> {
+  const described = JSON.parse(await readFile(DESCRIPTION, "utf8")) as DescribedPaths;
+
+  return Object.entries(described.paths)
+    .filter(([path]) => path.startsWith("/store"))
+    .flatMap(([path, operations]) =>
+      Object.keys(operations).map((method) => `${method} ${path}`),
+    )
+    .sort();
+}
+
+/** Every operation the Shopper's half actually calls, read off the client calls it makes. */
+function everyOperationTheJourneyDrives(journey: string): string[] {
+  const called = [...journey.matchAll(/\.([A-Z]+)\("(\/store[^"]*)"/g)].map(
+    (match) => `${(match[1] ?? "").toLowerCase()} ${match[2] ?? ""}`,
+  );
+  return [...new Set(called)].sort();
+}
+
 describe("the Shopper's half of this file reaches only the store surface", () => {
   it("is found, and is the journey rather than a stub", async () => {
     // Every assertion below is over a region of text. A region that was empty, or that had
@@ -205,6 +241,41 @@ describe("the Shopper's half of this file reaches only the store surface", () =>
         true,
       );
     }
+  });
+
+  /**
+   * That the instrument is **whole**, and stays whole — the half of ADR-0069 a passing journey
+   * cannot prove on its own.
+   *
+   * A journey that walked eight of the surface's operations would be green, would look like a
+   * proof, and would leave the ninth exercised by nothing — which is how `/store` came to serve
+   * nine operations without one that reads a Product. So the coverage is *derived*: the
+   * description says what the store surface serves, this file says what the journey drives, and
+   * a store route added without a clause here reddens the build rather than quietly opting out.
+   *
+   * **Asked of the side this file is not writing** (ADR-0049): the expectation comes from
+   * `packages/core/openapi.json`, the checked-in artifact, which `openapi.test.ts` separately
+   * holds to being what this build actually serves. A count taken from the journey itself would
+   * agree with the journey by construction.
+   *
+   * It is one direction rather than two. An operation the journey drives is necessarily on the
+   * surface — the client would not have typed it otherwise — so the reverse check is the
+   * compiler's, and stating it here would be a second answer to a question that has one.
+   *
+   * **Watched failing before it was trusted**, with the line-item `DELETE` turned into a second
+   * `PATCH`: it went red naming `delete /store/carts/{id}/line-items/{lineItemId}` and nothing
+   * else, which is the diagnosis a count could not have given.
+   */
+  it("drives every operation the store surface serves", async () => {
+    const served = await everyStoreOperation();
+    const driven = everyOperationTheJourneyDrives(await theShoppersHalfOfThisFile());
+
+    // Two empty lists are equal, and an empty description would make this vacuous.
+    expect(served.length).toBeGreaterThan(5);
+    expect(driven.length).toBeGreaterThan(5);
+    // Named rather than counted: a failure says which operation nothing walks, which is the
+    // diagnosis. Extra is fine and impossible — a path off the surface fails the sweep above.
+    expect(served.filter((operation) => !driven.includes(operation))).toEqual([]);
   });
 
   it("reaches nothing a storefront could not reach", async () => {
@@ -278,13 +349,63 @@ describe("a Shopper buys something", () => {
     const filled = answered(
       await browser.POST("/store/carts/{id}/line-items", {
         params: { path: { id: started.id } },
-        body: { variantId, quantity: HOW_MANY },
+        body: { variantId },
       }),
       "adding to the Cart",
     );
-    expect(filled.lineItems).toHaveLength(1);
     expect(filled.lineItems[0]?.variant.sku).toBe(THE_SKU);
-    expect(filled.lineItems[0]?.quantity).toBe(HOW_MANY);
+
+    // A Shopper who puts two things in a Cart and then changes their mind about both is the
+    // ordinary path rather than the exotic one, and it is what drives the three Cart
+    // operations a straight-line purchase never touches. The other size goes in…
+    const otherSize = page.variants.find((one) => one.sku === THE_OTHER_SKU);
+    const considered = answered(
+      await browser.POST("/store/carts/{id}/line-items", {
+        params: { path: { id: started.id } },
+        body: { variantId: otherSize?.id ?? "" },
+      }),
+      "adding the other size",
+    );
+    expect(considered.lineItems).toHaveLength(2);
+
+    // …the first line goes up to two…
+    const theLine = considered.lineItems.find((one) => one.variant.sku === THE_SKU);
+    const raised = answered(
+      await browser.PATCH("/store/carts/{id}/line-items/{lineItemId}", {
+        params: { path: { id: started.id, lineItemId: theLine?.id ?? "" } },
+        body: { quantity: HOW_MANY },
+      }),
+      "changing how many",
+    );
+    expect(raised.lineItems.find((one) => one.variant.sku === THE_SKU)?.quantity).toBe(
+      HOW_MANY,
+    );
+
+    // …and the other size goes back on the shelf. A removal is a `DELETE` and never a quantity
+    // of zero, and it answers with what is left so the page re-renders without a second call.
+    const otherLine = considered.lineItems.find(
+      (one) => one.variant.sku === THE_OTHER_SKU,
+    );
+    const trimmed = answered(
+      await browser.DELETE("/store/carts/{id}/line-items/{lineItemId}", {
+        params: { path: { id: started.id, lineItemId: otherLine?.id ?? "" } },
+      }),
+      "removing the other size",
+    );
+    expect(trimmed.lineItems).toHaveLength(1);
+    expect(trimmed.lineItems[0]?.quantity).toBe(HOW_MANY);
+
+    // The guest signs in half way through, which is what this route is for. Asserting who the
+    // Shopper is needs a **secret** key, so it is the server's call and not the browser's
+    // (ADR-0020) — the same split as the purchase leg, arriving one step earlier.
+    const known = answered(
+      await server.PATCH("/store/carts/{id}", {
+        params: { path: { id: started.id } },
+        body: { shopper: { email: THE_SHOPPER } },
+      }),
+      "attaching the Shopper",
+    );
+    expect(known.shopper?.email).toBe(THE_SHOPPER);
 
     // Read back on its own, because a storefront re-renders a Cart from a page load rather
     // than from whatever the last mutation happened to answer.
@@ -294,6 +415,7 @@ describe("a Shopper buys something", () => {
     );
     expect(reread.id).toBe(started.id);
     expect(reread.placed).toBe(false);
+    expect(reread.lineItems).toHaveLength(1);
 
     // The purchase leg, on the **secret** key: this is where money and stock move, and a
     // publishable key is refused here (ADR-0055). The browser built the Cart and the server
@@ -328,6 +450,9 @@ describe("a Shopper buys something", () => {
     expect(confirmation.id).toBe(placed.id);
     expect(confirmation.number).toBe(placed.number);
     expect(confirmation.total).toBe(THE_PRICE * HOW_MANY);
+    // And it is the Shopper's rather than a guest's, which is the one thing the Cart learned
+    // between being built and being placed.
+    expect(confirmation.shopper?.email).toBe(THE_SHOPPER);
   });
 
   it("refuses the browser's key at the purchase leg, which is why there are two", async () => {
