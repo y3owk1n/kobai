@@ -81,6 +81,7 @@ Three things follow, and each has a test rather than a convention behind it:
 | `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
 | `devbox run admin:dev` | The Admin with a reload loop, beside `devbox run dev`. See [The Admin](#the-admin). |
 | `devbox run db` | Just Postgres — what the test suite needs, on this checkout's own port. |
+| `devbox run browsers` | Downloads the Chromium the Admin's browser seam drives. `ci` and `test` run it themselves. |
 | `devbox run test` | Postgres up, build, then the whole suite. |
 | `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
 | `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
@@ -910,9 +911,47 @@ so the browser still sees one origin while editing.
 `@kobai/core` import, and no route that exists for its benefit — if the Admin needs something
 the API cannot do, that is a finding about the API (ADR-0010).
 `tests/admin-uses-only-the-public-api.test.ts` fails the build on any network primitive in
-the Admin's source and on any kobai path `openapi.json` does not carry. Interaction and
-visual testing of the Admin is deferred, not forgotten; that guardrail is what stands in for
-it.
+the Admin's source and on any kobai path `openapi.json` does not carry. That is a static ban:
+it proves the Admin cannot cheat and nothing whatever about whether it works. What proves the
+second is the browser seam below.
+
+**The Admin is tested in a real browser, in the gate** (ADR-0063, #175).
+`tests/the-admin-in-a-browser.test.ts` drives Chromium against a really-booted reference
+Project — `node dist/src/server.js` against a throwaway database, on a port the OS hands out —
+and `tests/support/admin-browser.ts` is the harness, which says in its own header how to add a
+case. `devbox run browsers` downloads the browser and `devbox run ci` and `devbox run test`
+both run that themselves, for ADR-0044's reason: a guardrail behind an opt-in step is not a
+faster guardrail, it is an optional one. Five things about it are decisions rather than
+implementation:
+
+- **It asserts the frame's promises and never screen behaviour.** Deep-linking, refresh,
+  browser back and forward, a session running out mid-use and the Merchant landing back where
+  they were, a refusal rendering where it was attempted, and skeleton, spinner and empty
+  states. **A case that a request-level test could have asked belongs there instead**, which
+  is where screen behaviour has always been asserted.
+- **`axe-core` runs on every screen a case visits and any violation fails the build.** It is a
+  call per screen rather than per case, so a case that navigates twice audits twice.
+- **The keyboard assertions are not padding, because a scanner sees none of them.** Reaching a
+  control is `tabTo`/`keyboardTo`, which press a key until the control has focus and fail
+  naming where the keyboard got to instead — `Tab` walks the page, `ArrowDown` walks an open
+  menu. Focus after a re-sign-in, the command palette (#177) and the `aria-disabled` controls
+  that stay focusable so they can host the explanation of why they are unavailable (#178) are
+  all keyboard decisions, and all arrive here.
+- **Arrange through the API and open a window per case.** Every case gets its own browser
+  context — its own cookie jar, its own `localStorage` — so nothing one case leaves behind is
+  reachable from another; the *catalog* is shared, because a boot per case is not affordable,
+  so a case names its own titles and calls `emptyTheCatalog` when an empty list is its subject.
+  Time is passed by winding `core_session.expires_at` back, never by waiting.
+- **The browser is Chromium's headless shell**, which is what `--only-shell` downloads and what
+  `channel: "chromium-headless-shell"` launches — since Playwright 1.49 a bare `headless: true`
+  asks for the full browser, which is deliberately not downloaded. The flag and the channel are
+  one decision in two files and the seam's first case holds them together.
+
+Two hazards in the Admin are known and are **not** this seam's to close. ADR-0063 asks the
+session query to be re-read on window focus *and* on navigation and only focus is wired —
+`reference/admin/src/lib/session.tsx` says so at the query, and it falls due with #178. And
+`Pager`'s dead Next/Previous use real `disabled` rather than `aria-disabled`, deliberately,
+because there is no explanation to host on one.
 
 ### The scaffolder, and the two trees it keeps in step
 
@@ -1521,6 +1560,15 @@ database at all: that the `migrations/` directory each package resolves relative
 `tests/packaged-migrations.test.ts` packs every workspace package that ships a
 `migrations/` directory or names one in `files`, and reads the tarball back. The packages
 are discovered rather than listed, so the next Plugin is covered without an edit.
+
+The **browser seam** is the Admin's, and it is the only one that opens a browser.
+`tests/the-admin-in-a-browser.test.ts` drives Chromium against a really-booted reference
+Project; `tests/support/admin-browser.ts` is the harness and its header says how to add a
+case. It asserts the **frame's** promises — deep-linking, refresh, back and forward, session
+expiry and return, a refusal rendering where it was attempted, and list, loading and empty
+states — with `axe-core` on every screen and explicit keyboard assertions beside it. It
+asserts no screen behaviour: **a case a request could have asked belongs in the HTTP seam.**
+[The Admin](#the-admin) has the rest of it.
 
 The **image seam** is the last one, and its rule is: **ask the built image, never the
 Dockerfile.** Both Dockerfiles ran `pnpm install --prod` in their runtime stage, which looks

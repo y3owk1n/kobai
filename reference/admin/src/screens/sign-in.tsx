@@ -65,6 +65,10 @@ export function SignIn({
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-4 p-6">
+      {/* This screen renders in place of the frame, so the frame's heading is not here to
+          inherit — and a page with no `h1` is a page a screen reader cannot summarise. Hidden
+          because the card below already says it on screen. */}
+      <h1 className="sr-only">Sign in to the kobai Admin</h1>
       <Card>
         <CardHeader>
           <CardTitle>kobai Admin</CardTitle>
