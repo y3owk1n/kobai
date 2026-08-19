@@ -1,19 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  type Control,
-  type FieldValues,
-  type Path,
-  useController,
-} from "react-hook-form";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import type { Control, FieldValues, Path } from "react-hook-form";
+import { ListboxField } from "@/components/listbox-field";
 import { orThrow, problemOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
@@ -52,20 +39,17 @@ export function useFulfilmentStrategies() {
  * name unwired between this read and the submit is still attempted and still refused with
  * `unknown-fulfilment-strategy`, which is what keeps this an affordance.
  *
- * **It is shadcn's `Select`, and getting there took a fix in the frame rather than a different
- * control.** Base UI portals the list out of the card it was opened from, which by default
- * means `<body>` — outside every landmark, which `axe-core` fails the build on as `region` the
- * moment a browser case audits a screen with it open. The answer is `lib/portal.tsx`: the frame
- * offers a container inside `main` and `ui/select.tsx` renders into it, so the list escapes its
- * card's stacking context exactly as before and lands somewhere the document's outline accounts
- * for. A native `<select>` was the other way out and was rejected — it would have been the one
- * control in this Admin that shadcn did not draw, and the landmark problem would still have
- * been waiting for the next menu or popover.
- *
- * **It is driven through `useController`** because a listbox is not an `<input>` and cannot be
- * `register`ed. The form still owns the value, so validation, `formState.errors` and `reset`
- * work here exactly as they do for the SKU beside it — which a `useState` next to the form
- * would have quietly given up.
+ * **The listbox itself is `components/listbox-field.tsx`** (#245), which is where the Base UI
+ * composition this used to spell out lives — `items`, the `SelectGroup`, `null` for nothing
+ * selected, and `useController`, because a listbox is not an `<input>` and cannot be
+ * `register`ed. What is left here is the part that is genuinely this field's: which list it is,
+ * and what to say under it. Getting to a `Select` at all took a fix in the frame rather than a
+ * different control — Base UI portals the list out of the card it was opened from, which by
+ * default means `<body>`, outside every landmark and a `region` violation the moment a browser
+ * case audits a screen with it open, so `lib/portal.tsx` offers a container inside `main`. A
+ * native `<select>` was the other way out and was rejected: it would have been the one control
+ * in this Admin that shadcn did not draw, and the landmark problem would still have been
+ * waiting for the next menu or popover.
  *
  * **A failed read blocks nothing.** The field goes unavailable and says so, and the form around
  * it still submits — `fulfilment` is optional on both routes that take it, so correcting a SKU
@@ -83,7 +67,6 @@ export function FulfilmentStrategyField<T extends FieldValues>({
   readonly description?: string;
 }) {
   const strategies = useFulfilmentStrategies();
-  const { field, fieldState } = useController({ control, name });
   const wired = strategies.data?.strategies ?? [];
 
   /**
@@ -96,83 +79,27 @@ export function FulfilmentStrategyField<T extends FieldValues>({
    */
   const known = strategies.isSuccess;
 
-  /**
-   * The Strategy this field is on, or `null` where it is on none.
-   *
-   * **`null` rather than `""`, because `null` is what Base UI means by "nothing selected".**
-   * The two agreed by accident — a value serialising to `""` counts as empty for the
-   * placeholder — but only `null` says it. The *form* still holds `""` for the untouched
-   * field, which is the value the schema refuses; `null` is what `Select` is handed.
-   */
-  const chosen =
-    typeof field.value === "string" && field.value !== "" ? field.value : null;
-
-  /**
-   * The value this field is on, when the list does not carry it.
-   *
-   * Offered regardless, so the picker can show and stay on the Strategy the Variant actually
-   * points at — and named "not wired here" only once {@link known}, because until then every
-   * Variant looks unwired.
-   */
-  const unwired =
-    chosen !== null && !wired.some((strategy) => strategy.name === chosen)
-      ? { value: chosen, label: known ? `${chosen} — not wired here` : chosen }
-      : null;
-
-  /**
-   * What each Strategy on offer is called: the one list the options are drawn from, and the
-   * one `Select` resolves the trigger's text against.
-   *
-   * **`items` is how `Select.Value` renders a label rather than the raw value.** Without it
-   * the trigger and the list disagreed about the same Strategy — the option read
-   * `physical — not wired here` while the trigger under it read `physical`.
-   */
-  const items = [
-    ...(unwired ? [unwired] : []),
-    ...wired.map((strategy) => ({ value: strategy.name, label: strategy.name })),
-  ];
-
   return (
-    <Field data-invalid={fieldState.error !== undefined}>
-      <FieldLabel htmlFor={id}>Fulfilment Strategy</FieldLabel>
-      <Select
-        items={items}
-        value={chosen}
-        // Base UI reports `null` for "nothing selected", which this field never wants: a Variant
-        // always points at some Strategy, and clearing it would submit an empty name for kobai
-        // to refuse. A `null` is dropped and the field keeps what it had.
-        onValueChange={(next) => {
-          if (next !== null) field.onChange(next);
-        }}
-        disabled={strategies.isError}
-      >
-        <SelectTrigger
-          id={id}
-          ref={field.ref}
-          onBlur={field.onBlur}
-          aria-invalid={fieldState.error !== undefined}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {/* The list's padding lives on the group in this distribution, so options that are
-              not wrapped in one sit flush against the popup's edge. */}
-          <SelectGroup>
-            {items.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <FieldDescription>
-        {strategies.isError
+    <ListboxField
+      id={id}
+      control={control}
+      name={name}
+      label="Fulfilment Strategy"
+      options={wired.map((strategy) => ({
+        value: strategy.name,
+        label: strategy.name,
+      }))}
+      // The Strategy the Variant points at is offered whether or not the list carries it, so the
+      // picker can show and stay on it — named "not wired here" only once {@link known}, because
+      // until then every Variant looks unwired.
+      unlisted={(strategy) => (known ? `${strategy} — not wired here` : strategy)}
+      description={
+        strategies.isError
           ? problemOf(strategies.error, "kobai did not say which Strategies it has.")
           : (description ??
-            "What a Variant is delivered by. This deployment wired these; a Plugin's is added in the Project's kobai.config.ts.")}
-      </FieldDescription>
-      <FieldError errors={[fieldState.error]} />
-    </Field>
+            "What a Variant is delivered by. This deployment wired these; a Plugin's is added in the Project's kobai.config.ts.")
+      }
+      disabled={strategies.isError}
+    />
   );
 }
