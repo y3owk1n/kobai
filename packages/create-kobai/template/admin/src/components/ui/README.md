@@ -21,7 +21,30 @@ is the cheap half of that, and its value is that a departure had to be typed out
 
 ## What has actually been changed
 
-Nothing here changes what a component renders. Every entry is a **suppression comment**, because
+### One change to what a component does: where its popup is portaled
+
+`select.tsx` and `dropdown-menu.tsx` each take a `container` prop and default it to the frame's,
+through `usePortalContainer()` from `src/lib/portal.tsx`. Upstream portals to `<body>`.
+
+**It is a real accessibility failure and not a preference.** Base UI moves a popup out of the
+card it was opened from so it escapes that card's `overflow` and stacking context, which is
+right; leaving it at `<body>` puts *content* outside every landmark, which `axe-core` reports as
+`region` — and `tests/the-admin-in-a-browser.test.ts` audits screens **with an overlay open**, so
+the build fails on it. The theme menu had been shipping that violation since #176 with no case
+opening it. Nothing about the escaping is given up: the popup is still positioned by floating-ui
+and still leaves its card, it simply lands in a container the frame renders inside `main`.
+
+No token can express this, which is the bar this file sets for an edit. Each of the three edited
+lines per file carries a `CHANGED FROM UPSTREAM` comment pointing back here. `dialog.tsx` and
+`alert-dialog.tsx` are deliberately **not** changed: axe excludes a `role="dialog"` subtree from
+the region rule, so they were always green, and `tooltip.tsx` is not either — `action-button.tsx`
+hides its popup from the accessibility tree, so there is no content there to be outside anything.
+
+**If `shadcn add select --overwrite` or `--overwrite` on the menu reverts this, the browser seam
+goes red**, naming the screen and the rule. That is the intended way to find out.
+
+### The rest are suppression comments
+
 `devbox run ci` fails on any Biome finding at any severity (ADR-0039) and upstream shadcn is not
 written against this repository's lint configuration. Each one sits at the line it suppresses.
 

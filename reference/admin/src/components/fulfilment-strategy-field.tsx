@@ -1,9 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ComponentProps } from "react";
+import {
+  type Control,
+  type FieldValues,
+  type Path,
+  useController,
+} from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { orThrow, problemOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
-import { cn } from "@/lib/utils";
 
 /**
  * The Strategies this deployment has wired, read once and shared by every field below.
@@ -40,64 +51,49 @@ export function useFulfilmentStrategies() {
  * name unwired between this read and the submit is still attempted and still refused with
  * `unknown-fulfilment-strategy`, which is what keeps this an affordance.
  *
- * **It is a native `<select>`, and that is a decision rather than a shortcut.** shadcn's
- * `Select` is a listbox in a **portal**, which puts its options at the end of `<body>`, outside
- * every landmark — and `axe-core` reports exactly that, as `region`, on the one screen this
- * Admin audits with a picker open. The tooltip's portal was excused because its content is
- * announced another way and can be hidden from the accessibility tree (see
- * `components/action-button.tsx`); a list of options a Merchant has to choose from cannot be.
- * What is wanted here is a form control inside a form — two or three names, no search, no
- * grouping, no icons — which is the one job the platform's own control does better than a
- * `div` tree. It also means react-hook-form can `register` it like every other field, so the
- * value lives with the rest of the form instead of in a `useState` beside it.
+ * **It is shadcn's `Select`, and getting there took a fix in the frame rather than a different
+ * control.** Base UI portals the list out of the card it was opened from, which by default
+ * means `<body>` — outside every landmark, which `axe-core` fails the build on as `region` the
+ * moment a browser case audits a screen with it open. The answer is `lib/portal.tsx`: the frame
+ * offers a container inside `main` and `ui/select.tsx` renders into it, so the list escapes its
+ * card's stacking context exactly as before and lands somewhere the document's outline accounts
+ * for. A native `<select>` was the other way out and was rejected — it would have been the one
+ * control in this Admin that shadcn did not draw, and the landmark problem would still have
+ * been waiting for the next menu or popover.
  *
- * shadcn is still what it is built out of: `Field`, `FieldLabel`, `FieldDescription` and
- * `FieldError` are all theirs. The control's classes are **copied** from `ui/input.tsx` rather
- * than shared with it — minus the `file:` and `placeholder:` rules, which no `<select>` can use
- * — because sharing them would mean exporting a string out of a vendored component, and the
- * next `shadcn add input` would overwrite the export. They are the same **tokens** either way,
- * which is what keeps this tuned with everything else (ADR-0063); what a `shadcn add input`
- * that changes them leaves behind is a picker to re-copy, and there is one of it.
+ * **It is driven through `useController`** because a listbox is not an `<input>` and cannot be
+ * `register`ed. The form still owns the value, so validation, `formState.errors` and `reset`
+ * work here exactly as they do for the SKU beside it — which a `useState` next to the form
+ * would have quietly given up.
  *
  * **A failed read blocks nothing.** The field goes unavailable and says so, and the form around
  * it still submits — `fulfilment` is optional on both routes that take it, so correcting a SKU
  * does not stop because a second request did.
  */
-export function FulfilmentStrategyField({
+export function FulfilmentStrategyField<T extends FieldValues>({
   id,
-  current,
+  control,
+  name,
   description,
-  error,
-  className,
-  ...select
 }: {
   readonly id: string;
-  /**
-   * What this Variant points at now, so a Strategy nobody wired is still offered.
-   *
-   * The one state this screen exists to repair: a Variant left pointing at a Strategy the
-   * deployment has since unwired, which `place-order` refuses at 409 and which before #144
-   * could only be mended by deleting the Product. Leaving it out of the options would show the
-   * Merchant a picker that silently disagrees with the Variant in front of them.
-   */
-  readonly current?: string;
+  readonly control: Control<T>;
+  readonly name: Path<T>;
   readonly description?: string;
-  readonly error?: { readonly message?: string } | undefined;
-} & Omit<ComponentProps<"select">, "id" | "children">) {
+}) {
   const strategies = useFulfilmentStrategies();
+  const { field, fieldState } = useController({ control, name });
   const wired = strategies.data?.strategies ?? [];
 
   /**
-   * The value this field starts on, when the list does not carry it.
+   * The value this field is on, when the list does not carry it.
    *
-   * Rendered as an option regardless, because a `<select>` whose value matches no option shows
-   * *nothing* and reports `""` — so a form submitted before the list arrived would send an
-   * empty Strategy, and the field would look blank in the meantime.
+   * Offered as an option regardless, because a `Select` whose value matches no item shows
+   * nothing — so a Variant would look blank while the list was in flight, and the one state
+   * this screen exists to repair would be invisible rather than obvious.
    */
-  const missing =
-    current !== undefined &&
-    current !== "" &&
-    !wired.some((strategy) => strategy.name === current);
+  const chosen = typeof field.value === "string" ? field.value : "";
+  const missing = chosen !== "" && !wired.some((strategy) => strategy.name === chosen);
 
   /**
    * Whether "this deployment does not have that Strategy" is a thing we actually know.
@@ -110,36 +106,46 @@ export function FulfilmentStrategyField({
   const known = strategies.isSuccess;
 
   return (
-    <Field data-invalid={error !== undefined}>
+    <Field data-invalid={fieldState.error !== undefined}>
       <FieldLabel htmlFor={id}>Fulfilment Strategy</FieldLabel>
-      <select
-        id={id}
-        aria-invalid={error !== undefined}
+      <Select
+        value={chosen}
+        // Base UI reports `null` for "nothing selected", which this field never wants: a Variant
+        // always points at some Strategy, and clearing it would submit an empty name for kobai
+        // to refuse. A `null` is dropped and the field keeps what it had.
+        onValueChange={(next) => {
+          if (next !== null) field.onChange(next);
+        }}
         disabled={strategies.isError}
-        className={cn(
-          "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:disabled:bg-input/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
-          className,
-        )}
-        {...select}
       >
-        {missing ? (
-          <option value={current}>
-            {known ? `${current} — not wired here` : current}
-          </option>
-        ) : null}
-        {wired.map((strategy) => (
-          <option key={strategy.name} value={strategy.name}>
-            {strategy.name}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger
+          id={id}
+          ref={field.ref}
+          onBlur={field.onBlur}
+          aria-invalid={fieldState.error !== undefined}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {missing ? (
+            <SelectItem value={chosen}>
+              {known ? `${chosen} — not wired here` : chosen}
+            </SelectItem>
+          ) : null}
+          {wired.map((strategy) => (
+            <SelectItem key={strategy.name} value={strategy.name}>
+              {strategy.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <FieldDescription>
         {strategies.isError
           ? problemOf(strategies.error, "kobai did not say which Strategies it has.")
           : (description ??
             "What a Variant is delivered by. This deployment wired these; a Plugin's is added in the Project's kobai.config.ts.")}
       </FieldDescription>
-      <FieldError errors={[error]} />
+      <FieldError errors={[fieldState.error]} />
     </Field>
   );
 }

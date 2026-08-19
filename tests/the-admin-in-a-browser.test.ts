@@ -628,6 +628,16 @@ describe("the frame's own controls", () => {
 
     await expect.poll(isDark).toBe(true);
 
+    // Audited **with the menu open**, which nothing did until #179 — and it was a real
+    // violation the whole time: this menu portals its items, and at Base UI's default target of
+    // `<body>` they are content outside every landmark, which axe reports as `region`. The
+    // frame offers a container inside `main` now (`lib/portal.tsx`) and this is what holds it.
+    // Watched failing with that container taken away.
+    await page.keyboard.press("Enter");
+    await shows(dark, "the theme menu, reopened");
+    await auditAccessibility(page, "the Products screen with the theme menu open");
+    await page.keyboard.press("Escape");
+
     await page.reload();
     await shows(
       page.getByText("Everything this Store sells"),
@@ -1514,35 +1524,45 @@ describe("the catalog screens", () => {
     // The picker is fed by `GET /admin/fulfilment-strategies` (ADR-0067) — the route this
     // ticket added because the Admin had no way to learn the set, and hard-coding Core's two
     // is the closed set ADR-0014 exists to prevent, written into the client.
-    const picker = identity.getByLabel("Fulfilment Strategy");
+    const picker = identity.getByRole("combobox", { name: "Fulfilment Strategy" });
     await shows(picker, "the Fulfilment Strategy picker");
 
     // Exactly what this deployment wired, asked of kobai rather than written down here: a case
     // that spelled `physical` and `digital` would be the same closed set in a third place, and
-    // would go red on the first deployment that wires a Plugin's Strategy.
+    // would go red on the first deployment that wires a Plugin's Strategy — as this one does,
+    // because the reference Project wires `@kobai/plugin-made-to-order`'s beside Core's two.
     const wired = (
       await seam.api<{ strategies: { name: string }[] }>(
         "GET",
         "/admin/fulfilment-strategies",
       )
     ).strategies.map((strategy) => strategy.name);
+
+    await picker.click();
     await expect
-      .poll(() => picker.locator("option").allInnerTexts(), {
+      .poll(() => page.getByRole("option").allInnerTexts(), {
         timeout: LOCATOR_TIMEOUT,
-        message: "The Strategy picker never filled in from kobai.",
+        message: "The Strategy list never filled in from kobai.",
       })
       .toEqual(wired);
+
+    // Audited **with the list open**, because an overlay is a screen — and this is the audit
+    // that `lib/portal.tsx` exists for. Base UI portals the list out of its card, and at its
+    // default target of `<body>` it is content outside every landmark, which axe reports as
+    // `region`. Watched failing exactly that way before the frame offered a container inside
+    // `main`, and that is the only reason to believe this case can catch it.
+    await auditAccessibility(page, "the Product screen with the Strategy list open");
 
     // Both fields at once, because that is what the one form does — ADR-0062 settles the SKU
     // and the Strategy as corrections in place, and a Merchant here to repair one is very often
     // fixing the other.
     const corrected = `SWAPPED-${Date.now()}`;
+    await page.getByRole("option", { name: "digital", exact: true }).click();
     await identity.getByLabel("SKU").fill(corrected);
-    await picker.selectOption("digital");
     await page.getByRole("button", { name: "Save Variant" }).click();
 
     await expect
-      .poll(() => picker.inputValue(), {
+      .poll(async () => (await picker.innerText()).trim(), {
         timeout: LOCATOR_TIMEOUT,
         message: "The Variant never settled on the Strategy it was swapped onto.",
       })

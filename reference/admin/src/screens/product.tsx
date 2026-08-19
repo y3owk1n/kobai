@@ -390,10 +390,9 @@ function VariantIdentity({
           />
           <FulfilmentStrategyField
             id={`variant-strategy-${variant.id}`}
-            current={variant.fulfilment.strategy}
+            control={form.control}
+            name="strategy"
             description="How this Variant is delivered. Swapping it is how a poster becomes a download; whatever stock has been counted stays counted (ADR-0062)."
-            error={form.formState.errors.strategy}
-            {...form.register("strategy")}
           />
         </div>
 
@@ -869,9 +868,8 @@ function NewVariant({ productId }: { readonly productId: string }) {
           />
           <FulfilmentStrategyField
             id="new-variant-strategy"
-            current={DEFAULT_STRATEGY}
-            error={form.formState.errors.strategy}
-            {...form.register("strategy")}
+            control={form.control}
+            name="strategy"
           />
         </CardContent>
         <CardFooter className="mt-4">

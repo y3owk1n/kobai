@@ -1,6 +1,7 @@
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
+import { usePortalContainer } from "@/lib/portal";
 import { cn } from "@/lib/utils";
 
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
@@ -21,11 +22,22 @@ function DropdownMenuContent({
   side = "bottom",
   sideOffset = 4,
   className,
+  container,
   ...props
 }: MenuPrimitive.Popup.Props &
-  Pick<MenuPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
+  Pick<MenuPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset"> &
+  // CHANGED FROM UPSTREAM — see `./README.md`.
+  Pick<MenuPrimitive.Portal.Props, "container">) {
+  // CHANGED FROM UPSTREAM — see `./README.md`.
+  const fromTheFrame = usePortalContainer();
+
   return (
-    <MenuPrimitive.Portal>
+    // CHANGED FROM UPSTREAM — see `./README.md`. Upstream portals to `<body>`, which is outside
+    // every landmark, and `axe-core` reports the items as `region` whenever a browser case
+    // audits a screen with this menu open. The container comes from the frame
+    // (`@/lib/portal.tsx`), which renders it inside `main`; `undefined` where there is no frame,
+    // which is upstream's behaviour exactly.
+    <MenuPrimitive.Portal container={container ?? fromTheFrame}>
       <MenuPrimitive.Positioner
         className="isolate z-50 outline-none"
         align={align}

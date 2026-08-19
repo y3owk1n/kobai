@@ -1094,18 +1094,24 @@ further things about the screens are conventions rather than one screen's choice
   exists to repair about a Variant that is fine. The value is still rendered as an option while
   the list is in flight, because a `<select>` whose value matches no option shows nothing and
   reports `""`.
-- **A `<select>` is native, and this is the one place the Admin leaves shadcn.** shadcn's
-  `Select` is a listbox in a **portal**, so its options sit at the end of `<body>` outside every
-  landmark, and `axe-core` fails the build on it as `region` the moment a case audits a screen
-  with one open — which the browser seam does, because an overlay is a screen. The tooltip's
-  portal is excused by being hidden from the accessibility tree (`components/action-button.tsx`);
-  a list of options a Merchant chooses from cannot be. `shadcn add select` is therefore
-  deliberately **not** vendored here. `Field`, `FieldLabel`, `FieldDescription` and `FieldError`
-  are still shadcn's, and the control's classes are **copied** from `ui/input.tsx` rather than
-  shared with it — sharing would mean exporting a string out of a vendored component, which the
-  next `shadcn add input` overwrites. The tokens are the same either way, which is what keeps it
-  tuned with every other field; what a `shadcn add input` that changes them leaves behind is one
-  picker to re-copy. react-hook-form can `register` it, which a listbox cannot be.
+- **A popup that portals lands in the frame's container, not in `<body>`** (#179).
+  `lib/portal.tsx` is the whole argument and `components/app-layout.tsx` renders the container
+  inside `main`. Base UI moves a `Select`'s list and a `DropdownMenu`'s items out of the card
+  they were opened from so they escape its `overflow` and stacking context — right about
+  clipping, wrong about *content*: at the default target they sit outside every landmark, which
+  `axe-core` reports as `region`. **The browser seam audits screens with an overlay open, so
+  this fails the build**, and the theme menu had been shipping that violation since #176 with
+  nothing opening it. `ui/select.tsx` and `ui/dropdown-menu.tsx` therefore take a `container` and
+  default it to the frame's — the one change to what a vendored component *does*, recorded in
+  `components/ui/README.md` and at each line. **A `Dialog` needs none of this**: axe excludes a
+  `role="dialog"` subtree from the rule, so `ui/dialog.tsx` and `ui/alert-dialog.tsx` are
+  untouched. **Vendor a new component that portals and it inherits this**, provided its
+  `Content` passes `container` on; a new one that does not will be found by the first case that
+  audits it open.
+- **A control that is not an `<input>` is driven with `useController`, never a `useState`
+  beside the form.** The Fulfilment Strategy picker is a listbox, so it cannot be `register`ed —
+  but the form still owns the value, which is what keeps its validation, `formState.errors` and
+  `reset` working like every field next to it.
   **A second one factors this out of `components/fulfilment-strategy-field.tsx`**; reaching for
   the vendored `Select` instead means answering the landmark question first.
 - **Card titles are headings on the Product screen and on no other.** The frame's `h1` names the
