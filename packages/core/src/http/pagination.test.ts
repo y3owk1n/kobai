@@ -4,6 +4,7 @@ import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
 import {
   createTestApiKey,
   createTestKobai,
+  seedTestCart,
   seedTestCatalog,
   seedTestOrder,
   signInTestMerchant,
@@ -66,6 +67,7 @@ const LISTS = [
   { path: "/admin/api-keys", key: "apiKeys", credential: "session" },
   { path: "/admin/roles", key: "roles", credential: "session" },
   { path: "/admin/merchants", key: "merchants", credential: "session" },
+  { path: "/admin/carts", key: "carts", credential: "session" },
   { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
 
@@ -623,6 +625,21 @@ async function seedThree(
   }
 
   const seeded: string[] = [];
+  // Three Carts over the store surface, which is the only way there is to make one — a Merchant
+  // reads them and writes none of them (ADR-0071). One catalog behind all three, under a SKU of
+  // its own: the cursor sweep seeds every list into one deployment, and the Orders branch seeds
+  // a catalog too, so two default ones would collide on `POSTER-A2` and be refused `sku-taken`.
+  if (list.key === "carts") {
+    const catalog = await seedTestCatalog(kobai, {
+      merchant,
+      variants: [{ sku: "CART-POSTER", prices: [1250] }],
+    });
+    for (let index = 0; index < 3; index += 1) {
+      seeded.push((await seedTestCart(kobai, { catalog })).id);
+    }
+    return seeded;
+  }
+
   if (list.key === "orders") {
     const catalog = await seedTestCatalog(kobai, { merchant });
     for (let index = 0; index < 3; index += 1) {

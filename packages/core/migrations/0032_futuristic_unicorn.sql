@@ -1,0 +1,1 @@
+CREATE INDEX "core_cart_created_at_id_idx" ON "core_cart" USING btree ("created_at","id");

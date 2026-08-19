@@ -301,39 +301,29 @@ export const ServerError = z.object({ error: z.string() }).openapi("ServerError"
  * parameters exist or what they mean. A description that enumerated different *paths* per
  * deployment would not be a contract; five copies of one contract, each bound to its own list,
  * is the same contract five times.
+ *
+ * **A list that also filters passes its filter through here too** — {@link CartPageQuery} is the
+ * one that does. It goes through {@link pageQueryOf} rather than assembling the pieces itself,
+ * because the whole point of naming a list once is that there is no second place to keep in
+ * step: a schema built from `pageParameters("carts")` and stamped by another list's name would
+ * typecheck and would issue cursors nothing accepts.
  */
 export function pageQuery(list: PagedList) {
+  return pageQueryOf(list, {});
+}
+
+/**
+ * One list's query: ADR-0064's two parameters, whatever that list narrows by, and its name.
+ *
+ * **The list is named once, and this is where both ends of it are settled** (#183): the same
+ * argument decides which cursors {@link decodeCursor} will accept and which name `takePage`
+ * stamps into the next one. Everything a route adds is a *filter* — never another parameter with
+ * a meaning of its own for paging — so the contract above stays the same contract on every list.
+ */
+function pageQueryOf<Filters extends z.ZodRawShape>(list: PagedList, filters: Filters) {
   return (
     z
-      .object({
-        limit: z.coerce
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_PAGE_LIMIT)
-          .default(DEFAULT_PAGE_LIMIT)
-          .meta({
-            description: `How many to answer with. Between 1 and ${MAX_PAGE_LIMIT}; ${DEFAULT_PAGE_LIMIT} if it is not sent. More than ${MAX_PAGE_LIMIT} is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received ${MAX_PAGE_LIMIT} would read the short page as the end of the list.`,
-          }),
-        after: z
-          .string()
-          .transform((raw, ctx) => {
-            const cursor = decodeCursor(list, raw);
-            if (cursor === undefined) {
-              ctx.addIssue({
-                code: "custom",
-                message: `not a cursor \`${list}\` issued — an \`after\` has to be a \`nextCursor\` this same list handed back`,
-              });
-              return z.NEVER;
-            }
-            return cursor;
-          })
-          .optional()
-          .meta({
-            description:
-              "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page.",
-          }),
-      })
+      .object({ ...pageParameters(list), ...filters })
       // The list travels with the request rather than beside it, so a reader is handed which
       // list it is reading and cannot page one under another's name. It is not a parameter and
       // never appears as one: this transform runs after the query string has been read, so
@@ -342,13 +332,46 @@ export function pageQuery(list: PagedList) {
   );
 }
 
+/** `limit` and `after`, which are ADR-0064's two and the whole of what every list takes. */
+function pageParameters(list: PagedList) {
+  return {
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAGE_LIMIT)
+      .default(DEFAULT_PAGE_LIMIT)
+      .meta({
+        description: `How many to answer with. Between 1 and ${MAX_PAGE_LIMIT}; ${DEFAULT_PAGE_LIMIT} if it is not sent. More than ${MAX_PAGE_LIMIT} is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received ${MAX_PAGE_LIMIT} would read the short page as the end of the list.`,
+      }),
+    after: z
+      .string()
+      .transform((raw, ctx) => {
+        const cursor = decodeCursor(list, raw);
+        if (cursor === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message: `not a cursor \`${list}\` issued — an \`after\` has to be a \`nextCursor\` this same list handed back`,
+          });
+          return z.NEVER;
+        }
+        return cursor;
+      })
+      .optional()
+      .meta({
+        description:
+          "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page.",
+      }),
+  };
+}
+
 /**
  * The field every list answers beside its items, and the only end-of-list signal there is.
  *
  * **Absent** rather than `null` when there is nothing further, because a client that has to
  * tell "no more" from "not asked" is being told the same thing twice. And absence rather than
- * a short page: a page can be short for other reasons — filtering, once these routes filter —
- * so a caller that stopped on a short page would stop early the day one arrives.
+ * a short page: a page can be short for other reasons — `GET /admin/carts`'s `state` is the
+ * first filter on this surface — so a caller that stopped on a short page would stop early.
  */
 export const NextCursor = z.string().optional().meta({
   description:
@@ -1301,22 +1324,21 @@ export const CartLineItem = z
   .openapi("CartLineItem");
 
 /**
- * A Cart, and what every route on it answers with — creating one, changing it, or reading it.
+ * A Cart as the **Merchant's list** reports it — everything but what is in it.
  *
- * **No totals.** ADR-0009 makes a Cart unauthoritative: what a Shopper pays is resolved at
- * Capture, and a figure here would be one nothing stands behind and the first thing anybody
- * would mistake for one.
+ * The split {@link Cart} makes with this is `OrderSummary`'s, for the same reason: a list is not
+ * a detail view, and a Merchant scanning what is being held wants whose Cart it is, what has
+ * become of it and when it lapses rather than every line of every Cart at once.
  */
-export const Cart = z
+export const CartSummary = z
   .object({
     id: z.uuid().meta({
       description:
-        "The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart.",
+        "The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart. A Merchant may enumerate these and the public may not (ADR-0071).",
     }),
     shopper: CartShopper.nullable().meta({
       description: "`null` for a guest, which is the ordinary path.",
     }),
-    lineItems: z.array(CartLineItem).readonly(),
     metadata: Metadata,
     expiresAt: z.iso.datetime().meta({
       description:
@@ -1333,7 +1355,49 @@ export const Cart = z
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
-  .openapi("Cart");
+  .openapi("CartSummary");
+
+/**
+ * A Cart, and what every route on it answers with — creating one, changing it, or reading it.
+ *
+ * **No totals.** ADR-0009 makes a Cart unauthoritative: what a Shopper pays is resolved at
+ * Capture, and a figure here would be one nothing stands behind and the first thing anybody
+ * would mistake for one.
+ */
+export const Cart = CartSummary.extend({
+  lineItems: z.array(CartLineItem).readonly(),
+}).openapi("Cart");
+
+/** The list, in an envelope — the same shape, and the same reason, as `OrderList`. */
+export const CartList = z
+  .object({ carts: z.array(CartSummary).readonly(), nextCursor: NextCursor })
+  .openapi("CartList");
+
+/**
+ * What has become of a Cart, and the one thing `GET /admin/carts` filters by (ADR-0071).
+ *
+ * The three **partition** the table rather than overlapping: a Cart that became an Order is
+ * `spent` whatever its deadline says, one that has not and is past its deadline is `expired`,
+ * and everything else is `live`. `live` is the useful one — it is the answer to *why is that
+ * stock unavailable*, which is a Shopper away at their bank (ADR-0070) — and without the filter
+ * the default list is mostly history.
+ */
+export const CartState = z.enum(["live", "expired", "spent"]).openapi("CartState");
+
+/**
+ * The Cart list's query: ADR-0064's two parameters, and the one thing this list narrows by.
+ *
+ * A **constant**, like every other schema on this surface — `pageQuery` is a factory only
+ * because a list's name is what varies between its callers, and there is one Cart list. What
+ * makes this the same contract as every other list's is that it is built by
+ * {@link pageQueryOf}: a filter is added, and nothing about paging is re-decided here.
+ */
+export const CartPageQuery = pageQueryOf("carts", {
+  state: CartState.optional().meta({
+    description:
+      "Narrow to Carts in one state. `live` is holding stock and can still be placed, `expired` ran out of time, and `spent` has already become an Order. The three partition the list, so omitting this answers all of them.",
+  }),
+});
 
 /** Attaching a Shopper, or `null` to make the Cart a guest's again. */
 const AttachShopper = z.object({

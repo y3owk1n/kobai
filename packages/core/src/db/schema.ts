@@ -384,8 +384,16 @@ export type PriceRow = typeof price.$inferSelect;
  * **`id` is the capability.** A storefront addresses a Cart by this value and holds no other
  * authority over it, because there is no Shopper session to hang one off and there must never
  * be one (ADR-0020). `gen_random_uuid()` is 122 bits from the platform CSPRNG, so the value
- * encodes nothing, sorts by nothing, and cannot be walked from a Cart somebody does hold; and
- * there is deliberately no route that lists Carts, so there is nothing to enumerate either.
+ * encodes nothing, sorts by nothing, and cannot be walked from a Cart somebody does hold.
+ *
+ * **The public cannot enumerate them; a Merchant can** (ADR-0071). This comment used to say
+ * there was deliberately no route that lists Carts, and `GET /admin/carts` reversed that
+ * deliberately: a Merchant asking *why is that stock unavailable* has no other way to be told
+ * that a Shopper is at their bank holding it (ADR-0070). The amended rule is that a Cart
+ * identifier is a capability **Merchants hold and the public does not** — the list is behind a
+ * Merchant session and `cart:read`, and nothing on the store surface enumerates anything. That
+ * route is also **read-only**, so handing the capability to a Merchant hands them no way to
+ * release a hold out from under the Shopper who is mid-payment.
  *
  * **The Shopper reference is two nullable columns and never a credential.** ADR-0020 has Core
  * store a reference — keyed by email, with an optional external identity — and trust the
@@ -393,31 +401,41 @@ export type PriceRow = typeof price.$inferSelect;
  * table, and no assumption anywhere that a Shopper is authenticated: both columns are null on
  * the ordinary path, which is a guest.
  */
-export const cart = pgTable("core_cart", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  /**
-   * When this Cart stops being placeable — a **lifetime** fixed at creation, not an idle
-   * window (contrast `core_session`, ADR-0045). "Abandoned" is then measured from when the
-   * Cart was made, and no amount of touching it keeps one alive forever.
-   *
-   * Nothing deletes the row when it passes. ADR-0028 lists abandoned cart as a first-party
-   * Plugin and a Plugin cannot recover what Core has deleted, so expiry is a fact about the
-   * row rather than the absence of one.
-   */
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  /** The Shopper reference's key. Null for a guest, which is the ordinary case (ADR-0020). */
-  shopperEmail: text("shopper_email"),
-  /** The Shopper's identity in whatever system the storefront actually authenticates against. */
-  shopperExternalId: text("shopper_external_id"),
-  /**
-   * ADR-0004's escape hatch, and on a Cart it is load-bearing rather than cheap: ADR-0013
-   * has a Project's replaced Step read its inputs from here, so this is the door a Shopper's
-   * unmodelled choice comes through.
-   */
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const cart = pgTable(
+  "core_cart",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * When this Cart stops being placeable — a **lifetime** fixed at creation, not an idle
+     * window (contrast `core_session`, ADR-0045). "Abandoned" is then measured from when the
+     * Cart was made, and no amount of touching it keeps one alive forever.
+     *
+     * Nothing deletes the row when it passes. ADR-0028 lists abandoned cart as a first-party
+     * Plugin and a Plugin cannot recover what Core has deleted, so expiry is a fact about the
+     * row rather than the absence of one.
+     */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** The Shopper reference's key. Null for a guest, which is the ordinary case (ADR-0020). */
+    shopperEmail: text("shopper_email"),
+    /** The Shopper's identity in whatever system the storefront actually authenticates against. */
+    shopperExternalId: text("shopper_external_id"),
+    /**
+     * ADR-0004's escape hatch, and on a Cart it is load-bearing rather than cheap: ADR-0013
+     * has a Project's replaced Step read its inputs from here, so this is the door a Shopper's
+     * unmodelled choice comes through.
+     */
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // `GET /admin/carts` pages on `(created_at desc, id desc)` (ADR-0064), and this is the
+    // index that ordering reads backwards — the same pair `0028` put on the three tables that
+    // were paged then. Carts belong in that company rather than with Roles and Merchants: this
+    // one grows without bound and takes an insert from every storefront session.
+    index("core_cart_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
 
 export type CartRow = typeof cart.$inferSelect;
 

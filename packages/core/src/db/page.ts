@@ -71,7 +71,8 @@ export type PagedList =
   | "api-keys"
   | "roles"
   | "merchants"
-  | "store-products";
+  | "store-products"
+  | "carts";
 
 /** What a caller asked for: how many, and what they have already seen. */
 export type PageRequest = {
