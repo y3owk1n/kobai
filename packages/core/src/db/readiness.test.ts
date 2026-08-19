@@ -49,9 +49,161 @@ function bootAgainst(databaseUrl: string): Kobai {
   return kobai;
 }
 
-/** What is still holding the event loop open, as Node itself reports it. */
-function timersArmed(): number {
-  return process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
+/**
+ * The module whose timers this file is entitled to count, as a stack frame names it.
+ *
+ * Attribution is by the frame that *called* `setTimeout`, never by the whole stack: `probe()`
+ * hands its client back to the pool, and pg arms a ten-second idle timer of its own inside
+ * that call — so `readiness.ts` sits in the stack of a timer it did not arm, and a whole-stack
+ * match would count it.
+ *
+ * It is a path, so it couples this assertion to where that module lives. Moving `expiresIn`
+ * elsewhere or renaming the file **reddens the build** rather than quietly emptying the count:
+ * the guard in the test asks whether anything was attributed at all before believing that
+ * nothing was left armed.
+ */
+const MODULE_UNDER_TEST = "/db/readiness.ts";
+
+/** This file, whose own frames sit between `Error` and whoever armed the timer. */
+const THIS_FILE = "/db/readiness.test.ts";
+
+/** What `readiness.ts` did with timers over one window. */
+type TimerAccount = {
+  /**
+   * How many it armed — every timer, the deadline and a retry's `sleep()` alike. Zero means
+   * the attribution stopped matching anything rather than that the module armed nothing.
+   */
+  readonly armed: number;
+  /** How many of those it had not stood down again when the window closed. */
+  readonly leftArmed: number;
+};
+
+/**
+ * The timers `readiness.ts` itself armed while `run` was in flight, and how many outlived it.
+ *
+ * Intervals as well as timeouts, because the count this replaced covered both — Node reports a
+ * `setInterval` as a `"Timeout"` resource like any other, so dropping `setInterval` here would
+ * have narrowed what the assertion sees while looking like it had only been made more precise.
+ *
+ * This used to be `process.getActiveResourcesInfo()`, counted once either side of the call
+ * (#195). That is **process-wide**: it counts every armed `Timeout` anywhere in the Node
+ * process, other test files sharing this vitest worker included, so anything at all arming or
+ * disarming one inside that window moved the number. It was seen failing once as
+ * `expected 2, received 1` during an unrelated gate run — a foreign timer *firing*
+ * mid-assertion — and a test that fails for what another file was doing costs more than it
+ * proves. Nothing here is a delta any more: a timer this call did not arm cannot be counted,
+ * and a foreign one going away cannot uncount anything.
+ *
+ * Replacing a global to measure one is not the same trap it removes, and the difference is
+ * worth being explicit about. What went wrong before was *reading* a number every other file
+ * in the process could move; what happens here is a replacement that holds for the length of
+ * one call, is put back in a `finally`, hands every timer it did not attribute straight to the
+ * real function unwrapped, and counts nothing it did not attribute — so a foreign arm inside
+ * the window is passed through and ignored rather than added, which is exactly what the old
+ * count could not do.
+ *
+ * **Watched failing**, because an assertion nobody has seen fail is not yet known to be able
+ * to: against a `waitForDatabase` whose `expiry.cancel()` was taken out, this reports
+ * `leftArmed: 1` and the test fails on the line that says so — and again against a deadline
+ * armed with `setInterval`, which is the half a narrower replacement would have stopped seeing.
+ * The pg idle timer armed inside the same window is not what either caught: that one is
+ * attributed to pg and never counted, and a count of everything armed in the window would have
+ * reported it as a leak on the green build too.
+ */
+async function timersArmedBy(run: () => Promise<unknown>): Promise<TimerAccount> {
+  const realSetTimeout = globalThis.setTimeout;
+  const realSetInterval = globalThis.setInterval;
+  const realClearTimeout = globalThis.clearTimeout;
+  const realClearInterval = globalThis.clearInterval;
+  const stillArmed = new Set<unknown>();
+  let armed = 0;
+
+  /**
+   * `real`, with every timer the module under test arms through it counted and remembered.
+   *
+   * `forgetsItselfWhenItFires` is the whole of the difference between the two: a timeout that
+   * has fired holds nothing open, so it leaves the set exactly as a cleared one does, while an
+   * interval is still armed after its callback runs and stays until something clears it. Only
+   * a timer this module armed is wrapped at all, so nobody else's callback is touched.
+   */
+  const watched =
+    (real: Arm, forgetsItselfWhenItFires: boolean): Arm =>
+    (callback, ms, ...args) => {
+      if (!armedByModuleUnderTest()) return real(callback, ms, ...args);
+      armed += 1;
+      if (!forgetsItselfWhenItFires) {
+        const handle = real(callback, ms, ...args);
+        stillArmed.add(handle);
+        return handle;
+      }
+      let handle: NodeJS.Timeout | undefined;
+      handle = real(
+        (...fired) => {
+          stillArmed.delete(handle);
+          callback(...fired);
+        },
+        ms,
+        ...args,
+      );
+      stillArmed.add(handle);
+      return handle;
+    };
+
+  const disarming =
+    (real: Disarm): Disarm =>
+    (handle) => {
+      stillArmed.delete(handle);
+      real(handle);
+    };
+
+  // `Object.assign` carries the real function's own properties across, rather than the one
+  // `@types/node` names. Satisfying the type and preserving the behaviour are two different
+  // jobs here: `__promisify__` is a declaration with nothing behind it — `"__promisify__" in
+  // setTimeout` is `false` — and what `promisify()` actually reads is the enumerable
+  // `Symbol(nodejs.util.promisify.custom)`, which assigning the narrow shape would have dropped.
+  globalThis.setTimeout = Object.assign(watched(realSetTimeout, true), realSetTimeout);
+  globalThis.setInterval = Object.assign(
+    watched(realSetInterval, false),
+    realSetInterval,
+  );
+  globalThis.clearTimeout = disarming(realClearTimeout);
+  globalThis.clearInterval = disarming(realClearInterval);
+
+  try {
+    await run();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearTimeout = realClearTimeout;
+    globalThis.clearInterval = realClearInterval;
+  }
+
+  return { armed, leftArmed: stillArmed.size };
+}
+
+/** `setTimeout` and `setInterval`, which take and give back the same things. */
+type Arm = <TArgs extends unknown[]>(
+  callback: (...args: TArgs) => void,
+  ms?: number,
+  ...args: TArgs
+) => NodeJS.Timeout;
+
+/** `clearTimeout` and `clearInterval`, likewise. */
+type Disarm = (handle?: NodeJS.Timeout | string | number) => void;
+
+/**
+ * Whether whoever armed the timer now being created is the module under test.
+ *
+ * The arming call is the first frame that is not this file's, rather than a frame at a fixed
+ * depth: the stack opens with `Error`'s own line and then however many frames this file
+ * contributes between raising it and the replacement above — which was two, until it was
+ * three, and counting them is the kind of thing that reads as an empty count rather than as a
+ * failure. The emptiness guard in the test caught exactly that.
+ */
+function armedByModuleUnderTest(): boolean {
+  const frames = (new Error().stack ?? "").split("\n").slice(1);
+  const armer = frames.find((frame) => !frame.includes(THIS_FILE));
+  return armer?.includes(MODULE_UNDER_TEST) === true;
 }
 
 /** A port nothing is listening on — `127.0.0.1:1` is refused rather than dropped. */
@@ -109,14 +261,23 @@ describe("waiting for the database", () => {
     // Warmed first: the pool arms an idle timer of its own the first time a client goes
     // back into it, and this is about the deadline's timer rather than that one.
     await booting.waitForDatabase();
-    const before = timersArmed();
 
-    await booting.waitForDatabase({ timeoutMs: 30_000 });
+    const timers = await timersArmedBy(() =>
+      booting.waitForDatabase({ timeoutMs: 30_000 }),
+    );
 
+    // Asked before it is believed: an attribution that matched nothing would leave the
+    // assertion below passing against a `waitForDatabase` that armed a deadline and abandoned
+    // it, which is ADR-0049's trap arriving as a green build. Against a database that is
+    // already up nothing retries, so the timer it counts here is the deadline and no other.
+    expect(
+      timers.armed,
+      "No timer was attributed to the module under test, so the count below is empty rather than clean.",
+    ).toBeGreaterThan(0);
     // The deadline lost the race and was stood down. Left armed, a `setTimeout` for thirty
     // seconds holds the event loop open — invisible to a server that has just bound a port,
     // and thirty seconds of nothing to any script that called this and expected to exit.
-    expect(timersArmed()).toBe(before);
+    expect(timers.leftArmed).toBe(0);
   });
 
   it("keeps trying while the database is not there yet, and proceeds when it arrives", async () => {
