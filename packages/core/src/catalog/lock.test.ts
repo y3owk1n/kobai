@@ -24,7 +24,7 @@ import { lockProduct, lockVariant, lockVariants } from "./lock.ts";
  *
  * So this calls the function and asks Postgres, which is where a lock is a fact (ADR-0011),
  * exactly as `updated-at.test.ts` asks it about a trigger. It is a **deliberate exception** to
- * "the dominant seam is the public HTTP API" (AGENTS.md § Writing tests): it couples to one
+ * "the dominant seam is the public HTTP API" (docs/agents/writing-tests.md): it couples to one
  * internal name, which is a cost paid once and moved with a rename, in exchange for the only
  * assertion in this repository that can watch this lock fail.
  *

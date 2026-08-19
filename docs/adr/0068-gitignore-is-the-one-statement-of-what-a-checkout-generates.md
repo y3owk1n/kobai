@@ -149,7 +149,7 @@ with `**/` in front of them neither does while an ordinary file beside them stil
 so `git status` would never show you one sitting in `reference/`, and a credential that
 reaches a layer is in that layer forever — the reason `.npmrc` is mounted as a build secret
 rather than copied at all
-(AGENTS.md § Writing tests, under the image seam).
+(docs/agents/writing-tests.md, under the image seam).
 
 Docker offers nothing like `vcs.useIgnoreFile`, so here the answer **is** the glob — which is
 why the rule is enforced rather than delegated. `tests/nothing-git-ignores-reaches-the-build-context.test.ts`

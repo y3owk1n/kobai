@@ -22,7 +22,7 @@ change any internal a Developer could technically reach. Read strictly, that put
 in the same bucket as an internal function — reachable, unpromised, changeable without notice.
 
 But the harness is not reachable by accident. It is a **declared subpath export** of a
-published package; `AGENTS.md` § Writing tests tells every test in this repository to reach for
+published package; `docs/agents/writing-tests.md` tells every test in this repository to reach for
 it; and its own module comment says why it ships rather than staying private — "because a
 Plugin author needs the same seam Core tests through". A surface that is exported, documented
 and recommended is promised in every way except the one that matters when it breaks.
@@ -53,7 +53,7 @@ may assert on, such as the Price `seedTestCatalog` seeds when a test names none.
 - **Adding an export is a decision, not a convenience.** A helper that lands here must be
   designed as public API — the common case one line, the interesting case still expressible,
   and the arrangement a test is *about* never hidden. #52's `seedTestCatalog` is the worked
-  example, and `AGENTS.md` § Writing tests is where the next one gets documented.
+  example, and `docs/agents/writing-tests.md` is where the next one gets documented.
 - **Renaming or removing one is a breaking change**, on the same footing as a change to a
   Workflow's declared Steps. That is a real constraint on Core's own refactoring, accepted
   because the alternative is worse: a harness that shifts under a Project between minors makes

@@ -52,7 +52,7 @@ describe("the reference Project's configuration", () => {
     // it is where a Plugin's line is meant to be read: this is the Project's test of its own
     // `kobai.config.ts`, so the list *is* the subject rather than an expectation borrowed to
     // check something else. Everywhere else in the repository the list is derived — see
-    // `tests/support/wired-migration-sets.ts` and AGENTS.md § Writing tests.
+    // `tests/support/wired-migration-sets.ts` and docs/agents/writing-tests.md.
     expect(config.migrationSets?.map((set) => set.name)).toEqual([
       "plugin-price-log",
       "plugin-made-to-order",

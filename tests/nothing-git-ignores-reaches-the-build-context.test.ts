@@ -24,7 +24,7 @@ import { describe, expect, it } from "vitest";
  * `.env` is the one that makes this more than housekeeping. `.gitignore` hides it from
  * `git status` at every depth, so nobody would see it sitting there — and a credential that
  * reaches a layer is in that layer forever, which is the reason `.npmrc` is mounted as a
- * build secret rather than copied (AGENTS.md § Writing tests, the image seam).
+ * build secret rather than copied (docs/agents/writing-tests.md, the image seam).
  *
  * The rule below is therefore **derived, not listed**: a `.dockerignore` pattern naming
  * something the governing `.gitignore` also ignores has to match at the same depths. It says

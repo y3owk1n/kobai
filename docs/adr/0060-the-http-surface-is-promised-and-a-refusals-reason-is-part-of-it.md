@@ -313,7 +313,7 @@ it wrote down two reason strings and observed that nothing was watching them.
 - **`Refusal` is gone from the description**, replaced by `InvalidRequest`, `MerchantRefusal`,
   `CatalogRefusal` and `ApiKeyNotFound`. Taken under ADR-0058's licence, and it is the last
   moment such a rename is free.
-- **`AGENTS.md` § The API contract is where this becomes an instruction, and the edit was owed
+- **`docs/agents/the-http-surface.md` is where this becomes an instruction, and the edit was owed
   rather than made here.** That section described how the description is *kept honest* and said
   nothing about what changing it costs; and its one sentence about reason strings — "it stops
   at the status: the `session-*` and `api-key-*` *reasons* inside a `401` are pinned one level
