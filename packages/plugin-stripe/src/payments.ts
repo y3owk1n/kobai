@@ -8,7 +8,14 @@ import {
   stripeSaid,
 } from "./api.ts";
 import type { StripeUnplacedRefundRow } from "./db/schema.ts";
-import { STRIPE_CART_ID_KEY, STRIPE_PAYMENT_INTENT_KEY } from "./metadata.ts";
+import {
+  cartIdOfPaymentIntent,
+  contextOfPaymentIntent,
+  STRIPE_CART_ID_KEY,
+  STRIPE_CONTEXT_KEY,
+  STRIPE_PAYMENT_INTENT_KEY,
+  stripeContextValue,
+} from "./metadata.ts";
 import {
   refundUnplacedPayment,
   type UnplacedPaymentRefund,
@@ -22,6 +29,22 @@ export type StartPaymentRequest = {
   readonly amount: number;
   /** ISO 4217. **This is what decides which methods Stripe offers** — see {@link stripePayments}. */
   readonly currency: string;
+  /**
+   * ADR-0013's open context, as the storefront sent it when the Cart was quoted.
+   *
+   * Recorded on the intent under {@link STRIPE_CONTEXT_KEY} so that the placement runs with
+   * the context the quote ran with — see that key for how a bag of anything travels through
+   * metadata Stripe holds as strings, and for the one payment this Plugin refuses to start.
+   */
+  readonly metadata?: Readonly<Record<string, unknown>>;
+};
+
+/** What a payment was started for, read back off the intent by {@link StripePaymentProvider.paymentOf}. */
+export type StartedPaymentDetails = {
+  /** The Cart it was started for. */
+  readonly cartId: string;
+  /** The open context it was started with — `{}` for a purchase that carried none. */
+  readonly metadata: Readonly<Record<string, unknown>>;
 };
 
 /** What Stripe answered, in the two values a storefront needs and one it can act on. */
@@ -48,6 +71,21 @@ export type StartedPayment = {
  */
 export type StripePaymentProvider = PaymentProvider & {
   readonly startPayment: (request: StartPaymentRequest) => Promise<StartedPayment>;
+  /**
+   * What a payment was started for, by its reference — `null` for one this Plugin never
+   * started.
+   *
+   * **This is what the settling half of the flow reads everything from.** The Shopper's
+   * returning browser holds a reference and nothing else, and the webhook holds only what
+   * Stripe sends, so a Project that took the Cart from the request would be letting the two
+   * callers make different requests under the one `Idempotency-Key` they share (ADR-0070).
+   * One source, one body, either caller.
+   *
+   * `null` is an answer rather than a failure: a Store's Stripe account holds payments kobai
+   * never started, and a Project may turn one back without guessing at a Cart for it. Stripe
+   * being unreachable or refusing the key is the other thing entirely, and throws.
+   */
+  readonly paymentOf: (reference: string) => Promise<StartedPaymentDetails | null>;
   /**
    * Give back a payment kobai refused to place, and record it — see
    * {@link refundUnplacedPayment}.
@@ -164,7 +202,35 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
 
     refundUnplacedPayment: (request) => refundUnplacedPayment(options, request),
 
-    startPayment: async ({ cartId, amount, currency }) => {
+    paymentOf: async (reference) => {
+      const found = await callStripe(options, {
+        method: "GET",
+        path: `/v1/payment_intents/${encodeURIComponent(reference)}`,
+      });
+      if (!found.ok) {
+        // The same reading `charge` makes, through the same function: an intent Stripe has
+        // never heard of is a payment this Plugin did not start, and anything else — a
+        // mistyped key, a revoked one, a rate limit, an outage — is the deployment being
+        // broken and must not read as a stranger's payment.
+        if (stripeNeverHeardOfIt(found)) return null;
+        throw new Error(
+          `Stripe answered ${found.status} when this Plugin asked about a PaymentIntent: ${stripeSaid(found.error.message)}`,
+        );
+      }
+
+      const cartId = cartIdOfPaymentIntent(found.body);
+      // A payment in this Store's Stripe account with no Cart on it is one kobai never
+      // started, and there is nothing to settle for it.
+      if (cartId === null) return null;
+
+      return { cartId, metadata: contextOfPaymentIntent(found.body) };
+    },
+
+    startPayment: async ({ cartId, amount, currency, metadata }) => {
+      // Before the intent exists, because a context Stripe would not carry back is a payment
+      // that must not be started at all — see STRIPE_CONTEXT_KEY.
+      const context = stripeContextValue(metadata);
+
       const result = await callStripe(options, {
         method: "POST",
         path: "/v1/payment_intents",
@@ -173,7 +239,7 @@ export function stripePayments(options: StripeOptions): StripePaymentProvider {
           // Stripe's currencies are lower case, kobai's are ISO 4217 as written.
           currency: currency.toLowerCase(),
           automatic_payment_methods: { enabled: true },
-          metadata: { [STRIPE_CART_ID_KEY]: cartId },
+          metadata: { [STRIPE_CART_ID_KEY]: cartId, [STRIPE_CONTEXT_KEY]: context },
         },
         // Deliberately no idempotency key. Stripe replays the *first* answer for a repeated
         // key, so a Shopper who edits their Cart and starts again would be sent to their bank
@@ -320,8 +386,7 @@ function missingIntent(): PaymentOutcome {
  * being told their bank said no, with nothing anywhere saying otherwise.
  */
 function notFound(failure: Extract<StripeResult, { ok: false }>): PaymentOutcome {
-  const missing = failure.status === 404 || failure.error.code === "resource_missing";
-  if (!missing) {
+  if (!stripeNeverHeardOfIt(failure)) {
     throw new Error(
       `Stripe answered ${failure.status} when this Plugin asked about a PaymentIntent: ${stripeSaid(failure.error.message)}`,
     );
@@ -331,4 +396,15 @@ function notFound(failure: Extract<StripeResult, { ok: false }>): PaymentOutcome
     ok: false,
     detail: `This payment could not be found: ${stripeSaid(failure.error.message)}`,
   };
+}
+
+/**
+ * Whether Stripe's refusal means *there is no such payment* rather than *this Plugin could not
+ * ask*.
+ *
+ * One reading in one place, because both callers of `/v1/payment_intents/{id}` turn on it and
+ * two copies would eventually disagree about which of them a 401 is.
+ */
+function stripeNeverHeardOfIt(failure: Extract<StripeResult, { ok: false }>): boolean {
+  return failure.status === 404 || failure.error.code === "resource_missing";
 }

@@ -35,6 +35,27 @@ export default defineConfig({
       "reference/src/**/*.test.ts",
       "tests/**/*.test.ts",
     ],
+    /**
+     * **The gate never calls Stripe** (ADR-0070), and this is what makes that true of a
+     * Developer's machine as well as of CI.
+     *
+     * The reference Project reads these at import and takes payments at a bank when it has all
+     * three (`reference/src/payments/stripe.ts`), so a maintainer with a real key exported in
+     * their shell would otherwise have the suite — and every Project it spawns, which inherits
+     * this environment — reach the network with a live secret and charge somebody. Blanked
+     * rather than deleted, because blank is what an unset variable is here: the Project reads
+     * an empty one as one that was not set, so the suite is the ordinary deployment that
+     * settles out of band, which is what every assertion in it about `manual` expects.
+     *
+     * A test whose subject *is* Stripe passes its own configuration in — see
+     * `reference/src/payments/stripe.test.ts` — and stubs the `fetch` the Plugin's whole
+     * contact with the network goes through.
+     */
+    env: {
+      STRIPE_SECRET_KEY: "",
+      STRIPE_WEBHOOK_SECRET: "",
+      STRIPE_PAYMENT_PAGE_URL: "",
+    },
     // Every test creates a database of its own and runs migrations into it. That is slower
     // than a fake and worth it — see `createTestKobai`.
     testTimeout: 30_000,

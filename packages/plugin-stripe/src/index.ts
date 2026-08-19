@@ -53,14 +53,19 @@
 export type { StripeOptions } from "./api.ts";
 export type { StripeUnplacedRefundRow } from "./db/schema.ts";
 export { stripeUnplacedRefund } from "./db/schema.ts";
+export { paymentIntentIdOfEvent, STRIPE_SETTLING_EVENT_TYPE } from "./events.ts";
 export {
   cartIdOfPaymentIntent,
+  contextOfPaymentIntent,
   STRIPE_CART_ID_KEY,
+  STRIPE_CONTEXT_KEY,
+  STRIPE_METADATA_VALUE_LIMIT,
   STRIPE_PAYMENT_INTENT_KEY,
 } from "./metadata.ts";
 export { stripeMigrationSet } from "./migration-set.ts";
 export type {
   StartedPayment,
+  StartedPaymentDetails,
   StartPaymentRequest,
   StripePaymentProvider,
 } from "./payments.ts";

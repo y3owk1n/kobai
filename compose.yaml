@@ -74,6 +74,14 @@ services:
       # Merchant. See `.env.example`.
       - KOBAI_INITIAL_MERCHANT_EMAIL
       - KOBAI_INITIAL_MERCHANT_PASSWORD
+      # What this checkout takes payments a Shopper completes at their bank with, and the key
+      # its own routes place the resulting Orders with (ADR-0070). Bare names for the same
+      # reason as the two above, and unset in every checkout that has not deliberately filled
+      # them in — including CI, which must never hold a Stripe secret. See `.env.example`.
+      - KOBAI_STORE_API_KEY
+      - STRIPE_SECRET_KEY
+      - STRIPE_WEBHOOK_SECRET
+      - STRIPE_PAYMENT_PAGE_URL
     ports:
       # Derived, for the same reason the database's port above is: devbox hashes the
       # checkout's path into a port in 53000-53999, so two checkouts can run

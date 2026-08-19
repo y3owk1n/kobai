@@ -1,6 +1,7 @@
 import type { PaymentRequest } from "@kobai/core";
 import { createTestKobai } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
+import { paymentIntentIdOfEvent } from "./events.ts";
 import { cartIdOfPaymentIntent, STRIPE_PAYMENT_INTENT_KEY } from "./metadata.ts";
 import { stripeMigrationSet } from "./migration-set.ts";
 import { stripePayments } from "./payments.ts";
@@ -146,6 +147,193 @@ describe("starting a payment the Shopper completes at their bank", () => {
         },
       },
     ]);
+  });
+
+  it("carries the open context the storefront sent, as one JSON value", async () => {
+    // ADR-0013's context is whatever the storefront sent that Core does not model, and a
+    // deployment's Steps may price on it — so the payment has to be *placed* with the
+    // context it was *quoted* with or the two figures are for two different purchases
+    // (ADR-0077). Stripe's metadata values are strings and the context is not, so it
+    // travels as JSON under one key rather than as a key per field: a bag Core never
+    // interprets cannot be flattened into Stripe's forty-character keys without inventing
+    // rules for nesting, and one value is one thing to read back.
+    const stripe = stripeStub({
+      "POST /v1/payment_intents": {
+        body: { id: "pi_redirect", client_secret: "pi_redirect_secret_abc" },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await payments.startPayment({
+      cartId: "cart-abcdef",
+      amount: 2500,
+      currency: "MYR",
+      metadata: { leadTimeDays: 3, tier: "trade" },
+    });
+
+    expect(stripe.calls[0]?.form).toEqual({
+      amount: "2500",
+      currency: "myr",
+      "automatic_payment_methods[enabled]": "true",
+      "metadata[kobaiCartId]": "cart-abcdef",
+      "metadata[kobaiContext]": '{"leadTimeDays":3,"tier":"trade"}',
+    });
+  });
+
+  it("sends no context key at all when the storefront sent nothing", async () => {
+    // An empty bag and no bag are the same fact, and writing `{}` onto every intent a Store
+    // ever takes would put a value in a Merchant's Stripe dashboard that says nothing.
+    const stripe = stripeStub({
+      "POST /v1/payment_intents": {
+        body: { id: "pi_redirect", client_secret: "pi_redirect_secret_abc" },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await payments.startPayment({ cartId: "cart-abcdef", amount: 2500, currency: "MYR" });
+
+    expect(stripe.calls[0]?.form).not.toHaveProperty("metadata[kobaiContext]");
+  });
+
+  it("refuses to start a payment whose context Stripe would not carry back", async () => {
+    // **A truncated context is worse than no payment**, and this is the one place that can
+    // say so. Stripe holds 500 characters per metadata value; a context that does not fit
+    // would be quoted with and placed without, so a Step pricing on it would work out two
+    // figures for one purchase — and the Shopper would already have authorised the first.
+    // Nothing is sent to Stripe at all: the throw happens before the intent exists.
+    const stripe = stripeStub({});
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(
+      payments.startPayment({
+        cartId: "cart-abcdef",
+        amount: 2500,
+        currency: "MYR",
+        metadata: { note: "x".repeat(600) },
+      }),
+    ).rejects.toThrow(/500/);
+    expect(stripe.calls).toEqual([]);
+  });
+});
+
+describe("reading a payment back by its reference", () => {
+  it("answers the Cart and the context it was started with", async () => {
+    // What settling needs, and the provider is the only thing that has it: the Shopper's
+    // returning browser sends a reference and nothing else, and the webhook could not send
+    // more, so both settle from here and their two requests are one (ADR-0070).
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        body: intent("succeeded", {
+          metadata: {
+            kobaiCartId: "cart-abcdef",
+            kobaiContext: '{"leadTimeDays":3}',
+          },
+        }),
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(payments.paymentOf("pi_redirect")).resolves.toEqual({
+      cartId: "cart-abcdef",
+      metadata: { leadTimeDays: 3 },
+    });
+    // A read, so no idempotency key: Stripe replays the first answer for a repeated one,
+    // which is the whole point for a refund and a trap for anything that has moved on.
+    expect(stripe.calls[0]?.idempotencyKey).toBeNull();
+  });
+
+  it("answers null for a reference Stripe has never heard of", async () => {
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_nothing": {
+        status: 404,
+        body: { error: { code: "resource_missing", message: "No such payment_intent." } },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(payments.paymentOf("pi_nothing")).resolves.toBeNull();
+  });
+
+  it("answers null for a payment in this Store's Stripe account that kobai never started", async () => {
+    // A Merchant's Stripe account holds payments kobai knows nothing about — a subscription,
+    // a payment link, an invoice — and `null` is what lets the Project's route turn one back
+    // rather than guess at a Cart for it.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_elsewhere": {
+        body: intent("succeeded", { metadata: {} }),
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(payments.paymentOf("pi_elsewhere")).resolves.toBeNull();
+  });
+
+  it("throws rather than answering null when Stripe will not say", async () => {
+    // The same distinction `charge` draws, and for the same reason: a mistyped key, a
+    // revoked one or an outage answered as "no such payment" would settle nothing and say
+    // the payment was a stranger's, leaving a Shopper's money at the bank with nothing
+    // anywhere reporting it.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        status: 401,
+        body: { error: { type: "invalid_request_error", message: "Invalid API Key." } },
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_wrong", fetch: stripe.fetch });
+
+    await expect(payments.paymentOf("pi_redirect")).rejects.toThrow(/Invalid API Key/);
+  });
+
+  it("reads a context nobody can parse as none, and lets the amount answer for it", async () => {
+    // Only reachable by somebody editing the intent in Stripe's dashboard, since this
+    // Plugin is what writes that value. Settling with the context kobai can actually read
+    // is safe because it is not the last check: a Step that priced on what is missing works
+    // out a different total, and `charge` declines a payment for a figure that disagrees
+    // with the Order (ADR-0077), so the money goes back rather than buying at a price
+    // nobody authorised.
+    const stripe = stripeStub({
+      "GET /v1/payment_intents/pi_redirect": {
+        body: intent("succeeded", {
+          metadata: { kobaiCartId: "cart-abcdef", kobaiContext: "not json" },
+        }),
+      },
+    });
+    const payments = stripePayments({ secretKey: "sk_test_123", fetch: stripe.fetch });
+
+    await expect(payments.paymentOf("pi_redirect")).resolves.toEqual({
+      cartId: "cart-abcdef",
+      metadata: {},
+    });
+  });
+});
+
+describe("which payment a webhook is about", () => {
+  it("reads the PaymentIntent off an event that says the bank answered", () => {
+    expect(
+      paymentIntentIdOfEvent({
+        type: "payment_intent.succeeded",
+        data: { object: { id: "pi_redirect", metadata: { kobaiCartId: "cart-abcdef" } } },
+      }),
+    ).toBe("pi_redirect");
+  });
+
+  it("answers null for an event about somebody else's money, and for one that settles nothing", () => {
+    // A Store's endpoint is told about every event it subscribed to — a payment kobai never
+    // started, an intent that has only just been created — and `null` is what lets the
+    // Project's webhook acknowledge one without settling anything.
+    expect(
+      paymentIntentIdOfEvent({
+        type: "payment_intent.succeeded",
+        data: { object: { id: "pi_elsewhere", metadata: {} } },
+      }),
+    ).toBeNull();
+    expect(
+      paymentIntentIdOfEvent({
+        type: "payment_intent.created",
+        data: { object: { id: "pi_redirect", metadata: { kobaiCartId: "cart-abcdef" } } },
+      }),
+    ).toBeNull();
+    expect(paymentIntentIdOfEvent("not an event")).toBeNull();
   });
 });
 

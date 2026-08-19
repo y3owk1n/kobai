@@ -188,6 +188,14 @@ export default defineKobaiConfig({
 });
 ```
 
+**One provider is one line, and *which* provider may be a question about your environment.**
+The reference Project's own file reads that line as `bank?.provider ?? manualPaymentProvider`:
+given Stripe's settings it takes payments a Shopper completes at their bank through
+`@kobai/plugin-stripe`, and given none it settles out of band through its own
+`src/payments/manual.ts` and mounts no payment routes at all. Both boot, both serve, and a
+deployment that has misconfigured its payments is never a deployment that is down (ADR-0053,
+ADR-0070). Your Project decides that for itself; kobai asks only for an object.
+
 **Six keys today**, and every one of them names a *subject* rather than a scalar — a key
 holding one setting is how a file gets a second top-level key the day it needs to say
 anything else about the same thing
@@ -545,8 +553,13 @@ demand more than Core sends; #127 settled that, and the subsection below says wh
 
 **`PaymentProvider` is the second, and Core implements it nowhere on purpose** (ADR-0053): a
 deployment with none wired boots, serves its catalog and its Admin, and refuses only the
-placing of an Order. You wire it as `payments: { provider }`, and the reference Project's own
-`manual` provider — its source, in its repository — is the worked example.
+placing of an Order. You wire it as `payments: { provider }`, and there are two worked examples
+of it in this repository, one from each of the places an implementation can come from: the
+reference Project's own `manual` provider — its source, in its repository — and
+`@kobai/plugin-stripe`, an off-the-shelf package. **Taking a payment a Shopper completes at
+their bank costs one route more than the config line**, because a Plugin cannot add one and
+signature verification is yours to own: `reference/src/payments/` is that route, generated into
+what `create-kobai` gives you (ADR-0070).
 
 **A Fulfilment Strategy is one of these, and not a sixth Extension Point.** ADR-0014 says a
 Variant points at a named Strategy that answers three questions about it — does it ship, does

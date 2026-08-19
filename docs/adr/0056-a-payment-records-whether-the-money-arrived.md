@@ -1,8 +1,16 @@
 # A Payment records whether the money arrived
 
+> **The count in the first sentence is out of date and nothing else here is.**
+> [ADR-0070](./0070-a-payment-the-shopper-completes-at-their-bank.md) shipped
+> `@kobai/plugin-stripe`, so a second provider exists and the reference Project takes it when its
+> environment is configured for one. That provider answers `received: true` for money that has
+> left a Shopper's bank and `received: false` for a payment Stripe reports as `processing` —
+> which is this record working exactly as designed, in the case it was written for. `manual`
+> still answers `received: false`, and is still what a deployment with no bank settles with.
+
 [ADR-0053](./0053-core-owns-the-payment-record-and-ships-no-provider.md) gave Core a Payment
-record and no provider, and the one provider that exists — the reference Project's `manual` —
-**moves no money**. It records that a Merchant will be paid out of band and answers `ok: true`,
+record and no provider, and the one provider that existed when this was written — the reference
+Project's `manual` — **moves no money**. It records that a Merchant will be paid out of band and answers `ok: true`,
 which is the same answer a card processor gives after taking the money. Every Order the
 reference Project takes therefore looked settled, and #103's criterion is precisely that it must
 not: *an Order that has not been paid is visibly distinct, so a manually settled Order is not

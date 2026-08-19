@@ -14,8 +14,8 @@ import {
   signInTestMerchant,
   type TestKobai,
 } from "@kobai/core/testing";
-import { describe, expect, it } from "vitest";
-import config from "../kobai.config.ts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import config, { bank } from "../kobai.config.ts";
 
 /**
  * The reference Project's side of ADR-0017: a Plugin offers, and the Project wires.
@@ -49,9 +49,10 @@ describe("the reference Project's configuration", () => {
     // the same runner, which is what makes "a Project owns tables on the same terms a Plugin
     // does" a fact about the code rather than a claim in a document.
     //
-    // `plugin-stripe` is the one whose set is wired while its provider is not — this Store
-    // settles out of band — which is the same ADR-0017 point from the other side: naming a
-    // migration set installs a Plugin's *tables* and commits a deployment to nothing else.
+    // `plugin-stripe` is the one whose set is wired whether or not its provider is — which is
+    // the same ADR-0017 point from the other side: naming a migration set installs a Plugin's
+    // *tables* and commits a deployment to nothing else. Here it is wired and the provider is
+    // not, because the gate is a deployment nobody has given Stripe.
     //
     // **This is the one enumeration of the set list #129 deliberately left standing**, and
     // it is where a Plugin's line is meant to be read: this is the Project's test of its own
@@ -303,7 +304,58 @@ describe("the Step this Project wired from a Plugin", () => {
  * kobai, which is the standard #72 sets for dependency substitution being proven rather than
  * merely present — so both halves are asserted here: that wiring it is what lets this deployment
  * take an Order, and that removing the line leaves everything else working.
+ *
+ * **Which provider this Project supplies is a question about its environment** (ADR-0070). Given
+ * Stripe's three settings it is `@kobai/plugin-stripe`'s and this Store takes payments at a
+ * bank; given none it is `src/payments/manual.ts` and this Store settles out of band. Every
+ * test below is the second, because the gate is a deployment nobody has given Stripe and
+ * `vitest.config.ts` blanks those variables to keep it one whatever a Developer's shell
+ * exports — the gate has no Stripe secret and must never acquire one.
  */
+describe("what this deployment takes money with", () => {
+  it("settles out of band, because nobody has given this one Stripe", () => {
+    // The two halves of the same line in `kobai.config.ts`, pinned together: no Stripe
+    // configuration means no bank, and no bank means `manual`. It is also what makes every
+    // assertion below — and the upgrade gate's, which boots this Project for real — about a
+    // provider that moves no money and calls nothing.
+    expect(bank).toBeNull();
+    expect(config.payments?.provider?.name).toBe("manual");
+  });
+
+  it("takes payments at a bank when this deployment has been given Stripe's settings", async () => {
+    // The same file, the same Project, read with an environment that has been filled in —
+    // which is the whole of what wiring `@kobai/plugin-stripe` costs a Developer: a dependency
+    // and some settings, with no line of this repository edited (ADR-0069's bar).
+    //
+    // Re-imported rather than reconfigured, because this config is read once at boot from
+    // `process.env`, and what is under test is *that* reading. Nothing here reaches Stripe: a
+    // provider is built and asked its name, which is a property of the object.
+    //
+    // Undone whatever happens below, and that is not tidiness: a failed assertion that left
+    // these set would hand a Stripe configuration to every test after it in this file, which
+    // is the one thing the gate must never have.
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_123");
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_test_123");
+    vi.stubEnv("STRIPE_PAYMENT_PAGE_URL", "https://storefront.test/checkout/pay");
+    vi.resetModules();
+
+    const configured = (await import(
+      "../kobai.config.ts"
+    )) as typeof import("../kobai.config.ts");
+
+    expect(configured.bank?.provider.name).toBe("stripe");
+    expect(configured.default.payments?.provider?.name).toBe("stripe");
+    expect(configured.bank?.configuration.paymentPageUrl).toBe(
+      "https://storefront.test/checkout/pay",
+    );
+  });
+});
+
 describe("the Payment Provider this Project supplies", () => {
   /** A Cart with something in it, placed — the shortest path to the money. */
   async function placeAnOrder(kobai: TestKobai) {
