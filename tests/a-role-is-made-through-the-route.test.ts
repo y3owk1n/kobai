@@ -60,7 +60,7 @@ const ARRANGED_THROUGH_A_ROUTE: Readonly<Record<string, string>> = {
  * statement does, and a ban that only knows one spelling is a ban on typing it that way.
  */
 const buildsOneIn = (table: string) =>
-  new RegExp(`\\binsert\\s+into\\s+(?:"?\\w+"?\\s*\\.\\s*)?"?${table}(?!\\w)"?`, "i");
+  new RegExp(`\\binsert\\s+into\\s+(?:"?\\w+"?\\s*\\.\\s*)?"?${table}(?!\\w)"?`, "gi");
 
 /**
  * This file, the one thing the scan does not read.
@@ -143,19 +143,20 @@ const readText = (path: string) =>
 function offencesIn(path: string, source: string): Offence[] {
   const found: Offence[] = [];
 
-  for (const literal of stringLiterals(source)) {
+  for (const literal of stringLiterals(source, path)) {
     for (const [table, route] of Object.entries(ARRANGED_THROUGH_A_ROUTE)) {
-      const match = buildsOneIn(table).exec(literal.text);
-      if (match === null) continue;
-
-      const preceding = literal.text.slice(0, match.index).match(/\n/g)?.length ?? 0;
-      found.push({
-        path,
-        line: literal.line + preceding,
-        table,
-        route,
-        statement: match[0].replace(/\s+/g, " "),
-      });
+      // Every match, not the first: one migration-shaped literal can carry two statements,
+      // and a message that named one of them would send a reader back for the other.
+      for (const match of literal.text.matchAll(buildsOneIn(table))) {
+        const preceding = literal.text.slice(0, match.index).match(/\n/g)?.length ?? 0;
+        found.push({
+          path,
+          line: literal.line + preceding,
+          table,
+          route,
+          statement: match[0].replace(/\s+/g, " "),
+        });
+      }
     }
   }
 
@@ -204,11 +205,13 @@ type Frame =
  * an identifier that an import is free to rename, rather than a stricter reading of a string.
  * `tests/no-push-script.test.ts` bounds itself the same way and for the same reason.
  */
-function stringLiterals(source: string): StringLiteral[] {
+function stringLiterals(source: string, path: string): StringLiteral[] {
   const found: StringLiteral[] = [];
   // Innermost last. The bottom frame is the file itself and is never popped.
   const stack: Frame[] = [{ kind: "code", braces: 0 }];
   const at = (offset: number) => source[offset] ?? "";
+  /** The last significant token in code, which is what tells `/` apart from `/`. */
+  let previous = "";
   let index = 0;
   let line = 1;
 
@@ -225,9 +228,11 @@ function stringLiterals(source: string): StringLiteral[] {
       } else if (char === "`") {
         found.push({ text: frame.text, line: frame.line });
         stack.pop();
+        previous = "`";
         index += 1;
       } else if (char === "$" && at(index + 1) === "{") {
         stack.push({ kind: "code", braces: 0 });
+        previous = "";
         index += 2;
       } else {
         if (char === "\n") line += 1;
@@ -258,17 +263,43 @@ function stringLiterals(source: string): StringLiteral[] {
       continue;
     }
 
+    // A regular expression, skipped whole. Not a nicety: `/[{]/` counts as an open brace
+    // otherwise, and one unbalanced brace desynchronises everything after it — see the
+    // check at the foot of this function for what happens when it still goes wrong.
+    if (char === "/" && opensARegex(previous)) {
+      const end = regexEndsAt(source, index);
+      if (end !== undefined) {
+        previous = "/";
+        index = end;
+        continue;
+      }
+    }
+
+    // An identifier or a number, read whole, so that `return /…/` can be told from `x / y`.
+    if (/[\w$]/.test(char)) {
+      let word = "";
+      while (index < source.length && /[\w$]/.test(at(index))) {
+        word += at(index);
+        index += 1;
+      }
+      previous = word;
+      continue;
+    }
+
     if (char === "'" || char === '"') {
       const quoted = quotedAt(source, index, char);
       if (quoted === undefined) {
-        // It never closed on its line, so it was never a string — an apostrophe inside a
-        // regular expression or a JSX child, most likely. Step over the quote and nothing
-        // else, so at worst one character is misread rather than the rest of the file.
+        // It never closed on its line, so it was never a string — an apostrophe inside JSX
+        // text, most likely, a regular expression having been skipped whole above. Step over
+        // the quote and nothing else, so one character is misread rather than the rest of
+        // the line; anything worse than that is caught by the check below.
+        previous = char;
         index += 1;
         continue;
       }
       found.push({ text: quoted.text, line });
       line += quoted.lines;
+      previous = char;
       index = quoted.end;
       continue;
     }
@@ -283,20 +314,98 @@ function stringLiterals(source: string): StringLiteral[] {
     // belonging to an object or a block written inside it.
     if (char === "{") {
       frame.braces += 1;
+      previous = char;
       index += 1;
       continue;
     }
     if (char === "}") {
       if (frame.braces > 0) frame.braces -= 1;
       else if (stack.length > 1) stack.pop();
+      previous = char;
       index += 1;
       continue;
     }
 
+    if (!/\s/.test(char)) previous = char;
     index += 1;
   }
 
+  // **A reader that lost its place says so, rather than passing what it could not read.**
+  // Every `{` in a TypeScript file is closed, so anything else means this reader mis-lexed
+  // something — and the damage is silent: a stray open brace turns a template's closing `}`
+  // into an ordinary one, leaving the reader in code where the file has text, so every
+  // literal after that point goes unseen and the file passes. Failing open is the one
+  // outcome a guardrail may not have.
+  const rest = stack.at(-1);
+  if (stack.length !== 1 || rest?.kind !== "code" || rest.braces !== 0) {
+    throw new Error(
+      `${path} could not be read to its end: the reader finished ${stack.length - 1} template(s) deep, so anything after that point was never checked for a Role or a Merchant built with SQL. That is a defect in the reader above, not necessarily in the file.`,
+    );
+  }
+
   return found;
+}
+
+/**
+ * Whether a `/` here opens a regular expression rather than dividing, judged the way every
+ * JavaScript lexer judges it: by what came before. After a value — an identifier, a number,
+ * a closing bracket, a string — a `/` divides; anywhere a value could start, it quotes one.
+ */
+function opensARegex(previous: string): boolean {
+  return (
+    previous === "" ||
+    BEFORE_A_VALUE.has(previous) ||
+    (previous.length === 1 && "([{,;:=!&|?+-*%~^<>".includes(previous))
+  );
+}
+
+/** The keywords a regular expression can follow. `x in /y/` is not a thing; `case /y/` is. */
+const BEFORE_A_VALUE = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+  "throw",
+]);
+
+/**
+ * The offset just past the regular expression starting at `start`, or `undefined` where
+ * there is none — a `/` that closes on no line of its own is a division after all.
+ *
+ * A `/` inside a character class does not close it, which is the whole reason this is a
+ * function rather than an `indexOf`.
+ */
+function regexEndsAt(source: string, start: number): number | undefined {
+  let index = start + 1;
+  let inClass = false;
+
+  while (index < source.length) {
+    const char = source[index] ?? "";
+    if (char === "\n") return undefined;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === "[") inClass = true;
+    else if (char === "]") inClass = false;
+    else if (char === "/" && !inClass) {
+      index += 1;
+      while (/[a-z]/.test(source[index] ?? "")) index += 1;
+      return index;
+    }
+    index += 1;
+  }
+
+  return undefined;
 }
 
 /**
@@ -486,6 +595,35 @@ describe("reading a test file", () => {
   it("does not read the words as SQL when they are assembled from a variable", () => {
     // The chunks either side of a hole are separate literals, so neither one is a statement.
     expect(scan(`query(\`insert into \${table} (name) values ($1)\`)`)).toEqual([]);
+  });
+
+  it("keeps its place past a brace inside a regular expression", () => {
+    // The reader counts braces so it can find the `}` that closes a `${…}` hole, and a `{`
+    // inside a regular expression is not one of them. Miscounting here is the expensive
+    // mistake: the hole never closes, so the reader stays in code where the file has text
+    // and everything after it — here, an offence on the very next line — goes unseen.
+    expect(
+      scan(`
+        const a = \`insert into core_role (name) values (\${x.replace(/[{]/g, "")})\`;
+        const b = 'insert into core_merchant (email) values ($1)';
+      `),
+    ).toHaveLength(2);
+  });
+
+  it("refuses to pass a file it lost its place in", () => {
+    // Whatever else the reader gets wrong, it may not go quiet. A file it cannot finish
+    // reading is a file nothing has checked, and that must read as a failure rather than
+    // as a pass.
+    expect(() => scan("const unfinished = `${")).toThrow(/could not be read to its end/);
+  });
+
+  it("names both statements when one literal carries two", () => {
+    expect(
+      scan(`await kobai.database.query(\`
+        insert into core_role (name) values ('bookkeeper');
+        insert into core_merchant (email) values ('a@b.c');
+      \`);`),
+    ).toHaveLength(2);
   });
 
   it("keeps reading past an apostrophe that is not opening a string", () => {
