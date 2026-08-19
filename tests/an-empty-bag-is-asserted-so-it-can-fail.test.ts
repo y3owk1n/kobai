@@ -36,13 +36,22 @@ import { describe, expect, it } from "vitest";
 const repoRoot = new URL("../", import.meta.url);
 const run = promisify(execFile);
 
-/** `toMatchObject(`, wherever it is not the tail of a longer name. */
-const MATCHER_CALL = /(?<![\w$])toMatchObject\s*\(/g;
+/**
+ * The two matchers that take a **subset**, wherever the name is not the tail of a longer one.
+ *
+ * `expect.objectContaining({})` says exactly what `toMatchObject({})` says and says it just
+ * as loudly, so a rule about one that let the other through would be half a rule. There are
+ * none of either today, which is the moment to sweep for both.
+ */
+const MATCHER_CALL = /(?<![\w$])(?:toMatchObject|objectContaining)\s*\(/g;
+
+/** What may sit in front of a quote without it opening a string. */
+const WORD_CHARACTER = /[\w$]/;
 
 /** An object literal with nothing in it — the whole of what this file looks for. */
 const EMPTY_LITERAL = /\{\s*\}/g;
 
-type Offence = { readonly line: number; readonly source: string };
+type Offence = { readonly line: number; readonly text: string };
 
 /**
  * The source with its comments and string literals blanked out, character for character.
@@ -52,11 +61,18 @@ type Offence = { readonly line: number; readonly source: string };
  * fixtures at the foot of this file write several out in full. Blanked rather than removed,
  * so an offset still resolves to the line a Developer would open.
  *
- * A `"` or `'` with no partner before the end of its line is left as ordinary text rather
- * than treated as an opener, which is what keeps a character class like the one below from
- * swallowing the rest of the file. The heuristic degrades into reading a little too much
- * rather than a great deal too little, and there is no regex-literal handling beyond it. A
- * template literal may legitimately cross a line and so gets no such guard.
+ * **Two rules decide what opens a string, and both exist to stop this failing open.** A
+ * blanked span that swallowed a real `toMatchObject` would take a live offence out of the
+ * scan and report nothing about it — ADR-0049's trap, arriving as a green build. So a `"` or
+ * `'` counts as an opener only when it has a partner before the end of its own line, which
+ * neither may cross; and only when nothing word-like and no `/` sits directly in front of
+ * it, which is what tells a string from an apostrophe in JSX prose (`don't … it's`) and from
+ * a quote inside a regex literal (`/'/`). Both pairs would otherwise close over the code
+ * between them. Biome formats every file here, so a real opener always follows a space or a
+ * bracket; the fixtures at the foot of this file hold both cases.
+ *
+ * A template literal may legitimately cross a line and so gets the second rule only — a
+ * tagged one is written `sql\`…\``, with the backtick against a word.
  */
 function blankCommentsAndStrings(source: string): string {
   // Code units rather than code points: a spread would collapse a surrogate pair into one
@@ -86,7 +102,10 @@ function blankCommentsAndStrings(source: string): string {
       continue;
     }
     const quote = source[at];
-    if (quote === '"' || quote === "'" || quote === "`") {
+    if (
+      (quote === '"' || quote === "'" || quote === "`") &&
+      opensAString(source, at, quote)
+    ) {
       const close = closingQuote(source, at, quote);
       if (close === -1) {
         at += 1;
@@ -100,6 +119,20 @@ function blankCommentsAndStrings(source: string): string {
   }
 
   return out.join("");
+}
+
+/**
+ * Whether the quote at `at` opens a literal, rather than sitting inside something else.
+ *
+ * A `"` or `'` directly behind a word character or a `/` is an apostrophe or a regex, not an
+ * opener — see `blankCommentsAndStrings`. A backtick is exempt, because a tagged template
+ * puts one against the end of its tag.
+ */
+function opensAString(source: string, at: number, quote: string): boolean {
+  if (quote === "`") return true;
+  const before = source[at - 1];
+  if (before === undefined) return true;
+  return before !== "/" && !WORD_CHARACTER.test(before);
 }
 
 /** Where the literal opened at `open` closes, or `-1` if it never does. */
@@ -146,7 +179,7 @@ function emptyBagsMatchedAsSubsets(source: string): Offence[] {
 
     for (const empty of code.slice(opens, closes).matchAll(EMPTY_LITERAL)) {
       const line = code.slice(0, opens + (empty.index ?? 0)).split("\n").length;
-      offences.push({ line, source: (lines[line - 1] ?? "").trim() });
+      offences.push({ line, text: (lines[line - 1] ?? "").trim() });
     }
 
     // Past the whole call rather than past its name: one `toMatchObject` cannot sit inside
@@ -159,37 +192,44 @@ function emptyBagsMatchedAsSubsets(source: string): Offence[] {
 }
 
 /**
- * Every test file **git tracks**.
+ * Every TypeScript file **git tracks**.
  *
  * Asked of git rather than of the filesystem, for the reason ADR-0068 gives: a harness puts
  * a whole second checkout under `.claude/worktrees/`, and a recursive read would sweep that
- * one's tests too and name a file the reader is not in.
+ * one's sources too and fail naming a file the reader is not in.
+ *
+ * Every `.ts` and `.tsx`, not only the ones named `*.test.ts`. An assertion is an assertion
+ * wherever it is written, and this repository has two places that write them outside a test
+ * file — `tests/support/` and `packages/core/src/testing/`, the second of which is promised
+ * surface a Plugin author reads. Neither costs anything to include: `toMatchObject` is
+ * vitest's and appears nowhere else, so widening the net catches helpers rather than noise.
  */
-async function trackedTestFiles(): Promise<string[]> {
+async function trackedSources(): Promise<string[]> {
   const { stdout } = await run(
     "git",
-    ["ls-files", "--", ":(glob)**/*.test.ts", ":(glob)**/*.test.tsx"],
+    ["ls-files", "--", ":(glob)**/*.ts", ":(glob)**/*.tsx"],
     { cwd: fileURLToPath(repoRoot) },
   );
   return stdout.trim().split("\n").filter(Boolean).sort();
 }
 
 describe("an assertion that an open bag is empty", () => {
-  it("finds the repository's tests, so an empty scan cannot pass", async () => {
-    const files = await trackedTestFiles();
+  it("finds the repository's sources, so an empty scan cannot pass", async () => {
+    const files = await trackedSources();
 
     expect(files.length).toBeGreaterThan(20);
     expect(files).toContain("packages/core/src/catalog/catalog.test.ts");
+    expect(files).toContain("packages/core/src/testing/catalog.ts");
   });
 
   it("is written so that it can fail, everywhere in this repository", async () => {
-    const files = await trackedTestFiles();
+    const files = await trackedSources();
 
     const offences: string[] = [];
     for (const file of files) {
       const source = await readFile(new URL(file, repoRoot), "utf8");
       for (const offence of emptyBagsMatchedAsSubsets(source)) {
-        offences.push(`${file}:${offence.line} — ${offence.source}`);
+        offences.push(`${file}:${offence.line} — ${offence.text}`);
       }
     }
 
@@ -210,7 +250,7 @@ describe("the scan itself", () => {
       expect(body).toMatchObject({});
     `);
 
-    expect(found.map((offence) => offence.source)).toEqual([
+    expect(found.map((offence) => offence.text)).toEqual([
       "metadata: {},",
       'variants: [{ sku: "POSTER-A2", metadata: {} }],',
       "expect(body).toMatchObject({});",
@@ -240,6 +280,35 @@ describe("the scan itself", () => {
     expect(found).toEqual([]);
   });
 
+  it("sweeps the other matcher that takes a subset", () => {
+    const found = emptyBagsMatchedAsSubsets(`
+      expect(orders).toEqual([expect.objectContaining({ metadata: {} })]);
+    `);
+
+    expect(found.map((offence) => offence.text)).toEqual([
+      "expect(orders).toEqual([expect.objectContaining({ metadata: {} })]);",
+    ]);
+  });
+
+  /**
+   * The one way this scan could fail *open*, watched rather than reasoned about.
+   *
+   * An apostrophe in JSX prose and a quote inside a regex literal both come in pairs, and a
+   * pair that was read as a string would blank the code between them — taking a live offence
+   * out of the scan and reporting nothing, which is a green build saying the rule holds. Each
+   * line below carries a real offence between two such quotes.
+   */
+  it("does not read a pair of apostrophes as a string and swallow the code between", () => {
+    const found = emptyBagsMatchedAsSubsets(
+      [
+        `render(<p>don't {expect(b).toMatchObject({ m: {} })} it's</p>);`,
+        `const t = /'/; expect(c).toMatchObject({ m: {} }); const u = /'/;`,
+      ].join("\n"),
+    );
+
+    expect(found.map((offence) => offence.line)).toEqual([1, 2]);
+  });
+
   it("keeps counting lines through what it blanked out", () => {
     const found = emptyBagsMatchedAsSubsets(
       [
@@ -250,6 +319,6 @@ describe("the scan itself", () => {
       ].join("\n"),
     );
 
-    expect(found).toEqual([{ line: 4, source: "x.toMatchObject({ m: {} });" }]);
+    expect(found).toEqual([{ line: 4, text: "x.toMatchObject({ m: {} });" }]);
   });
 });

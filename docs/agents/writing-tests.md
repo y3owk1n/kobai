@@ -546,15 +546,24 @@ level down, asserting a length and nothing at all about what survived.
 
 **`tests/an-empty-bag-is-asserted-so-it-can-fail.test.ts` is what keeps that true**, because
 prose on its own had already lost this round: #186 found three more of them written after
-#172's fix landed, plus that `[{}]`. It sweeps every test file **git tracks** — so a second
-checkout under `.claude/worktrees/` is not swept — blanks the comments and string literals
-first, so the ones quoting the trap are not read as the code they quote, and fails naming any
-empty object literal inside a `toMatchObject` argument. **Deliberately not a lint rule**:
-Biome ships none for this, so it would mean introducing GritQL plugins as a mechanism for a
-single rule, and severity was never what was missing — under ADR-0039 every finding fails the
-gate already. It is watched failing against fixtures in its own file, and each assertion it
-made this repository rewrite was watched failing against a build that stores something, which
-the version it replaced passed.
+#172's fix landed, plus that `[{}]`. It sweeps every `.ts` and `.tsx` file **git tracks** —
+so a second checkout under `.claude/worktrees/` is not swept, and a helper under
+`tests/support/` or `src/testing/` is — blanks the comments and string literals first, so the
+ones quoting the trap are not read as the code they quote, and fails naming any empty object
+literal inside a `toMatchObject` **or `expect.objectContaining`** argument. **Deliberately not
+a lint rule**: Biome ships none for this, so it would mean introducing GritQL plugins as a
+mechanism for a single rule, and severity was never what was missing — under ADR-0039 every
+finding fails the gate already.
+
+**What it can see is a literal `{}` inside a literal call, and that is the whole of it.** A
+bag hoisted to a variable — `const expected = { metadata: {} }` — is the same non-assertion
+and is invisible to it, so the rule above is still yours to have read; the sweep catches the
+way it actually gets written. Everything it *can* see is watched rather than reasoned about:
+it fails against fixtures in its own file for each shape, including the two that would make it
+fail **open** — an apostrophe in JSX prose and a quote inside a regex literal, either of which
+would otherwise pair up and blank a live offence out of the scan, which is ADR-0049's trap
+arriving as a green build. And each assertion it made this repository rewrite was watched
+failing against a build that stores something, which the version it replaced passed.
 
 Real Postgres rather than a fake, because under
 [ADR-0004](../adr/0004-plugins-own-their-tables-core-tables-are-closed.md),
