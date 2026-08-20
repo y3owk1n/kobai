@@ -114,6 +114,7 @@ describe("a Cart becomes an Order", () => {
         steps: [
           { step: "load-cart", implementation: "load-cart" },
           { step: "price-lines", implementation: "price-lines" },
+          { step: "select-shipping", implementation: "select-shipping" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "calculate-tax" },
           { step: "hold-reservations", implementation: "hold-reservations" },

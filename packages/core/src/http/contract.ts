@@ -36,6 +36,7 @@ import { FULFILMENT_STATES } from "../fulfilment/lifecycle.ts";
 import type { FulfilmentTransition } from "../fulfilment/transition.ts";
 import type { MediaUploadOutcome } from "../media/media.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
+import type { LoadCartRefusal } from "../order/load-cart.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
 import type { QuoteCartRefusal as QuoteCartReason } from "../order/quote-cart.ts";
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
@@ -985,16 +986,55 @@ export const EnabledCurrency = z
   .openapi("EnabledCurrency");
 
 /**
+ * A **shipping method** — a named, flat-rated way of delivering into one Region (#321).
+ *
+ * A Region is where geography is modelled (ADR-0005), so it is where what delivery costs lives.
+ * **It carries no currency of its own**: a Region selects exactly one, a Cart in that Region is
+ * stamped in it, and kobai converts nothing (ADR-0074) — a code here would be a second answer
+ * able to disagree with the Region it belongs to.
+ *
+ * It is nested in the Region rather than served by a list route of its own, which means
+ * ADR-0064's cursor and the filtering convention have nothing here to attach to: a Merchant
+ * reads a Region's rates by reading the Region, exactly as they read the Store's enabled
+ * currencies by reading the Store.
+ */
+export const ShippingOption = z
+  .object({
+    id: z.uuid(),
+    name: z.string().meta({
+      description:
+        "What a Shopper reads when they choose how it should reach them — `Standard`, `Next day`. **Not unique**: two of a name are two methods.",
+    }),
+    amount: z.int().meta({
+      description:
+        "The flat rate, in minor units of the **Region's** currency — 500 is 5.00. Never negative; zero is free delivery. It becomes an Adjustment on the Order at Capture (ADR-0022), never a total of its own.",
+    }),
+  })
+  .openapi("ShippingOption");
+
+/**
+ * The same method as a **Merchant** reads one — {@link ShippingOption} and the bag beside it.
+ *
+ * Two components for one noun, on #207's split, and here it does real work: a storefront is
+ * offered these on a **publishable** key, so `metadata` — which is the Merchant's and the
+ * Project's — would reach a browser the day somebody put something in it.
+ */
+export const ShippingMethod = ShippingOption.extend({
+  metadata: Metadata,
+}).openapi("ShippingMethod");
+
+/**
  * A **Region** — a geography this Store sells into (#291, ADR-0005, ADR-0074).
  *
- * Three fields, and what is absent is what the next two specs bring: tax treatment is spec 7 and
- * shipping methods are spec 5, and both hang off this row when they arrive. It **selects** a
- * currency rather than declaring one — the Store enumerates what may be priced in, a Region
- * names one of those — and ADR-0074 is where that division is argued.
+ * What it carries is a name, the currency it **selects** out of the Store's enabled set, and the
+ * ways this Store delivers into it (#321). Tax treatment is spec 7 and hangs off this row when
+ * it arrives. The Store enumerates what may be priced in and a Region names one of those, which
+ * is the division ADR-0074 argues.
  *
  * **A Region is not a tenant, and this is the spec most likely to be read as an invitation.**
  * ADR-0005 is explicit: variation *within* one Store. Nothing is scoped by a Region and nothing
- * will be.
+ * will be — a shipping method naming one **is** the fact that this is what delivery costs there,
+ * which is `Price.region`'s shape rather than a scope.
  */
 export const Region = z
   .object({
@@ -1007,9 +1047,35 @@ export const Region = z
       description:
         "The ISO 4217 code this Region prices in, which is always one of the currencies `GET /admin/store` reports. kobai converts nothing, ever: a Variant with no Price in this currency has no price here.",
     }),
+    shippingMethods: z.array(ShippingMethod).readonly().meta({
+      description:
+        "The ways this Store delivers into this Region, in the order the Merchant put them in — which is the order a storefront should offer them. Empty for a Region delivery is not priced into, which is every Region until somebody prices one: a Cart there is then offered nothing and charged nothing for carriage.",
+    }),
     metadata: Metadata,
   })
   .openapi("Region");
+
+/**
+ * One entry of a `shippingMethods` list, as a Merchant writes one.
+ *
+ * Not a registered component, exactly as {@link SetAddress} is not: it is inlined into the two
+ * Region requests that take one, so `id` reads as optional on the field as it is written.
+ *
+ * **`id` is what makes a rename a rename.** An entry carrying one is the method that already has
+ * it — renamed, repriced, moved, or all three, with every Cart that chose it still choosing it —
+ * and one without is new. That is `options`' rule, and reconciling by name instead was watched
+ * there taking every value with it.
+ */
+const SetShippingMethod = z.object({
+  id: z.uuid().optional(),
+  name: z.string(),
+  amount: z.int(),
+  metadata: Metadata.optional(),
+});
+
+/** The sentence both Region requests say about `shippingMethods`, written once. */
+const SHIPPING_METHODS_ARE_THE_WHOLE_LIST =
+  "**The complete list** of the ways this Store delivers into this Region, in the order they should be offered in — so this is where a rate is added, renamed, repriced, reordered and removed, and an entry left out is a method taken away. An entry's `id` names one this Region already carries and keeps every Cart that chose it on it; an entry with no `id` is new. An `id` this Region has not got is refused with `shipping-method-not-found`. A rate is in the **Region's** currency and carries no code of its own.";
 
 /**
  * A Region as everything that is *not* the Region routes reports one — what it is called and
@@ -1047,6 +1113,17 @@ export const CreateRegionRequest = z
       description:
         "Required. An ISO 4217 code this Store has **enabled**, read case-insensitively — `GET /admin/store` lists them and `PATCH /admin/store` enables another. One this Store has not enabled is refused at 422 with `currency-not-enabled`.",
     }),
+    // On the create as well as on the correction, on `collections`' argument rather than
+    // `media`'s: nothing has to be uploaded first and nothing else can create one, so a Region
+    // and what it costs to deliver there is one request rather than two. Absent and empty are
+    // one fact here — a Region prices no delivery until somebody says so — and two at the
+    // correction, where absent means "leave it" (ADR-0062).
+    shippingMethods: z
+      .array(SetShippingMethod)
+      .optional()
+      .meta({
+        description: `${SHIPPING_METHODS_ARE_THE_WHOLE_LIST} Leaving it out creates a Region delivery is not priced into, which is where every Region starts.`,
+      }),
     metadata: Metadata.optional(),
   })
   .openapi("CreateRegionRequest");
@@ -1066,6 +1143,12 @@ export const UpdateRegionRequest = z
       description:
         "An ISO 4217 code this Store has enabled, read case-insensitively. One it has not is refused at 422 with `currency-not-enabled`.",
     }),
+    shippingMethods: z
+      .array(SetShippingMethod)
+      .optional()
+      .meta({
+        description: `${SHIPPING_METHODS_ARE_THE_WHOLE_LIST} Leaving it out leaves this Region's rates alone; sending an empty list takes all of them away, and a Cart that had chosen one is left choosing again.`,
+      }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
     }),
@@ -1083,6 +1166,11 @@ const REGION_REASONS = {
   "region-not-found": "region-not-found",
   "currency-not-enabled": "currency-not-enabled",
   "region-in-use": "region-in-use",
+  // The word a `shippingMethods` naming a method this Region has not got is refused with
+  // (#321). It is **422** on `currency-not-enabled`'s distinction: the body is well formed and
+  // what refuses it is the state of the Store. The Cart surface answers the same word for the
+  // same fact one door along, because one fact gets one word whichever end asks it (ADR-0060).
+  "shipping-method-not-found": "shipping-method-not-found",
 } as const satisfies {
   [R in
     | Refused<RegionCreation>
@@ -2820,7 +2908,13 @@ export const CartSummary = z
     // A union, for `Store.defaultRegion`'s reason.
     address: z.union([Address, z.null()]).meta({
       description:
-        "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads, quotes and places.",
+        "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going.",
+    }),
+    // A union, for `Store.defaultRegion`'s reason — and `ShippingOption` rather than
+    // `ShippingMethod`, because this shape is answered on a publishable key (#207).
+    shippingMethod: z.union([ShippingOption, z.null()]).meta({
+      description:
+        "How this Cart is to be delivered — what the Shopper chose out of `GET /store/carts/{id}/shipping-options` — or `null` where nothing has been chosen, which means any of *nothing in it ships*, *this Store prices no delivery into its Region* and *the Shopper has not got that far*. **Live, not a snapshot**: what is charged becomes an Adjustment on the Order at Capture, so repricing or deleting the method afterwards cannot rewrite what was paid. Moving the Cart to another Region unchooses it, because a rate belongs to one Region.",
     }),
     metadata: Metadata,
     expiresAt: z.iso.datetime().meta({
@@ -2926,6 +3020,10 @@ export const UpdateCartRequest = z
       description:
         "Where what is in this Cart is to be delivered. **The whole Address, replacing whatever is on the Cart** — there is no merge, so a postal code left out of a correction is a postal code taken off. `null` removes the Address altogether; absent leaves it alone. kobai checks the shape and nothing beyond it (ADR-0072).",
     }),
+    shippingMethodId: z.uuid().nullable().optional().meta({
+      description:
+        "How this Cart is to be delivered — the `id` of one of the methods `GET /store/carts/{id}/shipping-options` offers. `null` unchooses; absent leaves whatever was chosen alone. One belonging to any other Region, or to no Region at all, is refused with `shipping-method-not-found` — a rate is denominated in the currency of the Region that carries it. **Moving the Cart to another Region unchooses it**, so a storefront that switches market and rechooses in one request sends both fields and this one wins.",
+    }),
     metadata: Metadata.optional(),
   })
   .openapi("UpdateCartRequest");
@@ -2982,6 +3080,10 @@ const CART_REASONS = {
   "region-not-found": "region-not-found",
   "cart-is-denominated": "cart-is-denominated",
   "variant-not-priced-in-region": "variant-not-priced-in-region",
+  // The one shipping brought (#321). It is the admin surface's own word for the same fact — this
+  // Store has no such shipping method — because one fact gets one word whichever end asks it,
+  // and `cart/write.ts` is where the reading that produces it lives.
+  "shipping-method-not-found": "shipping-method-not-found",
 } as const satisfies { [R in CartRefusalReason | RequestReason]: R };
 
 export const CartRefusal = z
@@ -3059,6 +3161,68 @@ export const CartReservationRefusal = z
     }),
   })
   .openapi("CartReservationRefusal");
+
+// ---- How a Cart is delivered ------------------------------------------------------------
+
+/**
+ * **What this Cart may be shipped by** (#321).
+ *
+ * A route of the **Cart's** rather than of the Region's, and that is the decision: what a Cart
+ * may be delivered by depends on the Cart's Region *and* on whether anything in it ships at all,
+ * and the second is a fact about what a Shopper put in it rather than about the Store — so a
+ * list of one Region's rates could not have answered it, and every storefront would have had to
+ * work it out for itself.
+ *
+ * **It answers what Core's own `select-shipping` will charge from, and does not run that Step.**
+ * Running it would mean charging a question — the Step is what refuses a Cart with nowhere to be
+ * sent, and it is what a Project replaces to quote real carrier rates. So a deployment that has
+ * replaced the Step is answered here with the Region's flat rates regardless, and that is a
+ * **known limit** rather than a promise: such a deployment's own options belong on a route of
+ * its own until kobai offers a seam for them, and `POST /store/carts/{id}/quote` is what says
+ * what the Cart then actually comes to.
+ */
+export const CartShippingOptions = z
+  .object({
+    cartId: z.uuid(),
+    requiresShipping: z.boolean().meta({
+      description:
+        "Whether anything in this Cart is **shipped** — which is what its Variants' Fulfilment Strategies answer (ADR-0014), not something the Store configures. `false` is a Cart of downloads: it needs no Address, is offered nothing here, and is charged nothing to deliver.",
+    }),
+    currency: z.string().meta({
+      description: "ISO 4217 — the Cart's own. Every `amount` below is in it.",
+    }),
+    options: z.array(ShippingOption).readonly().meta({
+      description:
+        "The ways this Cart may be delivered, in the order the Merchant put them in. Empty when `requiresShipping` is `false`, and empty when this Store prices no delivery into the Cart's Region — in which case placing charges nothing for carriage rather than being refused. Choose one with `PATCH /store/carts/{id}` — `shippingMethodId`.",
+    }),
+  })
+  .openapi("CartShippingOptions");
+
+/**
+ * Offering a Cart its options, refused — a **closed** set, like a hold's.
+ *
+ * The Cart is read exactly as a hold, a quote and a placement read it, so these are
+ * `load-cart.ts`'s words and the mapped `satisfies` holds them to that union. Nothing a Project
+ * or a Plugin supplies runs on this path: `select-shipping` is not invoked, because this answers
+ * what may be *chosen* rather than what is *charged*.
+ */
+const CART_SHIPPING_OPTION_REASONS = {
+  "cart-not-found": "cart-not-found",
+  "cart-expired": "cart-expired",
+  "cart-placed": "cart-placed",
+  "cart-empty": "cart-empty",
+  "variant-unavailable": "variant-unavailable",
+  "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+} as const satisfies { [R in LoadCartRefusal]: R };
+
+export const CartShippingOptionsRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(CART_SHIPPING_OPTION_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("CartShippingOptionsRefusal");
 
 // ---- Quoting a Cart ---------------------------------------------------------------------
 
@@ -3228,6 +3392,11 @@ const QUOTE_REASONS = {
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
   "variant-not-found": "variant-not-found",
   "price-not-set": "price-not-set",
+  // `select-shipping`'s two (#321). They are reachable from the quote and from the placement
+  // alike, because both run that Step — which is what makes *this Cart has nowhere to be sent*
+  // something a storefront meets before a Shopper is sent to a bank rather than after.
+  "shipping-address-required": "shipping-address-required",
+  "shipping-method-required": "shipping-method-required",
 } as const satisfies { [R in QuoteCartReason | PriceResolutionRefusal]: R };
 
 /**
@@ -3660,6 +3829,10 @@ const PLACE_ORDER_REASONS = {
   "payment-declined": "payment-declined",
   "no-payment-provider": "no-payment-provider",
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
+  // `select-shipping`'s two (#321), which the quote answers too — a storefront meets them
+  // before a Shopper is sent to a bank rather than after.
+  "shipping-address-required": "shipping-address-required",
+  "shipping-method-required": "shipping-method-required",
   "idempotency-key-reused": "idempotency-key-reused",
   "idempotency-key-in-progress": "idempotency-key-in-progress",
 } as const satisfies {

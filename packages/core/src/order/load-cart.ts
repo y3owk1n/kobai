@@ -72,6 +72,18 @@ export type CartToPlace = {
    * one answer.
    */
   readonly address: OrderAddress | null;
+  /**
+   * The delivery method the Shopper chose, or `null` where they have chosen none (#321).
+   *
+   * The **identifier** rather than the method, because what `select-shipping` does with it is
+   * look it up among the ones this Cart's Region offers — and that lookup is the thing that
+   * makes a rate from another Region unchargeable rather than merely unlikely. Reading the whole
+   * row here would have meant reading it in a place that cannot ask that question.
+   *
+   * Read by *this* module for this file's whole reason: the hold route and the placement read
+   * one Cart through one query, so what is in a Cart has one answer.
+   */
+  readonly shippingMethodId: string | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -188,6 +200,7 @@ export async function readCartToPlace(
       // Cart — and through `address/address.ts`'s own selection, so the Cart a storefront reads
       // and the Cart a placement copies cannot describe two different destinations.
       ...addressColumns,
+      shippingMethodId: cart.shippingMethodId,
       metadata: cart.metadata,
       // The same expression the Cart's own routes judge expiry with, imported rather than
       // rewritten: a second spelling of it would be a second answer to whether a Cart is
@@ -280,6 +293,7 @@ export async function readCartToPlace(
         currency: found.currency,
         regionId: found.regionId,
         address: addressToSnapshot(found),
+        shippingMethodId: found.shippingMethodId,
         metadata: found.metadata,
       },
       channel,

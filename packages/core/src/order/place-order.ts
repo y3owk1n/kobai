@@ -35,6 +35,11 @@ import {
   reservableLinesOf,
 } from "./load-cart.ts";
 import { type Order, readOrder } from "./read.ts";
+import {
+  type SelectShippingRefusal,
+  type ShippedLines,
+  selectShipping,
+} from "./select-shipping.ts";
 
 /**
  * **`place-order`** — a Cart becomes an immutable Order, in one request.
@@ -54,7 +59,7 @@ import { type Order, readOrder } from "./read.ts";
  * it, and consuming the claims joins the transaction the Order is written in rather than becoming
  * another thing that can fail afterwards (ADR-0018).
  *
- * Seven slots today:
+ * Eight slots today:
  *
  * - **`load-cart`** reads the Cart and its lines, and refuses a Cart that is missing, expired,
  *   already placed or empty. It applies no pricing rule; it hands over what was selected, with
@@ -63,6 +68,9 @@ import { type Order, readOrder } from "./read.ts";
  * - **`price-lines`** invokes `resolve-price` for each line, through the deployment's own
  *   declaration (ADR-0054) — so a Project that replaced `select-price` charges its own prices
  *   at Capture without wiring the same customisation twice.
+ * - **`select-shipping`** turns what it costs to deliver this Cart into an **Adjustment on the
+ *   Order** (ADR-0022) — see {@link selectShipping}. Core's own implementation offers the flat
+ *   rates the Cart's Region carries; a Project replaces the slot to quote real carrier rates.
  * - **`apply-adjustments`** attaches discounts and surcharges as their own lines (ADR-0022).
  *   Core's own implementation attaches none; the slot is where a Plugin's or a Project's rule
  *   goes.
@@ -81,6 +89,12 @@ import { type Order, readOrder } from "./read.ts";
  * ordering taste.** ADR-0022 says an Adjustment changes what a line total means in every Order
  * snapshot, tax base and refund; a discount applied after the tax had been worked out would
  * leave the Order taxed on a figure nobody was charged.
+ *
+ * **`select-shipping` runs before both, and that is the same argument one slot earlier** (#321).
+ * Carriage is taxed, so it has to exist before the tax is worked out; and putting it in front of
+ * `apply-adjustments` rather than between that Step and the tax means a deployment's own
+ * Adjustment rule can *see* it, which is what makes *free delivery over fifty* an ordinary
+ * discount rather than a special case.
  */
 
 /**
@@ -117,6 +131,10 @@ export type PlaceOrderRefusal =
   // reads a Cart the same way and refuses the same words, so there is one list of them
   // (`load-cart.ts`) and both status maps go red together when it grows.
   | LoadCartRefusal
+  // Everything `select-shipping` can say, folded in for the same reason: the quote route runs
+  // that Step too, so one list of them (`select-shipping.ts`) turns both status maps red
+  // together when it grows.
+  | SelectShippingRefusal
   | "no-payment-provider"
   | "payment-declined"
   // Every way a Reservation provider can say the Store has not got it, folded in for the same
@@ -186,6 +204,9 @@ export type Adjustment = {
 export type AdjustedLine = PricedLine & {
   readonly adjustments: readonly Adjustment[];
 };
+
+/** What `select-shipping` produces and `apply-adjustments` adjusts. */
+export type { ShippedLines } from "./select-shipping.ts";
 
 /** What `apply-adjustments` produces and `calculate-tax` taxes. */
 export type AdjustedLines = {
@@ -390,18 +411,27 @@ export const priceLines = defineStep(
  *
  * A Plugin or a Project fills it either way round, and both are ordinary:
  *
- * - **Replacing** the slot owns it — the Step takes {@link PricedLines} and returns
+ * - **Replacing** the slot owns it — the Step takes {@link ShippedLines} and returns
  *   {@link AdjustedLines} with whatever it decided.
  * - **Inserting after** it composes — an inserted Step takes and gives {@link AdjustedLines}, so
  *   two rules that each add a surcharge stack rather than overwrite one another. That is the
  *   shape to reach for when more than one thing adjusts an Order.
+ *
+ * **What it is handed already carries the carriage** (#321), and a replacement has to pass it on
+ * — Core's own does, and `@kobai/plugin-made-to-order`'s does. That is the one thing about this
+ * slot the compiler cannot ask for: a Step declaring the narrower {@link PricedLines} as its
+ * input is still assignable here, so a replacement that returned `adjustments: []` would drop a
+ * Shopper's delivery charge in silence. What holds it is the reference Project, which replaces
+ * this very slot and is the deployment `tests/a-storefront-buys-something.test.ts` buys through.
  */
 export const applyAdjustments = defineStep(
   "apply-adjustments",
-  (input: PricedLines): AdjustedLines => ({
+  (input: ShippedLines): AdjustedLines => ({
     cart: input.cart,
     lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
-    adjustments: [],
+    // Carried forward rather than emptied: `select-shipping` put the carriage here a slot ago,
+    // and Core's own rule adds nothing of its own to it.
+    adjustments: input.adjustments,
   }),
 );
 
@@ -1007,6 +1037,7 @@ export function oneCurrency(lines: readonly TaxedLine[]): string {
 export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order")
   .step(loadCart)
   .step(priceLines)
+  .step(selectShipping)
   .step(applyAdjustments)
   .step(calculateTax)
   .step(holdReservations)

@@ -1,7 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { ShippingOption } from "@kobai/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GlobeIcon } from "lucide-react";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
@@ -10,6 +11,7 @@ import { ConfirmDelete } from "@/components/confirm-delete";
 import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
 import { Problem } from "@/components/problem";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -29,6 +31,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { useCrumbTitle } from "@/lib/crumb";
+import { currencyLabel } from "@/lib/currencies";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { orThrow, problemOf, regionReasonOf } from "@/lib/refusal";
 import { useRouteId } from "@/lib/route";
@@ -87,9 +90,218 @@ export function RegionScreen() {
       <h2 className="font-medium text-xl">{found.name}</h2>
 
       <RegionIdentity id={id} name={found.name} currency={found.currency} />
+
+      <ShippingMethods
+        id={id}
+        currency={found.currency}
+        methods={found.shippingMethods}
+      />
     </div>
   );
 }
+
+/**
+ * How this Store delivers into this Region, and what each way costs (#321).
+ *
+ * **One form over the whole list, because kobai takes the whole list.**
+ * `PATCH /admin/regions/{id}` reads `shippingMethods` as what the Region's rates should now
+ * *be* — an entry carrying an `id` is the method that already has it, one without is new, and
+ * one this Region has that the list does not name is removed. So adding, renaming, repricing,
+ * reordering and removing are the same request, exactly as the Product screen's Options card
+ * is, and this is a list a Merchant edits rather than four controls.
+ *
+ * **Removing one is not the same as deleting a Product**, so there is no `ConfirmDelete` here:
+ * kobai refuses nothing for it, and a Cart that had chosen the rate is left choosing again
+ * rather than broken. The row a Merchant is about to lose is in front of them and Save is what
+ * commits it, which is the bargain the Options card already takes.
+ *
+ * **A rate is in this Region's currency and carries no code of its own**, which is why the
+ * amount field says which one: a Region selects exactly one currency and kobai converts
+ * nothing (ADR-0074), so moving this Region onto another currency reinterprets these figures
+ * rather than converting them.
+ */
+function ShippingMethods({
+  id,
+  currency,
+  methods,
+}: {
+  readonly id: string;
+  readonly currency: string;
+  readonly methods: readonly ShippingOption[];
+}) {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.storeWrite, "change the Store");
+
+  const form = useForm<ShippingMethodsInput, unknown, ShippingMethodsValues>({
+    resolver: zodResolver(ShippingMethodsForm),
+    // Keyed by what kobai holds, so a save that landed leaves the rows showing the Region's
+    // rates rather than what was typed — including the identifiers kobai assigned to the ones
+    // that were new a moment ago.
+    values: {
+      shippingMethods: methods.map((one) => ({
+        methodId: one.id,
+        name: one.name,
+        amount: String(one.amount),
+      })),
+    },
+  });
+  // `methodId` rather than `id`, for the Options card's reason: `useFieldArray` writes a key of
+  // its own onto each field object and that key is called `id`, so a method's real identifier
+  // under that name would be the one thing this list cannot afford to lose — losing it turns
+  // every rename into a removal and an addition, and takes every Cart that chose it off.
+  const rows = useFieldArray({ control: form.control, name: "shippingMethods" });
+
+  const save = useMutation({
+    mutationFn: async (values: ShippingMethodsValues) =>
+      orThrow(
+        await client.PATCH("/admin/regions/{id}", {
+          params: { path: { id } },
+          body: {
+            shippingMethods: values.shippingMethods.map((one) =>
+              // Left out entirely rather than sent as `undefined`, which is what tells kobai
+              // this is a new method rather than one it should already know.
+              one.methodId === undefined
+                ? { name: one.name, amount: one.amount }
+                : { id: one.methodId, name: one.name, amount: one.amount },
+            ),
+          },
+        }),
+      ),
+    onSuccess: () => void queries.invalidateQueries({ queryKey: [REGION, id] }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h3>Shipping methods</h3>
+        </CardTitle>
+        <CardDescription>
+          How this Store delivers into this Region, in the order a storefront should offer
+          them. Each rate is a flat charge in {currencyLabel(currency)}, and it lands on
+          the Order as its own line rather than being folded into what the goods cost. A
+          Region with none prices no delivery: a Cart there is offered nothing and charged
+          nothing to be delivered.
+        </CardDescription>
+      </CardHeader>
+      <form onSubmit={form.handleSubmit((values) => save.mutate(values))}>
+        <CardContent className="grid gap-4">
+          <Problem
+            problem={save.isError ? whyNotChanged(save.error) : null}
+            title="The shipping methods were not changed."
+          />
+
+          {rows.fields.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              This Store prices no delivery into this Region, so nothing in a Cart bought
+              here is charged carriage.
+            </p>
+          ) : null}
+
+          {rows.fields.map((row, index) => (
+            <div
+              key={row.id}
+              className="grid items-end gap-2 sm:grid-cols-[1fr_10rem_auto]"
+            >
+              <FormField
+                id={`shipping-method-name-${row.id}`}
+                label={`Method ${index + 1}`}
+                error={form.formState.errors.shippingMethods?.[index]?.name}
+                {...form.register(`shippingMethods.${index}.name`)}
+              />
+              <FormField
+                id={`shipping-method-amount-${row.id}`}
+                label="Rate, in minor units"
+                error={form.formState.errors.shippingMethods?.[index]?.amount}
+                {...form.register(`shippingMethods.${index}.amount`)}
+              />
+              {/* Plain buttons rather than `ActionButton`s: these rearrange the form and
+                  call kobai nothing, so there is no permission to explain — the one control
+                  that writes is the submit below. Each says which row it is for in an
+                  `sr-only` span, because three buttons all announcing "Up" tell a screen
+                  reader nothing about which. */}
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={index === 0}
+                  onClick={() => rows.move(index, index - 1)}
+                >
+                  Up<span className="sr-only"> — method {index + 1}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={index === rows.fields.length - 1}
+                  onClick={() => rows.move(index, index + 1)}
+                >
+                  Down<span className="sr-only"> — method {index + 1}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => rows.remove(index)}
+                >
+                  Remove<span className="sr-only"> — method {index + 1}</span>
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => rows.append({ name: "", amount: "" })}
+            >
+              Add a shipping method
+            </Button>
+          </div>
+        </CardContent>
+        <CardFooter className="mt-4">
+          <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>
+            {save.isPending ? <Spinner /> : null}
+            Save shipping methods
+          </ActionButton>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * The shape of a Region's shipping methods, and only the shape (ADR-0063).
+ *
+ * The amount is **parsed rather than coerced from a blank**, exactly as the Price editor's is:
+ * an `<input>` hands over a string, so an empty one has to be caught before `Number("")` turns
+ * it into free delivery nobody chose. Whether kobai will take the number — negative, absurd —
+ * and whether an identifier names a method of this Region are Core's answers and arrive as
+ * refusals; restated here they would be a second, stale copy a Merchant could not appeal.
+ */
+const ShippingMethodsForm = z.object({
+  shippingMethods: z.array(
+    z.object({
+      methodId: z.string().optional(),
+      name: z.string().min(1, "A method needs a name — Standard, Next day."),
+      amount: z
+        .string()
+        .min(1, "A rate is a whole number of minor units — 500 is 5.00.")
+        .transform((typed) => Number(typed))
+        .pipe(
+          z
+            .number("A rate is a whole number of minor units — 500 is 5.00.")
+            .int("Minor units are whole: 500, not 5.00."),
+        ),
+    }),
+  ),
+});
+
+type ShippingMethodsInput = z.input<typeof ShippingMethodsForm>;
+type ShippingMethodsValues = z.output<typeof ShippingMethodsForm>;
 
 /**
  * The shape of the form, and only the shape (ADR-0063).
@@ -261,6 +473,12 @@ function whyNotChanged(thrown: unknown): string {
     case "currency-not-enabled":
       return "This Store does not price in that currency. Enable it on the Store screen first — a Region may only select a currency the Store has.";
 
+    case "shipping-method-not-found":
+      // Reachable from the shipping card and not from the identity form, and the two share this
+      // function because they share the family — a rate somebody else deleted while this page
+      // was open, which is the one thing a Merchant can act on here.
+      return "One of these shipping methods is no longer there — somebody else removed it, or this page has been open a while. Reload and set the rates again.";
+
     case "invalid":
     case "malformed-body":
       // kobai's own prose names the field, which is more than this screen knows.
@@ -301,6 +519,7 @@ function whyNotDeleted(thrown: unknown): string {
       return "It is already gone — somebody else deleted it, or this page has been open a while.";
 
     case "currency-not-enabled":
+    case "shipping-method-not-found":
     case "invalid":
     case "malformed-body":
       // Not reachable from a delete, which sends no body. Reported as kobai said it rather than

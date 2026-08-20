@@ -308,6 +308,11 @@ function whyNotCreated(thrown: unknown): string {
       // Refusals of a change or a deletion, not reachable from a creation.
       return problemOf(thrown, fallback);
 
+    case "shipping-method-not-found":
+      // Not reachable from this form, which sends no `shippingMethods`: a Region's rates are
+      // set on the Region's own screen, once it exists. Reported as kobai said it.
+      return problemOf(thrown, fallback);
+
     case undefined:
       // A 500, which carries no `reason` on purpose, or the network being gone.
       return fallback;

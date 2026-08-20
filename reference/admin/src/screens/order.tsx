@@ -149,8 +149,9 @@ export function OrderScreen() {
         <CardHeader>
           <CardTitle>What it came to</CardTitle>
           <CardDescription>
-            An Adjustment belonging to no single line — a basket-wide voucher, say — is
-            listed here rather than folded into the figure.
+            An Adjustment belonging to no single line — the delivery charge, a basket-wide
+            voucher — is listed here rather than folded into the figure, so the books show
+            what was carriage and what was goods.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2 text-sm">

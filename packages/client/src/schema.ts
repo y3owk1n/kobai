@@ -2076,7 +2076,7 @@ export interface paths {
     };
     /**
      * Create a Region
-     * @description A name and the currency it prices in, which has to be one this Store has enabled — `GET /admin/store` lists them. Names are **not** unique: a Region is addressed by its identifier everywhere. Nothing about tax or shipping is here yet; both hang off this row when they arrive.
+     * @description A name, the currency it prices in — which has to be one this Store has enabled, `GET /admin/store` lists them — and, optionally, the ways this Store delivers into it. Names are **not** unique: a Region is addressed by its identifier everywhere. Nothing about tax is here yet; it hangs off this row when it arrives.
      */
     post: {
       requestBody: {
@@ -2109,7 +2109,7 @@ export interface paths {
             "application/json": components["schemas"]["PermissionDenied"];
           };
         };
-        /** @description Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency. */
+        /** @description Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency — or `shipping-method-not-found`, a `shippingMethods` entry naming an `id`, which a Region being created cannot have. */
         422: {
           content: {
             "application/json": components["schemas"]["RegionRefusal"];
@@ -2133,7 +2133,7 @@ export interface paths {
   "/admin/regions/{id}": {
     /**
      * Read a Region
-     * @description One Region — its name, and the currency it prices in.
+     * @description One Region — its name, the currency it prices in, and the ways this Store delivers into it.
      */
     get: {
       parameters: {
@@ -2183,7 +2183,7 @@ export interface paths {
     };
     /**
      * Delete a Region
-     * @description Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again. **Every Price entered for this Region goes with it**, because a Price naming a Region that no longer exists could never apply again; `GET /admin/prices?region=` is where to read them before deleting. Prices that name no Region are untouched and go on applying everywhere.
+     * @description Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again. **Every shipping method and every Price entered for this Region goes with it**, because a Price naming a Region that no longer exists could never apply again; `GET /admin/prices?region=` is where to read them before deleting. Prices that name no Region are untouched and go on applying everywhere.
      */
     delete: {
       parameters: {
@@ -2237,7 +2237,7 @@ export interface paths {
     };
     /**
      * Change a Region
-     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. **A Region's currency may move**, unlike the Store's: a Region *selects* one of the currencies this Store has enabled, so moving the selection changes which Prices apply here rather than what any amount means.
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. **A Region's currency may move**, unlike the Store's: a Region *selects* one of the currencies this Store has enabled, so moving the selection changes which Prices apply here rather than what any amount means. **`shippingMethods` is the whole list**, so a rate is added, renamed, repriced, reordered and removed here — an entry carrying an `id` is the method that already has it, and a Cart that chose it keeps its choice.
      */
     patch: {
       parameters: {
@@ -2282,7 +2282,7 @@ export interface paths {
             "application/json": components["schemas"]["RegionRefusal"];
           };
         };
-        /** @description Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency. */
+        /** @description Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency, or `shipping-method-not-found`, a `shippingMethods` entry names an `id` this Region has not got. */
         422: {
           content: {
             "application/json": components["schemas"]["RegionRefusal"];
@@ -3514,8 +3514,8 @@ export interface paths {
       };
     };
     /**
-     * Attach a Shopper, move a Cart to another Region, or change its own data
-     * @description What a storefront calls when a guest signs in half way through, and when a Shopper changes where they are buying. `shopper` needs a secret key; `null` makes the Cart a guest's again. `regionId` moves the Cart **in place** — the same Cart, the same `id`, every Line Item still on it, re-denominated in the new Region's currency and re-priced there on the next read. It is refused while the Cart is holding stock (`cart-is-denominated`) or once it has been placed (`cart-placed`), because a hold and a Payment are both denominated in the currency the Cart was in; and refused, naming the lines, where one of them would have no Price in the new Region.
+     * Attach a Shopper, choose how a Cart is delivered, move it to another Region, or change its own data
+     * @description What a storefront calls when a guest signs in half way through, when a Shopper chooses how their Order should reach them, and when they change where they are buying. `shopper` needs a secret key; `null` makes the Cart a guest's again. `shippingMethodId` chooses one of the ways `GET /store/carts/{id}/shipping-options` offers, and `null` unchooses. `regionId` moves the Cart **in place** — the same Cart, the same `id`, every Line Item still on it, re-denominated in the new Region's currency and re-priced there on the next read. It is refused while the Cart is holding stock (`cart-is-denominated`) or once it has been placed (`cart-placed`), because a hold and a Payment are both denominated in the currency the Cart was in; and refused, naming the lines, where one of them would have no Price in the new Region.
      */
     patch: {
       parameters: {
@@ -3570,7 +3570,7 @@ export interface paths {
             "application/json": components["schemas"]["CartRefusal"];
           };
         };
-        /** @description Well formed, and still refused: this Store has no such Region, or a line of this Cart would have no Price in it — the refusal names them, and the Cart is left where it was. */
+        /** @description Well formed, and still refused: this Store has no such Region, or a line of this Cart would have no Price in it — the refusal names them, and the Cart is left where it was — or the `shippingMethodId` names no way this Cart's Region is delivered into. */
         422: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
@@ -3840,6 +3840,68 @@ export interface paths {
         422: {
           content: {
             "application/json": components["schemas"]["CartReservationRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/store/carts/{id}/shipping-options": {
+    /**
+     * What this Cart may be shipped by
+     * @description The ways this Cart may be delivered, in the order the Merchant put them in. `requiresShipping` is `false` for a Cart nothing in which is shipped — a Cart of downloads — and such a Cart needs no Address and is charged nothing to deliver. An **empty `options`** with `requiresShipping` true is a Store that prices no delivery into this Cart's Region: placing charges nothing for carriage rather than being refused. Choose one with `PATCH /store/carts/{id}` — `shippingMethodId` — and `POST /store/carts/{id}/quote` is what says what the Cart then comes to.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description What this Cart may be shipped by, and whether anything in it is shipped at all. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["CartShippingOptions"];
+          };
+        };
+        /** @description No live API key was presented. */
+        401: {
+          headers: {
+            /** @description The scheme the request failed to satisfy. */
+            "www-authenticate": "Bearer";
+          };
+          content: {
+            "application/json": components["schemas"]["ApiKeyRefusal"];
+          };
+        };
+        /** @description No such Cart exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CartShippingOptionsRefusal"];
+          };
+        };
+        /** @description This Cart can no longer become an Order — it has expired, or it has already been placed — or something in it names a Fulfilment Strategy this deployment no longer has wired. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["CartShippingOptionsRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: this Cart has nothing in it, so there is nothing to deliver. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["CartShippingOptionsRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -4265,10 +4327,26 @@ export interface components {
       name: string;
       /** @description The ISO 4217 code this Region prices in, which is always one of the currencies `GET /admin/store` reports. kobai converts nothing, ever: a Variant with no Price in this currency has no price here. */
       currency: string;
+      /** @description The ways this Store delivers into this Region, in the order the Merchant put them in — which is the order a storefront should offer them. Empty for a Region delivery is not priced into, which is every Region until somebody prices one: a Cart there is then offered nothing and charged nothing for carriage. */
+      shippingMethods: components["schemas"]["ShippingMethod"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
       };
+    };
+    ShippingMethod: components["schemas"]["ShippingOption"] & {
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    ShippingOption: {
+      /** Format: uuid */
+      id: string;
+      /** @description What a Shopper reads when they choose how it should reach them — `Standard`, `Next day`. **Not unique**: two of a name are two methods. */
+      name: string;
+      /** @description The flat rate, in minor units of the **Region's** currency — 500 is 5.00. Never negative; zero is free delivery. It becomes an Adjustment on the Order at Capture (ADR-0022), never a total of its own. */
+      amount: number;
     };
     StoreRefusal: {
       /** @description What went wrong, in prose. */
@@ -4706,13 +4784,24 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "region-not-found" | "currency-not-enabled" | "region-in-use";
+      reason: "invalid" | "malformed-body" | "region-not-found" | "currency-not-enabled" | "region-in-use" | "shipping-method-not-found";
     };
     CreateRegionRequest: {
       /** @description Required, and not empty. */
       name: string;
       /** @description Required. An ISO 4217 code this Store has **enabled**, read case-insensitively — `GET /admin/store` lists them and `PATCH /admin/store` enables another. One this Store has not enabled is refused at 422 with `currency-not-enabled`. */
       currency: string;
+      /** @description **The complete list** of the ways this Store delivers into this Region, in the order they should be offered in — so this is where a rate is added, renamed, repriced, reordered and removed, and an entry left out is a method taken away. An entry's `id` names one this Region already carries and keeps every Cart that chose it on it; an entry with no `id` is new. An `id` this Region has not got is refused with `shipping-method-not-found`. A rate is in the **Region's** currency and carries no code of its own. Leaving it out creates a Region delivery is not priced into, which is where every Region starts. */
+      shippingMethods?: {
+          /** Format: uuid */
+          id?: string;
+          name: string;
+          amount: number;
+          /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+          metadata?: {
+            [key: string]: unknown;
+          };
+        }[];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -4727,6 +4816,17 @@ export interface components {
       name?: string;
       /** @description An ISO 4217 code this Store has enabled, read case-insensitively. One it has not is refused at 422 with `currency-not-enabled`. */
       currency?: string;
+      /** @description **The complete list** of the ways this Store delivers into this Region, in the order they should be offered in — so this is where a rate is added, renamed, repriced, reordered and removed, and an entry left out is a method taken away. An entry's `id` names one this Region already carries and keeps every Cart that chose it on it; an entry with no `id` is new. An `id` this Region has not got is refused with `shipping-method-not-found`. A rate is in the **Region's** currency and carries no code of its own. Leaving it out leaves this Region's rates alone; sending an empty list takes all of them away, and a Cart that had chosen one is left choosing again. */
+      shippingMethods?: {
+          /** Format: uuid */
+          id?: string;
+          name: string;
+          amount: number;
+          /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+          metadata?: {
+            [key: string]: unknown;
+          };
+        }[];
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
@@ -4949,8 +5049,10 @@ export interface components {
       currency: string;
       /** @description Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region. */
       region: components["schemas"]["RegionIdentity"] | null;
-      /** @description Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads, quotes and places. */
+      /** @description Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going. */
       address: components["schemas"]["Address"] | null;
+      /** @description How this Cart is to be delivered — what the Shopper chose out of `GET /store/carts/{id}/shipping-options` — or `null` where nothing has been chosen, which means any of *nothing in it ships*, *this Store prices no delivery into its Region* and *the Shopper has not got that far*. **Live, not a snapshot**: what is charged becomes an Adjustment on the Order at Capture, so repricing or deleting the method afterwards cannot rewrite what was paid. Moving the Cart to another Region unchooses it, because a rate belongs to one Region. */
+      shippingMethod: components["schemas"]["ShippingOption"] | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -5004,7 +5106,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced" | "region-not-found" | "cart-is-denominated" | "variant-not-priced-in-region";
+      reason: "invalid" | "malformed-body" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced" | "region-not-found" | "cart-is-denominated" | "variant-not-priced-in-region" | "shipping-method-not-found";
     };
     IssuedApiKey: {
       /** Format: uuid */
@@ -5220,6 +5322,11 @@ export interface components {
         /** Format: uuid */
         regionId?: string;
       }) | null;
+      /**
+       * Format: uuid
+       * @description How this Cart is to be delivered — the `id` of one of the methods `GET /store/carts/{id}/shipping-options` offers. `null` unchooses; absent leaves whatever was chosen alone. One belonging to any other Region, or to no Region at all, is refused with `shipping-method-not-found` — a rate is denominated in the currency of the Region that carries it. **Moving the Cart to another Region unchooses it**, so a storefront that switches market and rechooses in one request sends both fields and this one wins.
+       */
+      shippingMethodId?: string | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -5274,6 +5381,25 @@ export interface components {
        * @enum {string}
        */
       reason: "cart-not-found" | "cart-expired" | "cart-placed" | "cart-empty" | "variant-unavailable" | "unknown-fulfilment-strategy" | "insufficient-inventory";
+    };
+    CartShippingOptions: {
+      /** Format: uuid */
+      cartId: string;
+      /** @description Whether anything in this Cart is **shipped** — which is what its Variants' Fulfilment Strategies answer (ADR-0014), not something the Store configures. `false` is a Cart of downloads: it needs no Address, is offered nothing here, and is charged nothing to deliver. */
+      requiresShipping: boolean;
+      /** @description ISO 4217 — the Cart's own. Every `amount` below is in it. */
+      currency: string;
+      /** @description The ways this Cart may be delivered, in the order the Merchant put them in. Empty when `requiresShipping` is `false`, and empty when this Store prices no delivery into the Cart's Region — in which case placing charges nothing for carriage rather than being refused. Choose one with `PATCH /store/carts/{id}` — `shippingMethodId`. */
+      options: components["schemas"]["ShippingOption"][];
+    };
+    CartShippingOptionsRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "cart-not-found" | "cart-expired" | "cart-placed" | "cart-empty" | "variant-unavailable" | "unknown-fulfilment-strategy";
     };
     Quote: {
       /** Format: uuid */
@@ -5341,7 +5467,7 @@ export interface components {
     };
     QuoteRefusal: {
       error: string;
-      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
+      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`, `shipping-address-required`, `shipping-method-required`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
       reason: string;
       workflow: {
         name: string;
@@ -5371,7 +5497,7 @@ export interface components {
     };
     PlaceOrderRefusal: {
       error: string;
-      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
+      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `shipping-address-required`, `shipping-method-required`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
       reason: string;
       /** @description How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this. */
       workflow?: {

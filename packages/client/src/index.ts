@@ -343,6 +343,17 @@ export type QuoteRequest = components["schemas"]["QuoteRequest"];
 export type Region = components["schemas"]["Region"];
 export type RegionIdentity = components["schemas"]["RegionIdentity"];
 export type RegionList = components["schemas"]["RegionList"];
+/**
+ * How a Region is delivered into, and what a storefront is offered (#321).
+ *
+ * **{@link ShippingOption} and {@link ShippingMethod} are two components for one noun**, and the
+ * split is #207's: a Cart's chosen method and the options a Cart is offered are answered on a
+ * **publishable** key, so they carry no `metadata` — the Merchant's bag reaches a browser only
+ * by somebody putting it there. A Merchant reading a Region gets the other one.
+ */
+export type ShippingOption = components["schemas"]["ShippingOption"];
+export type ShippingMethod = components["schemas"]["ShippingMethod"];
+export type CartShippingOptions = components["schemas"]["CartShippingOptions"];
 export type Channel = components["schemas"]["Channel"];
 export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelList = components["schemas"]["ChannelList"];
@@ -382,6 +393,8 @@ export type CartRefusal = components["schemas"]["CartRefusal"];
 export type CartReservations = components["schemas"]["CartReservations"];
 export type HeldClaim = components["schemas"]["HeldClaim"];
 export type CartReservationRefusal = components["schemas"]["CartReservationRefusal"];
+export type CartShippingOptionsRefusal =
+  components["schemas"]["CartShippingOptionsRefusal"];
 export type OrderRefusal = components["schemas"]["OrderRefusal"];
 /**
  * Every way moving a Fulfilment can be refused (#320).

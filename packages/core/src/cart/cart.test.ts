@@ -46,6 +46,10 @@ describe("building a Cart", () => {
       // Nowhere to deliver it, which is where a Cart starts: nothing makes an Address
       // mandatory, and a storefront asks for one when it is ready to (#319).
       address: null,
+      // Nothing chosen, which is where every Cart starts and is what a Cart of downloads stays
+      // at: `select-shipping` charges what was chosen and charges nothing where nothing was
+      // (#321).
+      shippingMethod: null,
       lineItems: [],
       metadata: {},
       expiresAt: expect.any(String),

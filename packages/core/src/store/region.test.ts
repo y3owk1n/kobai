@@ -95,6 +95,10 @@ describe("the Regions a Store sells into", () => {
       id: expect.any(String),
       name: "United States",
       currency: "USD",
+      // Empty because this create named none: a Region prices no delivery until a Merchant
+      // says what it costs, which is every Region until somebody does (#321). `toEqual` rather
+      // than `toMatchObject` so this really asserts the emptiness.
+      shippingMethods: [],
       metadata: { vat: "none" },
     });
 
@@ -250,7 +254,7 @@ describe("the Regions a Store sells into", () => {
 });
 
 describe("a Region is not a scoping key", () => {
-  it("is referenced by the Store, a Price, a Cart and two Addresses, and by nothing else", async () => {
+  it("is referenced by the Store, a Price, a Cart, two Addresses and its rates, and by nothing else", async () => {
     await using kobai = await createTestKobai();
     const schema = inspectSchema(kobai.database);
     const table = await regionTable(schema);
@@ -285,6 +289,16 @@ describe("a Region is not a scoping key", () => {
     // nothing narrows a list of Orders or of Addresses by Region, and no request is answered a
     // different set of anything because of one.
     //
+    // **`core_shipping_method.region_id` is the sixth, and it is the one that looks most like a
+    // scope and is least like one** (#321). It is not a column on a row that exists anyway: the
+    // row **is** the fact that delivering into this Region costs this much, so a shipping method
+    // without a Region would not be a shipping method narrowed to nothing, it would be
+    // meaningless. That is `core_price.region_id` read one noun along and taken further — a Price
+    // may name no Region and apply everywhere, and a rate may not, because a rate is denominated
+    // in the currency the Region selects. Nothing is narrowed by it either: no list of anything
+    // is filtered by Region, and a Cart in a Region this Store prices no delivery into still
+    // reads, quotes and places.
+    //
     // A `region_id` appearing on `core_order` itself, or on a catalog table, is what this still
     // names, and the day one does that is another decision to take here.
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
@@ -306,6 +320,11 @@ describe("a Region is not a scoping key", () => {
       {
         constraint: "core_price_region_id_core_region_id_fk",
         from: { schema: table.schema, name: "core_price" },
+        to: table,
+      },
+      {
+        constraint: "core_shipping_method_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_shipping_method" },
         to: table,
       },
       {
@@ -356,6 +375,11 @@ describe("a Region is not a scoping key", () => {
       {
         constraint: "core_scoped_region_fk",
         from: { schema: table.schema, name: "core_scoped_by_region" },
+        to: table,
+      },
+      {
+        constraint: "core_shipping_method_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_shipping_method" },
         to: table,
       },
       {

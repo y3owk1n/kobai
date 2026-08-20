@@ -218,6 +218,26 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
   );
   expect(counted.status, "counting the posters").toBe(200);
 
+  // **What it costs to get a poster to somebody** (#321). A Store that has not said what
+  // carriage costs charges none, so a journey that buys something physical and expects to pay
+  // for its delivery has to say it — and saying it is a Merchant's job, like counting the
+  // shelf, so it is arrangement. **Two rates**, because with one, *the Shopper chose* and
+  // *kobai charged the only one there is* would be the same run.
+  const market = (await (
+    await kobai.request("/admin/store", { headers: posters.merchant.headers })
+  ).json()) as { defaultRegion: { id: string } | null };
+  const priced = await kobai.request(`/admin/regions/${market.defaultRegion?.id ?? ""}`, {
+    method: "PATCH",
+    headers: json,
+    body: JSON.stringify({
+      shippingMethods: [
+        { name: THE_CHEAPER_WAY, amount: THE_CHEAPER_CARRIAGE },
+        { name: THE_CHOSEN_WAY, amount: THE_CARRIAGE },
+      ],
+    }),
+  });
+  expect(priced.status, "pricing delivery").toBe(200);
+
   const publishable = await createTestApiKey(kobai, posters.merchant, {
     name: "the browser's",
     kind: "publishable",
@@ -458,6 +478,27 @@ const GLOSSY = "Glossy";
  * (`WHAT_THIS_PROJECT_CHARGES`).
  */
 const THE_PRICE = 1250;
+
+/**
+ * What this Store charges to get a poster to a Shopper, and the cheaper way it also offers.
+ *
+ * Two rather than one, because with a single rate "the Shopper chose the delivery method" and
+ * "kobai charged the only one there is" are the same run — so the journey picks the *dearer* of
+ * two and every total below counts in it (#321).
+ */
+const THE_CARRIAGE = 1500;
+const THE_CHEAPER_CARRIAGE = 500;
+
+/** What the Merchant calls the two, and what the Shopper reads when they choose between them. */
+const THE_CHOSEN_WAY = "Next day";
+const THE_CHEAPER_WAY = "Standard";
+
+/** Where the parcel goes. No postal authority would check it, which is the point (ADR-0072). */
+const THE_DESTINATION = {
+  country: "MY",
+  lines: ["12 Jalan Ampang", "Kuala Lumpur"],
+  postalCode: "50450",
+};
 
 /**
  * One value a Variant carries for one option, and the same shape a Shopper picks in.
@@ -979,6 +1020,51 @@ describe("a Shopper buys something", () => {
     expect(reread.id).toBe(started.id);
     expect(reread.placed).toBe(false);
     expect(reread.lineItems).toHaveLength(1);
+    // Nowhere to send it and no way chosen, which is where every Cart starts (#319, #321).
+    expect(reread.address).toBeNull();
+    expect(reread.shippingMethod).toBeNull();
+
+    // **Where it goes.** kobai checks the shape and nothing beyond it (ADR-0072), so this is an
+    // address a Shopper typed rather than one a postal authority approved — and it is on the
+    // browser's key, because saying where a parcel goes asserts nothing about who anybody is.
+    const addressed = answered(
+      await browser.PATCH("/store/carts/{id}", {
+        params: { path: { id: started.id } },
+        body: { address: THE_DESTINATION },
+      }),
+      "saying where it goes",
+    );
+    expect(addressed.address?.lines).toEqual(THE_DESTINATION.lines);
+
+    // **And how it gets there.** The options are the Cart's rather than the Region's, because
+    // whether anything in this Cart ships at all is a fact about what is in it (ADR-0014) — a
+    // Cart of downloads is offered nothing and asked for no Address. The browser's key again:
+    // this claims nothing and charges nothing, so it is on the quote's side of ADR-0055's line.
+    const delivery = answered(
+      await browser.GET("/store/carts/{id}/shipping-options", {
+        params: { path: { id: started.id } },
+      }),
+      "asking how it may be delivered",
+    );
+    expect(delivery.requiresShipping).toBe(true);
+    // In the Merchant's own order, which is the order a storefront should offer them in.
+    expect(delivery.options.map((one) => one.name)).toEqual([
+      THE_CHEAPER_WAY,
+      THE_CHOSEN_WAY,
+    ]);
+
+    // The Shopper is in a hurry and picks the dearer of the two, which is what makes the totals
+    // below the *chosen* figure rather than the only one there was.
+    const chosenWay = delivery.options.find((one) => one.name === THE_CHOSEN_WAY);
+    expect(chosenWay?.amount).toBe(THE_CARRIAGE);
+    const choosing = answered(
+      await browser.PATCH("/store/carts/{id}", {
+        params: { path: { id: started.id } },
+        body: { shippingMethodId: chosenWay?.id ?? "" },
+      }),
+      "choosing how it should reach them",
+    );
+    expect(choosing.shippingMethod?.name).toBe(THE_CHOSEN_WAY);
 
     // What the Cart comes to, which is the figure a storefront has to start a payment for
     // (ADR-0077). A redirect payment is created *before* the Shopper leaves and kobai works out
@@ -992,8 +1078,23 @@ describe("a Shopper buys something", () => {
       }),
       "asking what the Cart comes to",
     );
-    expect(cartQuote.total).toBe(THE_PRICE * HOW_MANY);
+    expect(cartQuote.total).toBe(THE_PRICE * HOW_MANY + THE_CARRIAGE);
     expect(cartQuote.lineItems.map((one) => one.sku)).toEqual([THE_SKU]);
+    // **The carriage, before anybody pays** — its own line rather than a number folded into
+    // what the posters cost (ADR-0022), so the books show what was delivery and what was goods.
+    // It carries a tax figure from the day it shipped, and Core charges none (spec 7).
+    expect(cartQuote.adjustments).toEqual([
+      {
+        code: "shipping",
+        description: THE_CHOSEN_WAY,
+        amount: THE_CARRIAGE,
+        tax: 0,
+        metadata: {
+          shippingMethodId: chosenWay?.id,
+          shippingMethodName: THE_CHOSEN_WAY,
+        },
+      },
+    ]);
     // A moment rather than an offer: it says when it was worked out and carries nothing that
     // could be sent back at kobai.
     expect(new Date(cartQuote.quotedAt).getTime()).toBeLessThanOrEqual(Date.now());
@@ -1027,8 +1128,11 @@ describe("a Shopper buys something", () => {
       }),
       "placing the Order",
     );
-    expect(placed.total).toBe(THE_PRICE * HOW_MANY);
+    expect(placed.total).toBe(THE_PRICE * HOW_MANY + THE_CARRIAGE);
     expect(placed.lineItems[0]?.sku).toBe(THE_SKU);
+    // The delivery charge is on the Order as the line it is, which is what makes the total the
+    // total: the goods, and what it cost to send them.
+    expect(placed.adjustments.map((one) => one.amount)).toEqual([THE_CARRIAGE]);
     // **The figure the storefront was quoted is the figure the Shopper was charged**, which is
     // the whole reason the quote route exists: the payment it started is for the money kobai
     // then took (ADR-0077).
@@ -1053,7 +1157,7 @@ describe("a Shopper buys something", () => {
     );
     expect(confirmation.id).toBe(placed.id);
     expect(confirmation.number).toBe(placed.number);
-    expect(confirmation.total).toBe(THE_PRICE * HOW_MANY);
+    expect(confirmation.total).toBe(THE_PRICE * HOW_MANY + THE_CARRIAGE);
     // And it is the Shopper's rather than a guest's, which is the one thing the Cart learned
     // between being built and being placed.
     expect(confirmation.shopper?.email).toBe(THE_SHOPPER);

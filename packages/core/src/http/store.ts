@@ -24,9 +24,11 @@ import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
+import { type LoadCartRefusal, readCartToPlace } from "../order/load-cart.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
 import { type QuoteCartRefusal, quoteCart } from "../order/quote-cart.ts";
 import { type Order, readOrder, readOrderPlacedFrom } from "../order/read.ts";
+import { shippingOptionsFor } from "../order/select-shipping.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import { marketAsked } from "../pricing/market.ts";
 import type {
@@ -376,7 +378,7 @@ const CART_REFUSALS = {
     contract.CartRefusal,
   ),
   notSellableThere: json(
-    "Well formed, and still refused: this Store has no such Region, or a line of this Cart would have no Price in it — the refusal names them, and the Cart is left where it was.",
+    "Well formed, and still refused: this Store has no such Region, or a line of this Cart would have no Price in it — the refusal names them, and the Cart is left where it was — or the `shippingMethodId` names no way this Cart's Region is delivered into.",
     contract.CartRefusal,
   ),
 } as const;
@@ -444,9 +446,10 @@ const readCartRoute = createRoute({
 const updateCartRoute = createRoute({
   method: "patch",
   path: "/carts/{id}",
-  summary: "Attach a Shopper, move a Cart to another Region, or change its own data",
+  summary:
+    "Attach a Shopper, choose how a Cart is delivered, move it to another Region, or change its own data",
   description:
-    "What a storefront calls when a guest signs in half way through, and when a Shopper changes where they are buying. `shopper` needs a secret key; `null` makes the Cart a guest's again. `regionId` moves the Cart **in place** — the same Cart, the same `id`, every Line Item still on it, re-denominated in the new Region's currency and re-priced there on the next read. It is refused while the Cart is holding stock (`cart-is-denominated`) or once it has been placed (`cart-placed`), because a hold and a Payment are both denominated in the currency the Cart was in; and refused, naming the lines, where one of them would have no Price in the new Region.",
+    "What a storefront calls when a guest signs in half way through, when a Shopper chooses how their Order should reach them, and when they change where they are buying. `shopper` needs a secret key; `null` makes the Cart a guest's again. `shippingMethodId` chooses one of the ways `GET /store/carts/{id}/shipping-options` offers, and `null` unchooses. `regionId` moves the Cart **in place** — the same Cart, the same `id`, every Line Item still on it, re-denominated in the new Region's currency and re-priced there on the next read. It is refused while the Cart is holding stock (`cart-is-denominated`) or once it has been placed (`cart-placed`), because a hold and a Payment are both denominated in the currency the Cart was in; and refused, naming the lines, where one of them would have no Price in the new Region.",
   security: API_KEY,
   request: {
     params: contract.IdParam,
@@ -593,6 +596,67 @@ const holdCartRoute = createRoute({
     404: CART_RESERVATION_REFUSALS.noCart,
     409: CART_RESERVATION_REFUSALS.notHoldable,
     422: CART_RESERVATION_REFUSALS.nothingToHold,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+// ---- How a Cart is delivered ---------------------------------------------------------------
+
+/**
+ * **What this Cart may be shipped by** (#321) — the route a storefront's delivery step is built
+ * from.
+ *
+ * **It is a Cart's route and not a Region's**, which is the decision rather than a shape. A
+ * storefront asks what *this* Cart may be shipped by because the answer depends on the Cart's
+ * Region **and** on whether anything in it ships at all — and the second is a fact about what a
+ * Shopper put in the Cart rather than about the Store, which a list of one Region's rates could
+ * not have answered. A `GET /admin/regions/{id}/shipping-methods` would have answered a
+ * different question and left every storefront to work this one out for itself.
+ *
+ * **It does not run `select-shipping`, and that is a known limit rather than a promise.** That
+ * Step is what *charges* — it is what refuses a Cart with nowhere to be sent, and it is what a
+ * Project replaces to quote real carrier rates — so running it here would mean charging a
+ * question. What this answers is what Core's own Step will accept a choice from, which is the
+ * Cart's Region's rates; a deployment that replaced the Step is answered those regardless, and
+ * its own options belong on a route of its own until kobai offers a seam for them.
+ *
+ * **A publishable key opens it**, on the quote's argument (ADR-0055, ADR-0077): it claims
+ * nothing, charges nothing and writes nothing, and everything it answers is derived from a Cart
+ * whose identifier the browser already holds. Gating it would push a delivery step through a
+ * Project's own server for no boundary in return.
+ *
+ * **The Cart is read exactly as a quote, a hold and a placement read it**, through
+ * `load-cart.ts` — so the words it refuses with are the same words at the same statuses, and a
+ * storefront that is offered a method here is a storefront `select-shipping` will accept it
+ * from. Two answers a Merchant might expect and does not get: it does not refuse a Cart with no
+ * Address (choosing where it goes and choosing how it gets there are two steps, and the second
+ * is refused at the quote), and it answers **200 with an empty list** for a Cart nothing in
+ * which ships, because *there is nothing to choose* is an answer rather than a failure.
+ */
+const cartShippingOptionsRoute = createRoute({
+  method: "get",
+  path: "/carts/{id}/shipping-options",
+  summary: "What this Cart may be shipped by",
+  security: API_KEY,
+  description:
+    "The ways this Cart may be delivered, in the order the Merchant put them in. `requiresShipping` is `false` for a Cart nothing in which is shipped — a Cart of downloads — and such a Cart needs no Address and is charged nothing to deliver. An **empty `options`** with `requiresShipping` true is a Store that prices no delivery into this Cart's Region: placing charges nothing for carriage rather than being refused. Choose one with `PATCH /store/carts/{id}` — `shippingMethodId` — and `POST /store/carts/{id}/quote` is what says what the Cart then comes to.",
+  request: { params: contract.IdParam },
+  responses: {
+    200: json(
+      "What this Cart may be shipped by, and whether anything in it is shipped at all.",
+      contract.CartShippingOptions,
+    ),
+    401: REFUSALS.noApiKey,
+    404: json("No such Cart exists.", contract.CartShippingOptionsRefusal),
+    409: json(
+      "This Cart can no longer become an Order — it has expired, or it has already been placed — or something in it names a Fulfilment Strategy this deployment no longer has wired.",
+      contract.CartShippingOptionsRefusal,
+    ),
+    422: json(
+      "Well formed, and still refused: this Cart has nothing in it, so there is nothing to deliver.",
+      contract.CartShippingOptionsRefusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -964,6 +1028,44 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     );
   });
 
+  store.openapi(cartShippingOptionsRoute, async (c) => {
+    // The same reading of a Cart the quote, the hold and the placement go through, so what a
+    // storefront is offered here is what `select-shipping` will accept from it — a second query
+    // would be a second answer to what is in a Cart and to whether any of it ships.
+    const read = await readCartToPlace(
+      deps.db,
+      c.req.valid("param").id,
+      deps.fulfilment,
+      // Threaded although nothing here prices anything, exactly as the hold route threads it:
+      // one reading of a Cart, one shape (#293).
+      c.get("apiKey").channel,
+    );
+    if (!read.ok) {
+      return c.json(
+        { error: read.detail, reason: read.reason },
+        CART_SHIPPING_OPTIONS_STATUS[read.reason],
+      );
+    }
+
+    const offered = await shippingOptionsFor(
+      deps.db,
+      read.loaded.cart,
+      read.loaded.lines,
+    );
+
+    return c.json(
+      {
+        cartId: read.loaded.cart.id,
+        requiresShipping: offered.requiresShipping,
+        // The Cart's own stamp rather than the Region's, for `marketOfCart`'s reason: a Merchant
+        // who moves a Region onto another currency must not reprice a Cart in flight (ADR-0074).
+        currency: read.loaded.cart.currency,
+        options: offered.options,
+      },
+      200,
+    );
+  });
+
   store.openapi(quoteCartRoute, async (c) => {
     // Both halves of the open context, or the keys that arrived in both — the same reading
     // `POST /store/orders` makes, because a quote that ran against a different context from the
@@ -1178,6 +1280,10 @@ const UPDATE_CART_STATUS = {
   // 422 beside `variant-not-priced`, which is the word an *add* meets: well formed, and refused
   // by what this Store has priced.
   "variant-not-priced-in-region": 422,
+  // 422 beside `region-not-found`, and for its reason: a body naming a record this Store has
+  // not got. It is the same word and the same status the Region routes answer, because it is
+  // one fact reached from two ends (ADR-0060).
+  "shipping-method-not-found": 422,
 } as const satisfies StatusesFor<typeof updateCart>;
 
 /** 422 for a Variant with no Price: well formed, and still refused. */
@@ -1222,6 +1328,24 @@ const HOLD_CART_STATUS = {
 } as const satisfies StatusesFor<typeof holdCartReservations>;
 
 /**
+ * What each refusal of *offering a Cart its shipping options* means (#321).
+ *
+ * **Every entry is the status that word already means on this surface**, which is the whole rule
+ * these maps follow: a storefront meets `cart-expired` at 409 whether it was reading a Cart,
+ * holding its stock, asking how it may be delivered, quoting it or placing it. Held to
+ * `load-cart.ts`'s union by the `satisfies`, so a word added there turns this red naming it
+ * along with the three maps beside it.
+ */
+const CART_SHIPPING_OPTIONS_STATUS = {
+  "cart-not-found": 404,
+  "cart-expired": 409,
+  "cart-placed": 409,
+  "cart-empty": 422,
+  "variant-unavailable": 409,
+  "unknown-fulfilment-strategy": 409,
+} as const satisfies Record<LoadCartRefusal, ContentfulStatusCode>;
+
+/**
  * How a Step refusing to quote a Cart becomes a status — the same shape, and the same
  * `satisfies`, as the two maps below it.
  *
@@ -1244,6 +1368,11 @@ const QUOTE_REFUSAL_STATUS = {
   "unknown-fulfilment-strategy": 409,
   "variant-not-found": 422,
   "price-not-set": 422,
+  // 422 beside "cart-empty", and for its reason: the request is well formed and what refuses it
+  // is the state of the Cart, which the storefront has a control for — set an Address, choose a
+  // way of delivering it — and which retrying alone will never change (#321).
+  "shipping-address-required": 422,
+  "shipping-method-required": 422,
 } as const satisfies Record<
   QuoteCartRefusal | PriceResolutionRefusal,
   QuoteRefusalStatus
@@ -1326,6 +1455,11 @@ const PLACE_ORDER_REFUSAL_STATUS = {
   // no longer has is a Store that has been reconfigured out from under its own catalog, and
   // retrying changes nothing until somebody wires it back (ADR-0052).
   "unknown-fulfilment-strategy": 409,
+  // 422 beside "cart-empty", and for its reason: the request is well formed and what refuses it
+  // is the state of the Cart, which the storefront has a control for — set an Address, choose a
+  // way of delivering it — and which retrying alone will never change (#321).
+  "shipping-address-required": 422,
+  "shipping-method-required": 422,
 } as const satisfies Record<
   PlaceOrderRefusal | PriceResolutionRefusal,
   PlaceOrderRefusalStatus

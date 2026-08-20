@@ -13,6 +13,7 @@ import {
   type TaxedLines,
   totalOf,
 } from "./place-order.ts";
+import type { SelectShippingRefusal } from "./select-shipping.ts";
 
 /**
  * **What a Cart comes to, asked before anything is bought** (ADR-0077).
@@ -111,11 +112,16 @@ export type CartQuote = {
  *
  * `place-order`'s minus everything the pricing half never reaches: no payment is asked for, so
  * `no-payment-provider` and `payment-declined` are unreachable, and nothing is claimed, so a
- * Reservation provider is never asked either. What is left is reading the Cart and pricing its
- * lines — and `resolve-price`'s own refusals travel out of `price-lines` as themselves, exactly
- * as they do when an Order is placed, so the store surface maps them the same way.
+ * Reservation provider is never asked either. What is left is reading the Cart, pricing its
+ * lines and deciding what it costs to deliver — and `resolve-price`'s own refusals travel out of
+ * `price-lines` as themselves, exactly as they do when an Order is placed, so the store surface
+ * maps them the same way.
+ *
+ * **`select-shipping`'s two are in the prefix and so are here** (#321), which is what makes *this
+ * Cart has nowhere to be sent* reachable from the quote as well as from the placement — the
+ * property ADR-0077 exists for, arriving at a refusal rather than at a figure.
  */
-export type QuoteCartRefusal = LoadCartRefusal;
+export type QuoteCartRefusal = LoadCartRefusal | SelectShippingRefusal;
 
 /**
  * The slot the pricing half ends **before**, and the one place that boundary is written down.

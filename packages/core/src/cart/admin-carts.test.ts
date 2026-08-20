@@ -55,6 +55,8 @@ describe("a Merchant sees the Carts the Store is holding", () => {
           // On the list as well, and for the list's own reason: a Merchant looking for the
           // Cart a Shopper is asking about is looking at where it goes (#319).
           address: null,
+          // And how it is to get there, which is the other half of the same question (#321).
+          shippingMethod: null,
           metadata: {},
           expiresAt: expect.any(String),
           expired: false,
@@ -193,6 +195,7 @@ describe("a Merchant opens one Cart", () => {
         },
       ],
       address: null,
+      shippingMethod: null,
       metadata: {},
       expiresAt: expect.any(String),
       expired: false,
