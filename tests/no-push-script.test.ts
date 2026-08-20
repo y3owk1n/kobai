@@ -1,11 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import {
-  type ParseError,
-  parse as parseJsonc,
-  printParseErrorCode,
-  visit,
-} from "jsonc-parser";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -23,10 +17,16 @@ import { parse as parseYaml } from "yaml";
 const repoRoot = new URL("../", import.meta.url);
 
 /**
- * Every file that can define a runnable command. `devbox.json` is on this list because
- * ADR-0031 makes it where kobai's commands live — which makes it the file where someone
- * would reach for the convenient one. A CI workflow is on it because a `run:` step is a
- * command too: nothing stops one running the thing no script is allowed to name.
+ * Every file that can define a runnable command. Under ADR-0083 that is every
+ * `package.json` — the workspace root's most of all, because that is where kobai's commands
+ * live and so where someone would reach for the convenient one. A CI workflow is on the list
+ * because a `run:` step is a command too: nothing stops one running the thing no script is
+ * allowed to name.
+ *
+ * `devbox.json` used to be on it, and is not because it declares no scripts at all —
+ * `tests/devbox-declares-no-commands.test.ts` holds that, which forbids the whole class
+ * rather than this one command. #30's hazard, where devbox generated a `"//db:push"` key
+ * into a runnable `devbox run db:push`, cannot arise in a file with no keys.
  */
 type CommandFile = {
   path: string;
@@ -48,8 +48,8 @@ type CommandFile = {
   /**
    * Whether a `"// …"` key here is inert prose the scan may skip. True of a manifest: npm
    * attaches no meaning to such a key, so only a human ever reads it. False of
-   * `devbox.json`, where the key *is* a command — so the scan has to judge it as one.
-   * See `devboxFile`.
+   * A manifest's `"// …"` key is inert, so the scan skips it; nothing here turns a key
+   * into a command the way devbox did (#30).
    */
   commentKeysAreInert: boolean;
 };
@@ -63,11 +63,11 @@ type CommandFile = {
 const NOT_OURS = new Set(["node_modules", "dist", ".devbox", ".git"]);
 
 /**
- * Every `package.json` and `devbox.json` in the repository, discovered rather than listed.
+ * Every `package.json` in the repository, discovered rather than listed.
  *
  * It was a list, and the list went stale exactly the way a list does: `reference/admin` had
  * a manifest with its own `// db:push` note that nothing scanned, and then `reference/` grew
- * a `devbox.json` and `packages/create-kobai/` grew a whole generated Project underneath it.
+ * `packages/create-kobai/` grew a whole generated Project underneath it.
  * Discovery covers the next one without an edit, which is the same reason
  * `tests/packaged-migrations.test.ts` discovers its packages.
  *
@@ -75,9 +75,8 @@ const NOT_OURS = new Set(["node_modules", "dist", ".devbox", ".git"]);
  * the one whose scripts every Developer receives, so a push script reaching it would be the
  * furthest-travelling version of this mistake.
  */
-async function commandFilePaths(): Promise<{ manifests: string[]; devboxes: string[] }> {
+async function commandFilePaths(): Promise<{ manifests: string[] }> {
   const manifests: string[] = [];
-  const devboxes: string[] = [];
 
   const walk = async (directory: URL, prefix: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -87,25 +86,24 @@ async function commandFilePaths(): Promise<{ manifests: string[]; devboxes: stri
         continue;
       }
       if (entry.name === "package.json") manifests.push(`${prefix}package.json`);
-      if (entry.name === "devbox.json") devboxes.push(`${prefix}devbox.json`);
     }
   };
 
   await walk(repoRoot, "");
 
-  if (manifests.length === 0 || devboxes.length === 0) {
+  if (manifests.length === 0) {
     // Failing open would be worse than failing: an empty list makes this whole file pass by
     // scanning nothing, which is indistinguishable from scanning everything.
     throw new Error(
-      `Discovery found ${manifests.length} manifest(s) and ${devboxes.length} devbox.json, so little or nothing was scanned for a push script.`,
+      `Discovery found ${manifests.length} manifest(s), so nothing was scanned for a push script.`,
     );
   }
 
-  return { manifests, devboxes };
+  return { manifests };
 }
 
 async function commandFiles(): Promise<CommandFile[]> {
-  const { manifests, devboxes } = await commandFilePaths();
+  const { manifests } = await commandFilePaths();
 
   const files: CommandFile[] = await Promise.all(
     manifests.map(async (path) => {
@@ -127,64 +125,11 @@ async function commandFiles(): Promise<CommandFile[]> {
     }),
   );
 
-  for (const path of devboxes) {
-    files.push(devboxFile(await readText(path), path));
-  }
-
   for (const path of await ciPaths()) {
     files.push(ciFile(path, await readText(path)));
   }
 
   return files;
-}
-
-/**
- * `devbox.json`, read the way the scan reads it. The fixtures below use this too.
- *
- * Its explanation comes from its **comments**, not from a `"// …"` key like a manifest's.
- * devbox generates one shell script per key at `.devbox/gen/scripts/<key>.sh` through a
- * path join, and a join collapses the leading `//` — so a `"//db:push"` key writes to
- * `db:push.sh` and creates the very `devbox run db:push` that ADR-0030 says must never
- * exist, while `"//db:generate"` lands on the real script's file and races it. Observed on
- * devbox 0.17.5; see #30. `devbox.json` is HuJSON, so a real comment says the same thing
- * and can never be generated into a command.
- */
-function devboxFile(contents: string, path = "devbox.json"): CommandFile {
-  const errors: ParseError[] = [];
-  // `allowTrailingComma` because HuJSON permits one and `devbox add` writes them: it
-  // reformats this file when it rewrites it, and a comment in it makes it choose the
-  // trailing-comma style. Reading it less permissively than devbox writes it would make
-  // this guardrail fall over on a file devbox itself produced.
-  const config = parseJsonc(contents, errors, { allowTrailingComma: true }) as {
-    shell?: { scripts?: Record<string, string> };
-  };
-  if (errors.length > 0) {
-    const detail = errors
-      .map((e) => `${printParseErrorCode(e.error)} at offset ${e.offset}`)
-      .join(", ");
-    throw new Error(
-      `${path} could not be read, so no script in it was checked: ${detail}.`,
-    );
-  }
-
-  const scripts = config?.shell?.scripts;
-  if (scripts === undefined || Object.keys(scripts).length === 0) {
-    // Failing open would be worse than failing, and this is the likelier way it would
-    // happen than a parse error: devbox moves `shell.scripts`, this reads nothing, and
-    // the file where kobai's commands live goes unscanned while both tests still pass.
-    throw new Error(
-      `${path} declares no shell.scripts, so a file kobai's commands live in was not scanned for a push script.`,
-    );
-  }
-
-  return {
-    path,
-    commands: scripts,
-    comments: jsoncComments(contents),
-    namesCommands: true,
-    // Not inert: a `"//db:push"` key here is a `devbox run db:push` that exists.
-    commentKeysAreInert: false,
-  };
 }
 
 /** One CI file, read the way the scan reads it. The fixtures below use this too. */
@@ -193,7 +138,7 @@ function ciFile(path: string, contents: string): CommandFile {
     path,
     commands: ciRunSteps(contents),
     // A CI file has nowhere natural to put the comment, and it is not where a Developer
-    // looks for the commands. The manifests and devbox.json carry the explanation.
+    // looks for the commands. The manifests carry the explanation.
     comments: null,
     namesCommands: false,
     // A CI key is a location, never a `"// …"` comment, so this changes nothing here.
@@ -228,10 +173,10 @@ async function readText(path: string): Promise<string> {
 /**
  * A `// …` key is the comment explaining the absence, not a command.
  *
- * This is a **manifest** convention only. `package.json` is strict JSON — npm rejects a
- * real comment — and npm attaches no meaning to the key, so it stays inert. `devbox.json`
- * is the opposite on both counts: it takes real comments and it turns every key into a
- * script. See `devboxFile`.
+ * `package.json` is strict JSON — npm rejects a real comment — and npm attaches no meaning
+ * to the key, so it stays inert. That was not true of `devbox.json`, which takes real
+ * comments and turned every key into a script, so a `"//db:push"` key there was the command
+ * it meant to document (#30). It declares no keys now.
  */
 const isComment = (name: string) => name.startsWith("//");
 
@@ -240,36 +185,6 @@ const commentsIn = (scripts: Record<string, string>) =>
   Object.entries(scripts)
     .filter(([name]) => isComment(name))
     .map(([, text]) => text);
-
-/**
- * The comments in a JSONC file — `devbox.json` explains itself in these.
- *
- * Consecutive `//` lines are joined into one comment, because that is what they are: a
- * paragraph wrapped to the line width, not one remark per line. Read line by line instead,
- * no single comment would carry both halves of the assertion below, and a file could
- * satisfy it by mentioning `push` in one place and ADR-0030 in an unrelated other.
- */
-function jsoncComments(contents: string): string[] {
-  const blocks: { lastLine: number; text: string }[] = [];
-
-  visit(contents, {
-    onComment: (offset, length, startLine) => {
-      const text = contents.slice(offset, offset + length);
-      // A `/* … */` comment can span lines of its own, so the next one is adjacent to
-      // where this one ended rather than to where it started.
-      const lastLine = startLine + (text.match(/\n/g)?.length ?? 0);
-      const previous = blocks.at(-1);
-      if (previous && previous.lastLine === startLine - 1) {
-        previous.lastLine = lastLine;
-        previous.text += ` ${text}`;
-      } else {
-        blocks.push({ lastLine, text });
-      }
-    },
-  });
-
-  return blocks.map(({ text }) => text);
-}
 
 /**
  * A GitHub Actions file — not kobai's Workflow, which `CONTEXT.md` reserves for a declared
@@ -321,31 +236,6 @@ const runsPush = (command: string) =>
 const explainsTheAbsence = (comment: string) =>
   /push/i.test(comment) && /0030/.test(comment);
 
-/**
- * The file devbox generates a `devbox.json` key into: `<scripts dir>/<key>.sh`, reached
- * through a path join. A join cleans the path it builds, so leading slashes disappear on
- * the way — which is how `"//db:push"` and `"db:push"` end up as one script.
- */
-const generatedScript = (key: string) => `${key.replace(/^\/+/, "")}.sh`;
-
-/**
- * Each pair of keys devbox would generate into one file. Both are named, because either
- * one of them could be the mistake and the reader is the one who knows which.
- */
-function collidingKeys(commands: Record<string, string>): string[] {
-  const claimedBy = new Map<string, string>();
-  const collisions: string[] = [];
-
-  for (const key of Object.keys(commands)) {
-    const script = generatedScript(key);
-    const first = claimedBy.get(script);
-    if (first === undefined) claimedBy.set(script, key);
-    else collisions.push(`"${first}" and "${key}" both generate ${script}`);
-  }
-
-  return collisions;
-}
-
 /** Each offence as its file, which command, and what that command runs. */
 function offenders(files: CommandFile[]): string[] {
   const found: string[] = [];
@@ -363,7 +253,7 @@ function offenders(files: CommandFile[]): string[] {
 }
 
 describe("no push command exists anywhere", () => {
-  it("finds none in any package manifest, in devbox.json, or in a CI workflow", async () => {
+  it("finds none in any package manifest or in a CI workflow", async () => {
     expect(offenders(await commandFiles())).toEqual([]);
   });
 
@@ -390,133 +280,13 @@ describe("no push command exists anywhere", () => {
     // Project, because that is the Project the generated one is made from.
     const scanned = (await commandFiles()).map((file) => file.path);
 
+    expect(scanned).toContain("package.json");
     expect(scanned).toContain("reference/package.json");
     expect(scanned).toContain("reference/admin/package.json");
-    expect(scanned).toContain("reference/devbox.json");
     expect(scanned).toContain("packages/create-kobai/template/package.json");
-    expect(scanned).toContain("packages/create-kobai/template/devbox.json");
-  });
-
-  it("has no devbox.json key that generates over another one, in any devbox.json", async () => {
-    // The other half of #30, and the reason `"//db:push"` was ever dangerous: two keys
-    // that generate into one file are one command, and which of them it runs depends on
-    // the order devbox happened to write them in.
-    //
-    // Every discovered file, not just the root's. There are three now, and the one inside
-    // the generated Project is the one that would carry the mistake to every Developer.
-    const { devboxes } = await commandFilePaths();
-    const collisions: string[] = [];
-
-    for (const path of devboxes) {
-      const file = devboxFile(await readText(path), path);
-      collisions.push(...collidingKeys(file.commands).map((c) => `${path}: ${c}`));
-    }
-
-    expect(collisions).toEqual([]);
-    // Discovery finding nothing would make this pass by checking nothing.
-    expect(devboxes.length).toBeGreaterThanOrEqual(3);
   });
 });
 
-/**
- * `devbox.json` is the file where someone reaches for the convenient command, so these
- * cover its reading against the two ways it can go wrong: an explanation that has
- * evaporated, and the `"// …"` key that #30 showed is a command wearing a comment's
- * clothes. They go through `devboxFile`, the same reader the scan itself uses.
- */
-describe("reading devbox.json", () => {
-  const explained = `{
-  "shell": {
-    "scripts": {
-      // There is deliberately no db:push script. \`drizzle-kit push\` diffs against the
-      // LIVE database; see docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md.
-      "db:generate": "pnpm -r build && pnpm -r db:generate"
-    }
-  }
-}`;
-
-  it("reads the commands out of a file that has comments in it", () => {
-    expect(devboxFile(explained).commands).toEqual({
-      "db:generate": "pnpm -r build && pnpm -r db:generate",
-    });
-  });
-
-  it("reads a wrapped explanation as one comment rather than as its lines", () => {
-    // The two halves of the explanation sit on different lines. Read separately, neither
-    // line explains anything.
-    expect(devboxFile(explained).comments?.filter(explainsTheAbsence)).toHaveLength(1);
-  });
-
-  it("finds no explanation once the comments are deleted", () => {
-    // The red case for the assertion above, so that it is known to be able to fail rather
-    // than assumed to be.
-    const stripped = explained
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("//"))
-      .join("\n");
-
-    expect(devboxFile(stripped).comments?.filter(explainsTheAbsence)).toHaveLength(0);
-  });
-
-  it("is not satisfied by two unrelated remarks", () => {
-    // One comment saying `push` and a different one citing the ADR is not an explanation,
-    // and this is the shape the file takes today: it carries a note about its own comment
-    // convention as well as the explanation.
-    const scattered = `{
-  "shell": {
-    "scripts": {
-      // Explanations here are real comments: a "//db:push" key would become a command.
-      "db:generate": "pnpm -r build && pnpm -r db:generate",
-
-      // ADR-0030 is why db:generate builds first.
-      "build": "pnpm -r build"
-    }
-  }
-}`;
-
-    expect(devboxFile(scattered).comments?.filter(explainsTheAbsence)).toHaveLength(0);
-  });
-
-  it("judges a `// …` key as the command devbox generates from it", () => {
-    // devbox writes `.devbox/gen/scripts/<key>.sh` through a path join, and a join eats
-    // the leading `//`. The key below is not a comment: it is `devbox run db:push`.
-    const offending = `{
-  "shell": {
-    "scripts": {
-      "//db:push": "There is deliberately no db:push script. See ADR-0030.",
-      "db:generate": "pnpm -r build && pnpm -r db:generate"
-    }
-  }
-}`;
-
-    expect(offenders([devboxFile(offending)])).toHaveLength(1);
-    expect(offenders([devboxFile(offending)])[0]).toContain("db:push");
-  });
-
-  it("catches a `// …` key that generates over the script it meant to document", () => {
-    // The original sighting: `devbox run db:generate` echoed the prose and exited 127,
-    // then ran the real command again once something else regenerated the file.
-    const colliding = `{
-  "shell": {
-    "scripts": {
-      "//db:generate": "It builds first because a Plugin's drizzle.config.ts …",
-      "db:generate": "pnpm -r build && pnpm -r db:generate"
-    }
-  }
-}`;
-
-    expect(collidingKeys(devboxFile(colliding).commands)).toEqual([
-      '"//db:generate" and "db:generate" both generate db:generate.sh',
-    ]);
-  });
-});
-
-/**
- * The scan above is only as good as what it reads. A CI file is not a manifest — its
- * commands are `run:` blocks spread over many jobs, any of which can be a multi-line
- * script — so these cover the reading of one, against CI written to offend. They go
- * through `ciFile`, the same reader the scan itself uses.
- */
 describe("reading a CI file", () => {
   // Indented from column zero because YAML counts the indentation.
   const offending = `
@@ -528,12 +298,12 @@ jobs:
   gate:
     steps:
       - uses: actions/checkout@v4
-      - run: devbox run ci
+      - run: pnpm run ci
   release:
     steps:
       - name: Ship the schema
         run: |
-          devbox run install
+          pnpm install --frozen-lockfile
           pnpm --filter @kobai/core exec drizzle-kit push
 `;
 
@@ -595,7 +365,7 @@ on:
 jobs:
   gate:
     steps:
-      - run: devbox run ci
+      - run: pnpm run ci
 `),
     ).toEqual([]);
   });

@@ -126,13 +126,15 @@ updates:
     # nobody reads to the bottom of, going red for a reason that is not obvious, and
     # sitting. A major is meant to cost a decision — this makes it visibly ask for one.
 
-    # DECISION: `@types/node` never crosses a major here. #28 records why: `devbox.json`
-    # pins `nodejs@22` under ADR-0031, and typing against Node 26's API surface while
+    # DECISION: `@types/node` never crosses a major here. #28 records why: `.node-version`
+    # pins Node 22 under ADR-0083, and typing against Node 26's API surface while
     # running Node 22 typechecks code against functions that do not exist at runtime —
     # worse than being behind. Without this, a 22 → 26 PR would arrive every week and be
     # hand-closed every week, which is how a reviewer learns to skim past exactly the
-    # kind of PR this file exists to make them read. **Lift this the day the devbox Node
-    # pin moves** — that pin is the constraint, not the types.
+    # kind of PR this file exists to make them read. **Lift this the day `.node-version`
+    # moves** — that pin is the constraint, not the types. It is one of five copies of the
+    # same major, held together by `tests/one-node-version.test.ts`, so moving it is one
+    # change rather than five.
     #
     # HAZARD, and it is the reason to keep this list at two entries and never grow it
     # casually: `ignore` is one of the options that shapes **security** pull requests as

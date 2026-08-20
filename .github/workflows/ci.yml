@@ -1,5 +1,9 @@
-# One job running the one gate. If `devbox run ci` passes locally it passes here, because
-# it is the same command against the same pinned toolchain — see AGENTS.md § Development.
+# One job running the one gate. If `pnpm run ci` passes locally it passes here, because it
+# is the same command — see AGENTS.md § Development.
+#
+# It installs no devbox. The gate should prove the path contributors are told to use, and
+# under ADR-0083 that is Node from `.node-version`, corepack, and pnpm; devbox provided
+# exactly those two things for whoever wants it, and nothing else this job needs.
 name: ci
 
 on:
@@ -23,10 +27,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install devbox
-        uses: jetify-com/devbox-install-action@v0.15.0
+      # The one pin, read by `actions/setup-node` here and by fnm, nvm, nodenv, asdf and
+      # mise on a contributor's machine. `tests/one-node-version.test.ts` holds it to
+      # `engines`, `devbox.json` and both Dockerfiles.
+      - uses: actions/setup-node@v6
         with:
-          enable-cache: "true"
+          node-version-file: .node-version
+
+      # corepack activates the pnpm pinned in `package.json`, on the Node above. One Node,
+      # everywhere — a separately-installed pnpm brings its own and would run every script
+      # on it (ADR-0031).
+      - run: corepack enable
 
       - name: Cache the pnpm store
         uses: actions/cache@v6
@@ -35,8 +46,8 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
 
-      # The Chromium `tests/the-admin-in-a-browser.test.ts` drives. `devbox run ci` downloads
-      # it itself — the gate needs nothing run before it, and that stays true — so this only
+      # The Chromium `tests/the-admin-in-a-browser.test.ts` drives. `pnpm run ci` downloads
+      # it itself — the gate needs nothing run before it but the install — so this only
       # decides whether the download happens again on every run. Keyed on the lockfile, which
       # is the same key the pnpm store uses and moves whenever the Playwright version does; it
       # also moves for every other dependency, which costs one extra download and nothing else.
@@ -47,6 +58,14 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: playwright-${{ runner.os }}-
 
+      # The gate installs nothing, so the install is its own step — which is what every
+      # other JavaScript repository does and what makes a dependency failure legible as one.
+      - run: pnpm install --frozen-lockfile
+
       # Postgres comes up through the repository's own compose file rather than a service
       # container, so CI runs against the same database a Developer does.
-      - run: devbox run ci
+      #
+      # One step, not four. A step list here would be a second definition of green that can
+      # drift from the composite a contributor runs, and "the same command" is the property
+      # worth more than per-step timing (ADR-0083).
+      - run: pnpm run ci

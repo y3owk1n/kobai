@@ -27,24 +27,6 @@
       "db": "docker compose up -d --wait db",
       "db:down": "docker compose down -v",
 
-      // Every script below that runs a binary out of `node_modules` opens with
-      // `sh scripts/require-install.sh <its own name> &&`. A Project that has never installed
-      // is not an exotic state, it is the state this one arrived in — the only one it has
-      // ever been in — and what those scripts did there was fail with
-      // `Command "vite" not found`: a message naming a binary, leaving whoever ran the first
-      // command they were told to run to work out that a package manager never ran.
-      // `install` carries no guard because it *is* the install, and the docker-only scripts
-      // carry none because nothing has to be installed here for them at all — `up` installs
-      // inside the image.
-      //
-      // The guard is a file rather than a shell function in the `init_hook` above, because
-      // devbox skips that hook whenever a devbox shell is already active, and a function
-      // defined there is then missing from every script. `scripts/require-install.sh` says
-      // the rest. It is a copy of the one kobai's own workspace uses — a Project reaches into
-      // no repository that generated it — and every line of code in the two is identical;
-      // kobai's tests/a-fresh-checkout-is-told-what-to-run.test.ts fails naming the line if
-      // that stops being true.
-
       // Explanations here are real comments, never `"// …"` keys. devbox turns every key in
       // this file into a runnable script and eats the leading slashes doing it, so a
       // `"//db:push"` key would create the very `devbox run db:push` the next comment says
@@ -55,7 +37,7 @@
       // Generates a migration from this Project's own schema, in `src/db/schema.ts`, into
       // this Project's own `migrations/`. Adding a column to a table you own is this
       // command and nothing else: no coordination with Core, no Plugin consulted.
-      "db:generate": "sh scripts/require-install.sh db:generate && pnpm --filter kobai-project db:generate",
+      "db:generate": "pnpm --filter kobai-project db:generate",
 
       // There is deliberately no db:push script, and this is the file where someone would
       // reach for the convenient one. `drizzle-kit push` diffs against the LIVE database:
@@ -71,17 +53,17 @@
       // the root by default — so without the flag this builds the Admin, reports success,
       // and leaves the Project's own TypeScript uncompiled. The first thing anyone would
       // notice is `node dist/src/server.js` saying the file does not exist.
-      "build": "sh scripts/require-install.sh build && pnpm -r --include-workspace-root build",
-      "dev": "sh scripts/require-install.sh dev && pnpm -r --include-workspace-root build && pnpm --filter kobai-project dev",
+      "build": "pnpm -r --include-workspace-root build",
+      "dev": "pnpm -r --include-workspace-root build && pnpm --filter kobai-project dev",
 
       // The Admin with a reload loop, in a second terminal beside `devbox run dev`. It is a
       // Vite dev server that proxies `/admin`, `/store` and `/health` to the app, so the
       // browser still sees exactly one origin — which is what production looks like and why
       // there is no CORS configured anywhere (ADR-0010, ADR-0033).
-      "admin:dev": "sh scripts/require-install.sh admin:dev && pnpm --filter kobai-project-admin dev",
+      "admin:dev": "pnpm --filter kobai-project-admin dev",
 
-      "typecheck": "sh scripts/require-install.sh typecheck && pnpm -r --include-workspace-root typecheck",
-      "start": "sh scripts/require-install.sh start && pnpm --filter kobai-project start"
+      "typecheck": "pnpm -r --include-workspace-root typecheck",
+      "start": "pnpm --filter kobai-project start"
     }
   }
 }
