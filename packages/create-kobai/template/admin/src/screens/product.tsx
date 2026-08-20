@@ -11,10 +11,11 @@ import type {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackageXIcon } from "lucide-react";
 import { useState } from "react";
-import { useController, useFieldArray, useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
+import { CollectionsField } from "@/components/collections-field";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { FormField } from "@/components/form-field";
 import { FulfilmentStrategyField } from "@/components/fulfilment-strategy-field";
@@ -38,7 +39,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Empty,
   EmptyDescription,
@@ -46,13 +46,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from "@/components/ui/field";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -64,7 +57,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useOfferedCollections } from "@/lib/collections";
 import { useCrumbTitle } from "@/lib/crumb";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
@@ -623,9 +615,14 @@ function ProductMedia({
  * order — there is no first Collection and nothing to move up or down — which is why this is a
  * list of checkboxes rather than `useFieldArray` with Up and Down beside each row.
  *
- * **The set is read from kobai, never written down here**, through `lib/collections.ts` — which
- * the Products list's own filter reads from too, so the two ask one question in one place and
- * inherit the same known gap about the hundred-and-first Collection.
+ * **The picker itself is `components/collections-field.tsx`** since the New Product form began
+ * offering the same question at a create (#280) — the second use, which is where a component
+ * gets extracted here. What this card keeps is what is its own: the whole set kobai already
+ * holds, the request that changes it, and the sentence below about what Remove does. The set of
+ * Collections to choose from is read from kobai and never written down, through
+ * `lib/collections.ts`, which the Products list's own filter reads from too — so the three ask
+ * one question in one place and inherit the same known gap about the hundred-and-first
+ * Collection.
  *
  * **Removing a Collection here takes this Product out of it and deletes nothing** — not the
  * Collection, and not the other Products in it. That sentence is in the card because a Merchant
@@ -643,16 +640,11 @@ function ProductCollections({
   const reread = useRereadProduct(id);
   const unavailable = useCannotWrite();
 
-  const offered = useOfferedCollections();
-
   const form = useForm<{ collections: string[] }>({
     // `values` rather than `defaultValues`, so a change that landed leaves the form showing what
     // kobai now holds rather than what was clicked at it.
     values: { collections: collections.map((one) => one.id) },
   });
-  const { field } = useController({ control: form.control, name: "collections" });
-  const held = Array.isArray(field.value) ? field.value : [];
-
   const save = useMutation({
     mutationFn: async (values: { collections: string[] }) =>
       orThrow(
@@ -663,21 +655,6 @@ function ProductCollections({
       ),
     onSuccess: reread,
   });
-
-  /**
-   * Every Collection this card can draw a row for.
-   *
-   * The offered list, plus any this Product is already in that the list did not carry — which is
-   * `PermissionsField`'s rule about a word Core has never heard of, arriving here as the
-   * hundred-and-first Collection. A card that quietly dropped one would take the Product out of
-   * it on the next save, which is data loss spelled as a form.
-   */
-  const rows = [
-    ...offered.collections,
-    ...collections.filter(
-      (one) => !offered.collections.some((each) => each.id === one.id),
-    ),
-  ];
 
   return (
     <Card>
@@ -697,65 +674,21 @@ function ProductCollections({
             problem={save.isError ? whyNotChanged(save.error) : null}
             title="The Collections were not changed."
           />
-          <Problem
-            problem={
-              offered.error === null
-                ? null
-                : problemOf(offered.error, "The Collections could not be read.")
+          <CollectionsField
+            idPrefix="product-collection"
+            control={form.control}
+            name="collections"
+            // The ones kobai did not offer and this Product is nevertheless in — the
+            // hundred-and-first Collection, which a card that dropped it would take this
+            // Product out of on the next save.
+            alsoOffer={collections}
+            whenNone={
+              <p className="text-muted-foreground text-sm">
+                This Store has no Collections yet. Make one in the Collections section and
+                it will be offered here.
+              </p>
             }
           />
-
-          {offered.pending ? (
-            <div
-              className="grid gap-3"
-              role="status"
-              aria-label="Reading the Collections"
-            >
-              <Skeleton className="h-6 w-48" />
-              <Skeleton className="h-6 w-48" />
-            </div>
-          ) : null}
-
-          {offered.read && rows.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              This Store has no Collections yet. Make one in the Collections section and
-              it will be offered here.
-            </p>
-          ) : null}
-
-          {rows.length > 0 ? (
-            <FieldSet>
-              <FieldLegend variant="label">In these Collections</FieldLegend>
-              {/* `checkbox-group` is what `Field`'s own spacing rules key off, so the list is
-                  spaced the way shadcn spaces a set of checkboxes. */}
-              <FieldGroup data-slot="checkbox-group">
-                {rows.map((collection) => (
-                  <Field key={collection.id} orientation="horizontal">
-                    <Checkbox
-                      id={`product-collection-${collection.id}`}
-                      checked={held.includes(collection.id)}
-                      onCheckedChange={(inIt) =>
-                        field.onChange(
-                          inIt
-                            ? [...held, collection.id]
-                            : held.filter((each) => each !== collection.id),
-                        )
-                      }
-                    />
-                    {/* A `<label for>` reaches the checkbox because Base UI's root is a
-                        `<button>`, which is labelable — so clicking the title toggles it and a
-                        screen reader announces the Collection as the control's name. */}
-                    <FieldLabel
-                      htmlFor={`product-collection-${collection.id}`}
-                      className="font-normal"
-                    >
-                      {collection.title}
-                    </FieldLabel>
-                  </Field>
-                ))}
-              </FieldGroup>
-            </FieldSet>
-          ) : null}
         </CardContent>
         <CardFooter className="mt-4">
           <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>

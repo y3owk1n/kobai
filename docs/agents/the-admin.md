@@ -444,11 +444,20 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   first name the route answers with was the alternative and is worse — it is alphabetical, so
   the picker would default to `digital`. **A set two controls both ask for is a module**, on the
   extract-on-the-second rule the two components above already carry: `lib/collections.ts` is that
-  set for Collections (#256), read by the Products list's second filter and by the Product
-  screen's Collections card, and it reports *whether kobai has answered* beside the list because
-  both callers need to tell "the Store has none" from "nobody has asked yet". It asks for a
-  hundred and **does not page**, which is `components/media-attachments.tsx`'s known gap arriving
-  one noun along, and it is written down there rather than here for that reason.
+  set for Collections (#256), read by the Products list's second filter and by
+  `components/collections-field.tsx`, and it reports *whether kobai has answered* beside the list
+  because every caller needs to tell "the Store has none" from "nobody has asked yet". It asks
+  for a hundred and **does not page**, which is `components/media-attachments.tsx`'s known gap
+  arriving one noun along, and it is written down there rather than here for that reason.
+  **The picker over that set is one component too** (#280): the Product screen's Collections card
+  and the New Product form ask a Merchant the same question, because `collections` is on
+  `POST /admin/products` as well as on the correction — so the checkboxes, the skeleton and the
+  hundred-and-first Collection offered anyway live in `components/collections-field.tsx`, and it
+  takes `control` and `name` like `permissions-field.tsx` rather than a value and a callback. Two
+  things stay the callers': what a Store with **no** Collections is told, which is a sentence on
+  the card and nothing at all on the create form — a Merchant filling one in did not come looking
+  for Collections — and, at a create, that `collection-not-found` is now a refusal that form can
+  really meet, by a Collection deleted since the list was read.
 - **A field whose options are still loading must not say the value is wrong.** The "not wired
   here" option is gated on the query having **succeeded**, not on the name being absent from an
   empty list — otherwise every ordinary `physical` Variant is labelled broken for the length of

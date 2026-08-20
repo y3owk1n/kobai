@@ -1448,7 +1448,7 @@ export const Product = z
     }),
     collections: z.array(Collection).readonly().meta({
       description:
-        "The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections` on `PATCH /admin/products/{id}`, which takes the whole set. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round.",
+        "The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections`, which takes the whole set: on `POST /admin/products`, so a Product can be created straight into one, and on `PATCH /admin/products/{id}` thereafter. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round.",
     }),
     metadata: Metadata,
   })
@@ -1602,6 +1602,14 @@ export const ProductOptionCorrection = z
  * a **draft**, always; publishing is an act a Merchant performs at `PATCH /admin/products/{id}`
  * rather than a side effect of typing a title. A `status` on this body would make the two the
  * same request again, with the draft as whatever a client remembered to send.
+ *
+ * **`collections` *is* here, and `media` is still not** (#280). The two absences read alike and
+ * are not the same: Media is bytes uploaded at a route of their own, so attaching is a second
+ * act however this body is shaped, while a Collection is a row that already exists and grouping
+ * a Product into one at the moment it is created costs nothing but the field. What it buys is
+ * the request a client no longer makes twice — a hundred Products into a Collection was two
+ * hundred requests. It is the same set {@link UpdateProductRequest} takes, refused in the same
+ * words, so what may be created is what may be corrected to (ADR-0060).
  */
 export const CreateProductRequest = z
   .object({
@@ -1617,6 +1625,10 @@ export const CreateProductRequest = z
     options: z.array(ProductOptionDeclaration).optional().meta({
       description:
         "The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values — which is the one case two of them may answer nothing alike, since a Product declaring no options offers no combination to choose. Where it declares any, two Variants of this body answering them the same way is refused at 400: a storefront maps a combination to one Variant.",
+    }),
+    collections: z.array(CollectionMembership).optional().meta({
+      description:
+        "**The Collections this Product is created into** — the whole set, exactly as `PATCH /admin/products/{id}` takes it, so grouping a Product at the moment it is created is one request rather than two. Left out is the same as an empty list: a Product in no Collection, which is what every Product is until somebody groups it. The order carries no meaning — this is a set, not an ordered list like `media` on the correction — so what comes back is by title. A Collection this Store does not have is refused at 422 with `collection-not-found`, and **nothing is written**: no Product, no Variant and no membership. Nothing here creates a Collection; `POST /admin/collections` does.",
     }),
     metadata: Metadata.optional(),
     variants: z.array(CreateVariantRequest).min(1),
