@@ -59,7 +59,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useCrumbTitle } from "@/lib/crumb";
-import { useOfferedChannels, useOfferedRegions, whyRegionsNotRead } from "@/lib/markets";
+import {
+  useOfferedChannels,
+  useOfferedRegions,
+  whyChannelsNotRead,
+  whyRegionsNotRead,
+} from "@/lib/markets";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { catalogReasonOf, orThrow, problemOf } from "@/lib/refusal";
@@ -1276,9 +1281,8 @@ function Prices({
                 ...channels.offered.map((one) => ({ value: one.id, label: one.name })),
               ]}
               description={
-                channels.error === null
-                  ? "Which route to market this Price applies through. A storefront is in the Channel its API key was minted into."
-                  : problemOf(channels.error, "kobai did not say which Channels it has.")
+                whyChannelsNotRead(channels) ??
+                "Which route to market this Price applies through. A storefront is in the Channel its API key was minted into."
               }
               disabled={channels.error !== null}
             />

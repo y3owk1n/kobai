@@ -98,7 +98,7 @@ export function useEnabledCurrencies(): EnabledCurrencies {
  * and each of them has to tell a failed read apart from a Store that has enabled nothing. A
  * fourth spelling of *kobai did not say* is the thing this rules out, and there would have been
  * three of them the day the third picker was written. `lib/markets.ts` carries the same function
- * for Regions and, deliberately, none for Channels — one caller is not a module.
+ * for Regions and for Channels, and every picker over a set kobai names now reaches for one.
  *
  * It answers `null` for a read that has not failed, so a caller reaches for `??` and keeps its
  * own prose for the states that are not failures — what is worth saying about an empty list, or

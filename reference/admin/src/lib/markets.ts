@@ -79,10 +79,6 @@ export function useOfferedRegions(): OfferedMarkets<Region> {
  * Price editor's Region picker and the Store screen's Default Region card both have to tell a
  * read that failed apart from a Store that has defined none, and an empty list looks identical
  * either way. **Extract on the second**, and the Store screen is the second.
- *
- * There is deliberately **no `whyChannelsNotRead` beside it**: the Price editor is still the only
- * control that renders a failed Channel read, so the sentence lives at that call site until
- * something else needs it. One caller is not a module.
  */
 export function whyRegionsNotRead(regions: OfferedMarkets<Region>): string | null {
   if (regions.error === null) return null;
@@ -108,4 +104,23 @@ export function useOfferedChannels(): OfferedMarkets<Channel> {
     isPending: query.isPending,
     error: query.isError ? query.error : null,
   };
+}
+
+/**
+ * Why the Channels could not be read, in words a Merchant can act on — or `null` (#311).
+ *
+ * {@link whyRegionsNotRead} one noun along, and the third of these written for the same reason:
+ * the Price editor's Channel picker and the API keys screen's mint form both draw an empty list
+ * for a Store with no Channels and for a read that never landed, and only one of those is
+ * something a Merchant can act on.
+ *
+ * **The API keys screen is the case that shows why the sentence is not enough on its own.** Its
+ * picker always carries `In no particular Channel`, which is a real answer and the one most keys
+ * want — so a failed read there is not an empty picker at all, and the caller says the read
+ * failed *and* that the ordinary key can still be minted. Naming the failure is this function's;
+ * what is still possible in spite of it is the caller's.
+ */
+export function whyChannelsNotRead(channels: OfferedMarkets<Channel>): string | null {
+  if (channels.error === null) return null;
+  return problemOf(channels.error, "kobai did not say which Channels it has.");
 }

@@ -519,12 +519,18 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   `lib/store.ts`, `lib/markets.ts`, `lib/collections.ts`, the last of which spells the same two
   fields `read` and `pending` — and a screen renders it **in the field's own `description`**, through
   `problemOf`, with the control `disabled`. Being merely dead is not saying so: a disabled picker
-  reads as one that has not loaded. **The sentence is a function next to the hook once two
-  screens need it** — `whyCurrenciesNotRead`, `whyRegionsNotRead` — and stays at the call site
-  while one does, which is why there is deliberately no `whyChannelsNotRead`. That is
+  reads as one that has not loaded. **The sentence is a function next to the hook** —
+  `whyCurrenciesNotRead`, `whyRegionsNotRead`, `whyChannelsNotRead` — which is
   `lib/currencies.ts`'s rule one question along: naming the failure and deciding which screens
   show it are two questions, and separating them is what stops a fourth spelling of *kobai did
-  not say*.
+  not say*. **Every picker over one of these sets was fixed in one change, deliberately**, because
+  the alternative is repairing this defect one screen at a time — which is how it survived #300
+  and #292 both. **The API keys screen's Channel picker is the one that does not fall through**, and it
+  is the case worth reading before writing the next one: `In no particular Channel` is a real
+  answer rather than an empty-set placeholder — the one most keys want and every key that exists
+  today — so a failed read there costs a Merchant the *other* rows and nothing else, and the
+  field says the read failed **and** that the ordinary key can still be minted. Naming a failure
+  belongs to the module; what is still possible in spite of it belongs to the caller.
 - **A `Select` is given `items`, its options are wrapped in a `SelectGroup`, and "no value" is
   `null`** (#239). All three are Base UI's documented shape and this Admin had none of them, so
   each was a defect the type checker could not see. `Select.Value` renders the **raw value**
