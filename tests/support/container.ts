@@ -266,6 +266,17 @@ export type ComposeProject = {
   /** The image compose built for `app`, so it can be asked what it contains. */
   readonly appImage: string;
   logs(): Promise<string>;
+  /**
+   * Throws the `app` container away and starts another off the same image, waiting until it
+   * is ready again.
+   *
+   * **A redeploy, minus the rebuild** — which is the half that decides where a Project's
+   * uploaded files were. A container's own filesystem goes with the container and a mounted
+   * volume does not, so this is the only question that can tell the two apart, and reading a
+   * file back afterwards is the only way to ask it. `--no-deps`, so the database this Project
+   * has been using is left running underneath exactly as a real redeploy leaves it.
+   */
+  recreateApp(): Promise<void>;
   down(): Promise<void>;
 };
 
@@ -285,12 +296,15 @@ export async function composeUp(options: {
   /** Unique, so this compose project owns its own containers, network and volume. */
   readonly projectName: string;
   /**
-   * `POSTGRES_PORT` and `PORT`, which the gate must override rather than inherit.
+   * Whatever this compose file reads out of the environment — the two ports at least.
    *
-   * `devbox run ci` exports a `POSTGRES_PORT` of its own in front of every script (#21), and
-   * a nested compose project inheriting it would try to publish this Project's Postgres on
-   * the port the repository's is already on. Overriding it here changes nothing about the
-   * repository's own database — it is one child process's environment.
+   * `POSTGRES_PORT` and `PORT` have to be *overridden* rather than inherited: `devbox run ci`
+   * exports a `POSTGRES_PORT` of its own in front of every script (#21), and a nested compose
+   * project inheriting it would try to publish this Project's Postgres on the port the
+   * repository's is already on. Doing it here changes nothing about the repository's own
+   * database — it is one child process's environment. Anything else a test needs the running
+   * Project configured with travels the same way, because the compose file forwards it by
+   * name and reads no `.env` this test wrote.
    */
   readonly env: Readonly<Record<string, string>>;
   /** The host port `PORT` publishes the application on. */
@@ -314,28 +328,39 @@ export async function composeUp(options: {
 
   const logs = async () => compose(["logs", "app"], "").catch(() => "");
 
+  const exited = async () => {
+    const state = await compose(
+      ["ps", "--all", "--format", "{{.Service}} {{.State}}"],
+      "`docker compose ps` could not read the Project's services.",
+    );
+    return /^app exited/m.test(state) ? state.trim() : undefined;
+  };
+
+  const recreateApp = async () => {
+    await compose(
+      ["up", "--detach", "--force-recreate", "--no-deps", "app"],
+      "`docker compose up --force-recreate app` failed, so the Project was never redeployed and nothing below it was asked.",
+    );
+    await waitForReady({
+      what: "The Project's `app` service, after being recreated",
+      logs,
+      exited,
+    });
+  };
+
   try {
     await compose(
       ["up", "--build", "--detach"],
       "`docker compose up --build` failed on the Project's own compose file. Nothing below it ran.",
     );
 
-    await waitForReady({
-      what: "The Project's `app` service",
-      logs,
-      exited: async () => {
-        const state = await compose(
-          ["ps", "--all", "--format", "{{.Service}} {{.State}}"],
-          "`docker compose ps` could not read the Project's services.",
-        );
-        return /^app exited/m.test(state) ? state.trim() : undefined;
-      },
-    });
+    await waitForReady({ what: "The Project's `app` service", logs, exited });
 
     return {
       origin: `http://127.0.0.1:${appPort}`,
       appImage: `${projectName}-app`,
       logs,
+      recreateApp,
       down,
     };
   } catch (cause) {
