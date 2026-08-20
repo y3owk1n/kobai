@@ -1593,10 +1593,9 @@ const CollectionFilter = z.string().optional();
  * and never a row read: best match, on the Region and the Channel, in a Workflow a Project may
  * have replaced.
  *
- * **A union rather than `.nullable()`** on both, for the reason `Store.defaultRegion` carries:
- * `.nullable()` at a reference site is applied to the registered component, so `RegionIdentity`
- * itself would be published as `object | null` and every other route naming one would promise a
- * `null` no handler produces.
+ * **A union rather than `.nullable()`** on both, for `Store.defaultRegion`'s reason: written the
+ * other way, **`RegionIdentity`** is what is published as `object | null`, at every other route
+ * naming one.
  */
 export const Price = z
   .object({

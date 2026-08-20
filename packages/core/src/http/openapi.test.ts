@@ -242,6 +242,14 @@ function componentsAdmittingNull(schemas: Record<string, ComponentSchema>): stri
  * would slip through, and the answer if that day comes is another clause here rather than a
  * different kind of check.
  *
+ * **A schema with no `.openapi()` is not a component and this does not reach it**, which is the
+ * first thing to check before reading a `.nullable()` in `contract.ts` as a bug. `AttachShopper`
+ * is the one to look at: it is a bare `z.object`, so `CreateCartRequest` and `UpdateCartRequest`
+ * each inline its shape rather than referring to it, and `.nullable()` there is applied to the
+ * field exactly as it reads. There is no registered component for a `null` to leak onto — the
+ * failure this sweeps for is that a *named* schema is shared, and an inlined one is shared with
+ * nobody.
+ *
  * The document is **built** rather than read off disk, so the failure arrives when the
  * `.nullable()` is written rather than when somebody gets around to regenerating. The
  * checked-in file cannot disagree: the drift check above holds it byte for byte.
