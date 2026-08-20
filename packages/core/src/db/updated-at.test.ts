@@ -3,6 +3,7 @@ import {
   createTestApiKey,
   createTestKobai,
   inspectSchema,
+  seedTestOrder,
   signInTestMerchant,
   type TestDatabase,
 } from "../testing/index.ts";
@@ -52,6 +53,38 @@ describe("updated_at", () => {
     expect(revoked.status).toBe(204);
 
     const after = await updatedAtOf(kobai.database, "core_api_key", key.id);
+    expect(after.getTime()).toBeGreaterThan(before.getTime());
+  });
+
+  /**
+   * The table this column was put on **before anything could move a row on it**, and the first
+   * write that does (#320).
+   *
+   * `core_fulfilment.updated_at` shipped with the entity and its own schema comment said so — a
+   * Fulfilment is the one part of an Order that is expected to move while the Order around it
+   * never does — so until a transition existed, the guardrail below said the trigger was attached
+   * and nothing said it did anything. This is the row watched moving, which is the only assertion
+   * that can tell a working trigger from a column that defaults to `now()`.
+   */
+  it("advances when a Merchant dispatches a Fulfilment", async () => {
+    await using kobai = await createTestKobai();
+    const order = await seedTestOrder(kobai);
+    const opened = await kobai.request(`/admin/orders/${order.id}`, {
+      headers: order.catalog.merchant.headers,
+    });
+    const placed = (await opened.json()) as { fulfilments: readonly { id: string }[] };
+    const one = placed.fulfilments[0];
+    if (one === undefined) throw new Error("this Order has no Fulfilment to dispatch");
+
+    const before = await updatedAtOf(kobai.database, "core_fulfilment", one.id);
+
+    const dispatched = await kobai.request(
+      `/admin/orders/${order.id}/fulfilments/${one.id}/dispatch`,
+      { method: "POST", headers: order.catalog.merchant.headers },
+    );
+    expect(dispatched.status).toBe(200);
+
+    const after = await updatedAtOf(kobai.database, "core_fulfilment", one.id);
     expect(after.getTime()).toBeGreaterThan(before.getTime());
   });
 

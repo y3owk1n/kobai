@@ -4,7 +4,7 @@ import { createTestKobai, migrationSetUpTo, type TestKobai } from "../testing/in
 import { ALL_PERMISSIONS, PERMISSIONS } from "./permissions.ts";
 
 /**
- * `deployment:read` reaching the `owner` Role of a deployment that **already existed** — which
+ * `fulfilment:write` reaching the `owner` Role of a deployment that **already existed** — which
  * is the only state the migration that appends it ever meets in the field, and the one no other
  * test of Core's set arranges.
  *
@@ -18,18 +18,24 @@ import { ALL_PERMISSIONS, PERMISSIONS } from "./permissions.ts";
  * So the arrangement is the whole test: apply Core's set as it stood the day before, assert the
  * Role is short of exactly this word, then apply the rest onto it.
  *
- * **Watched failing twice.** With `0048` dropped from the journal the second case named
- * `deployment:read` as the word missing from the upgraded Role, while the first passed — which
+ * **It follows the newest permission, and that is why it is named after none of them.** The
+ * append that can be forgotten is always the one being written, and the file has been retargeted
+ * once already — from `deployment:read` (#265) to this. Nothing is lost by moving it: the first
+ * case holds the `owner` Role of a pre-upgrade deployment equal to *every permission but this
+ * one*, so every earlier append is still asserted, by the state it left behind.
+ *
+ * **Watched failing twice.** With `0062` dropped from the journal the second case named
+ * `fulfilment:write` as the word missing from the upgraded Role, while the first passed — which
  * is the point, since a Role that never gained the permission still holds every one it had. And
- * with the `CASE` taken out of `0048`'s append, the third case named it twice in the same array.
+ * with the `CASE` taken out of `0062`'s append, the third case named it twice in the same array.
  *
  * Nothing here reaches past the migration seam. The Role is read with SQL because the
  * application cannot boot against a half-migrated database, which is exactly the deployment
  * this migration arrives at.
  */
 
-/** The last migration before the permission — where a deployment stands when `0048` reaches it. */
-const BEFORE_THE_PERMISSION = "0047_product_and_variant_media_updated_at_triggers";
+/** The last migration before the permission — where a deployment stands when `0062` reaches it. */
+const BEFORE_THE_PERMISSION = "0061_large_whistler";
 
 /** A database migrated as far as {@link BEFORE_THE_PERMISSION}, and in service. */
 async function aDeploymentFromBeforeThePermission(): Promise<TestKobai> {
@@ -49,7 +55,7 @@ function ownerPermissions(kobai: TestKobai): Promise<{ permissions: string[] }[]
   );
 }
 
-describe("the deployment:read permission arriving at a deployment that already exists", () => {
+describe("the fulfilment:write permission arriving at a deployment that already exists", () => {
   it("finds an owner Role that holds every permission but this one", async () => {
     await using kobai = await aDeploymentFromBeforeThePermission();
 
@@ -59,7 +65,7 @@ describe("the deployment:read permission arriving at a deployment that already e
     await expect(ownerPermissions(kobai)).resolves.toEqual([
       {
         permissions: ALL_PERMISSIONS.filter(
-          (permission) => permission !== PERMISSIONS.deploymentRead,
+          (permission) => permission !== PERMISSIONS.fulfilmentWrite,
         ),
       },
     ]);
@@ -85,10 +91,10 @@ describe("the deployment:read permission arriving at a deployment that already e
     // An Administrator who reads a release note and grants the word ahead of the upgrade —
     // `PATCH /admin/roles/{id}` takes any non-empty string, and Core deliberately does not
     // check the vocabulary. The append is guarded on exactly this, and without the guard the
-    // Role comes out of the upgrade holding `deployment:read` twice.
+    // Role comes out of the upgrade holding `fulfilment:write` twice.
     await kobai.database.query(
       `update "core_role" set "permissions" = "permissions" || ARRAY[$1] where "name" = 'owner'`,
-      [PERMISSIONS.deploymentRead],
+      [PERMISSIONS.fulfilmentWrite],
     );
 
     await runMigrations(kobai.db, [coreMigrationSet]);

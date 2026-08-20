@@ -1,6 +1,7 @@
 import { asc, eq, inArray } from "drizzle-orm";
 import type { Queryable, Transaction } from "../db/client.ts";
 import { fulfilment, orderLineItem } from "../db/schema.ts";
+import type { FulfilmentState } from "./lifecycle.ts";
 import type { AppliedFulfilment } from "./strategy.ts";
 
 /**
@@ -12,9 +13,10 @@ import type { AppliedFulfilment } from "./strategy.ts";
  * unfixable once there is order history — so it is a row per way this Order is delivered, and
  * the Line Items that go together point at the same one.
  *
- * **Nothing here fulfils anything.** There is no state, no transition and no dispatch: fulfilling
- * is its own spec (#98 puts it out of scope), and what this ticket owes is the record it will be
- * written against. What exists today is the grouping and the snapshot.
+ * **This is the grouping and the snapshot; the moving is `./lifecycle.ts` and
+ * `./transition.ts`.** A Fulfilment carries a state and a tracking reference since #320, and the
+ * legal moves between the states are written down in the first of those rather than settled by
+ * whichever handler got there first.
  */
 
 /** One Fulfilment of an Order, as a caller reads it. */
@@ -37,6 +39,21 @@ export type Fulfilment = {
   readonly requiresShipping: boolean;
   readonly tracksInventory: boolean;
   readonly hasLeadTime: boolean;
+  /**
+   * Where this part of the Order has got to — and the **one** thing on an Order that moves.
+   *
+   * Not a snapshot, unlike everything above it: the three answers say what was true at Capture
+   * and this says what is true now. A mixed Order's parts each carry their own, which is
+   * ADR-0014's argument made assertable — dispatching the poster leaves the PDF exactly where
+   * it was.
+   */
+  readonly state: FulfilmentState;
+  /**
+   * What the Merchant recorded when they dispatched this, or `null`.
+   *
+   * Opaque: kobai stores it and parses nothing out of it, and models no carrier at all.
+   */
+  readonly trackingReference: string | null;
   /**
    * The Order's Line Items this Fulfilment covers, in SKU order — the order the Order reports
    * its lines in, so the two lists read against each other.
@@ -61,6 +78,10 @@ export type Fulfilment = {
  * exactly those four columns today, so no Order kobai places can hold such a pair; the
  * tiebreaker is here because the grouping rule is a decision that may change and the read path
  * must not silently depend on it — the query below ends in one for the same reason.
+ *
+ * **`state` is deliberately not one of the columns ordered by**, though it is selected: it is
+ * the one field here that moves, so an Order that reported its Fulfilments in state order would
+ * shuffle its own list every time a Merchant dispatched one of them.
  */
 export async function readFulfilmentsOf(
   db: Queryable,
@@ -73,6 +94,8 @@ export async function readFulfilmentsOf(
       requiresShipping: fulfilment.requiresShipping,
       tracksInventory: fulfilment.tracksInventory,
       hasLeadTime: fulfilment.hasLeadTime,
+      state: fulfilment.state,
+      trackingReference: fulfilment.trackingReference,
     })
     .from(fulfilment)
     .orderBy(

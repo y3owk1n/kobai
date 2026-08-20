@@ -258,6 +258,26 @@ export type UpdateCollectionRequest = components["schemas"]["UpdateCollectionReq
 export type CollectionMembership = components["schemas"]["CollectionMembership"];
 export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
+/**
+ * One way an Order gets to the Shopper, and the **only** part of an Order that moves (#320).
+ *
+ * An Order has as many as it has ways of being delivered, on independent timelines, because a
+ * mixed one ships a poster and emails a PDF (ADR-0014). Its three booleans are what the
+ * Fulfilment Strategy answered *at Capture* and never change; `state` and `trackingReference` are
+ * what a Merchant moves through `POST /admin/orders/{id}/fulfilments/{fulfilmentId}/dispatch` and
+ * the two routes beside it.
+ */
+export type Fulfilment = components["schemas"]["Fulfilment"];
+/**
+ * Where a Fulfilment has got to — a **closed** set, unlike the name of the Strategy above it.
+ *
+ * *What* a Store sells is open because a Store may sell anything; *how a parcel moves* is Core's
+ * own. A fifth state is additive on the wire and is **not** additive for an exhaustive `switch`
+ * (ADR-0060), so it arrives with a release note.
+ */
+export type FulfilmentState = components["schemas"]["FulfilmentState"];
+export type DispatchFulfilmentRequest =
+  components["schemas"]["DispatchFulfilmentRequest"];
 export type Payment = components["schemas"]["Payment"];
 /**
  * Where something goes — the live one a Cart carries, and the **snapshot** an Order holds.
@@ -363,6 +383,14 @@ export type CartReservations = components["schemas"]["CartReservations"];
 export type HeldClaim = components["schemas"]["HeldClaim"];
 export type CartReservationRefusal = components["schemas"]["CartReservationRefusal"];
 export type OrderRefusal = components["schemas"]["OrderRefusal"];
+/**
+ * Every way moving a Fulfilment can be refused (#320).
+ *
+ * Four of its words are the four {@link FulfilmentState}s, and that is the construction rather
+ * than a coincidence: a move is refused by *where the Fulfilment already is*, so naming the state
+ * is the whole answer. `fulfilment-cancelled` is what cancelled going back to dispatched gets.
+ */
+export type FulfilmentRefusal = components["schemas"]["FulfilmentRefusal"];
 export type QuoteRequestRefusal = components["schemas"]["QuoteRequestRefusal"];
 export type PlaceOrderRequestRefusal = components["schemas"]["PlaceOrderRequestRefusal"];
 export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];

@@ -59,6 +59,16 @@ export const PERMISSIONS = {
    * `store:read`, which a Role holds so somebody can correct a currency.
    */
   deploymentRead: "deployment:read",
+  /**
+   * Moving a Fulfilment — dispatching one, marking one delivered, cancelling one (#320).
+   *
+   * **There is no `fulfilment:read` to put beside it**, and that is kobai's decision rather than
+   * a gap in this list: a Fulfilment is read through its Order, which `order:read` already
+   * covers. So the Order screen is opened by `order:read` and its dispatch controls are
+   * unavailable to a Merchant who holds that and not this — which is exactly the warehouse Role
+   * the word exists for, seen from the other side.
+   */
+  fulfilmentWrite: "fulfilment:write",
 } as const satisfies Record<string, string>;
 
 /**

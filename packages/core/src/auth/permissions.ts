@@ -123,6 +123,27 @@ export const PERMISSIONS = {
    * it equals `ALL_PERMISSIONS` exactly, so this list's order is the order the migrations ran.
    */
   deploymentRead: "deployment:read",
+  /**
+   * Move a Fulfilment — dispatch one, mark one delivered, cancel one that cannot be (#320).
+   *
+   * **Its own word so that warehouse staff can dispatch and do nothing else** (story 16), which
+   * is the whole of why it is not a second use of `order:read`: reading what every Shopper paid
+   * and posting a parcel are different powers, and the person doing the second usually should
+   * not have the first.
+   *
+   * **There is no `fulfilment:read` beside it**, and that absence is a decision rather than an
+   * asymmetry. A Fulfilment is not addressable on its own — it is read *through* its Order, on
+   * the shape `GET /admin/orders/{id}` and `GET /store/orders/{id}` already answer with — so
+   * there is no route for one to gate, and the house rule adds a Permission when a route needs
+   * one rather than for symmetry (`order:read` already covers it). The pair `catalog:` and
+   * `store:` draw is between reading a thing and changing it; here the thing is read as part of
+   * something else.
+   *
+   * It reads oddly last, like the five above it, and belongs there for the same reason: the
+   * seeded `owner` Role is a text array appended to one migration at a time and a test asserts
+   * it equals `ALL_PERMISSIONS` exactly, so this list's order is the order the migrations ran.
+   */
+  fulfilmentWrite: "fulfilment:write",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

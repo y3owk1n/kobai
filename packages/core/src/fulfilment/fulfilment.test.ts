@@ -186,6 +186,10 @@ describe("an Order's Fulfilments", () => {
         requiresShipping: false,
         tracksInventory: false,
         hasLeadTime: false,
+        // Both `pending`: Capture records how an Order is delivered and moves none of it.
+        // Moving them, one at a time, is `./a-fulfilment-moves.test.ts` (#320).
+        state: "pending",
+        trackingReference: null,
         lineItemIds: [lineIdFor(order, "PDF")],
       },
       {
@@ -194,6 +198,8 @@ describe("an Order's Fulfilments", () => {
         requiresShipping: true,
         tracksInventory: true,
         hasLeadTime: false,
+        state: "pending",
+        trackingReference: null,
         lineItemIds: [lineIdFor(order, "POSTER-A2")],
       },
     ]);

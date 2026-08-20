@@ -32,6 +32,8 @@ import {
   MAX_PAGE_LIMIT,
   type PagedList,
 } from "../db/page.ts";
+import { FULFILMENT_STATES } from "../fulfilment/lifecycle.ts";
+import type { FulfilmentTransition } from "../fulfilment/transition.ts";
 import type { MediaUploadOutcome } from "../media/media.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
@@ -3411,15 +3413,39 @@ export const OrderSummary = z
  * anybody would read as permission to write to the record.
  */
 /**
+ * Where one Fulfilment has got to — the **one** thing about an Order that moves (#320).
+ *
+ * A closed set, unlike a Fulfilment Strategy's name two schemas up, and the difference is the
+ * whole of ADR-0014: *what* a Store sells is open because a Store may sell anything, and *how a
+ * parcel moves* is Core's own. `fulfilment/lifecycle.ts` is the one list these are built from,
+ * along with the legal moves between them and the column's own `check`.
+ *
+ * **Adding a fifth is additive on the wire and not additive for a client that narrowed
+ * exhaustively** (ADR-0060), so it is owed a written note in the release.
+ */
+export const FulfilmentState = z
+  .enum(FULFILMENT_STATES)
+  .meta({
+    description:
+      "`pending` until a Merchant moves it: `dispatched` when it has gone, `delivered` when it arrived, `cancelled` for a part that cannot be delivered. `delivered` and `cancelled` are final — an Order's record does not walk backwards — and delivering takes a dispatch first.",
+  })
+  // A registered component rather than an inlined enum, so `@kobai/client` gives it a name a
+  // consumer can `switch` over. The description lives here rather than at the reference site,
+  // because a field carrying this emits a `$ref` and a `.meta()` there would replace this one.
+  .openapi("FulfilmentState");
+
+/**
  * A **Fulfilment** — how one part of an Order gets to the Shopper (ADR-0014).
  *
  * One per way this Order is delivered rather than a status on the Order, because a mixed Order
- * ships a poster and emails a PDF and those do not share a timeline. Nothing here moves yet:
- * fulfilling is its own spec, and this is the record it will be written against.
+ * ships a poster and emails a PDF and those do not share a timeline — and since #320 that is the
+ * argument being *used* rather than merely made: each of these moves on its own, so dispatching
+ * the poster leaves the PDF exactly where it was.
  *
  * The three booleans are what the Fulfilment Strategy **answered at Capture**, copied rather
  * than looked up — a Project may rewire a Strategy or remove the Plugin that offered one, and an
- * Order is immutable.
+ * Order is immutable. `state` and `trackingReference` are the two fields here that are *not* a
+ * snapshot, and they are the only two things on an Order that ever change.
  */
 export const Fulfilment = z
   .object({
@@ -3439,12 +3465,82 @@ export const Fulfilment = z
       description:
         "Whether there is an interval between Capture and delivery. `true` is a made-to-order line; how long is the Plugin's to know, and reaches the Order as an Adjustment.",
     }),
+    state: FulfilmentState,
+    trackingReference: z.string().nullable().meta({
+      description:
+        "What the Merchant recorded when they dispatched this — a consignment number, a carrier's own reference, anything. kobai stores it and parses nothing out of it, and models no carrier at all. `null` until a dispatch records one, and `null` for ever on a dispatch that recorded none, which is what a download has.",
+    }),
     lineItemIds: z.array(z.uuid()).readonly().meta({
       description:
         "The Line Items this Fulfilment covers, in the SKU order the Order reports its lines in. Every line of an Order kobai placed is in exactly one.",
     }),
   })
   .openapi("Fulfilment");
+
+/**
+ * One Fulfilment of one Order, addressed by both — the shape {@link VariantPriceParams} has,
+ * one noun along.
+ *
+ * **The Order is in the address although a Fulfilment's identifier is unique on its own**, and
+ * that is what makes the address mean something: a `fulfilmentId` belonging to some other Order
+ * is a mistake, and it is answered `fulfilment-not-found` rather than moving a Fulfilment the
+ * Merchant was not looking at.
+ */
+export const OrderFulfilmentParams = IdParam.extend({
+  fulfilmentId: z.string().meta({
+    description: "A Fulfilment of this Order. Anything else is not found.",
+  }),
+});
+
+/**
+ * What a Merchant records when they dispatch — one optional field, and no state anywhere in it.
+ *
+ * **The state is in the path and never in the body**, which is the whole of ADR-0062's line
+ * here: a `PATCH` accepting `state: "dispatched"` would let any state be set from any other, and
+ * every refusal below would be unreachable. So there are three routes named after what they do.
+ */
+export const DispatchFulfilmentRequest = z
+  .object({
+    trackingReference: z.string().min(1).optional().meta({
+      description:
+        "Optional, and an **opaque** string: kobai stores it, shows it, and parses nothing out of it. A dispatch that names none records `null` — a download has nothing to track — and delivering or cancelling afterwards leaves whatever was recorded here exactly where it is.",
+    }),
+  })
+  .openapi("DispatchFulfilmentRequest");
+
+/**
+ * Every way moving a Fulfilment can be refused, as a closed set (#320, ADR-0060).
+ *
+ * **Four of the seven are the four states**, and that is the construction rather than a
+ * coincidence: a move is refused by *where the Fulfilment already is*, so naming the state is
+ * the complete answer and the set cannot be short of a case. `fulfilment/lifecycle.ts` builds
+ * those four from the same list the column's `check` and `FulfilmentState` come from, so a fifth
+ * state arrives with its own word and no arm anywhere compiles without one.
+ *
+ * `fulfilment-cancelled` is the one #211 names by hand: it is what cancelled going back to
+ * dispatched is refused with, and it is the same word whichever of the three routes asks.
+ */
+const FULFILMENT_REASONS = {
+  ...REQUEST_REASONS,
+  "order-not-found": "order-not-found",
+  "fulfilment-not-found": "fulfilment-not-found",
+  "fulfilment-pending": "fulfilment-pending",
+  "fulfilment-dispatched": "fulfilment-dispatched",
+  "fulfilment-delivered": "fulfilment-delivered",
+  "fulfilment-cancelled": "fulfilment-cancelled",
+} as const satisfies {
+  [R in Refused<FulfilmentTransition> | RequestReason]: R;
+};
+
+export const FulfilmentRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(FULFILMENT_REASONS).meta({
+      description:
+        "Machine-readable. Branch on this. The four `fulfilment-…` words that are not `-not-found` name the state the Fulfilment is **already in**, which is what refused the move.",
+    }),
+  })
+  .openapi("FulfilmentRefusal");
 
 export const Order = OrderSummary.extend({
   lineItems: z.array(OrderLineItem).readonly().meta({

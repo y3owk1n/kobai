@@ -411,16 +411,34 @@ reference Project's `kobai.config.test.ts`, and every test in `order.test.ts` th
 what placing *answered* call that route by hand — for the same reason `cart.test.ts` builds
 its Carts by hand.
 
+**A mixed Order is one line too, and it is the arrangement two specs share** (#320, #321).
+`seedTestMixedOrder` places an Order carrying one `physical` line and one `digital` one — so it
+has **two Fulfilments**, on independent timelines, which is the only shape "each Fulfilment moves
+independently" and "there is no shipping charge on a download" can honestly be asserted against:
+
+```ts
+const order = await seedTestMixedOrder(kobai);          // POSTER-A2 and PDF, one Order
+const order = await seedTestMixedOrder(kobai, { merchant }); // one already signed in
+```
+
+`MIXED_ORDER_PHYSICAL_SKU` and `MIXED_ORDER_DIGITAL_SKU` are those two SKUs, exported so a test
+asks for a line **by SKU** rather than writing the strings down again. What comes back is an
+ordinary `TestOrder`. **Two convenient Orders is the thing this rules out**: a status column on
+`core_order` satisfies every assertion made against two Orders and fails on one, which is the
+whole of ADR-0014's argument. Three things it deliberately does not do — count stock, give the
+Cart an Address, or take any options — because each of those is the thing some other test is
+about, and `seedTestCatalog` and `seedTestOrder` are where a test says so in the open.
+
 **The harness is promised surface** (ADR-0047): everything `@kobai/core/testing` exports is
 covered by ADR-0019's semver commitment, because it ships for the Plugin author who needs the
 same seam Core tests through — while the five Extension Points of ADR-0003 stay five, since
 nothing attaches to a test harness at runtime. So a helper added here is designed as public
 API and documented in this section, and what a helper does *internally* — which requests it
-makes, in what order — is promised to nobody. `seedTestCatalog`'s, `seedTestCart`'s and
-`seedTestOrder`'s own contracts, including every case above, are asserted in
-`packages/core/src/testing/catalog.test.ts`, `packages/core/src/testing/cart.test.ts` and
-`packages/core/src/testing/order.test.ts` against the running application rather than against
-the object each returns.
+makes, in what order — is promised to nobody. `seedTestCatalog`'s, `seedTestCart`'s,
+`seedTestOrder`'s and `seedTestMixedOrder`'s own contracts, including every case above, are
+asserted in `packages/core/src/testing/catalog.test.ts`, `packages/core/src/testing/cart.test.ts`,
+`packages/core/src/testing/order.test.ts` and `packages/core/src/testing/mixed-order.test.ts`
+against the running application rather than against the object each returns.
 
 **Contention has a shape, and it stays in the HTTP seam.** ADR-0018 requires check-and-consume to
 be a row lock or a unique constraint and **never a `select` followed by an `update`** — and

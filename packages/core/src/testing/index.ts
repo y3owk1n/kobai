@@ -45,6 +45,12 @@ export {
   type PartialMigrationSet,
 } from "./migrations.ts";
 export {
+  MIXED_ORDER_DIGITAL_SKU,
+  MIXED_ORDER_PHYSICAL_SKU,
+  seedTestMixedOrder,
+  type TestMixedOrderOptions,
+} from "./mixed-order.ts";
+export {
   seedTestOrder,
   type TestOrder,
   type TestOrderLineItem,
