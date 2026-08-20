@@ -103,6 +103,7 @@ Three things follow, and each has a test rather than a convention behind it:
 | `pnpm run ci` | **The gate.** Lint, typecheck, build, test. Install first. |
 | `pnpm run up` | Postgres and the reference Project — it prints the URL. `/health`, Admin at `/admin-ui`. |
 | `pnpm run down` | Stop them. `pnpm run db:down` also drops the volume. |
+| `pnpm run dev` | The reference Project on this machine, **watching**: an edit anywhere under `packages/*/src` or `reference/src` recompiles and restarts it. |
 | `pnpm run admin:dev` | The Admin with a reload loop, beside `pnpm run dev`. See [The Admin](docs/agents/the-admin.md). |
 | `pnpm run db` | Just Postgres — what the test suite needs. |
 | `pnpm run browsers` | Downloads the Chromium the Admin's browser seam drives. `ci` and `test` reach this script themselves. |
@@ -111,6 +112,18 @@ Three things follow, and each has a test rather than a convention behind it:
 | `pnpm run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
 | `pnpm run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
 | `pnpm run template:generate` | Regenerate what `create-kobai` generates, from the reference Project. |
+
+**`pnpm run dev` watches two things, because an edit lands in one of two places.** Every
+workspace package the Project resolves at runtime does so through its `exports` to `dist` —
+the same path a Developer outside this repository takes — so `scripts/dev.ts` runs
+`tsc --watch` over each of them beside `node --watch` over the Project. Save a file in Core,
+tsc writes `dist`, Node notices and restarts. Without both halves the loop served the build
+you started it with and nothing after, which looks like your change did nothing rather than
+like nothing rebuilt it.
+
+**The Admin is deliberately in neither.** It is a browser bundle with a dev server of its
+own — `pnpm run admin:dev`, in a second terminal — and rebuilding it on every keystroke here
+would be slower and worse than the reload loop it already has.
 
 **Every command lives in `package.json`, and `devbox.json` declares none** (ADR-0083). That
 is asserted rather than noted: `tests/devbox-declares-no-commands.test.ts` fails the build if
@@ -129,15 +142,19 @@ the reference Project. `drizzle-kit push` diffs against the live database and si
 the tables of every package whose schema it was not given, leaving their tracking rows
 behind so the migration runner cannot repair it. See
 [ADR-0030](docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md). An
-explanation sits where the command would have been — a `"// db:push"` **key** in each
-package's `package.json`, inert because npm attaches no meaning to one — and
 `tests/no-push-script.test.ts` fails the build if a push script appears in any manifest, or
-in a `run:` step under `.github/workflows/`, where no script name would give it away.
+in a `run:` step under `.github/workflows/`, where no script name would give it away. **The
+ban is the control; nothing has to explain itself in a manifest.** Every `package.json` in
+this repository used to carry a `"// …"` key beside the scripts saying why — inert to npm,
+but an IDE reports each one, and thirty of them is a page of noise on a file you open to read
+four commands. The reasoning belongs here and in the ADR, where prose is prose.
 
 **`devbox.json` is HuJSON and takes real comments; a `"// …"` key there never was safe**,
 because devbox turned every key into a runnable script and ate the leading slashes doing it
 (#30). It declares no keys now, so the hazard is history rather than a standing rule — the
-reasoning is in ADR-0083. `biome.json` allows the trailing-comma style `devbox add` writes,
+reasoning is in ADR-0083. **A `package.json` carries no such key either**, for a duller
+reason: an editor flags every one of them, and a manifest is a file you open to read the
+commands. `biome.json` allows the trailing-comma style `devbox add` writes,
 through an `overrides` entry matching `**/devbox.json`; **run `pnpm run format` after any
 `devbox add`.** The relaxation is deliberately not repo-wide: a trailing comma in a
 `package.json` is a real defect, because npm requires strict JSON.

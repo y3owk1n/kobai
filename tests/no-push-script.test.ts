@@ -33,25 +33,11 @@ type CommandFile = {
   /** Command name → what it runs. A CI file keys by location; see `namesCommands`. */
   commands: Record<string, string>;
   /**
-   * Every comment in this file, or `null` where it is merely expected not to offend. One
-   * of them has to explain the absence. Where they come from differs by file, because
-   * where a comment can safely live differs by file — see `commentsIn` and
-   * `jsoncComments`.
-   */
-  comments: string[] | null;
-  /**
    * Whether those keys are names a Developer chose. A script called `db:push` offends by
    * its name alone, whatever it runs. A CI step's key is a location this file made up, so
    * only what the step runs can offend — CI is allowed to push tags and images.
    */
   namesCommands: boolean;
-  /**
-   * Whether a `"// …"` key here is inert prose the scan may skip. True of a manifest: npm
-   * attaches no meaning to such a key, so only a human ever reads it. False of
-   * A manifest's `"// …"` key is inert, so the scan skips it; nothing here turns a key
-   * into a command the way devbox did (#30).
-   */
-  commentKeysAreInert: boolean;
 };
 
 /**
@@ -110,18 +96,7 @@ async function commandFiles(): Promise<CommandFile[]> {
       const scripts = await read<{ scripts?: Record<string, string> }>(path).then(
         (json) => json.scripts ?? {},
       );
-      return {
-        path,
-        commands: scripts,
-        // A manifest with no scripts at all has nowhere a push script would have gone, so
-        // there is nothing for a comment to explain the absence *of* — the workspace root
-        // is the case, and it says why it has no scripts in a `"// scripts"` key of its
-        // own. A manifest that does declare scripts is a place someone would add one, and
-        // has to say why it has not.
-        comments: Object.keys(scripts).length > 0 ? commentsIn(scripts) : null,
-        namesCommands: true,
-        commentKeysAreInert: true,
-      };
+      return { path, commands: scripts, namesCommands: true };
     }),
   );
 
@@ -134,16 +109,7 @@ async function commandFiles(): Promise<CommandFile[]> {
 
 /** One CI file, read the way the scan reads it. The fixtures below use this too. */
 function ciFile(path: string, contents: string): CommandFile {
-  return {
-    path,
-    commands: ciRunSteps(contents),
-    // A CI file has nowhere natural to put the comment, and it is not where a Developer
-    // looks for the commands. The manifests carry the explanation.
-    comments: null,
-    namesCommands: false,
-    // A CI key is a location, never a `"// …"` comment, so this changes nothing here.
-    commentKeysAreInert: true,
-  };
+  return { path, commands: ciRunSteps(contents), namesCommands: false };
 }
 
 /** Every CI file. GitHub reads both extensions, so both are scanned. */
@@ -169,22 +135,6 @@ async function read<T>(path: string): Promise<T> {
 async function readText(path: string): Promise<string> {
   return readFile(fileURLToPath(new URL(path, repoRoot)), "utf8");
 }
-
-/**
- * A `// …` key is the comment explaining the absence, not a command.
- *
- * `package.json` is strict JSON — npm rejects a real comment — and npm attaches no meaning
- * to the key, so it stays inert. That was not true of `devbox.json`, which takes real
- * comments and turned every key into a script, so a `"//db:push"` key there was the command
- * it meant to document (#30). It declares no keys now.
- */
-const isComment = (name: string) => name.startsWith("//");
-
-/** What each of a manifest's `// …` keys says. One key, one comment. */
-const commentsIn = (scripts: Record<string, string>) =>
-  Object.entries(scripts)
-    .filter(([name]) => isComment(name))
-    .map(([, text]) => text);
 
 /**
  * A GitHub Actions file — not kobai's Workflow, which `CONTEXT.md` reserves for a declared
@@ -229,20 +179,12 @@ function ciRunSteps(contents: string): Record<string, string> {
 const runsPush = (command: string) =>
   /\bdrizzle-kit\b[^\n;&|]*?\bpush\b/.test(command.replace(/\\\r?\n\s*/g, " "));
 
-/**
- * A comment that says why there is no push command *and* points at the evidence for it.
- * ADR-0030 is cited by number because the number is what survives the file being renamed.
- */
-const explainsTheAbsence = (comment: string) =>
-  /push/i.test(comment) && /0030/.test(comment);
-
 /** Each offence as its file, which command, and what that command runs. */
 function offenders(files: CommandFile[]): string[] {
   const found: string[] = [];
 
-  for (const { path, commands, namesCommands, commentKeysAreInert } of files) {
+  for (const { path, commands, namesCommands } of files) {
     for (const [name, command] of Object.entries(commands)) {
-      if (commentKeysAreInert && isComment(name)) continue;
       if ((namesCommands && /push/i.test(name)) || runsPush(command)) {
         found.push(`${path} → ${name}: ${command}`);
       }
@@ -255,21 +197,6 @@ function offenders(files: CommandFile[]): string[] {
 describe("no push command exists anywhere", () => {
   it("finds none in any package manifest or in a CI workflow", async () => {
     expect(offenders(await commandFiles())).toEqual([]);
-  });
-
-  it("explains the absence where the command would have gone", async () => {
-    // An empty space reads as an oversight. A comment reads as a decision.
-    for (const { path, comments } of await commandFiles()) {
-      if (comments === null) continue;
-
-      // One comment has to do both. Asking the file as a whole to mention `push`
-      // somewhere and ADR-0030 somewhere else would be satisfied by two remarks that
-      // have nothing to do with each other.
-      expect(
-        comments.filter(explainsTheAbsence),
-        `${path} has no one comment saying both why it has no push script and where the evidence is`,
-      ).not.toHaveLength(0);
-    }
   });
 
   it("scans the Project every Developer receives, and both places a command can live", async () => {

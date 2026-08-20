@@ -125,7 +125,7 @@ describe("scaffolding a Project", () => {
     expect(status.stdout).toBe("");
   });
 
-  it("generates a Project with no push script and an explanation where one would be", async () => {
+  it("generates a Project with no push script, and no devbox to hide one in", async () => {
     const directory = join(await temporaryDirectory(), "corner-shop");
     await scaffold({ directory, templateRoot, git: false });
 
@@ -133,19 +133,22 @@ describe("scaffolding a Project", () => {
       await readFile(join(directory, "package.json"), "utf8"),
     ) as { scripts: Record<string, string> };
 
-    expect(Object.keys(manifest.scripts).filter((name) => /push/i.test(name))).toEqual([
-      // The `"// db:push"` key is the explanation, not a command — npm attaches no meaning
-      // to it. `tests/no-push-script.test.ts` is what knows the difference, and it scans the
-      // template this Project was generated from.
-      "// db:push",
-    ]);
-    expect(manifest.scripts["// db:push"]).toMatch(/0030/);
+    // The ban is the control (ADR-0030): `drizzle-kit push` diffs against the LIVE database,
+    // so pushing this Project's schema would report success while silently dropping Core's
+    // tables and every Plugin's. Nothing in the manifest explains itself — that is prose and
+    // it lives in the ADR, because an editor reports every `"// …"` key in a manifest.
+    expect(Object.keys(manifest.scripts).filter((name) => /push/i.test(name))).toEqual(
+      [],
+    );
+    expect(
+      Object.values(manifest.scripts).filter((run) =>
+        /drizzle-kit[^\n;&|]*push/.test(run),
+      ),
+    ).toEqual([]);
 
-    // There is one file to check, and that is the change: a generated Project used to ship a
-    // `devbox.json` carrying the same explanation as a real comment, because devbox turned a
-    // `"// …"` key into the very command it documented (#30). A Project ships no devbox at
-    // all now (ADR-0083), so the manifest is the only place a command can live and the only
-    // place the absence has to be explained.
+    // And there is one file to check rather than two, which is the change: a generated
+    // Project used to ship a `devbox.json` with a script list of its own. It ships no devbox
+    // at all now (ADR-0083), so the manifest is the only place a command can live.
     await expect(readFile(join(directory, "devbox.json"), "utf8")).rejects.toThrow(
       /ENOENT/,
     );
