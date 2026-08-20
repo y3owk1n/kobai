@@ -81,31 +81,25 @@ async function group(
   return { status: response.status, body: (await response.json()) as Product & Refusal };
 }
 
-/** A second Product in the same catalog, so a Collection can hold more than one thing. */
+/**
+ * A second Product in the same catalog, so a Collection can hold more than one thing.
+ *
+ * Seeded rather than hand-rolled: `seedTestCatalog` takes the Merchant this Store already has
+ * and leaves the Product **published**, which half the cases below need because they read it
+ * back over the store surface and a create makes a draft (#252).
+ */
 async function anotherProduct(
   kobai: TestKobai,
   catalog: TestCatalog,
   title: string,
   sku: string,
 ): Promise<string> {
-  const response = await kobai.request("/admin/products", {
-    method: "POST",
-    headers: { ...catalog.merchant.headers, "content-type": "application/json" },
-    body: JSON.stringify({ title, variants: [{ sku }] }),
+  const seeded = await seedTestCatalog(kobai, {
+    merchant: catalog.merchant,
+    title,
+    variants: [{ sku }],
   });
-  const body = (await response.json()) as { id: string };
-  if (response.status !== 201) {
-    throw new Error(`creating answered ${response.status}: ${JSON.stringify(body)}`);
-  }
-  // Published, because half the cases below read it back over the store surface and a create
-  // makes a draft (#252).
-  const published = await kobai.request(`/admin/products/${body.id}`, {
-    method: "PATCH",
-    headers: { ...catalog.merchant.headers, "content-type": "application/json" },
-    body: JSON.stringify({ status: "published" }),
-  });
-  expect(published.status, `publishing ${title}`).toBe(200);
-  return body.id;
+  return seeded.productId;
 }
 
 /** The ids of one page of a Product list, whichever surface asked for it. */

@@ -130,11 +130,24 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
   readonly browser: KobaiClient;
   readonly server: KobaiClient;
 }> {
+  // Most of a product page in one call (#281): the copy a Merchant wrote, the Collection the
+  // posters are grouped under, and the options this Product is chosen by — which
+  // `seedTestCatalog` declares by reading them off the Variants, so a Variant answering an
+  // option this Product does not declare is not an arrangement that can be written down here.
   const posters = await seedTestCatalog(kobai, {
     title: THE_PRODUCT,
-    variants: THE_GRID.map(({ sku, price }) => ({ sku, prices: [price] })),
+    description: THE_DESCRIPTION,
+    // A storefront's navigation is built out of the Collections the Products it read report, so
+    // nothing on the store surface enumerates these and the journey never asks it to.
+    collections: [THE_COLLECTION],
+    variants: THE_GRID.map(({ sku, price, options }) => ({
+      sku,
+      prices: [price],
+      options,
+    })),
   });
   const json = { ...posters.merchant.headers, "content-type": "application/json" };
+  const collection = posters.collection(THE_COLLECTION);
 
   // A second Product, so browsing is a choice rather than a list of one — and so that opening
   // the right product page is something the journey has to actually do. In no Collection, so
@@ -145,64 +158,36 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
     variants: [{ sku: "MUG", prices: [600] }],
   });
 
-  // What the Merchant groups the posters under. A storefront's navigation is built out of the
-  // Collections the Products it read report, so nothing on the store surface enumerates these
-  // and the journey never asks it to.
-  const grouped = await kobai.request("/admin/collections", {
-    method: "POST",
-    headers: json,
-    body: JSON.stringify({ title: THE_COLLECTION }),
-  });
-  expect(grouped.status, "making the Collection").toBe(201);
-  const collection = (await grouped.json()) as { readonly id: string };
-
   // Two Products a Shopper must never meet, **in that same Collection**: one still being
-  // written and one taken off sale. Their handles are named rather than proposed, because the
-  // journey then asks for each by the address a Merchant might have shared.
+  // written and one taken off sale. The Collection is handed over rather than named again,
+  // because two Collections may share a title and naming it would make a second one.
   for (const unpublished of THE_UNPUBLISHED) {
     const prepared = await seedTestCatalog(kobai, {
       merchant: posters.merchant,
       title: unpublished.title,
       status: unpublished.status,
+      collections: [collection],
       variants: [{ sku: unpublished.sku, prices: [700] }],
     });
-    const hidden = await kobai.request(`/admin/products/${prepared.productId}`, {
+    // Their handles are named rather than proposed, because the journey then asks for each by
+    // the address a Merchant might have shared. It is a `PATCH` on purpose: `seedTestCatalog`
+    // passes no handle of its own, so every catalog it seeds exercises the proposal instead.
+    const addressed = await kobai.request(`/admin/products/${prepared.productId}`, {
       method: "PATCH",
       headers: json,
-      body: JSON.stringify({
-        handle: unpublished.handle,
-        collections: [{ id: collection.id }],
-      }),
+      body: JSON.stringify({ handle: unpublished.handle }),
     });
-    expect(hidden.status, `grouping ${unpublished.title}`).toBe(200);
+    expect(addressed.status, `addressing ${unpublished.title}`).toBe(200);
   }
 
-  // What a product page is made of: the copy a Merchant wrote, the bag a Project attaches its
-  // own through (ADR-0004), the options this Product is chosen by in the order a picker should
-  // offer them, and the Collection it belongs to. One `PATCH`, exactly as the Admin sends it.
+  // The last thing a product page is made of: the bag a Project attaches its own through
+  // (ADR-0004), which is not something a seeded catalog carries.
   const described = await kobai.request(`/admin/products/${posters.productId}`, {
     method: "PATCH",
     headers: json,
-    body: JSON.stringify({
-      description: THE_DESCRIPTION,
-      metadata: { blurb: BLURB },
-      options: [{ name: THE_SIZE }, { name: THE_FINISH }],
-      collections: [{ id: collection.id }],
-    }),
+    body: JSON.stringify({ metadata: { blurb: BLURB } }),
   });
   expect(described.status, "describing the poster").toBe(200);
-
-  // And what each Variant *is*, for each of those options. Declaring an option leaves every
-  // Variant already on the Product unanswered, so this is the second half of the same edit and
-  // the route refuses a Variant that answers anything but the whole declared set.
-  for (const { sku, options } of THE_GRID) {
-    const answers = await kobai.request(`/admin/variants/${posters.variant(sku).id}`, {
-      method: "PATCH",
-      headers: json,
-      body: JSON.stringify({ options }),
-    });
-    expect(answers.status, `giving ${sku} its options`).toBe(200);
-  }
 
   // Counted, because the journey holds this stock before it buys it and a Variant nobody has
   // counted holds nothing at all (ADR-0014). A Merchant counting a shelf is arrangement like
@@ -409,7 +394,9 @@ const THE_PRICE = 1250;
  *
  * The two really are one thing — a Merchant's `Size` is `A2` and a Shopper's `Size` is `A2` —
  * which is what makes resolving a combination a comparison rather than a translation, and is
- * why `StoreVariantOptionValue` is the shape the page publishes.
+ * why `StoreVariantOptionValue` is the shape the page publishes. The Merchant's grid above
+ * writes the same values as a record, because that is what the arrangement helper takes; this
+ * is the shape they are *published* in, and the journey compares against it.
  */
 type APick = {
   readonly name: string;
@@ -426,35 +413,31 @@ type APick = {
  *
  * Only `THE_PRICE` is asserted on below; the other two amounts are simply different, so that a
  * Cart holding the wrong Variant would come to the wrong money.
+ *
+ * **The options are written the way `seedTestCatalog` takes them** — keyed by the option's name,
+ * so the Merchant's half of the fact is said once and the Product declares whatever the grid
+ * answers. The first row's key order is the order a storefront offers the options in, which is
+ * what the page below is held to.
  */
 const THE_GRID: readonly {
   readonly sku: string;
   readonly price: number;
-  readonly options: readonly APick[];
+  readonly options: Readonly<Record<string, string>>;
 }[] = [
   {
     sku: THE_SKU,
     price: THE_PRICE,
-    options: [
-      { name: THE_SIZE, value: A2 },
-      { name: THE_FINISH, value: MATTE },
-    ],
+    options: { [THE_SIZE]: A2, [THE_FINISH]: MATTE },
   },
   {
     sku: THE_OTHER_SKU,
     price: 900,
-    options: [
-      { name: THE_SIZE, value: A3 },
-      { name: THE_FINISH, value: MATTE },
-    ],
+    options: { [THE_SIZE]: A3, [THE_FINISH]: MATTE },
   },
   {
     sku: THE_GLOSSY_SKU,
     price: 1500,
-    options: [
-      { name: THE_SIZE, value: A2 },
-      { name: THE_FINISH, value: GLOSSY },
-    ],
+    options: { [THE_SIZE]: A2, [THE_FINISH]: GLOSSY },
   },
 ];
 

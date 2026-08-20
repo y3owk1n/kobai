@@ -227,6 +227,61 @@ await using kobai = await createTestKobai({          // a Plugin's, wired (ADR-0
 });
 ```
 
+**A catalog with breadth in it is the same one line** (#281). A Product carries a description,
+options and Collection memberships as well as a title and a status, and a test that needed any
+of them used to hand-roll a `PATCH /admin/products/{id}` plus a `PATCH /admin/variants/{id}` per
+Variant. It names them instead:
+
+```ts
+const catalog = await seedTestCatalog(kobai, {
+  description: "A2 or A3, matte or glossy.",
+  collections: ["Wall art"],                          // made on the way, and handed back
+  variants: [
+    { sku: "POSTER-A2-MATTE", options: { Size: "A2", Finish: "Matte" } },
+    { sku: "POSTER-A3-MATTE", options: { Size: "A3", Finish: "Matte" } },
+  ],
+});
+catalog.collection("Wall art").id;                    // by title, as a Variant is by SKU
+```
+
+**A Product's options are read off its Variants, and there is deliberately no way to declare
+them separately.** A Product declares its options and each Variant answers exactly those, which
+is one fact read from two ends — so a helper taking the two halves could be handed a Variant
+answering an option its Product never declared, which `POST /admin/products` refuses 422
+`variant-options-mismatch`. Here there is only one half: the Product declares whatever the
+Variants answer, in the order the **first** Variant writes them, which is the order a storefront
+offers them in. A record rather than the route's `[{ name, value }]` for the same reason — a key
+is one key, so a Variant answering `Size` twice cannot be written down either.
+
+Two arrangements the helper **refuses before it sends anything**, each naming both Variants,
+because a 4xx out of an arrangement names the helper rather than the test that called it:
+Variants of one call answering **different** sets of options (`{}` and nothing at all being the
+same answer, which is the ordinary Product with no options), and two Variants answering one
+combination — refused since #277, because a storefront maps a chosen combination to a SKU and
+can only do that where the mapping is a function. Both were watched failing against a helper
+with the check taken out, where the first became a 422 and the second a 400 from inside the
+create.
+
+**A Collection is named by title to make one, and handed back to reuse one.** Collection titles
+are deliberately not unique — there is no `collection-title-taken` — so a second catalog that
+named the same title would land in a *second* Collection of that name and every assertion about
+the first would quietly narrow to one Product:
+
+```ts
+const posters = await seedTestCatalog(kobai, { collections: ["Wall art"] });
+await seedTestCatalog(kobai, {
+  merchant: posters.merchant,
+  title: "A mug",
+  collections: [posters.collection("Wall art")],      // that one, not another of the name
+});
+```
+
+**No `handle` and no `media`, on purpose.** The handle is the sharper of the two: a create that
+names none proposes one from the title, so every catalog seeded in this repository is exercising
+that path, which is the one a Merchant meets first — `tests/a-storefront-buys-something.test.ts`
+is the shape for a test that does need an address of its own, and asks for it with a `PATCH` in
+the open.
+
 **A Cart is the arrangement every ticket in the commerce spine starts from**, and
 `seedTestCart` is the one line that produces one. It seeds a catalog if it is not given one,
 starts a Cart over the store surface, and puts a line on it — so the common case is one call

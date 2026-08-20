@@ -159,6 +159,178 @@ describe("seeding a catalog", () => {
     ).rejects.toThrow(/unknown-fulfilment-strategy/);
   });
 
+  it("writes the copy a Merchant wrote when a test names one", async () => {
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai, {
+      description: "A2 or A3, matte or glossy.",
+    });
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(product.json()).resolves.toMatchObject({
+      description: "A2 or A3, matte or glossy.",
+    });
+  });
+
+  it("declares the options its Variants answer, in the first one's order", async () => {
+    // The whole point of reading the declaration off the Variants: there is no second half to
+    // disagree with, so the Product ends up declaring exactly what its Variants are.
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai, {
+      variants: [
+        { sku: "POSTER-A2-MATTE", options: { Size: "A2", Finish: "Matte" } },
+        { sku: "POSTER-A3-MATTE", options: { Size: "A3", Finish: "Matte" } },
+      ],
+    });
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    const body = (await product.json()) as {
+      options: readonly { name: string }[];
+      variants: readonly {
+        sku: string;
+        options: readonly { name: string; value: string }[];
+      }[];
+    };
+    // The order is the Merchant's, and here the first Variant's — a storefront offers them in it.
+    expect(body.options.map((one) => one.name)).toEqual(["Size", "Finish"]);
+    expect(
+      body.variants.map((one) => [one.sku, one.options.map((held) => held.value)]),
+    ).toEqual([
+      ["POSTER-A2-MATTE", ["A2", "Matte"]],
+      ["POSTER-A3-MATTE", ["A3", "Matte"]],
+    ]);
+  });
+
+  it("declares nothing at all where no Variant answers anything", async () => {
+    // A Product with no options is the ordinary case rather than the exception (ADR-0008), and
+    // every other test in this file is quietly relying on this being what it gets. Several
+    // Variants of one, too: a Product declaring nothing has no combinations, so there is none
+    // for two of them to share — which is the same reading #277's refusal takes.
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai, {
+      variants: [{ sku: "ONE" }, { sku: "TWO" }],
+    });
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(product.json()).resolves.toMatchObject({
+      options: [],
+      variants: [{ sku: "ONE" }, { sku: "TWO" }],
+    });
+  });
+
+  it("refuses two Variants that answer different options, naming both", async () => {
+    // `variant-options-mismatch` read from the other end: the Product declares what the first
+    // Variant answers, so the second one is short. Refused before anything is sent, because a
+    // 422 out of an arrangement names this helper rather than the test that called it.
+    await using kobai = await createTestKobai();
+
+    await expect(
+      seedTestCatalog(kobai, {
+        variants: [
+          { sku: "POSTER-A2-MATTE", options: { Size: "A2", Finish: "Matte" } },
+          { sku: "POSTER-A3", options: { Size: "A3" } },
+        ],
+      }),
+    ).rejects.toThrow(/POSTER-A2-MATTE.*POSTER-A3.*variant-options-mismatch/s);
+  });
+
+  it("refuses two Variants that answer the options the same way", async () => {
+    // #277's refusal, arranged rather than met: a storefront resolves a combination to one
+    // Variant, so two of them answering one combination is not a catalog to seed.
+    await using kobai = await createTestKobai();
+
+    await expect(
+      seedTestCatalog(kobai, {
+        variants: [
+          { sku: "POSTER-A2-MATTE", options: { Size: "A2", Finish: "Matte" } },
+          { sku: "POSTER-A2-AGAIN", options: { Size: "A2", Finish: "Matte" } },
+        ],
+      }),
+    ).rejects.toThrow(/POSTER-A2-MATTE.*POSTER-A2-AGAIN.*answer it \(#277\)/s);
+  });
+
+  it("groups the Product into a Collection it makes on the way", async () => {
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai, { collections: ["Wall art"] });
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(product.json()).resolves.toMatchObject({
+      collections: [{ id: catalog.collection("Wall art").id, title: "Wall art" }],
+    });
+  });
+
+  it("puts a second catalog into the Collection the first one made", async () => {
+    // Collection titles are deliberately not unique, so naming the title again would make a
+    // second Collection — handing the first one back is how a test says "that one".
+    await using kobai = await createTestKobai();
+    const posters = await seedTestCatalog(kobai, { collections: ["Wall art"] });
+
+    const mugs = await seedTestCatalog(kobai, {
+      merchant: posters.merchant,
+      title: "A mug",
+      variants: [{ sku: "MUG" }],
+      collections: [posters.collection("Wall art")],
+    });
+
+    const listed = await kobai.request(
+      `/admin/products?collection=${posters.collection("Wall art").id}`,
+      { headers: posters.merchant.headers },
+    );
+    const body = (await listed.json()) as { products: readonly { id: string }[] };
+    expect(body.products.map((one) => one.id).toSorted()).toEqual(
+      [posters.productId, mugs.productId].toSorted(),
+    );
+  });
+
+  it("refuses to be asked for one Collection twice, named or handed over", async () => {
+    // Two titles would be two Collections of the name, which the route takes and which leaves
+    // `catalog.collection` able to answer either; the same Collection twice is `collections`
+    // naming one identifier twice, which the route refuses 400.
+    await using kobai = await createTestKobai();
+    const posters = await seedTestCatalog(kobai, { collections: ["Wall art"] });
+    const wallArt = posters.collection("Wall art");
+
+    await expect(
+      seedTestCatalog(kobai, {
+        merchant: posters.merchant,
+        title: "A mug",
+        variants: [{ sku: "MUG" }],
+        collections: ["Wall art", "Wall art"],
+      }),
+    ).rejects.toThrow(/"Wall art" twice/);
+    await expect(
+      seedTestCatalog(kobai, {
+        merchant: posters.merchant,
+        title: "A tote",
+        variants: [{ sku: "TOTE" }],
+        collections: [wallArt, wallArt],
+      }),
+    ).rejects.toThrow(/"Wall art" twice/);
+  });
+
+  it("is in no Collection unless a test asked, and says so when asked for one", async () => {
+    await using kobai = await createTestKobai();
+
+    const catalog = await seedTestCatalog(kobai);
+
+    const product = await kobai.request(`/admin/products/${catalog.productId}`, {
+      headers: catalog.merchant.headers,
+    });
+    await expect(product.json()).resolves.toMatchObject({ collections: [] });
+    expect(() => catalog.collection("Wall art")).toThrow(/seeded into none/);
+  });
+
   it("refuses to be told the same thing twice", () => {
     const seed = async () => {
       await using kobai = await createTestKobai();

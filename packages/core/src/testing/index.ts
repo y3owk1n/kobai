@@ -13,6 +13,7 @@ export {
 export {
   seedTestCatalog,
   type TestCatalog,
+  type TestCatalogCollection,
   type TestCatalogOptions,
   type TestCatalogPrice,
   type TestCatalogVariant,
