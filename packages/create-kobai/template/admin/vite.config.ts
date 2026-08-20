@@ -38,6 +38,12 @@ const proxy = {
   "^/admin/": { target: api, changeOrigin: false },
   "^/store/": { target: api, changeOrigin: false },
   "^/health$": { target: api, changeOrigin: false },
+  // Media's bytes, which are kobai's on a deployment using the storage it ships: a Media
+  // reports `/media/{key}` and an `<img>` asks this server for it. Without the line the dev
+  // loop answers that request with the Admin's own `index.html` and every preview is a broken
+  // image — which the single-origin container never shows, because there is no dev server in
+  // it. A deployment whose storage answers absolute URLs never reaches here at all.
+  "^/media/": { target: api, changeOrigin: false },
 };
 
 export default defineConfig({

@@ -559,6 +559,66 @@ export const price = pgTable(
 export type PriceRow = typeof price.$inferSelect;
 
 /**
+ * **Media** — a Merchant-supplied catalog asset, and Core's record of one (ADR-0015).
+ *
+ * The row is the record; the bytes are somewhere else entirely. `storage_key` is the only
+ * thing that reaches across, and what it means is the deployment's `MediaStorage`'s business
+ * and nothing this table has an opinion about — a path under a directory for the storage Core
+ * ships, an object key for an S3 one, whatever a CDN's driver hands back. **There is no `url`
+ * column, and its absence is the decision** (`media/storage.ts`): a URL stored at upload is a
+ * copy of an answer the storage is still able to give, so a Store that puts a CDN in front of
+ * the bucket it already had would be left with a table full of addresses naming the old one.
+ * The storage is asked at read time instead, and moving a deployment's Media is then copying
+ * the objects rather than rewriting rows.
+ *
+ * It is **unique**, because it is what `GET /media/{key}` resolves — one key names one row and
+ * one object, and two rows sharing one would make the byte route's answer a coin toss. That is
+ * a `.unique()` on a table this migration creates, so it carries none of ADR-0038's hazard.
+ *
+ * **`alt` is nullable, and `width`/`height` are too, for two different reasons.** Alt text is a
+ * thing a Merchant writes and may not have written yet, and an empty string would say they had.
+ * The dimensions are a fact about the bytes, read out of the file's own header at upload
+ * (`media/dimensions.ts`) — so `null` is the honest answer for a format kobai cannot read the
+ * header of, rather than a `0` a storefront would lay out against.
+ *
+ * There is deliberately **no `metadata`** here, unlike every principal entity above. This slice
+ * gives a Merchant one thing to say about an asset — what it shows, for somebody who cannot see
+ * it — and a bag nothing on the surface can write to would be a column pretending to be an
+ * escape hatch. Adding one is additive under ADR-0060 the day something needs it.
+ *
+ * There is no reference to a Product or a Variant either, in either direction: attaching Media
+ * to something is the next slice, and it arrives as its own join table with its own ordering
+ * rather than as a column here.
+ */
+export const media = pgTable(
+  "core_media",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** What the deployment's `MediaStorage` called the object it wrote. Opaque to Core. */
+    storageKey: text("storage_key").notNull().unique(),
+    /** As the upload declared it — `image/png`. Core stores it and serves it back verbatim. */
+    contentType: text("content_type").notNull(),
+    /** The name the Merchant's own machine gave the file, so a Media library is readable. */
+    filename: text("filename").notNull(),
+    /** How many bytes were stored, which is the one fact a Merchant can act on about weight. */
+    byteSize: integer("byte_size").notNull(),
+    /** Pixels, read from the bytes — `null` where the format's header could not be read. */
+    width: integer("width"),
+    height: integer("height"),
+    /** What this shows, for a Shopper who cannot see it. `null` until a Merchant writes it. */
+    alt: text("alt"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // What `GET /admin/media` pages along — see `core_api_key`'s for why both columns.
+    index("core_media_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
+
+export type MediaRow = typeof media.$inferSelect;
+
+/**
  * A Cart — a Shopper's **mutable, disposable, unauthoritative** selection before purchase
  * (`CONTEXT.md`, ADR-0009).
  *

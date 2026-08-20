@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,6 +106,42 @@ describe("the generated Project matches the reference Project", () => {
         drifted,
         `These template files no longer match the reference Project they are generated from. Run \`devbox run template:generate\` to bring them back into step, and read the diff before committing it — a change you did not expect here is a change to what every Developer receives.`,
       ).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "sweeps up nothing a run of the reference Project wrote",
+    async () => {
+      // The reference Project is a Project as well as the template's source, and running one
+      // writes files: the `MediaStorage` Core ships puts a Merchant's uploads under the
+      // process's working directory (ADR-0078), which for `devbox run dev` and for the browser
+      // seam that boots it in the gate is `reference/` itself. So a single upload — the Admin's
+      // own Media case does one every run — left a PNG here, and generation swept it into the
+      // checked-in template. Both assertions above went red naming a UUID, and what a Developer
+      // would have received was an image from somebody's test run (#254).
+      //
+      // `.gitignore` names `kobai-media/` and could not have caught it: this walk reads no
+      // ignore file, exactly as a `.dockerignore` cannot delegate to one (ADR-0068). So the
+      // skip is `projectFiles`'s own, and this is the arrangement that broke it — a file put
+      // where a run puts one, against the real tree rather than a synthetic stand-in.
+      const directory = join(referenceRoot, "kobai-media");
+      const stray = join(directory, `${randomUUID()}.png`);
+      await mkdir(directory, { recursive: true });
+      await writeFile(stray, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+      try {
+        expect(
+          (await expected())
+            .map((file) => file.path)
+            .filter((path) => path.includes("kobai-media")),
+          "A run of the reference Project left this behind, and generation put it in the template.",
+        ).toEqual([]);
+      } finally {
+        // The file only, never the directory: `devbox run dev` writes a Developer's own
+        // uploads here and this test has no business deleting them.
+        await rm(stray, { force: true });
+      }
     },
     TIMEOUT,
   );

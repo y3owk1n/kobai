@@ -12,6 +12,11 @@ dist/
 # devbox's nix profile
 .devbox/
 
+# Where the `MediaStorage` kobai ships writes what a Merchant uploads, when `kobai.config.ts`
+# points it nowhere else. Your Store's images are real data — back the directory up, or wire a
+# storage that has an object store behind it — and they are not a thing a repository holds.
+kobai-media/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -12,14 +12,35 @@ import { join, posix, sep } from "node:path";
  */
 
 /**
- * Directories that are build output or installed dependencies, never Project source.
+ * Directories that are build output, installed dependencies or runtime data, never Project
+ * source.
  *
  * Named rather than pattern-matched, so adding one is a decision. `dist` is on the list twice
  * over: it is the Project's compiled TypeScript *and* the Admin's built bundle, and neither
  * belongs in a template — `create-kobai` generates source, and the first thing a Developer
  * runs builds it.
+ *
+ * **This walk is a third ignore mechanism, and like a `.dockerignore` it cannot delegate to
+ * `.gitignore`** (ADR-0068). It reads no ignore file, so a directory `.gitignore` already names
+ * is still walked here — which is how `kobai-media` arrived. The shipped `MediaStorage` writes
+ * a Merchant's uploads under the **process's** working directory (ADR-0078), and the reference
+ * Project is run from its own root by `devbox run dev` and by the browser seam that boots it in
+ * the gate. So one upload put a PNG in `reference/kobai-media/`, `devbox run template:generate`
+ * swept it into `packages/create-kobai/template/`, and the checked-in template a Developer
+ * receives carried an image from somebody's test run. `.gitignore` could not have caught that:
+ * it keeps the file out of `git status`, and this walk never asks it (#254).
+ *
+ * It is runtime data rather than anything a checkout generates, which is the one way it differs
+ * from the four above — and it makes no difference to what belongs in a template. A Project's
+ * uploads are its Store's, and a generated Project's `.gitignore` says so.
  */
-const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", ".devbox", ".git"]);
+const SKIPPED_DIRECTORIES = new Set([
+  "node_modules",
+  "dist",
+  ".devbox",
+  ".git",
+  "kobai-media",
+]);
 
 /**
  * Files that are not a Project's source.

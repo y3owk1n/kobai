@@ -1,4 +1,5 @@
 import {
+  ImageIcon,
   KeyRoundIcon,
   PackageIcon,
   ReceiptTextIcon,
@@ -48,6 +49,18 @@ export const SECTIONS = [
     path: "/products",
     label: "Products",
     Icon: PackageIcon,
+    permission: PERMISSIONS.catalogRead,
+  },
+  {
+    /**
+     * Beside Products, because Media is catalog data (ADR-0015) and `catalog:read` is what
+     * opens it — the same Permission the Products list is behind. It is a section of its own
+     * rather than a card on a Product because nothing attaches a Media to a Product yet: what
+     * this Store has is a library, and the screen says so.
+     */
+    path: "/media",
+    label: "Media",
+    Icon: ImageIcon,
     permission: PERMISSIONS.catalogRead,
   },
   {

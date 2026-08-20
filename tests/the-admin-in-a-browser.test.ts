@@ -1,3 +1,4 @@
+import { crc32, deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -857,6 +858,7 @@ describe("the command palette", () => {
       .poll(() => paletteOptions(page).allInnerTexts())
       .toEqual([
         "Products",
+        "Media",
         "Orders",
         "Carts",
         "API keys",
@@ -866,6 +868,8 @@ describe("the command palette", () => {
       ]);
     await expect.poll(() => selected(page)).toEqual(["Products"]);
 
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => selected(page)).toEqual(["Media"]);
     await page.keyboard.press("ArrowDown");
     await expect.poll(() => selected(page)).toEqual(["Orders"]);
     await page.keyboard.press("ArrowDown");
@@ -1568,8 +1572,11 @@ describe("what a Role may do", () => {
     await shows(page.getByText("Everything this Store sells"), "the Products screen");
 
     // Orders and API keys would 403 on load for this Role, and an empty screen that refuses
-    // teaches nothing — so they are absent rather than present and dead (ADR-0063).
-    await expect.poll(() => sections(page)).toEqual(["Products"]);
+    // teaches nothing — so they are absent rather than present and dead (ADR-0063). Media is
+    // here because it is catalog data behind `catalog:read` (ADR-0015): the pair is what this
+    // Role can read, and a section list that named only one of them would be hiding a section
+    // this Merchant may open.
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media"]);
 
     // The palette reads the same list, which is the whole reason `lib/sections.ts` is a module:
     // two navigation affordances over one list cannot disagree about what this Admin has.
@@ -1580,7 +1587,7 @@ describe("what a Role may do", () => {
     );
     await expect
       .poll(() => page.getByRole("option").allInnerTexts())
-      .toEqual(["Products"]);
+      .toEqual(["Products", "Media"]);
 
     await auditAccessibility(page, "the Admin's palette on a narrow Role");
   });
@@ -1774,7 +1781,8 @@ describe("what a Role may do", () => {
   it("takes a Role edited elsewhere on the next navigation, without signing out", async () => {
     const narrow = await seam.merchantOnARole([CATALOG_READ, ORDER_READ]);
     const page = await seam.signedInAs(narrow, "/products");
-    await expect.poll(() => sections(page)).toEqual(["Products", "Orders"]);
+    // Media is beside Products because both are behind `catalog:read` (ADR-0015).
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Orders"]);
 
     // Somebody else, in another browser, widens this Role. The Merchant's session is untouched
     // — a Role is read on every request rather than copied into the session — so the Admin is
@@ -1788,7 +1796,9 @@ describe("what a Role may do", () => {
 
     // The half of ADR-0063 that #175 left unwired: the session query is re-read on navigation
     // as well as on window focus, so the frame catches up without anybody signing out.
-    await expect.poll(() => sections(page)).toEqual(["Products", "Orders", "API keys"]);
+    await expect
+      .poll(() => sections(page))
+      .toEqual(["Products", "Media", "Orders", "API keys"]);
 
     // And back the other way, which is the direction that actually takes an offer away — a
     // frame that only ever grew would be wrong in the one case a Merchant is *meant* to stop
@@ -1797,13 +1807,13 @@ describe("what a Role may do", () => {
       permissions: [CATALOG_READ],
     });
     await page.getByRole("link", { name: "Products" }).click();
-    await expect.poll(() => sections(page)).toEqual(["Products"]);
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media"]);
   });
 
   it("takes a Role edited elsewhere when the window is focused, with no navigation", async () => {
     const narrow = await seam.merchantOnARole([CATALOG_READ]);
     const page = await seam.signedInAs(narrow, "/products");
-    await expect.poll(() => sections(page)).toEqual(["Products"]);
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media"]);
 
     await seam.api("PATCH", `/admin/roles/${narrow.roleId}`, {
       permissions: [CATALOG_READ, ORDER_READ],
@@ -1818,7 +1828,7 @@ describe("what a Role may do", () => {
     await refocusTheWindow(page);
 
     expect(where(page)).toBe("/products");
-    await expect.poll(() => sections(page)).toEqual(["Products", "Orders"]);
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Orders"]);
   });
 });
 
@@ -2217,6 +2227,104 @@ describe("the catalog screens", () => {
  * before it attempts anything, so breaking it is a red build with a sentence rather than a
  * cascade.
  */
+/**
+ * The Media screen, and the two things about it no request-level test can ask (#254).
+ *
+ * Almost everything about Media is asserted through the API in `packages/core/src/media/`, and
+ * that is where it belongs. What is here is what only a browser has:
+ *
+ * - **The one form in this Admin that is not JSON.** It uses no react-hook-form, because a file
+ *   input's value is a `FileList` the browser owns and nothing may set — so the file is held
+ *   beside the form and the request is built by a `bodySerializer` handing `openapi-fetch` a
+ *   `FormData`. None of that shape is exercised by anything else in this repository, and a
+ *   serializer that produced the wrong body would still typecheck.
+ * - **That the storage kobai ships actually works on a Project that configured nothing.**
+ *   `reference/kobai.config.ts` has no `media` key at all, so this really-booted Project is the
+ *   default: the bytes go to a directory, the Media reports `/media/{key}`, and the assertion
+ *   that the preview *decoded* is the whole of "a Store with no object store still shows its
+ *   images" (ADR-0078). A `src` that resolved to the Admin's own `index.html` — which is what
+ *   the dev proxy got wrong — has a `naturalWidth` of zero.
+ */
+describe("the Media screen", () => {
+  /**
+   * A **real** 2×3 PNG — signature, `IHDR`, a deflated `IDAT` and `IEND`, each with its CRC.
+   *
+   * Built rather than checked in as a blob, so the two numbers this case asserts are numbers
+   * somebody wrote down here. It has to be a whole file rather than the header the unit tests
+   * use: `naturalWidth` is the browser saying it **decoded** an image, and a truncated PNG is
+   * exactly the thing that would answer zero for the wrong reason.
+   */
+  function pngBytes(): Buffer {
+    const width = 2;
+    const height = 3;
+
+    const chunk = (tag: string, body: Buffer): Buffer => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(body.length);
+      const tagged = Buffer.concat([Buffer.from(tag, "ascii"), body]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(tagged));
+      return Buffer.concat([length, tagged, crc]);
+    };
+
+    const header = Buffer.alloc(13);
+    header.writeUInt32BE(width, 0);
+    header.writeUInt32BE(height, 4);
+    // Eight bits a channel, colour type 2 (truecolour), no interlacing.
+    header.set([8, 2, 0, 0, 0], 8);
+
+    // One filter byte per scanline, then three bytes a pixel. Every pixel is black, which is
+    // the least this case needs an image to be.
+    const raw = Buffer.alloc(height * (1 + width * 3));
+
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk("IHDR", header),
+      chunk("IDAT", deflateSync(raw)),
+      chunk("IEND", Buffer.alloc(0)),
+    ]);
+  }
+
+  it("uploads a file with its alt text, and shows the image kobai served back", async () => {
+    const page = await seam.signedIn("/media");
+    await shows(page.getByText("Everything this Store has uploaded"), "the Media screen");
+    await auditAccessibility(page, "the Media screen");
+
+    const named = `a-poster-${Date.now()}.png`;
+    await page.getByLabel("File").setInputFiles({
+      name: named,
+      mimeType: "image/png",
+      buffer: pngBytes(),
+    });
+    await page.getByLabel("Alt text").fill("A blue A2 poster on a white wall");
+    await page.getByRole("button", { name: "Upload" }).click();
+
+    // The row, by the two things a Merchant typed — so this is the multipart body having
+    // arrived intact rather than a request merely having been answered.
+    const row = page.getByRole("row").filter({ hasText: named });
+    await shows(row, "the uploaded Media in the list");
+    await shows(row.getByText("A blue A2 poster on a white wall"), "its alt text");
+
+    // And the bytes came back from wherever the Project put them, which on a Project that
+    // configured nothing is a directory kobai serves itself. `naturalWidth` is the browser
+    // saying it decoded an image; a broken `src` answers zero.
+    const preview = row.getByRole("img", { name: "A blue A2 poster on a white wall" });
+    await shows(preview, "the preview kobai served");
+    await expect
+      .poll(
+        () =>
+          // Structurally typed rather than as an `HTMLImageElement`: this file compiles
+          // against Node's libs, so the DOM's names are not here — `focused` in the harness
+          // does the same thing to read `document.activeElement`.
+          preview.evaluate((node) => (node as { naturalWidth: number }).naturalWidth),
+        { timeout: LOCATOR_TIMEOUT },
+      )
+      .toBe(2);
+
+    await auditAccessibility(page, "the Media screen with something on it");
+  });
+});
+
 describe("Merchants, Roles and the Store", () => {
   /** The seeded `owner` Role, which is the only one that exists before a case makes another. */
   async function ownerRole(): Promise<{ id: string; permissions: string[] }> {

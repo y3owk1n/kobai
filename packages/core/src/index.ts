@@ -84,6 +84,40 @@ export type { HealthBody } from "./http/health.ts";
  */
 export type { OpenApiDocument } from "./http/openapi.ts";
 export { createKobai, type Kobai, type KobaiOptions } from "./kobai.ts";
+/**
+ * **Media** — the record Core keeps, and the interface that decides where the bytes live.
+ *
+ * `MediaStorage` is Extension Point 3's third named interface (ADR-0015). A Project writes an
+ * object satisfying it and names it as `media: { storage }` in `kobai.config.ts`;
+ * `MediaUpload` and `StoredMedia` are what such an object is handed and what it returns, so
+ * both have to be nameable, and `MediaOptions` is the shape of the config key.
+ *
+ * **The value here is the one thing `PaymentProvider` deliberately has no counterpart to.**
+ * Core ships `filesystemMediaStorage` and a deployment that configures nothing runs on it, on
+ * ADR-0051's argument — recorded on the interface itself. It is exported because a Project may
+ * want to name its own directory, and because a Project wiring a bucket in production and
+ * files in development writes exactly that ternary in the one file that shows it.
+ * `MEDIA_PATH` and `DEFAULT_MEDIA_DIRECTORY` are the two facts that storage's answers are
+ * built from, on the surface so that a Project mounting kobai behind something can say where
+ * its own media route ends up.
+ *
+ * `Media` is what a caller reads back off the API. `ImageDimensions` is not here and neither is
+ * `imageDimensions`: reading a header is Core's own business and a Project that wants an image
+ * measured has the answer on the record already.
+ */
+export type { Media } from "./media/media.ts";
+export type {
+  FilesystemMediaStorageOptions,
+  MediaOptions,
+  MediaStorage,
+  MediaUpload,
+  StoredMedia,
+} from "./media/storage.ts";
+export {
+  DEFAULT_MEDIA_DIRECTORY,
+  filesystemMediaStorage,
+  MEDIA_PATH,
+} from "./media/storage.ts";
 export type {
   AppliedMigrationSet,
   MigrationOutcome,

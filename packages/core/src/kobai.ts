@@ -14,6 +14,7 @@ import {
 import { resolveFulfilmentStrategies } from "./fulfilment/strategy.ts";
 import { createHttpApp, describeHttpApp } from "./http/app.ts";
 import type { OpenApiDocument } from "./http/openapi.ts";
+import { filesystemMediaStorage } from "./media/storage.ts";
 import { coreMigrationSet } from "./migrations/core-set.ts";
 import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
@@ -193,6 +194,12 @@ export function createKobai(options: KobaiOptions): Kobai {
   // have" is how a Variant becomes creatable in one module and unsellable in another.
   const fulfilment = resolveFulfilmentStrategies(options.fulfilment);
 
+  // Where this deployment's Media lives, decided once here for the Strategies' reason: two
+  // answers to "which storage is this Store's" is a Media reporting an address the byte route
+  // does not serve. **Unlike a Payment Provider, absent is a working Store** — ADR-0051 is what
+  // lets Core ship a default at all, and `media/storage.ts` carries that argument in full.
+  const mediaStorage = options.media?.storage ?? filesystemMediaStorage();
+
   const app = createHttpApp({
     db: database.db,
     fulfilment,
@@ -200,6 +207,7 @@ export function createKobai(options: KobaiOptions): Kobai {
     // is a configuration rather than a fault: this boot proceeds exactly as any other, and the
     // deployment refuses to place an Order and nothing else.
     paymentProvider: options.payments?.provider,
+    mediaStorage,
     migrations,
     logger,
     priceWorkflow,

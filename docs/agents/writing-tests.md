@@ -90,6 +90,37 @@ books and asserts on them — `packages/core/src/payment/payment.test.ts` is the
 distinction is the same one ADR-0036 draws for a compensation that throws: "the code ran" and
 "the Shopper got their money back" are two facts, and a counter only ever knows the first.
 
+**The harness also points Media somewhere throwaway, and that one is about the checkout rather
+than about courtesy** (#254). `MediaStorage` is a dependency a Project may substitute and Core
+ships a working one, so a deployment that configures nothing writes files under `kobai-media/`
+in its **working directory** — which for a test run is this repository. `createTestKobai` gives
+each instance a `mkdtemp` of its own and deletes it with the database, so no two tests share a
+directory and nothing running in-process leaves a Merchant's uploads in the tree. **Nothing in
+the gate reaches a network or a real object store**, on the rule `@kobai/plugin-stripe` already
+follows: a test either substitutes a storage or points the shipped one at a directory it made.
+
+**The browser seam is the one exception, and it is not one a test may fix.** It boots the
+*built* reference Project as its own process from `reference/` — that Project configures no
+`media` at all, which is exactly what its upload case proves — so the bytes land in
+`reference/kobai-media/`, and **nothing deletes them**: `devbox run dev` writes a Developer's own
+uploads to that same directory. `.gitignore` keeps it out of `git status`. What `.gitignore`
+could not do is keep it out of the template, because `projectFiles` reads no ignore file — so
+`kobai-media` is named in that walk's own skip list, and one upload in the gate no longer sweeps
+a PNG into what every Developer receives (#254, ADR-0068).
+
+```ts
+await using kobai = await createTestKobai({ media: { storage: mine } });     // one of your own
+await using here = await createTestKobai({                                   // the shipped one,
+  media: { storage: filesystemMediaStorage({ directory }) },                 // somewhere you
+});                                                                          // can look inside
+```
+
+**Ask the storage what it is holding**, exactly as a test about payment asks the provider: a
+substitute that records what it was handed and is then asserted against — these bytes, this
+content type — is the acceptance for the interface, and a counter saying `put` was reached would
+pass against a Core that stored the bytes itself. `packages/core/src/media/media.test.ts` is the
+shape.
+
 **Almost every test needs something to sell before it can assert anything, and that
 arrangement is one line.** `seedTestCatalog` creates a Product, the Variant that makes it
 sellable and a Price on that Variant — through the public API, like everything else here, so

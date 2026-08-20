@@ -14,7 +14,7 @@ says why the difference is real and where each one is written down.
 |---|---|---|---|
 | 1 | **Configuration** | One file where everything your Project has changed is declared | **Proven** — `reference/kobai.config.ts`, exercised on every commit |
 | 2 | **Workflow Step override** | Replace one named Step of a declared process; watch one without owning it | **Proven** — a replaced Step changes what the API serves, under test |
-| 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Proven** — three interfaces you can supply, two of them taking an implementation that is not Core's |
+| 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Proven** — four interfaces you can supply, two of them taking an implementation that is not Core's |
 | 4 | **Events** | React to something happening, without being in the path of it | **Promised only** — nothing to attach to; no bus, no emitter, no subscriber |
 | 5 | **Admin UI slots** | Put your own UI inside the Admin at a declared position | **Promised only** — no slot mechanism exists |
 
@@ -196,7 +196,7 @@ given Stripe's settings it takes payments a Shopper completes at their bank thro
 deployment that has misconfigured its payments is never a deployment that is down (ADR-0053,
 ADR-0070). Your Project decides that for itself; kobai asks only for an object.
 
-**Six keys today**, and every one of them names a *subject* rather than a scalar — a key
+**Seven keys today**, and every one of them names a *subject* rather than a scalar — a key
 holding one setting is how a file gets a second top-level key the day it needs to say
 anything else about the same thing
 ([ADR-0050](./adr/0050-the-idle-window-is-a-projects-the-cap-is-cores.md)):
@@ -214,6 +214,9 @@ anything else about the same thing
   and no ceiling at all**, because nothing renews a hold, so its window already is the bound
   — the asymmetry with `session` is
   [ADR-0075](./adr/0075-the-hold-window-is-a-projects-and-core-keeps-no-ceiling.md).
+- `media` — where a Merchant's uploaded images live, as `{ storage }`. Section 3 again, and the
+  one key in this list you can leave out and still have everything work: unlike a Payment
+  Provider, Core ships a storage. The third key the example above does not use.
 
 **Installing a Plugin does nothing.** `@kobai/plugin-price-log` above is an ordinary npm
 dependency, and adding it to `package.json` creates no table and runs no code. The two lines
@@ -528,9 +531,9 @@ Both are observably different from stock kobai and both are exercised on every c
 is the standard #72 set. **What is still absent is interfaces, not evidence** — see the end of
 this section.
 
-There are **three** interfaces you can use it on today: `Logger`, `PaymentProvider` and
-`FulfilmentStrategy`. Core names a fourth, `ReservationProvider`, and deliberately does *not*
-export it. ADR-0018 promises one interface with two providers — Inventory, which exists, and
+There are **four** interfaces you can use it on today: `Logger`, `PaymentProvider`,
+`FulfilmentStrategy` and `MediaStorage`. Core names a fifth, `ReservationProvider`, and
+deliberately does *not* export it. ADR-0018 promises one interface with two providers — Inventory, which exists, and
 Capacity, which does not yet — and both of them are Core's, so nothing here hands you a way to
 bring a kind of scarcity of your own. That is a decision rather than an oversight: a config
 key and an ADR would be needed, and neither exists.
@@ -560,6 +563,51 @@ reference Project's own `manual` provider — its source, in its repository — 
 their bank costs one route more than the config line**, because a Plugin cannot add one and
 signature verification is yours to own: `reference/src/payments/` is that route, generated into
 what `create-kobai` gives you (ADR-0070).
+
+**`MediaStorage` is the third, and the one where Core ships a working implementation.** A
+Merchant uploads a product image at `POST /admin/media`; where those bytes go, and — this is the
+part worth reading twice — **where a storefront fetches them from**, is what this interface
+decides:
+
+```ts
+import { defineKobaiConfig, type MediaStorage } from "@kobai/core";
+
+const bucket: MediaStorage = {
+  put: async ({ filename, contentType, bytes }) => ({ key: await putObject(filename, contentType, bytes) }),
+  urlFor: (key) => `https://cdn.example.com/${key}`,
+  // `null` means *these bytes are not kobai's to serve*, which is the whole of what a Store
+  // behind a CDN has to say: `urlFor` already sent the storefront somewhere else.
+  read: async () => null,
+};
+
+export default defineKobaiConfig({ media: { storage: bucket } });
+```
+
+Three things about it are decisions rather than implementation, and each one is a thing you
+inherit:
+
+- **The address is asked for, never stored.** A Media carries a `url` on the wire and there is no
+  `url` column: `urlFor` is called on every read. So putting a CDN in front of the bucket you
+  already had is one line here and no migration, and every Media you have ever recorded moves
+  with it.
+- **`read` is how kobai serves bytes, and answering `null` is an ordinary answer.** kobai has one
+  open route, `GET /media/{key}`, and it exists for the storage below rather than for yours: a
+  file on a disk is reachable over HTTP by nothing. Yours answers a URL of its own and no image
+  byte passes through the application.
+- **That route is open — no credential — because an `<img>` sends none.** So everything the
+  shipped storage holds is readable by anyone who knows a key, exactly as a public bucket's
+  objects are; keys are unguessable and nothing there enumerates. Media is *Merchant-supplied
+  catalog data* by definition (ADR-0015 puts a Shopper's uploaded artwork in your own table
+  instead), so that is bytes you were going to publish. If it is not, wire a storage that signs
+  its own URLs.
+
+**Core ships `filesystemMediaStorage`, and a deployment that says nothing runs on it** — files
+under `kobai-media/`, served by kobai. That is the one place Core ships an implementation of an
+interface it names, where `PaymentProvider` deliberately has none (ADR-0053); the reason it may
+is that #72's finding was already closed by the two above, so Media does not have to be the
+proof. It is local disk, so a second container has half your images and a deploy with no volume
+mounted there has none of them — both are reasons to wire something else in production rather
+than reasons the default is wrong.
 
 **A Fulfilment Strategy is one of these, and not a sixth Extension Point.** ADR-0014 says a
 Variant points at a named Strategy that answers three questions about it — does it ship, does
@@ -593,8 +641,9 @@ rewiring cannot rewrite.
 ### What every one of these interfaces looks like
 
 An interface's *shape* is under semver forever from the moment it ships (ADR-0019), so the
-four Core has named were deliberately compared against each other rather than each copying
-the last. What they agree on is worth knowing before you write one:
+five Core has named were deliberately compared against each other rather than each copying
+the last — `MediaStorage` was the most recent and was copied from the set. What they agree on is
+worth knowing before you write one:
 
 - **A plain object type, substituted whole.** No class to extend, no base to inherit, no
   `init` and no `close` — Core never constructs one of these and never disposes of one, so a
@@ -607,7 +656,8 @@ the last. What they agree on is worth knowing before you write one:
   has to say which system holds the money a year later; `ReservationProvider` carries one
   because a Reservation row names who must give the units back. `FulfilmentStrategy` carries
   none — it is named by the key you wired it under, exactly as a replaced Step is named by its
-  slot — and `Logger` needs none at all.
+  slot — and neither `Logger` nor `MediaStorage` needs one at all: there is one storage per
+  deployment, so nothing has to record which one wrote an object.
 - **Every operation is a property holding a function, never a method** — and that one is
   load-bearing rather than stylistic. TypeScript checks method parameters *bivariantly* and
   function-property parameters *contravariantly*, so only this spelling makes an implementation
@@ -615,8 +665,8 @@ the last. What they agree on is worth knowing before you write one:
   an implementation that reads a field Core does not send and your own build says so, naming
   the file and the parameter.
 
-The four used to disagree about that last point, and until **#127** they were two safe and two
-not. `Logger` and `ReservationProvider` were declared with methods, so this compiled:
+They used to disagree about that last point, and until **#127** the four that existed then were
+two safe and two not. `Logger` and `ReservationProvider` were declared with methods, so this compiled:
 
 ```ts
 const logger: Logger = {
@@ -639,25 +689,26 @@ declaring `fields` **required** rather than optional. The second is a one-charac
 `fields?` — and the first is a finding about the logger. The break itself is in ADR-0058's
 register, which is the list to date any compile error you hit against.
 
-**What is not here yet, and this is the honest half of the status above.** ADR-0026 names
-Media storage as the archetypal case of this Extension Point: a pluggable driver defaulting to
-local disk, with an S3-compatible one shipped. It also names a Postgres-backed job queue.
-**Neither exists.** The walking-skeleton spec put both out of scope on purpose and the
-commerce spine spec renewed the exclusion — kobai's first periodic work, the sweeper that
-releases lapsed Reservations, is a plain `setInterval` and explicitly *not* a job
+**What is not here yet, and this is the honest half of the status above.** ADR-0026 names two
+things as archetypal cases of this Extension Point. **Media storage is now one of them and is
+built** — a pluggable driver defaulting to local disk, which is the shape that ADR describes,
+though the S3-compatible implementation it also mentions is not shipped and is a Project's or a
+Plugin's to write. The other is a Postgres-backed **job queue**, and that one does not exist:
+kobai's first periodic work, the sweeper that releases lapsed Reservations, is a plain
+`setInterval` and explicitly *not* a job
 ([ADR-0057](./adr/0057-the-reservation-sweeper-is-an-interval-not-a-job.md)), which is a thing
 the queue spec will have to migrate rather than a queue you can attach to.
 
-So do not read ADR-0026 as documentation of something you can configure — read it as the
-argument for why storage did not need a sixth Extension Point. Moving this row to *proven*
-says the mechanism has carried somebody else's code; it does not say the interfaces you
-were promised are all here.
+So do not read ADR-0026 as documentation of everything you can configure — half of it is the
+argument for why storage did not need a sixth Extension Point, and that half is now real.
+Moving this row to *proven* says the mechanism has carried somebody else's code; it does not say
+the interfaces you were promised are all here.
 
 The database is not substitutable either, and is not meant to be: `createKobai` takes a
 connection string, not a handle. Postgres is a decision, not a driver
 ([ADR-0011](./adr/0011-postgres-and-drizzle.md)).
 
-So: if you need to substitute something none of the three names, there is nothing to attach
+So: if you need to substitute something none of the four names, there is nothing to attach
 to, and that is a gap to report rather than a mechanism to discover.
 
 ## 4. Events — **promised only**

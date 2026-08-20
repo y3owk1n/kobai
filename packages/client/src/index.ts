@@ -167,6 +167,22 @@ export type StoreVariantOptionValue = components["schemas"]["StoreVariantOptionV
 export type FulfilmentStrategySummary =
   components["schemas"]["FulfilmentStrategySummary"];
 export type Price = components["schemas"]["Price"];
+/**
+ * A Merchant-supplied catalog asset, and the address it is served at (ADR-0015).
+ *
+ * **`url` is the whole of what a client is told about where the bytes are**, and it may be
+ * absolute or root-relative: it is the deployment's own `MediaStorage`'s answer, so a Store on a
+ * CDN answers `https://…` and one on the storage kobai ships answers `/media/{key}`, which is
+ * kobai's own open byte route. It is asked of that storage on every read rather than stored, so
+ * a Store that moves its bucket moves every Media with it and nothing here goes stale.
+ *
+ * `width` and `height` are `null` for a format kobai cannot read a header from — `null` rather
+ * than `0`, so a storefront reserving space can tell *unknown* from a measurement.
+ */
+export type Media = components["schemas"]["Media"];
+export type MediaList = components["schemas"]["MediaList"];
+/** The `multipart/form-data` an upload sends: the file part, and optional alt text. */
+export type UploadMediaRequest = components["schemas"]["UploadMediaRequest"];
 export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
 export type Payment = components["schemas"]["Payment"];
@@ -232,6 +248,14 @@ export type OrderRefusal = components["schemas"]["OrderRefusal"];
 export type QuoteRequestRefusal = components["schemas"]["QuoteRequestRefusal"];
 export type PlaceOrderRequestRefusal = components["schemas"]["PlaceOrderRequestRefusal"];
 export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];
+/**
+ * The one refusal the open byte route makes.
+ *
+ * A single literal rather than a family, because nothing else about Media is refused: a key
+ * that was never stored, an object that has gone, and a deployment whose storage serves its own
+ * bytes rather than kobai's all answer this, and a client can act on none of the distinctions.
+ */
+export type MediaNotFound = components["schemas"]["MediaNotFound"];
 export type SessionRefusal = components["schemas"]["SessionRefusal"];
 export type ApiKeyRefusal = components["schemas"]["ApiKeyRefusal"];
 export type PermissionDenied = components["schemas"]["PermissionDenied"];
