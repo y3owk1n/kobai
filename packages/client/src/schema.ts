@@ -4132,7 +4132,8 @@ export interface components {
       };
       /** @description Every Price set on this Variant. A Price is a row, so there may be several. */
       prices: components["schemas"]["Price"][];
-      inventory: components["schemas"]["Inventory"];
+      /** @description What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely. */
+      inventory: components["schemas"]["Inventory"] | null;
     };
     VariantFulfilment: {
       /** @description The Fulfilment Strategy this Variant is delivered by, by name — `physical`, `digital`, or whatever this deployment wired. What that Strategy answers about shipping, stock and Lead Time is recorded on an Order's Fulfilments, where it is a snapshot rather than a live decision. */
@@ -4173,7 +4174,6 @@ export interface components {
       /** @description What the Merchant calls it — `Marketplace`. */
       name: string;
     };
-    /** @description What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely. */
     Inventory: {
       /** Format: uuid */
       variantId: string;
@@ -4183,7 +4183,7 @@ export interface components {
       reserved: number;
       /** @description `onHand - reserved` — what is left to sell. */
       available: number;
-    } | null;
+    };
     Product: {
       /** Format: uuid */
       id: string;
@@ -4498,26 +4498,26 @@ export interface components {
       id: string;
       /** @description The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's. */
       number: number;
-      shopper: components["schemas"]["CartShopper"];
+      /** @description As at Capture. `null` for a guest, which is the ordinary path. */
+      shopper: components["schemas"]["CartShopper"] | null;
       /** @description ISO 4217. Every amount here is in it. */
       currency: string;
       /** @description What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments and the tax on each of them. */
       total: number;
-      payment: components["schemas"]["Payment"];
+      /** @description The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks. */
+      payment: components["schemas"]["Payment"] | null;
       /**
        * Format: date-time
        * @description The moment of Capture, when this Order became immutable.
        */
       createdAt: string;
     };
-    /** @description As at Capture. `null` for a guest, which is the ordinary path. */
-    CartShopper: ({
+    CartShopper: {
       /** @description The reference's key, as the storefront wrote it. */
       email: string;
       /** @description This Shopper in whatever system the storefront authenticates against. */
       externalId: string | null;
-    }) | null;
-    /** @description The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks. */
+    };
     Payment: {
       /** Format: uuid */
       id: string;
@@ -4533,7 +4533,7 @@ export interface components {
       received: boolean;
       /** Format: date-time */
       createdAt: string;
-    } | null;
+    };
     Order: components["schemas"]["OrderSummary"] & {
       /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
       lineItems: components["schemas"]["OrderLineItem"][];
@@ -4620,7 +4620,8 @@ export interface components {
        * @description The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart. A Merchant may enumerate these and the public may not (ADR-0071).
        */
       id: string;
-      shopper: components["schemas"]["CartShopper"];
+      /** @description `null` for a guest, which is the ordinary path. */
+      shopper: components["schemas"]["CartShopper"] | null;
       /** @description ISO 4217 — the one currency this Cart is denominated in, and what every line of it is priced in. **Stamped when the Cart's Region was set rather than read through it** (ADR-0074), so a Merchant who moves a Region onto another currency does not reprice a Cart that already exists: where this and `region.currency` differ, this is the one that decides. It moves only when `PATCH /store/carts/{id}` moves the Cart to another Region. */
       currency: string;
       /** @description Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region. */

@@ -1199,9 +1199,11 @@ export const Store = z
     // at a *reference* site is applied to the registered component itself, so `Region` would be
     // published as `object | null` — and `GET /admin/regions` would then promise a page of items
     // that may each be `null`, which is a thing no handler produces and, under ADR-0060, a
-    // `null` a client is entitled to expect for ever. `Inventory` and `CartShopper` read that
-    // way in the generated client already; they are referenced from one genuinely nullable
-    // place each, and this is the first component shared between a nullable field and a list.
+    // `null` a client is entitled to expect for ever. **This is the canonical statement of that
+    // rule** — every other site in this file points here rather than restating it — and it is
+    // enforced rather than remembered: `openapi.test.ts` sweeps every registered component of
+    // the generated description and fails naming any that admits `null` (#309). `Inventory`,
+    // `CartShopper` and `Payment` were each published that way until that sweep existed.
     // The `description` goes on the union for the same reason — a `.meta()` there would have
     // overwritten the Region's own.
     defaultRegion: z.union([Region, z.null()]).meta({
@@ -1725,7 +1727,10 @@ export const Variant = z
       description:
         "Every Price set on this Variant. A Price is a row, so there may be several.",
     }),
-    inventory: Inventory.nullable().meta({
+    // A union rather than `Inventory.nullable()`, for `Store.defaultRegion`'s reason: written
+    // the other way, **`Inventory`** is what is published as `object | null`, everywhere it
+    // appears. It was, until #309.
+    inventory: z.union([Inventory, z.null()]).meta({
       description:
         "What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely.",
     }),
@@ -2625,7 +2630,10 @@ export const CartSummary = z
       description:
         "The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart. A Merchant may enumerate these and the public may not (ADR-0071).",
     }),
-    shopper: CartShopper.nullable().meta({
+    // A union rather than `CartShopper.nullable()`, for `Store.defaultRegion`'s reason: written
+    // the other way, **`CartShopper`** is what is published as `object | null` — here and at
+    // `OrderSummary`, which names the same component. It was, until #309.
+    shopper: z.union([CartShopper, z.null()]).meta({
       description: "`null` for a guest, which is the ordinary path.",
     }),
     currency: z.string().meta({
@@ -3192,7 +3200,9 @@ export const OrderSummary = z
       description:
         "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's.",
     }),
-    shopper: CartShopper.nullable().meta({
+    // A union, for `Store.defaultRegion`'s reason — and `.nullable()` at *either* of the two
+    // sites naming `CartShopper` would have published it as `object | null` at both.
+    shopper: z.union([CartShopper, z.null()]).meta({
       description: "As at Capture. `null` for a guest, which is the ordinary path.",
     }),
     currency: z.string().meta({ description: "ISO 4217. Every amount here is in it." }),
@@ -3200,7 +3210,10 @@ export const OrderSummary = z
       description:
         "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments and the tax on each of them.",
     }),
-    payment: Payment.nullable().meta({
+    // A union, for `Store.defaultRegion`'s reason. This is the only reference to `Payment`
+    // there is, which is exactly why the other spelling survived here: the component's `null`
+    // was accidentally honest, and the next reference to a Payment would have inherited it.
+    payment: z.union([Payment, z.null()]).meta({
       description:
         "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks.",
     }),

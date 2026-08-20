@@ -176,6 +176,120 @@ describe("the description is generated from the routes", () => {
 });
 
 /**
+ * As much of a registered component as the sweep below reads: how it says what it is.
+ *
+ * `type` is a string or a list of them in OpenAPI 3.1, which is JSON Schema's spelling and the
+ * reason `.nullable()` shows up as `["object", "null"]` rather than a `nullable: true` beside
+ * it.
+ */
+type ComponentSchema = {
+  readonly type?: string | readonly string[];
+  readonly anyOf?: readonly ComponentSchema[];
+  readonly oneOf?: readonly ComponentSchema[];
+  /** Read but never descended into, for the reason `admitsNull` gives. */
+  readonly allOf?: readonly ComponentSchema[];
+};
+
+/**
+ * Whether this schema admits `null` as itself — by its own `type`, or through a branch of a
+ * union, however deeply those are nested.
+ *
+ * **`allOf` is deliberately not descended into**, and that is a fact about JSON Schema rather
+ * than an omission: every member of an `allOf` has to hold at once, so a `null` member makes the
+ * whole schema unsatisfiable rather than nullable. The eight components that are `allOf` today
+ * are all `.extend()`s, and an `.extend()` that was then made nullable is a *union* over the
+ * `allOf`, which the branch walk below reaches.
+ */
+function admitsNull(schema: ComponentSchema): boolean {
+  return (
+    schema.type === "null" ||
+    (Array.isArray(schema.type) && schema.type.includes("null")) ||
+    [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].some(admitsNull)
+  );
+}
+
+/** The sweep itself: which of these registered components admit `null`, by name. */
+function componentsAdmittingNull(schemas: Record<string, ComponentSchema>): string[] {
+  return Object.entries(schemas)
+    .filter(([, schema]) => admitsNull(schema))
+    .map(([name]) => name);
+}
+
+/**
+ * That no **component** is published as nullable — the rule
+ * [`docs/agents/the-http-surface.md`](../../../../docs/agents/the-http-surface.md) states, with
+ * something behind it at last (#309).
+ *
+ * `.nullable()` at a *reference* site is applied by zod-openapi to the registered component
+ * rather than to the field, so `inventory: Inventory.nullable()` publishes **`Inventory`** as
+ * `object | null` — everywhere it appears, not only where it is genuinely absent. A client
+ * generated from that description narrows a `null` no handler produces, and under ADR-0060 it
+ * is a `null` that client is entitled to keep expecting. The correct spelling is
+ * `z.union([Inventory, z.null()])`, which puts the `null` on the field where it belongs and
+ * leaves the component an object.
+ *
+ * **It is asked of the description rather than of `contract.ts`, deliberately** — the rule is
+ * about what is *published*, and `.nullable()` at a reference site is only the way it has gone
+ * wrong so far. A grep of the source would be a second answer to the same question, and it
+ * would go quiet for a schema registered from anywhere but that file. It is also why this needs
+ * no list of components to check: the document names them, and one added tomorrow is swept the
+ * day it exists. That is `pagination.test.ts`'s and `filtering.test.ts`'s shape — derive the
+ * subject from the artifact, never from a list somebody has to remember.
+ *
+ * What it reads is a component's `type` and the branches of any union it is, and no more than
+ * that (`admitsNull` says why `allOf` is not one of them). A component made nullable some way
+ * OpenAPI allows and zod-openapi does not emit — a `const: null`, an `enum` carrying one —
+ * would slip through, and the answer if that day comes is another clause here rather than a
+ * different kind of check.
+ *
+ * The document is **built** rather than read off disk, so the failure arrives when the
+ * `.nullable()` is written rather than when somebody gets around to regenerating. The
+ * checked-in file cannot disagree: the drift check above holds it byte for byte.
+ *
+ * **Nothing here says a component may not be nullable in principle** — it says that today none
+ * is, and that making one is a decision rather than a slip. A component genuinely wanting a
+ * `null` branch answers this by arguing for it here.
+ */
+describe("a nullable reference is a union, so no component is published as nullable", () => {
+  it("registers no component that admits null", () => {
+    const { document } = describeCore();
+
+    const schemas = (document.components?.schemas ?? {}) as Record<
+      string,
+      ComponentSchema
+    >;
+
+    // A description with no components would pass the line below by finding nothing, which is
+    // ADR-0049's "two empty lists are equal" in the place it would be least visible.
+    expect(
+      Object.keys(schemas).length,
+      "the description registers no component at all, so this sweep is vacuous",
+    ).toBeGreaterThan(0);
+
+    // Named rather than counted: the failure has to say *which* component, because the call
+    // that caused it is at a reference site with some other component's name on the line.
+    expect(componentsAdmittingNull(schemas)).toEqual([]);
+  });
+
+  // The case above ends in `toEqual([])`, and an emptiness assertion nobody has watched fail is
+  // not yet known to be able to — `store.test.ts`'s rule, and the reason the sweep is a function
+  // rather than an expression inside it. Each shape here is one zod-openapi actually emits: a
+  // component made `.nullable()` outright, and one whose `.extend()` was, which is a `null`
+  // branch of a union over an `allOf`. The last two are what today's document is full of and
+  // must not be named, or the sweep would be red on `MigrationState` and the eight `allOf`s.
+  it("names a component that admits null, however it says so", () => {
+    expect(
+      componentsAdmittingNull({
+        Nullable: { type: ["object", "null"] },
+        ExtendedAndNullable: { anyOf: [{ allOf: [] }, { type: "null" }] },
+        Chosen: { oneOf: [{ type: "object" }, { type: "object" }] },
+        Extended: { allOf: [{ type: "object" }, { type: "object" }] },
+      }),
+    ).toEqual(["Nullable", "ExtendedAndNullable"]);
+  });
+});
+
+/**
  * Which release the description says it is describing.
  *
  * Its own block rather than one more case above, because the version is the one thing in the

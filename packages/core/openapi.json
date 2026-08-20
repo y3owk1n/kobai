@@ -968,7 +968,15 @@
             "description": "Every Price set on this Variant. A Price is a row, so there may be several."
           },
           "inventory": {
-            "$ref": "#/components/schemas/Inventory"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Inventory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely."
           }
         },
         "required": [
@@ -1102,10 +1110,7 @@
         ]
       },
       "Inventory": {
-        "type": [
-          "object",
-          "null"
-        ],
+        "type": "object",
         "properties": {
           "variantId": {
             "type": "string",
@@ -1129,8 +1134,7 @@
           "onHand",
           "reserved",
           "available"
-        ],
-        "description": "What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely."
+        ]
       },
       "Product": {
         "type": "object",
@@ -1992,7 +1996,15 @@
             "description": "The Order number — what a Shopper reads over the phone, and not the identifier. Monotonic and stable forever, and **not gapless**: gapless numbering is an invoicing requirement, and invoicing is not kobai's."
           },
           "shopper": {
-            "$ref": "#/components/schemas/CartShopper"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CartShopper"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "As at Capture. `null` for a guest, which is the ordinary path."
           },
           "currency": {
             "type": "string",
@@ -2003,7 +2015,15 @@
             "description": "What was charged, in minor units — every Line Item's total, plus the Order's own Adjustments and the tax on each of them."
           },
           "payment": {
-            "$ref": "#/components/schemas/Payment"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Payment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks."
           },
           "createdAt": {
             "type": "string",
@@ -2022,10 +2042,7 @@
         ]
       },
       "CartShopper": {
-        "type": [
-          "object",
-          "null"
-        ],
+        "type": "object",
         "properties": {
           "email": {
             "type": "string",
@@ -2042,14 +2059,10 @@
         "required": [
           "email",
           "externalId"
-        ],
-        "description": "As at Capture. `null` for a guest, which is the ordinary path."
+        ]
       },
       "Payment": {
-        "type": [
-          "object",
-          "null"
-        ],
+        "type": "object",
         "properties": {
           "id": {
             "type": "string",
@@ -2088,8 +2101,7 @@
           "currency",
           "received",
           "createdAt"
-        ],
-        "description": "The money taken for this Order. Present on every Order this version of kobai placed — payment is taken before Capture and written in the same transaction, so a declined one leaves no Order at all. `null` is what an Order placed before the Payment record existed reads as. Whether that money actually arrived is `payment.received`, which is a different question and the one a Merchant asks."
+        ]
       },
       "Order": {
         "allOf": [
@@ -2337,14 +2349,15 @@
             "description": "The identifier, and the whole of the authority to act on this Cart — there is no Shopper session to hang one off (ADR-0020). Treat it as a credential: it is unguessable, and anyone holding it can change this Cart. A Merchant may enumerate these and the public may not (ADR-0071)."
           },
           "shopper": {
-            "allOf": [
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/CartShopper"
               },
               {
-                "description": "`null` for a guest, which is the ordinary path."
+                "type": "null"
               }
-            ]
+            ],
+            "description": "`null` for a guest, which is the ordinary path."
           },
           "currency": {
             "type": "string",
