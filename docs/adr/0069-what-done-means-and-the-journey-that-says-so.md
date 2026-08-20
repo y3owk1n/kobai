@@ -137,6 +137,10 @@ search, and ADR-0026's job queue. Two of those need flagging rather than merely 
 - **The job queue may arrive whether or not it is planned.** #70's grill decides whether events are
   durable; if they are, ADR-0026's queue is pulled into spec 5 along with the sweeper debt
   ADR-0057 already owes it. Named here so it is a known risk rather than a mid-spec discovery.
+  **Answered, and it does not arrive**:
+  [ADR-0085](./0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md)
+  decides events are in-process and not durable, so spec 5 keeps the scope it has and ADR-0057's
+  debt stays owed to whichever spec builds the queue. What would reopen it is written down there.
 
 **Shopper accounts and order history are out and stay the Project's.** ADR-0020 has Core store a
 Shopper *reference* and no credential, deliberately; nothing here changes it. What changes is that

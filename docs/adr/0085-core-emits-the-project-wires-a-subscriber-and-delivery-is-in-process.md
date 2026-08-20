@@ -1,7 +1,8 @@
 # Core emits, the Project wires a subscriber, and delivery is in-process
 
-Events are the fourth of [ADR-0003](./0003-the-extension-surface-and-what-we-promise.md)'s five
-Extension Points and the one that has never existed in any form: #13's audit found no bus, no
+Events are one of [ADR-0003](./0003-the-extension-surface-and-what-we-promise.md)'s five Extension
+Points — the fourth, as `docs/extension-points.md` numbers them, since that ADR names five and
+numbers none — and the one that has never existed in any form: #13's audit found no bus, no
 emitter, no subscriber and no event type anywhere in `@kobai/core`, and `docs/extension-points.md`
 has said *promised only* ever since. This record is what the promise means. **It ships nothing**:
 the surface is built in #211, where Fulfilment dispatch first gives kobai something to announce.
@@ -158,9 +159,11 @@ contravariantly and one that demands more than Core sends is a compile error rat
 `undefined` at run time — the same spelling, for the same reason, as
 `FulfilmentStrategy.answersFor`.
 
-What may never happen to a payload without a major: removing a field, renaming one, narrowing its
-type, widening a `string` to `string | null`, or — the one no compiler catches — keeping a
-field's name and changing what it means.
+What may never happen to a payload without a major: removing a field, renaming one, widening a
+`string` to `string | null` — the direction that breaks a reader — or, the one no compiler
+catches, keeping a field's name and changing what it means. **Narrowing** runs the other way and
+is safe for the same reason adding a field is: a Subscriber that handled a `null` it can no
+longer be sent still compiles, and the branch is simply never taken.
 
 **A payload carries the identity of what happened and the facts of the transition itself, and
 nothing else.** Not a copy of the Order, not the Shopper's email, not the lines. Two reasons. A
