@@ -4,6 +4,7 @@ import {
   LayersIcon,
   PackageIcon,
   ReceiptTextIcon,
+  ServerCogIcon,
   ShieldCheckIcon,
   ShoppingCartIcon,
   StoreIcon,
@@ -214,6 +215,24 @@ export const SECTIONS = [
     label: "API keys",
     Icon: KeyRoundIcon,
     permission: PERMISSIONS.apiKeyRead,
+    group: "Developer",
+  },
+  {
+    /**
+     * **What this running kobai is** (#267, ADR-0080) — the release of Core, the Step in each
+     * Workflow position and where it came from, the Strategies wired here, and the migration
+     * sets that applied.
+     *
+     * **After API keys rather than before it**, and that is a decision about the front door
+     * rather than about reading order: the Admin lands on the head of the narrowed list, so a
+     * section put ahead of another moves where every Role holding both arrives. Appending
+     * leaves every existing landing exactly where #266 left it — including the Role holding
+     * only `api-key:read`, whose one section this group still heads with.
+     */
+    path: "/developer/deployment",
+    label: "Deployment",
+    Icon: ServerCogIcon,
+    permission: PERMISSIONS.deploymentRead,
     group: "Developer",
   },
 ] as const satisfies readonly Section[];

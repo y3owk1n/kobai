@@ -67,6 +67,15 @@ export { ADMIN_PATH };
  *   branch to render (#193). **Ask for a narrow window only where the *document* differs** —
  *   today that is `useIsMobile` and nothing else — because everything else narrows in CSS, and
  *   a case run twice over one DOM doubles what the file costs to prove the same thing.
+ * - **`page.route` delays a response; it does not invent one** — with the one exception a case
+ *   has to argue in place. Slowing a route down is how the state between "asking" and
+ *   "answered" becomes visible at all, and it changes nothing about what kobai said. Answering
+ *   a route with something kobai did *not* say is arranging by fiat, and it is allowed only
+ *   where the state is a **boot-time** one no request can put this deployment into — the
+ *   Deployment screen's "no Payment Provider wired" is the one (#267), and it fetches kobai's
+ *   real answer and changes the single field, so everything else on the screen is still this
+ *   deployment's. Anything a request could have arranged is arranged through
+ *   {@link AdminSeam.api}, as everything else here is.
  *
  * A later ticket wanting a file of its own takes one line — `await using seam = await
  * startAdminSeam()` in a `beforeAll` — and pays another boot, which is a few seconds. Adding a

@@ -51,6 +51,14 @@ export const PERMISSIONS = {
   merchantWrite: "merchant:write",
   storeRead: "store:read",
   storeWrite: "store:write",
+  /**
+   * The Developer's half, and the one Permission on this surface with no write (ADR-0080).
+   *
+   * Everything behind it is decided by a file a Developer edits and a process restart, so
+   * there is nothing to gate a write against — and it is deliberately not a second use of
+   * `store:read`, which a Role holds so somebody can correct a currency.
+   */
+  deploymentRead: "deployment:read",
 } as const satisfies Record<string, string>;
 
 /**

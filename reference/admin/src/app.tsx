@@ -23,6 +23,7 @@ import { CartScreen } from "@/screens/cart";
 import { Carts } from "@/screens/carts";
 import { CollectionScreen } from "@/screens/collection";
 import { Collections } from "@/screens/collections";
+import { DeploymentScreen } from "@/screens/deployment";
 import { MediaScreen } from "@/screens/media";
 import { Merchants } from "@/screens/merchants";
 import { OrderScreen } from "@/screens/order";
@@ -145,6 +146,10 @@ function Admin() {
             would be permanent furniture in vendored source `kobai-upgrade` can never reach.
             kobai is not published, so there is no bookmark to preserve (ADR-0079). */}
         <Route path="developer/api-keys" element={<ApiKeys />} />
+        {/* Three reads composed into one answer, and no fourth route to serve it
+            (ADR-0080). It joins the group API keys was moved into rather than standing
+            beside it, because what it answers is the deployment rather than the Store. */}
+        <Route path="developer/deployment" element={<DeploymentScreen />} />
         <Route path="merchants" element={<Merchants />} />
         <Route path="roles" element={<Roles />} />
         <Route path="roles/:id" element={<RoleScreen />} />
