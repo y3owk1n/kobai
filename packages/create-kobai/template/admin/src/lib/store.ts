@@ -2,7 +2,7 @@ import type { EnabledCurrency } from "@kobai/client";
 import { useQuery } from "@tanstack/react-query";
 import type { ListboxOption } from "@/components/listbox-field";
 import { currencyLabel } from "@/lib/currencies";
-import { orThrow } from "@/lib/refusal";
+import { orThrow, problemOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
 /**
@@ -30,7 +30,14 @@ import { useKobaiClient } from "@/lib/session";
  */
 const ENABLED = "enabled-currencies";
 
-/** What a caller needs: the codes, as options, and whether the read has really happened. */
+/**
+ * What a caller needs: the codes, as options, whether the read has really happened, and why it
+ * did not.
+ *
+ * The same four `lib/markets.ts` answers with, deliberately — a picker over a set kobai names
+ * has the same three states wherever it is, and a module that reported only two of them left
+ * its callers no way to render the third (#311).
+ */
 export type EnabledCurrencies = {
   readonly currencies: readonly EnabledCurrency[];
   /** The same set as `{ value, label }`, because both callers hand it to a `ListboxField`. */
@@ -45,6 +52,17 @@ export type EnabledCurrencies = {
    */
   readonly answered: boolean;
   readonly isPending: boolean;
+  /**
+   * Why the read failed, or `null` — what {@link answered} being `false` for ever means.
+   *
+   * It is here rather than left to `answered`, and that is the whole of #311: every one of the
+   * three currency pickers rendered an empty list on a failed `GET /admin/store`, which is
+   * exactly what a Store that has enabled nothing looks like. A Merchant was then told to enable
+   * a currency on a screen whose own read had just failed. It is `unknown` rather than an
+   * `Error` because what kobai turned the read back with is a refusal body — `problemOf` in
+   * `lib/refusal.ts` is what a caller passes it to.
+   */
+  readonly error: unknown;
 };
 
 export function useEnabledCurrencies(): EnabledCurrencies {
@@ -68,7 +86,30 @@ export function useEnabledCurrencies(): EnabledCurrencies {
     options: optionsOf(currencies),
     answered: query.isSuccess,
     isPending: query.isPending,
+    error: query.isError ? query.error : null,
   };
+}
+
+/**
+ * Why the enabled currencies could not be read, in words a Merchant can act on — or `null` (#311).
+ *
+ * **One sentence rather than three**, which is `lib/currencies.ts`'s lesson one question along:
+ * three screens offer this set — the Region screen, the New Region form and the Price editor —
+ * and each of them has to tell a failed read apart from a Store that has enabled nothing. A
+ * fourth spelling of *kobai did not say* is the thing this rules out, and there would have been
+ * three of them the day the third picker was written. `lib/markets.ts` carries the same function
+ * for Regions and, deliberately, none for Channels — one caller is not a module.
+ *
+ * It answers `null` for a read that has not failed, so a caller reaches for `??` and keeps its
+ * own prose for the states that are not failures — what is worth saying about an empty list, or
+ * about the Region a Price is being denominated for, is the caller's and not this module's.
+ */
+export function whyCurrenciesNotRead(currencies: EnabledCurrencies): string | null {
+  if (currencies.error === null) return null;
+  return problemOf(
+    currencies.error,
+    "kobai did not say which currencies this Store has enabled.",
+  );
 }
 
 /** One array for "kobai has not answered", so a caller's memo is not defeated by a fresh `[]`. */

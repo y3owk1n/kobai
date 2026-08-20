@@ -33,7 +33,7 @@ import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { orThrow, problemOf, regionReasonOf } from "@/lib/refusal";
 import { useRouteId } from "@/lib/route";
 import { useKobaiClient } from "@/lib/session";
-import { useEnabledCurrencies } from "@/lib/store";
+import { useEnabledCurrencies, whyCurrenciesNotRead } from "@/lib/store";
 
 /**
  * One Region: what it is called, what it prices in, and the way to remove it (#291, ADR-0074).
@@ -184,7 +184,12 @@ function RegionIdentity({
               deployment's decision, so it is asked about rather than written down (ADR-0063).
               Filterable for the reason the Store screen's picker is (#300): the control a
               Merchant types a code into is the same control on both screens, and a Store that
-              prices in a dozen places has a list worth narrowing. */}
+              prices in a dozen places has a list worth narrowing.
+
+              **A read that failed says so** (#311): an empty list is what a Store that prices in
+              nothing looks like, so a picker that drew one either way would send a Merchant to
+              the Store screen to enable a currency that is very likely already there. It is the
+              Region and Channel pickers' shape on the Product screen, one noun along. */}
           <ComboboxField
             control={form.control}
             name="currency"
@@ -192,7 +197,11 @@ function RegionIdentity({
             label="Currency"
             options={currencies.options}
             empty="This Store does not price in that. The Store screen is where a currency is enabled."
-            description="One of the currencies this Store may price in — the Store screen is where another is enabled. Moving a Region onto another currency changes which Prices apply here; it converts nothing."
+            description={
+              whyCurrenciesNotRead(currencies) ??
+              "One of the currencies this Store may price in — the Store screen is where another is enabled. Moving a Region onto another currency changes which Prices apply here; it converts nothing."
+            }
+            disabled={currencies.error !== null}
           />
         </CardContent>
         <CardFooter className="mt-4">

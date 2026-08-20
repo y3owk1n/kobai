@@ -488,7 +488,13 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   **`lib/markets.ts` is the same module for Regions and Channels** (#292), and it was extracted
   on the second caller like the rest: the Price editor asks for both, and the mint-a-key form
   was already asking for Channels under a cache key of the same name — two definitions of one
-  entry, which is worse than either. Three things about the Price editor are decisions rather
+  entry, which is worse than either. **Extracting it did not by itself remove the second
+  definition**, which is the part worth knowing: the Store screen's Default Region card kept a
+  `useQuery` of its own on `"offered-regions"` with a limit of its own for eight more tickets
+  (#311), so whichever of the two mounted first decided what the other read. The two limits
+  happened to agree at a hundred, which is exactly why nothing pointed at it. **A screen that
+  wants a set this module owns calls the hook**, and a `useQuery` in a screen whose key another
+  file also spells is the shape to go looking for. Three things about the Price editor are decisions rather
   than implementation. **The currency follows the chosen Region as a suggestion and never as a
   rule**: a Price denominated in something that Region does not select is a row kobai accepts
   and `select-price` can never pick, so the field *starts* on the right answer rather than the
@@ -504,6 +510,21 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   a round trip, and permanently if the read fails, which announces exactly the state the screen
   exists to repair about a Variant that is fine. The value is still rendered as an option while
   the list is in flight, because a picker whose value matches no option shows nothing.
+- **A picker over a set kobai names has three states, and an empty list is two of them** (#311).
+  *Nobody has asked yet*, *kobai answered and the Store has none*, and *the read failed* draw the
+  identical control, so a hook that reports only the first two leaves its callers unable to say
+  which — and the sentence a screen falls through to is then wrong in the worst direction, since
+  *enable a currency on the Store screen* is advice to a Merchant whose Store very likely has
+  one. So **every one of these hooks answers `error` beside whether kobai has replied** —
+  `lib/store.ts`, `lib/markets.ts`, `lib/collections.ts`, the last of which spells the same two
+  fields `read` and `pending` — and a screen renders it **in the field's own `description`**, through
+  `problemOf`, with the control `disabled`. Being merely dead is not saying so: a disabled picker
+  reads as one that has not loaded. **The sentence is a function next to the hook once two
+  screens need it** — `whyCurrenciesNotRead`, `whyRegionsNotRead` — and stays at the call site
+  while one does, which is why there is deliberately no `whyChannelsNotRead`. That is
+  `lib/currencies.ts`'s rule one question along: naming the failure and deciding which screens
+  show it are two questions, and separating them is what stops a fourth spelling of *kobai did
+  not say*.
 - **A `Select` is given `items`, its options are wrapped in a `SelectGroup`, and "no value" is
   `null`** (#239). All three are Base UI's documented shape and this Admin had none of them, so
   each was a defect the type checker could not see. `Select.Value` renders the **raw value**

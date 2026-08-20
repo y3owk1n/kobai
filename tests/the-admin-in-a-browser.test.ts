@@ -4549,4 +4549,48 @@ describe("Merchants, Roles and the Store", () => {
       )
       .toBe("JPY");
   });
+
+  it("says the currencies could not be read, rather than offering an empty picker", async () => {
+    const page = await seam.signedIn("/regions");
+    const form = page.locator("form").filter({ hasText: "Create Region" });
+    await shows(
+      form.getByRole("combobox", { name: "Currency" }),
+      "the New Region form's currency picker",
+    );
+
+    // **The second place this file answers a route with something other than what kobai said**,
+    // and the argument is the Playground's (`page.route` delays a response; it does not invent
+    // one): the network being gone is not a state any request can arrange, and it is precisely
+    // the state #311 is about. A *refused* read is a request-level question and is asserted
+    // where those belong — `store:read` gates this route in Core. What only a browser can say
+    // is that a picker with nothing in it says **which** kind of nothing it is, because an
+    // empty list is what a Store that has enabled nothing draws too.
+    await page.route(
+      (url) => url.pathname === "/admin/store",
+      async (route) => {
+        await route.abort();
+      },
+    );
+    await page.reload();
+
+    const picker = form.getByRole("combobox", { name: "Currency" });
+    await shows(picker, "the currency picker, on a load whose Store read failed");
+    await shows(
+      form.getByText("kobai did not say which currencies this Store has enabled."),
+      "the failed read, said under the field it emptied",
+    );
+    // And the sentence a Merchant must **not** be given, which is the defect rather than the
+    // fix: sending somebody to enable a currency they very likely have is worse than silence.
+    await hides(
+      form.getByText("This Store prices in one currency."),
+      "the advice that would have been wrong",
+    );
+    // Dead as well as explained, and the two halves are separate assertions on purpose: a
+    // picker that is only disabled reads as one that has not loaded yet, and a sentence under a
+    // live control invites a Merchant to open an empty list. Real `disabled` rather than
+    // `aria-disabled` is right here for `Pager`'s reason — there is no explanation to host on
+    // the control, because it is already under it.
+    await expect(picker.isDisabled()).resolves.toBe(true);
+    await auditAccessibility(page, "the Regions screen whose Store read failed");
+  });
 });

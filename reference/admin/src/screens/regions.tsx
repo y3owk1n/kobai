@@ -42,7 +42,7 @@ import {
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { orThrow, problemOf, regionReasonOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
-import { useEnabledCurrencies } from "@/lib/store";
+import { useEnabledCurrencies, whyCurrenciesNotRead } from "@/lib/store";
 
 /**
  * The geographies this Store sells into, and the way to define another (#291, ADR-0074).
@@ -241,7 +241,14 @@ function NewRegion() {
               being asked one question, so a named row on one screen and a bare code on the other
               would be this Admin disagreeing with itself. **Strictly closed**, unlike the Store
               screen's enable field — what a Region may price in is what kobai has enabled, and
-              `currency-not-enabled` is a real refusal rather than a gap in a browser's list. */}
+              `currency-not-enabled` is a real refusal rather than a gap in a browser's list.
+
+              **The three states are told apart, and a failed read is the one that was missing**
+              (#311). `answered` already kept *this Store prices in one currency* off a list that
+              was empty because nobody had asked yet; a read that failed is empty for a third
+              reason, and both of the other sentences are wrong about it — one sends a Merchant
+              to enable a currency they may well have, the other offers a list that is not
+              coming. */}
           <ComboboxField
             control={form.control}
             name="currency"
@@ -251,10 +258,12 @@ function NewRegion() {
             options={currencies.options}
             empty="This Store does not price in that. The Store screen is where a currency is enabled."
             description={
-              currencies.answered && currencies.options.length <= 1
+              whyCurrenciesNotRead(currencies) ??
+              (currencies.answered && currencies.options.length <= 1
                 ? "This Store prices in one currency. Enable another on the Store screen and it will be offered here."
-                : "One of the currencies this Store may price in. The Store screen is where another is enabled."
+                : "One of the currencies this Store may price in. The Store screen is where another is enabled.")
             }
+            disabled={currencies.error !== null}
           />
         </CardContent>
         <CardFooter className="mt-4">
