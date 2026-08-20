@@ -59,13 +59,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useCrumbTitle } from "@/lib/crumb";
-import { useOfferedChannels, useOfferedRegions } from "@/lib/markets";
+import {
+  useOfferedChannels,
+  useOfferedRegions,
+  whyChannelsNotRead,
+  whyRegionsNotRead,
+} from "@/lib/markets";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { catalogReasonOf, orThrow, problemOf } from "@/lib/refusal";
 import { useRouteId } from "@/lib/route";
 import { useKobaiClient } from "@/lib/session";
-import { useEnabledCurrencies } from "@/lib/store";
+import { useEnabledCurrencies, whyCurrenciesNotRead } from "@/lib/store";
 
 /**
  * One Product, and every operation kobai's admin surface offers on a catalog entry (#179).
@@ -1236,12 +1241,17 @@ function Prices({
                 ...currencies.options,
               ]}
               empty="Nothing matches that. A Price is denominated in a currency this Store has enabled — the Store screen is where another is."
+              // **A failed read says which one it was** (#311). This field was already dead when
+              // `GET /admin/store` failed — that is what `answered` being `false` for ever meant
+              // — but it said nothing, so it read as a picker that had simply not loaded. It now
+              // reports the failure the way the two pickers beside it do, off the same `error`.
               description={
-                suggested === null
+                whyCurrenciesNotRead(currencies) ??
+                (suggested === null
                   ? "Any currency this Store has enabled. Left as it is, kobai uses the Store's default."
-                  : `${suggested} is what that Region prices in. A Price in another currency is stored and never applies there.`
+                  : `${suggested} is what that Region prices in. A Price in another currency is stored and never applies there.`)
               }
-              disabled={!currencies.answered && !currencies.isPending}
+              disabled={currencies.error !== null}
             />
             <ListboxField
               id={`variant-new-price-region-${variant.id}`}
@@ -1256,9 +1266,8 @@ function Prices({
                 })),
               ]}
               description={
-                regions.error === null
-                  ? "Where this Price applies. Every Region is the fallback a Region-specific Price beats."
-                  : problemOf(regions.error, "kobai did not say which Regions it has.")
+                whyRegionsNotRead(regions) ??
+                "Where this Price applies. Every Region is the fallback a Region-specific Price beats."
               }
               disabled={regions.error !== null}
             />
@@ -1272,9 +1281,8 @@ function Prices({
                 ...channels.offered.map((one) => ({ value: one.id, label: one.name })),
               ]}
               description={
-                channels.error === null
-                  ? "Which route to market this Price applies through. A storefront is in the Channel its API key was minted into."
-                  : problemOf(channels.error, "kobai did not say which Channels it has.")
+                whyChannelsNotRead(channels) ??
+                "Which route to market this Price applies through. A storefront is in the Channel its API key was minted into."
               }
               disabled={channels.error !== null}
             />

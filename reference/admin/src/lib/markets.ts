@@ -1,6 +1,6 @@
 import type { Channel, Region } from "@kobai/client";
 import { useQuery } from "@tanstack/react-query";
-import { orThrow } from "@/lib/refusal";
+import { orThrow, problemOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
 /**
@@ -22,7 +22,9 @@ import { useKobaiClient } from "@/lib/session";
  *
  * **Neither list pages**, which is `lib/collections.ts`'s known gap one noun along and taken for
  * its reason: a cursor inside the Prices card would sit in an address that already locates a
- * Product, and there is one of these cards per Variant. A Store with more than a hundred Regions
+ * Product, and there is one of these cards per Variant. The Store screen's Default Region card
+ * is the same argument on a different address (#311) — a cursor there would sit in one that
+ * already locates the Store. A Store with more than a hundred Regions
  * would have some it cannot constrain a Price to from this screen — and a Store with more than a
  * hundred *geographies* has bigger questions than this control.
  */
@@ -70,6 +72,19 @@ export function useOfferedRegions(): OfferedMarkets<Region> {
   };
 }
 
+/**
+ * Why the Regions could not be read, in words a Merchant can act on — or `null` (#311).
+ *
+ * `lib/store.ts`'s `whyCurrenciesNotRead` one noun along, and here for the same reason: the
+ * Price editor's Region picker and the Store screen's Default Region card both have to tell a
+ * read that failed apart from a Store that has defined none, and an empty list looks identical
+ * either way. **Extract on the second**, and the Store screen is the second.
+ */
+export function whyRegionsNotRead(regions: OfferedMarkets<Region>): string | null {
+  if (regions.error === null) return null;
+  return problemOf(regions.error, "kobai did not say which Regions it has.");
+}
+
 export function useOfferedChannels(): OfferedMarkets<Channel> {
   const client = useKobaiClient();
 
@@ -89,4 +104,23 @@ export function useOfferedChannels(): OfferedMarkets<Channel> {
     isPending: query.isPending,
     error: query.isError ? query.error : null,
   };
+}
+
+/**
+ * Why the Channels could not be read, in words a Merchant can act on — or `null` (#311).
+ *
+ * {@link whyRegionsNotRead} one noun along, and the third of these written for the same reason:
+ * the Price editor's Channel picker and the API keys screen's mint form both draw an empty list
+ * for a Store with no Channels and for a read that never landed, and only one of those is
+ * something a Merchant can act on.
+ *
+ * **The API keys screen is the case that shows why the sentence is not enough on its own.** Its
+ * picker always carries `In no particular Channel`, which is a real answer and the one most keys
+ * want — so a failed read there is not an empty picker at all, and the caller says the read
+ * failed *and* that the ordinary key can still be minted. Naming the failure is this function's;
+ * what is still possible in spite of it is the caller's.
+ */
+export function whyChannelsNotRead(channels: OfferedMarkets<Channel>): string | null {
+  if (channels.error === null) return null;
+  return problemOf(channels.error, "kobai did not say which Channels it has.");
 }

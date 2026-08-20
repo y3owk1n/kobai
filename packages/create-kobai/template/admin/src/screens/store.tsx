@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { isoCurrencies } from "@/lib/currencies";
+import { useOfferedRegions, whyRegionsNotRead } from "@/lib/markets";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { orThrow, problemOf, storeReasonOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
@@ -465,15 +466,15 @@ function DefaultRegion({
   const client = useKobaiClient();
   const queries = useQueryClient();
   const unavailable = useUnavailable(PERMISSIONS.storeWrite, "change the Store");
-  const regions = useQuery({
-    queryKey: [OFFERED_REGIONS],
-    queryFn: async () =>
-      orThrow(
-        await client.GET("/admin/regions", {
-          params: { query: { limit: OFFERED_REGION_LIMIT } },
-        }),
-      ),
-  });
+  // **The Regions come from `lib/markets.ts`**, which is the module that owns this question
+  // (#292, #311). This card used to run a `useQuery` of its own on the same cache key,
+  // `"offered-regions"`, with a limit of its own — one cache entry with two definitions, which
+  // is the shape that module was extracted to stop: whichever of this card and the Price editor
+  // mounted first decided what the other read, and a change to either would have left the other
+  // stale with nothing pointing at it. The two limits happened to agree at a hundred, which is
+  // exactly why it could sit here unnoticed; `OFFERED_MARKETS` is now the one that decides, and
+  // its own doc carries the not-paging gap this card's constant used to state separately.
+  const regions = useOfferedRegions();
 
   const form = useForm<{ defaultRegion: string }>({
     // `values` rather than `defaultValues`, so a save that landed leaves the picker showing what
@@ -513,15 +514,23 @@ function DefaultRegion({
             id="store-default-region"
             label="Region"
             placeholder="Choose a Region"
-            options={(regions.data?.regions ?? []).map((region) => ({
+            options={regions.offered.map((region) => ({
               value: region.id,
               label: `${region.name} — ${region.currency}`,
             }))}
+            // **Three states, told apart**, which is #311's rule arriving at the picker the same
+            // ticket rewired. `answered` is the hook's name for what `isSuccess` said here and
+            // means the same thing — an empty list reads as *this Store has no Regions* only
+            // once kobai has actually replied — and a read that **failed** is empty for a third
+            // reason both of the other sentences are wrong about, since it sends a Merchant to
+            // the Regions screen to define one they very likely have.
             description={
-              regions.isSuccess && (regions.data?.regions.length ?? 0) === 0
+              whyRegionsNotRead(regions) ??
+              (regions.answered && regions.offered.length === 0
                 ? "This Store has no Regions. Define one on the Regions screen, and a storefront that names none will be answered for it."
-                : "The Regions screen is where these are defined. There is no way to have none: something has to answer a storefront that sends no Region."
+                : "The Regions screen is where these are defined. There is no way to have none: something has to answer a storefront that sends no Region.")
             }
+            disabled={regions.error !== null}
           />
         </CardContent>
         <CardFooter className="mt-4">
@@ -534,19 +543,6 @@ function DefaultRegion({
     </Card>
   );
 }
-
-/**
- * How many Regions the default picker offers, and the gap that comes with it.
- *
- * It does not page, which is `lib/collections.ts`'s known gap one noun along: a cursor inside
- * this card would sit in an address that already locates the Store screen. A Store with more
- * than a hundred Regions and an old one to pick is the case that reaches it, and the Regions
- * section is where every one of them can be found.
- */
-const OFFERED_REGION_LIMIT = 100;
-
-/** Its own cache key, deliberately not the Regions screen's — see `lib/store.ts`. */
-const OFFERED_REGIONS = "offered-regions";
 
 /**
  * The Store's metadata as something a person can edit.

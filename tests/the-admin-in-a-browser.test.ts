@@ -1630,6 +1630,73 @@ describe("API keys", () => {
     // #176 had to fix for contrast — so it is audited with a revoked row on screen.
     await auditAccessibility(page, "the API keys screen after a revocation");
   });
+
+  it("says the Channels could not be read, and still mints the key most Merchants want", async () => {
+    const page = await seam.signedIn("/developer/api-keys");
+    await shows(
+      page.getByRole("combobox", { name: "Channel" }),
+      "the mint form's Channel picker",
+    );
+
+    // The same arrangement the Regions screen's currency case takes, one noun along, and it
+    // needs a browser for the reason that one does: a Channel picker holding nothing but `In no
+    // particular Channel` is what a Store with no Channels draws too, and a failed read is a
+    // state no request can arrange.
+    await page.route(
+      (url) => url.pathname === "/admin/channels",
+      async (route) => {
+        await route.abort();
+      },
+    );
+    await page.reload();
+
+    const picker = page.getByRole("combobox", { name: "Channel" });
+    await shows(picker, "the Channel picker, on a load whose Channel read failed");
+    await shows(
+      page.getByText("kobai did not say which Channels it has."),
+      "the failed read, said under the field it emptied",
+    );
+
+    // **The half this screen does not share with the currency pickers.** `In no particular
+    // Channel` is a real answer rather than an empty-set placeholder, so the failure must not
+    // read as though minting were off — the field says so in as many words, and the control
+    // keeps the value that makes it true.
+    await shows(
+      page.getByText(/A key can still be minted into no particular Channel/),
+      "what a Merchant can still do in spite of the failed read",
+    );
+    await expect
+      .poll(async () => (await picker.innerText()).trim())
+      .toBe("In no particular Channel");
+    await expect(picker.isDisabled()).resolves.toBe(true);
+    await auditAccessibility(page, "the API keys screen whose Channel read failed");
+
+    // And it really mints, which is the assertion the two above are only evidence for: a form
+    // that explained itself perfectly and then refused to submit would be the same defect
+    // wearing better prose.
+    const named = `Minted with no Channels to read ${Date.now()}`;
+    await page.getByLabel("Name").fill(named);
+    await page.getByRole("button", { name: "Mint" }).click();
+
+    await shows(
+      page.getByText("Copy this now — it is shown once."),
+      "the key minted while the Channel read was failing",
+    );
+    await expect
+      .poll(
+        async () =>
+          (
+            await seam.api<{
+              apiKeys: { name: string; channelId: string | null }[];
+            }>("GET", "/admin/api-keys?limit=100")
+          ).apiKeys.find((one) => one.name === named)?.channelId,
+        {
+          timeout: LOCATOR_TIMEOUT,
+          message: "The key minted during a failed Channel read never reached kobai.",
+        },
+      )
+      .toBeNull();
+  });
 });
 
 describe("paging through the API keys", () => {
@@ -4547,5 +4614,49 @@ describe("Merchants, Roles and the Store", () => {
           ).regions.find((one) => one.name === named)?.currency,
       )
       .toBe("JPY");
+  });
+
+  it("says the currencies could not be read, rather than offering an empty picker", async () => {
+    const page = await seam.signedIn("/regions");
+    const form = page.locator("form").filter({ hasText: "Create Region" });
+    await shows(
+      form.getByRole("combobox", { name: "Currency" }),
+      "the New Region form's currency picker",
+    );
+
+    // **The second place this file answers a route with something other than what kobai said**,
+    // and the argument is the Playground's (`page.route` delays a response; it does not invent
+    // one): the network being gone is not a state any request can arrange, and it is precisely
+    // the state #311 is about. A *refused* read is a request-level question and is asserted
+    // where those belong — `store:read` gates this route in Core. What only a browser can say
+    // is that a picker with nothing in it says **which** kind of nothing it is, because an
+    // empty list is what a Store that has enabled nothing draws too.
+    await page.route(
+      (url) => url.pathname === "/admin/store",
+      async (route) => {
+        await route.abort();
+      },
+    );
+    await page.reload();
+
+    const picker = form.getByRole("combobox", { name: "Currency" });
+    await shows(picker, "the currency picker, on a load whose Store read failed");
+    await shows(
+      form.getByText("kobai did not say which currencies this Store has enabled."),
+      "the failed read, said under the field it emptied",
+    );
+    // And the sentence a Merchant must **not** be given, which is the defect rather than the
+    // fix: sending somebody to enable a currency they very likely have is worse than silence.
+    await hides(
+      form.getByText("This Store prices in one currency."),
+      "the advice that would have been wrong",
+    );
+    // Dead as well as explained, and the two halves are separate assertions on purpose: a
+    // picker that is only disabled reads as one that has not loaded yet, and a sentence under a
+    // live control invites a Merchant to open an empty list. Real `disabled` rather than
+    // `aria-disabled` is right here for `Pager`'s reason — there is no explanation to host on
+    // the control, because it is already under it.
+    await expect(picker.isDisabled()).resolves.toBe(true);
+    await auditAccessibility(page, "the Regions screen whose Store read failed");
   });
 });

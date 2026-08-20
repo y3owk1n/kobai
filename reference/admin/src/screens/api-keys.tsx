@@ -43,7 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useOfferedChannels } from "@/lib/markets";
+import { useOfferedChannels, whyChannelsNotRead } from "@/lib/markets";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { clearPreviewKey, readPreviewKey, writePreviewKey } from "@/lib/preview-key";
 import {
@@ -343,6 +343,9 @@ function MintKey({
   // #292**, when the Price editor became the second control asking the same question: two copies
   // sharing one cache key is one entry with two definitions, which is worse than either.
   const channels = useOfferedChannels();
+  // Read once rather than at the field, because the description below asks for it twice: what
+  // went wrong, and what a Merchant can still do in spite of it (#311).
+  const noChannels = whyChannelsNotRead(channels);
 
   const mint = useMutation({
     mutationFn: async ({ name, channelId }: MintKeyValues) =>
@@ -404,7 +407,22 @@ function MintKey({
                 label: channel.name,
               })),
             ]}
-            description="Which route to market every request presenting this key is in. It is decided here and cannot be changed afterwards — a key in the wrong Channel is replaced by minting another and revoking this one."
+            // **A failed read says so, and says what still works** (#311). This picker is the
+            // one in the Admin where an empty list is not an empty picker: `In no particular
+            // Channel` is a real answer, the one most keys want, and every key that exists
+            // today — so the read failing costs a Merchant the *other* rows and nothing else,
+            // and a sentence naming the failure alone would read as though minting were off.
+            // That second half is why this caller composes rather than falling through to
+            // `whyChannelsNotRead` the way the Price editor's does.
+            description={
+              noChannels === null
+                ? "Which route to market every request presenting this key is in. It is decided here and cannot be changed afterwards — a key in the wrong Channel is replaced by minting another and revoking this one."
+                : `${noChannels} A key can still be minted into no particular Channel, which is what most of them want and cannot be changed afterwards either.`
+            }
+            // Dead because there is nothing left to choose between, never because there is
+            // nothing to choose: the field keeps its value, so Mint still binds this key to no
+            // particular Channel exactly as it would have.
+            disabled={noChannels !== null}
           />
         </CardContent>
         <CardFooter className="mt-4 gap-2">

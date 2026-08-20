@@ -109,7 +109,11 @@ export function ComboboxField<T extends FieldValues, Submitted extends FieldValu
   /** What the popup says when nothing matches what was typed. */
   readonly empty?: string;
   /**
-   * The field is not usable — a read that failed, in the one caller that passes it.
+   * The field is not usable — a read that failed, which is what every caller passing it means.
+   *
+   * A dead control is only half of saying so: the caller also puts the failure in its
+   * `description`, because a picker that is merely disabled reads as one that has not loaded
+   * yet (#311).
    *
    * It goes on the root rather than on the trigger, which is where Base UI reads it from and
    * what puts the whole control — the trigger and the box inside the popup alike — out of use.
