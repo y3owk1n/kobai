@@ -8,6 +8,7 @@ import {
   ShieldCheckIcon,
   ShoppingCartIcon,
   StoreIcon,
+  TerminalIcon,
   UsersIcon,
 } from "lucide-react";
 import { PERMISSIONS, usePermissions } from "@/lib/permissions";
@@ -232,6 +233,27 @@ export const SECTIONS = [
     path: "/developer/deployment",
     label: "Deployment",
     Icon: ServerCogIcon,
+    permission: PERMISSIONS.deploymentRead,
+    group: "Developer",
+  },
+  {
+    /**
+     * **The whole API of the deployment in front of you** (#268, ADR-0080, ADR-0081) — every
+     * operation this build serves, what each takes, and every refusal each can make.
+     *
+     * `deployment:read` opens it, which is the same Permission the Deployment screen is behind
+     * and the same grant ADR-0080 describes: the whole shape of the API and nothing in it.
+     * What a Developer may then *do* on any of these operations is each route's own gate, in
+     * Core, and this screen predicts none of it.
+     *
+     * **Last, for the reason Deployment was appended rather than inserted** (#267): the front
+     * door lands on the head of the narrowed list, and this section shares its Permission with
+     * the one above it — so putting it ahead would move where every Role holding
+     * `deployment:read` arrives, which is what #266 spent its ordering on.
+     */
+    path: "/developer/playground",
+    label: "Playground",
+    Icon: TerminalIcon,
     permission: PERMISSIONS.deploymentRead,
     group: "Developer",
   },

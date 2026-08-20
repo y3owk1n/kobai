@@ -100,6 +100,15 @@ has, so a Developer would become somebody else in the Admin behind the screen. E
 operation has a blast radius of one record; these two have a blast radius of the session doing the
 asking, and no app boundary can fix that.
 
+**Amended by [#268](https://github.com/y3owk1n/kobai/issues/268): "offered" here means offered
+to *send*.** The Playground arrived in two halves, and the first of them browses the description
+and sends nothing at all — so it lists every operation the document carries, the two session
+ones included, because reading what `POST /admin/session` takes costs nobody their tab and is
+one of the things a Developer opens this screen for. The exclusion is a rule about the send
+control, and it lands with the sending. **What the sending ticket has to decide, and this record
+does not**, is whether an operation with no send control is worth leaving in the list or should
+disappear from it — this paragraph is the place to record that answer.
+
 **Everything else is offered, including what the selected credential cannot do.** The Admin's
 standing rule is that nothing predicts a refusal — there is no `canDelete` prop
 ([ADR-0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md)) — and hiding
