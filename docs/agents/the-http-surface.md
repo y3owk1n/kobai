@@ -883,10 +883,19 @@ same two Permissions. Six things about that surface are decisions rather than im
   applied to the **registered component**: written that way, `Region` is published as
   `object | null` and `GET /admin/regions` promises a page whose items may each be `null` —
   a thing no handler produces and, under ADR-0060, a `null` a client may expect for ever.
-  `Inventory` and `CartShopper` read that way in the generated client already; they are each
-  referenced from one genuinely nullable place, and `Region` is the first component shared
-  between a nullable field and a list. `Price.region`, `Price.channel` and
-  `ResolvedPrice.channel` are three more of them (#292).
+  `Price.region`, `Price.channel` and `ResolvedPrice.channel` are three more of them (#292).
+  **The rule is enforced rather than remembered** (#309) —
+  `openapi.test.ts` sweeps every registered component of the generated description and fails
+  naming any that admits `null`. It asks the *description* rather than `contract.ts`, so it
+  catches a component published nullable by any route at all and needs no list of components to
+  keep. **`Store.defaultRegion` is where the argument is written out**, and every other site in
+  `contract.ts` points at it rather than restating it. That sweep was written because four sites
+  had already broken the rule and nothing
+  noticed: `Inventory` (`Variant.inventory`), `CartShopper` (`CartSummary.shopper` and
+  `OrderSummary.shopper`) and `Payment` (`OrderSummary.payment`) were each published as
+  `object | null`. Each was *accidentally* honest — every reference to them was a genuinely
+  nullable one — which is exactly why it survived: the day one of them is put in a list, as
+  `Region` was, the description promises a page whose items may each be `null`.
 
 **A Price is constrained by a Region and a Channel, and resolution is best match** (#292,
 ADR-0008, ADR-0074). `regionId` and `channelId` are optional on
