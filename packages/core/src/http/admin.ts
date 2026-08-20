@@ -92,6 +92,7 @@ import type { MediaPolicy, MediaStorage } from "../media/storage.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import type { NotUsable } from "../patch.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
+import { marketAsked } from "../pricing/market.ts";
 import type { PriceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import {
@@ -124,7 +125,9 @@ import {
   MERCHANT_SESSION,
   type OpenApiDocument,
   PAGE_QUERY_INVALID,
+  PRICE_PARAMETERS,
   REFUSALS,
+  REGION_INVALID,
 } from "./openapi.ts";
 import {
   priceStatusFor,
@@ -1074,7 +1077,7 @@ const setPriceRoute = createRoute({
   path: "/variants/{id}/prices",
   summary: "Price a Variant",
   description:
-    "An insert, never an update. Calling this twice leaves a Variant with two Prices — which is how sale prices, further currencies and quantity breaks arrive without a migration.",
+    "An insert, never an update. Calling this twice leaves a Variant with two Prices — which is how sale prices, further currencies and quantity breaks arrive without a migration. **`regionId` and `channelId` are what tell two of them apart**: each is optional, leaving one out means *every* Region or *every* Channel, and a storefront asking for a price is answered by best match — both, then the Region, then the Channel, then the unconstrained fallback.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -1091,7 +1094,7 @@ const setPriceRoute = createRoute({
     403: REFUSALS.forbidden,
     404: json("No such Variant exists.", contract.CatalogRefusal),
     422: json(
-      "Well formed, and still refused: this Store does not price in that currency.",
+      "Well formed, and still refused: `unsupported-currency`, this Store has not enabled that currency; `region-not-found` or `channel-not-found`, the Price names one this Store has not got.",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1214,15 +1217,16 @@ const previewPriceRoute = createRoute({
   path: "/variants/{id}/price",
   summary: "What a storefront would be charged",
   description:
-    "Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. The response names the Steps that ran, so a replaced one is visible. Any query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.",
+    "Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. `region` names which market to price for and works exactly as it does on the store surface, so a Merchant previews what each Region will be charged through one declaration; the Channel is always the unconstrained one, because a Channel is decided by an API key and this route is opened by a session. The response names the Steps that ran, so a replaced one is visible. Any other query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
-  request: { params: contract.IdParam },
+  request: { params: contract.IdParam, query: contract.PriceQuery },
   responses: {
     200: json(
       "The resolved Price, and the Steps that produced it.",
       contract.ResolvedPrice,
     ),
+    400: REGION_INVALID,
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     404: json(
@@ -2269,8 +2273,20 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(previewPriceRoute, async (c) => {
+    // The same resolution the store surface makes, with the same fallback and the same refusal,
+    // from the one function both reach — a preview that disagreed with the storefront about
+    // which Region a request with no parameter means would be worse than no preview.
+    //
+    // **The Channel is `null` here and cannot be anything else**: a Channel is decided by an API
+    // key (ADR-0020) and this route is opened by a Merchant's session. A `?channel=` beside the
+    // Region would be a second way to say something the credential says, and the thing it would
+    // let a Merchant preview is a request no storefront could make.
+    const market = await marketAsked(deps.db, c.req.valid("query").region, null);
+    if (!market.ok)
+      return c.json({ error: market.detail, reason: "invalid" as const }, 400);
+
     const run = await deps.priceWorkflow.run(
-      { variantId: c.req.valid("param").id },
+      { variantId: c.req.valid("param").id, ...market.market },
       // **Every key the store surface puts on a Workflow context, and not a subset.** A Step is
       // a Project's to replace and may read any of them, so a route that trimmed the context
       // would be deciding on a Step's behalf which of this deployment's facts it may see — and
@@ -2279,7 +2295,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
       // is no body to merge, exactly as on `/store`.
       {
         db: deps.db,
-        metadata: openMetadata(new URL(c.req.url)),
+        metadata: openMetadata(new URL(c.req.url), PRICE_PARAMETERS),
         workflows: deps.workflows,
         paymentProvider: deps.paymentProvider,
         fulfilment: deps.fulfilment,
@@ -2823,11 +2839,21 @@ const PRICE_DELETION_STATUS = {
   "price-not-found": 404,
 } as const satisfies Record<Exclude<PriceDeletion, { ok: true }>["reason"], 404>;
 
-/** 422 for a currency this Store does not price in: well-formed, and still refused. */
+/**
+ * 422 for a currency this Store has not enabled, and for a Region or a Channel it has not got:
+ * well formed, and still refused by a fact about the Store.
+ *
+ * The Variant is the exception at 404, and the difference is what the request *addressed*: the
+ * Variant is in the path and is the thing being priced, where a Region and a Channel are fields
+ * of the body naming rows that constrain it — `collection-not-found`'s distinction on
+ * `POST /admin/products`, one noun along.
+ */
 const PRICE_STATUS = {
   invalid: 400,
   "unsupported-currency": 422,
   "variant-not-found": 404,
+  "region-not-found": 422,
+  "channel-not-found": 422,
 } as const satisfies Record<
   Exclude<PriceCreation, { ok: true }>["reason"],
   400 | 404 | 422

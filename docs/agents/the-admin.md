@@ -458,6 +458,19 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   the card and nothing at all on the create form — a Merchant filling one in did not come looking
   for Collections — and, at a create, that `collection-not-found` is now a refusal that form can
   really meet, by a Collection deleted since the list was read.
+  **`lib/markets.ts` is the same module for Regions and Channels** (#292), and it was extracted
+  on the second caller like the rest: the Price editor asks for both, and the mint-a-key form
+  was already asking for Channels under a cache key of the same name — two definitions of one
+  entry, which is worse than either. Three things about the Price editor are decisions rather
+  than implementation. **The currency follows the chosen Region as a suggestion and never as a
+  rule**: a Price denominated in something that Region does not select is a row kobai accepts
+  and `select-price` can never pick, so the field *starts* on the right answer rather than the
+  form refusing the wrong one, which would be the Admin holding a rule that lives in Core.
+  **Unconstrained is an option and not an empty picker** — `Every Region` heads the list, on the
+  argument the mint form's `In no particular Channel` already carries: it is the commonest Price
+  there is and a Merchant should be able to choose it on purpose. And **Supersede sends the
+  Price's own Region, Channel and currency**, because superseding means replacing *this* row: a
+  Merchant correcting what Malaysia pays must not be handed a Price for everywhere.
 - **A field whose options are still loading must not say the value is wrong.** The "not wired
   here" option is gated on the query having **succeeded**, not on the name being absent from an
   empty list — otherwise every ordinary `physical` Variant is labelled broken for the length of

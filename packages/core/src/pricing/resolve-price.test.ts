@@ -20,6 +20,10 @@ const flatRate = defineStep(
   "flat-rate",
   (input: LoadedPrices): ResolvedPrice => ({
     variant: input.variant,
+    // Handed back rather than invented: the market is what the request asked about, and a Step
+    // that answered for some other Region would be answering a different question.
+    region: input.region,
+    channel: input.channel,
     price: { id: "flat-rate", amount: 4200, currency: "XTS" },
   }),
 );
@@ -78,6 +82,8 @@ describe("a Project that replaces a Step in the price-resolution Workflow", () =
               "reads-what-load-prices-loaded",
               (input: LoadedPrices): ResolvedPrice => ({
                 variant: input.variant,
+                region: input.region,
+                channel: input.channel,
                 price: {
                   id: String(input.prices.length),
                   amount: input.prices[0]?.amount ?? 0,
@@ -246,6 +252,8 @@ describe("a Step reading an input Core does not model", () => {
 
       return {
         variant: input.variant,
+        region: input.region,
+        channel: input.channel,
         price: {
           id: chosen.id,
           amount: chosen.amount + surcharge,

@@ -1,6 +1,8 @@
 import { asc, eq } from "drizzle-orm";
 import { price, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import type { ChannelIdentity } from "../store/channel.ts";
+import type { RegionIdentity } from "../store/region.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
 import { defineWorkflow } from "../workflow/workflow.ts";
 
@@ -17,18 +19,44 @@ import { defineWorkflow } from "../workflow/workflow.ts";
  * Two Steps, and the split is where the seam wants to be:
  *
  * - **`load-prices`** asks the database what Prices exist for this Variant. It applies no
- *   rule; it hands over every candidate, in a stable order, with their `metadata`.
- * - **`select-price`** chooses among them. *That* is the rule, and it is a placeholder —
- *   see below.
+ *   rule; it hands over every candidate, in a stable order, with their `metadata` and their
+ *   constraint columns.
+ * - **`select-price`** chooses among them. *That* is the rule — since #292 it is **best
+ *   match** on the Region and the Channel rather than the placeholder it shipped as.
  *
  * The split matters more than it looks. Choosing in TypeScript over a loaded list, rather
  * than in `order by … limit 1`, is what makes the rule replaceable without also replacing
  * the query — so a Project that wants the cheapest Price, or one that reads a lead time out
- * of `metadata` (ADR-0013), swaps one Step and inherits the loading.
+ * of `metadata` (ADR-0013), swaps one Step and inherits the loading. It is also why the
+ * candidates arrive **unfiltered**: narrowing them to the ones that could apply would be the
+ * rule moving into the query, where a replacement cannot reach it.
  */
 
-/** What a storefront asks: this Variant, what does it cost. */
-export type PriceResolutionRequest = {
+/**
+ * The market a price is asked for: **where** a Shopper is buying, and **through what**.
+ *
+ * The pair travels together everywhere in this Workflow because it is one question — *what
+ * does this cost, here* — and because a Step deciding on one of them has to be handed the
+ * other or it cannot implement best match at all.
+ *
+ * **The Region comes from the request and the Channel from the credential** (ADR-0020,
+ * ADR-0074). `GET /store/variants/{id}/price?region=` names the first and falls back to the
+ * Store's default; the second is `core_api_key.channel_id`, decided when the key was minted, so
+ * a storefront neither threads a Channel through its requests nor can claim to be in one it was
+ * not issued a credential for. `null` is the unconstrained Channel — *no particular route to
+ * market* — which is every key that names none and every preview a Merchant asks from the
+ * Admin, where there is no key at all.
+ *
+ * There is no `PriceMarket` with a `null` Region: a request is always priced *somewhere*, which
+ * is what the Store owing a default Region buys (`store/seed.ts`).
+ */
+export type PriceMarket = {
+  readonly region: RegionIdentity;
+  readonly channel: ChannelIdentity | null;
+};
+
+/** What a storefront asks: this Variant, in this Region, through this Channel, what does it cost. */
+export type PriceResolutionRequest = PriceMarket & {
   readonly variantId: string;
 };
 
@@ -55,6 +83,17 @@ export type PriceCandidate = {
   /** Minor units of `currency` — 1250 is `USD` 12.50. */
   readonly amount: number;
   readonly currency: string;
+  /**
+   * The Region this Price applies to, or `null` for **every** Region (ADR-0008).
+   *
+   * The identifier rather than the Region, because a candidate is compared and never reported:
+   * what a chosen Price is *for* is {@link ResolvedPrice.region}, which is the market the
+   * request named rather than the constraint the row carries — and for an unconstrained Price
+   * those two are deliberately different things.
+   */
+  readonly regionId: string | null;
+  /** The Channel this Price applies to, or `null` for **every** Channel. */
+  readonly channelId: string | null;
   readonly metadata: Record<string, unknown>;
   readonly createdAt: Date;
 };
@@ -71,14 +110,22 @@ export type VariantIdentity = {
 };
 
 /** What `load-prices` produces and `select-price` chooses from. */
-export type LoadedPrices = {
+export type LoadedPrices = PriceMarket & {
   readonly variant: VariantIdentity;
   /** Every Price on the Variant, oldest first — a total order, so it never varies. */
   readonly prices: readonly PriceCandidate[];
 };
 
-/** The Workflow's output: one Price, and the Variant it prices. */
-export type ResolvedPrice = {
+/**
+ * The Workflow's output: one Price, the Variant it prices, and the market it was priced for.
+ *
+ * **The market is carried out as well as in**, which is what makes the answer say which
+ * question it answered: a storefront that sent no `?region=` was answered for the Store's
+ * default and has no other way to learn which that was, and a Merchant previewing a price
+ * needs to know it is looking at Malaysia's. It is also the half of #292's break to Extension
+ * Point 2 that a compiler can see — see the record in ADR-0058.
+ */
+export type ResolvedPrice = PriceMarket & {
   readonly variant: VariantIdentity;
   readonly price: {
     readonly id: string;
@@ -93,6 +140,11 @@ export type ResolvedPrice = {
  * Ordered `created_at` then `id`: `created_at` alone ties for Prices written in the same
  * instant, and a list whose order varies between two identical requests would make the Step
  * below non-deterministic for reasons nothing in the Workflow could explain.
+ *
+ * **Every Price, including the ones that cannot apply here.** Filtering by the Region, the
+ * Channel or the currency in the `where` clause would put the rule in the query — and the
+ * rule is what `select-price` is *for*, so a Project that replaced it would find half of its
+ * candidates already gone (ADR-0017).
  */
 export const loadPrices = defineStep(
   "load-prices",
@@ -113,6 +165,8 @@ export const loadPrices = defineStep(
         id: price.id,
         amount: price.amount,
         currency: price.currency,
+        regionId: price.regionId,
+        channelId: price.channelId,
         metadata: price.metadata,
         createdAt: price.createdAt,
       })
@@ -120,19 +174,51 @@ export const loadPrices = defineStep(
       .where(eq(price.variantId, found.id))
       .orderBy(asc(price.createdAt), asc(price.id));
 
-    return { variant: found, prices };
+    return { variant: found, region: input.region, channel: input.channel, prices };
   },
 );
 
 /**
- * Chooses which Price applies. **Newest wins.**
+ * How well a Price fits the market it is being asked about — higher is better, and `undefined`
+ * is *does not apply here at all*.
  *
- * This is a placeholder, and it is a named Step so that it is visible as one. Nothing yet
- * distinguishes two Prices on the same Variant — Region, Channel, quantity and customer
- * group are the constraint columns that would, and none of them exists (ADR-0008). Until
- * they do, "the one set most recently" is the only rule that is both deterministic and
- * honest about being arbitrary, and `id` breaks the tie so two Prices written in the same
- * instant still resolve the same way twice running.
+ * **Arithmetic with a right answer** (ADR-0008): a Price matching both the Region and the
+ * Channel beats one matching the Region alone, which beats one matching the Channel alone,
+ * which beats the unconstrained fallback. Two bits rather than four cases, so the ordering is
+ * the one the tiers are numbered in and cannot drift from it.
+ *
+ * A Price naming a *different* Region or a *different* Channel does not apply, which is the
+ * distinction that makes `null` mean **applies to all** rather than *matches nothing*.
+ */
+function tierOf(candidate: PriceCandidate, market: PriceMarket): number | undefined {
+  if (candidate.regionId !== null && candidate.regionId !== market.region.id)
+    return undefined;
+  if (
+    candidate.channelId !== null &&
+    candidate.channelId !== (market.channel?.id ?? null)
+  ) {
+    return undefined;
+  }
+  return (candidate.regionId === null ? 0 : 2) + (candidate.channelId === null ? 0 : 1);
+}
+
+/**
+ * Chooses which Price applies. **Best match, and the currency rule comes first.**
+ *
+ * Two rules, in this order, and the order is the decision:
+ *
+ * 1. **A Price not denominated in the Region's currency does not apply.** kobai converts
+ *    nothing, ever (ADR-0074), so a Region selecting MYR is answered from the MYR Prices or
+ *    from nothing at all — an unconstrained USD fallback is *not* a price in Malaysia, and best
+ *    match must never be able to beat this rule. A Variant with no Price in the Region's
+ *    currency answers the ordinary `price-not-set`.
+ * 2. **Then the best match**, by {@link tierOf}: both constraints, then the Region, then the
+ *    Channel, then the unconstrained fallback.
+ *
+ * **Ties within a tier are broken by an ordering ending in `id`.** Newest wins, which is what
+ * makes `POST /admin/variants/{id}/prices` supersede rather than accumulate; `id` settles two
+ * Prices written in the same instant, for #132's reason — a tie that reorders is a tie that will
+ * one day skip.
  *
  * A Project that disagrees replaces this one Step and keeps everything else — which is the
  * whole point of the Workflow being declared rather than written as a method.
@@ -140,22 +226,42 @@ export const loadPrices = defineStep(
 export const selectPrice = defineStep(
   "select-price",
   (input: LoadedPrices): ResolvedPrice => {
-    const chosen = input.prices.reduce<PriceCandidate | undefined>(
-      (best, candidate) => (best && !isNewer(candidate, best) ? best : candidate),
+    // The first rule, as a filter: what is left is every Price that applies here at all, each
+    // with how well it fits. `flatMap` rather than `filter` then `map`, so a candidate is
+    // judged once and the tier it was judged by is what survives.
+    const applies = input.prices.flatMap((candidate) => {
+      if (candidate.currency !== input.region.currency) return [];
+      const tier = tierOf(candidate, input);
+      return tier === undefined ? [] : [{ candidate, tier }];
+    });
+
+    // The second rule, as a comparison: a better tier wins, and inside one tier the newer Price
+    // does — which is the whole of "best match, ties broken by an ordering ending in `id`".
+    const best = applies.reduce<(typeof applies)[number] | undefined>(
+      (winning, one) =>
+        winning === undefined ||
+        one.tier > winning.tier ||
+        (one.tier === winning.tier && isNewer(one.candidate, winning.candidate))
+          ? one
+          : winning,
       undefined,
     );
 
+    const chosen = best?.candidate;
     if (!chosen) {
       throw refuse(
         "price-not-set",
-        "This Variant carries no Price. A Variant is sellable once a Price has been set on it.",
+        `This Variant carries no Price that applies in ${JSON.stringify(input.region.name)}, which prices in ${input.region.currency}. A Variant is sellable in a Region once a Price denominated in that Region's currency has been set on it, and kobai converts nothing.`,
       );
     }
 
     return {
       variant: input.variant,
+      region: input.region,
+      channel: input.channel,
       // Deliberately not the whole candidate: `metadata` belongs to the Merchant and the
-      // Project, and this output is served to a storefront.
+      // Project, and this output is served to a storefront. Nor its constraint columns — what
+      // the answer is *for* is the market above, which is the question that was asked.
       price: { id: chosen.id, amount: chosen.amount, currency: chosen.currency },
     };
   },

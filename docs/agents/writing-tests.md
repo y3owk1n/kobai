@@ -70,7 +70,29 @@ const price = await kobai.request("/store/variants/…/price", { headers: key.he
 ```
 
 A test whose subject is the *kind* of key should ask for the kind it means
-(`{ kind: "publishable" }`) and say why, rather than leaning on the default.
+(`{ kind: "publishable" }`) and say why, rather than leaning on the default. **Which Channel a
+request is in is decided by the key it presents** (ADR-0020), so a test about a Price
+constrained to a Channel mints one into that Channel — `createTestApiKey(kobai, merchant, {
+channelId })`, the `id` `POST /admin/channels` answered with — and every other test leaves it
+out, which is the unconstrained key a deployment with one route to market mints.
+
+**The harness boots, and booting seeds the default Region** (#292). `createTestKobai` calls
+`kobai.seedDefaultRegion()` after migrating, exactly as `reference/src/server.ts` does, because
+every route that prices something falls back to that Region when a request names none — a
+harness without one would put every test in a state no running deployment is in, and
+`GET /store/variants/{id}/price` would answer 400 to a request that named no Region. **That is
+the opposite call from the first Merchant, deliberately**: a Merchant is a credential a
+deployment supplies and a test about a narrow Role has to control which one exists, where a
+default Region is derived from the Store's own currency and there is nothing to get wrong.
+
+```ts
+await using kobai = await createTestKobai({ defaultRegion: false }); // before any boot seeded one
+```
+
+That is the pre-boot state and there is no other way back to it — nothing on the promised
+surface unsets `core_store.default_region_id` — so it belongs to a test whose subject *is* the
+seeding (`store/seed.test.ts`) or to one asserting on a whole list of Regions
+(`store/region.test.ts`).
 
 **The harness wires a Payment Provider, because Core ships none and almost no test is about
 one** (ADR-0053). `createTestKobai` passes `testPaymentProvider` — takes every payment, gives
@@ -150,9 +172,13 @@ const product = await kobai.request(`/admin/products/${catalog.productId}`, {
 });
 ```
 
-**Amounts are integer minor units** — 1250 is USD 12.50 — and a Price's currency is the
-Store's default, which since #5 is the only currency a Price may carry. So the helper takes
-no currency at all: the correct thing is the only thing.
+**Amounts are integer minor units** — 1250 is USD 12.50 — and what this helper seeds is a Price
+in the Store's default currency, applying to every Region and every Channel. It takes no
+currency, no Region and no Channel, and that is the same line it draws everywhere else: since
+#292 a Price may carry all three, and **a test about *selection* names the Prices it means** —
+through `POST /admin/variants/{id}/prices`, in the open, the way
+`pricing/best-match.test.ts` does. A helper that could arrange a constrained Price would be
+hiding the thing such a test is about.
 
 **Two catalogs in one deployment each need their own `title` as well as their own SKUs**
 (#251). A Product's handle is unique across the Store and is proposed from its title when a

@@ -120,12 +120,22 @@ export type OpenMetadataResult =
  * one and so can never collide; a route that takes one reaches for
  * {@link openMetadataWithBody} instead.
  *
- * A route that one day *does* model a query parameter must take it out of what it passes
- * here, or Core would start reading a key out of the open half and the openness would
- * quietly become a schema.
+ * **A route that models a query parameter names it in `modelled`, and there is one that does**
+ * (#292): `?region=` on the two price routes is read by Core, so it is subtracted here — a key
+ * Core reads is not part of the open half, or the openness would quietly become a schema. The
+ * subtraction is by name and the names come from the route's own schema, so a parameter modelled
+ * later cannot be forgotten here without the schema and the call disagreeing in one file.
+ *
+ * It is a *removal* rather than an allow-list because that is the direction the openness runs in:
+ * everything a caller sends is theirs unless Core has claimed it.
  */
-export function openMetadata(url: URL): Readonly<Record<string, unknown>> {
-  return Object.fromEntries(url.searchParams);
+export function openMetadata(
+  url: URL,
+  modelled: readonly string[] = [],
+): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(
+    [...url.searchParams].filter(([key]) => !modelled.includes(key)),
+  );
 }
 
 /**

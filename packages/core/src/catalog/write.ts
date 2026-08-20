@@ -10,7 +10,10 @@ import {
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { text } from "../patch.ts";
+import { CHANNEL_NOT_FOUND, readChannel } from "../store/channel.ts";
+import { currencyIsEnabled } from "../store/currency.ts";
 import { readDefaultCurrency } from "../store/read.ts";
+import { REGION_NOT_FOUND, readRegion } from "../store/region.ts";
 import {
   type CollectionMissing,
   collectionsThisStoreDoesNotHave,
@@ -132,14 +135,33 @@ export type VariantCreation =
 export type SetPriceInput = {
   readonly amount?: unknown;
   readonly currency?: unknown;
+  readonly regionId?: unknown;
+  readonly channelId?: unknown;
   readonly metadata?: unknown;
 };
 
+/**
+ * Setting a Price refuses four ways, and the last two are facts about the Store.
+ *
+ * `unsupported-currency` is ADR-0065's word narrowed rather than widened (#292): it used to
+ * mean *this Store prices in one currency and you named another*, and now means *this Store
+ * has not enabled that one*. The repair is the same sentence it always was — send a currency
+ * the Store prices in, or enable the one you meant — which is what makes it the same word.
+ *
+ * `region-not-found` and `channel-not-found` are the words those two entities already answer
+ * with, at **422** on `collection-not-found`'s distinction: the body is well formed and what
+ * refuses it is a Store that has no such Region or Channel. One fact gets one word (ADR-0060).
+ */
 export type PriceCreation =
   | { readonly ok: true; readonly price: Price }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | "unsupported-currency" | "variant-not-found";
+      readonly reason:
+        | "invalid"
+        | "unsupported-currency"
+        | "variant-not-found"
+        | typeof REGION_NOT_FOUND
+        | typeof CHANNEL_NOT_FOUND;
       readonly detail: string;
     };
 
@@ -475,15 +497,27 @@ export async function addVariant(
 }
 
 /**
- * Adds a Price to a Variant.
+ * Adds a Price to a Variant, in any currency the Store has enabled and for any Region and
+ * Channel it has (#292, ADR-0008, ADR-0074).
  *
- * The currency must be the Store's default, and defaults to it when the caller says nothing.
- * That is narrower than the column allows on purpose: the row can hold any currency, which
- * is the shape ADR-0008 asks for, but multi-currency pricing is out of this slice's scope
- * and there is no rule yet for choosing between two Prices in different currencies. Storing
- * one anyway would be inventing that rule by accident, in the one place it is expensive to
- * be wrong. Relaxing this check when Regions arrive costs nothing; rows written under no
- * rule at all would have to be reinterpreted.
+ * **The currency check widened and did not go away.** It used to be *the Store's default and
+ * nothing else*, because there was no rule for choosing between two Prices in different
+ * currencies; there is one now — a Region selects a currency and `select-price` answers from
+ * the Prices denominated in it — so the check is what ADR-0074 says the vocabulary is: the
+ * enabled set. A currency nobody enabled is still refused rather than converted, because kobai
+ * converts nothing, ever.
+ *
+ * **The default when a caller names no currency is still the Store's default**, unchanged and
+ * promised (ADR-0060), which is what keeps every client written before this working. It is
+ * deliberately *not* the named Region's currency: that would make one field's meaning depend on
+ * another's, and a Merchant who meant the Region's currency can say so in one word.
+ *
+ * **A Price whose currency the Region does not select is representable and is refused by
+ * nothing**, which is the one thing here that looks like an omission. It can never win a
+ * resolution — the currency rule is asked first — so it is an inert row rather than a wrong
+ * price, and refusing it would be a rule about a *pair* of fields with no route to correct
+ * either half on. The Admin's editor answers it as an affordance instead, by offering the
+ * Region's own currency first.
  */
 export async function setPrice(
   db: Database,
@@ -512,7 +546,11 @@ export async function setPrice(
       detail: '`currency` must be an ISO 4217 code, e.g. "USD".',
     };
   }
+  // Upper-cased for `parseEnabledCurrencies`' reason: `usd` and `USD` are one code.
   const asked = input.currency?.trim().toUpperCase();
+
+  const constrainedTo = readConstraints(input);
+  if (!constrainedTo.ok) return constrainedTo;
 
   if (!isUuid(variantId)) return notThatVariant(variantId);
 
@@ -539,17 +577,53 @@ export async function setPrice(
     if (!(await lockVariant(tx, variantId))) return notThatVariant(variantId);
 
     const currency = asked ?? defaultCurrency;
-    if (currency !== defaultCurrency) {
+    if (!(await currencyIsEnabled(tx, currency))) {
       return {
         ok: false,
         reason: "unsupported-currency",
-        detail: `This Store prices in ${defaultCurrency}. A Price in another currency belongs to a Region, and a Price does not carry one yet.`,
+        detail: `This Store has not enabled ${JSON.stringify(currency)}, and a Price is denominated in one of the currencies it may price in. \`GET /admin/store\` lists them, and \`PATCH /admin/store\` — \`currencies\` — is where another is enabled. kobai converts nothing, so a Price is never restated in a currency somebody else asked for.`,
+      } as const;
+    }
+
+    // Read rather than left to the foreign key, for `currencyIsEnabled`'s reason: the
+    // constraint can say only that *a* reference was bad, and this can say which and what to
+    // do about it — and the row is what this answers with, so it is wanted either way. Inside
+    // the transaction, so a Region deleted between the read and the insert takes the key's
+    // violation as the 500 it is rather than writing a Price against nothing.
+    const region =
+      constrainedTo.regionId === null
+        ? null
+        : await readRegion(tx, constrainedTo.regionId);
+    if (constrainedTo.regionId !== null && !region) {
+      return {
+        ok: false,
+        reason: REGION_NOT_FOUND,
+        detail: `No Region with the identifier ${JSON.stringify(constrainedTo.regionId)} exists, so a Price cannot apply to it. \`GET /admin/regions\` lists the ones this Store has, and leaving \`regionId\` out prices every Region.`,
+      } as const;
+    }
+
+    const channel =
+      constrainedTo.channelId === null
+        ? null
+        : await readChannel(tx, constrainedTo.channelId);
+    if (constrainedTo.channelId !== null && !channel) {
+      return {
+        ok: false,
+        reason: CHANNEL_NOT_FOUND,
+        detail: `No Channel with the identifier ${JSON.stringify(constrainedTo.channelId)} exists, so a Price cannot apply to it. \`GET /admin/channels\` lists the ones this Store has, and leaving \`channelId\` out prices every Channel.`,
       } as const;
     }
 
     const [created] = await tx
       .insert(price)
-      .values({ variantId, amount, currency, metadata })
+      .values({
+        variantId,
+        amount,
+        currency,
+        regionId: constrainedTo.regionId,
+        channelId: constrainedTo.channelId,
+        metadata,
+      })
       .returning({
         id: price.id,
         amount: price.amount,
@@ -558,8 +632,70 @@ export async function setPrice(
       });
     if (!created) throw new Error("Inserting a Price returned no row.");
 
-    return { ok: true, price: created } as const;
+    return {
+      ok: true,
+      // Assembled from what was read a statement ago rather than read back through a join:
+      // both rows were selected inside this transaction, and a Price has no second reader that
+      // could disagree about its shape the way a Variant's `readVariants` does.
+      price: {
+        ...created,
+        region: region
+          ? { id: region.id, name: region.name, currency: region.currency }
+          : null,
+        channel: channel ? { id: channel.id, name: channel.name } : null,
+      },
+    } as const;
   });
+}
+
+/**
+ * The two constraint columns a body names, narrowed — or why what it named is not an identifier.
+ *
+ * **Absent and `null` are one answer**, and that is the shape rather than a laxity: a Price that
+ * names no Region applies to every Region, so *say nothing* and *say explicitly nothing* are the
+ * same request. There is no correction route for a Price — one is superseded by another and
+ * never patched (ADR-0062) — so absent cannot also mean "leave it", which is the collision that
+ * makes this ambiguous everywhere else on the surface.
+ */
+function readConstraints(input: SetPriceInput):
+  | {
+      readonly ok: true;
+      readonly regionId: string | null;
+      readonly channelId: string | null;
+    }
+  | { readonly ok: false; readonly reason: "invalid"; readonly detail: string } {
+  const region = readConstraint("regionId", input.regionId, "Region", "/admin/regions");
+  if (!region.ok) return region;
+
+  const channel = readConstraint(
+    "channelId",
+    input.channelId,
+    "Channel",
+    "/admin/channels",
+  );
+  if (!channel.ok) return channel;
+
+  return { ok: true, regionId: region.value, channelId: channel.value };
+}
+
+/** One of them, named rather than positional: the two are read the same way and are not a list. */
+function readConstraint(
+  field: string,
+  value: unknown,
+  entity: string,
+  list: string,
+):
+  | { readonly ok: true; readonly value: string | null }
+  | { readonly ok: false; readonly reason: "invalid"; readonly detail: string } {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (typeof value !== "string" || !isUuid(value)) {
+    return {
+      ok: false,
+      reason: "invalid",
+      detail: `\`${field}\` must be the \`id\` of a ${entity} this Store has — \`GET ${list}\` lists them. Leave it out for a Price that applies to every ${entity}.`,
+    };
+  }
+  return { ok: true, value };
 }
 
 /**

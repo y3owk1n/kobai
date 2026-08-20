@@ -168,6 +168,28 @@ export const PAGE_QUERY_INVALID = json(
 );
 
 /**
+ * What a price route answers a `?region=` it cannot use with (#292).
+ *
+ * **The same `invalid` at 400 an unusable page parameter gets**, and for that one's reason: a
+ * Region this Store has not got does not fit the endpoint, and a `reason` of its own would be
+ * permanent under ADR-0060 for a distinction no storefront can act on differently. It is refused
+ * rather than defaulted because the alternative — quietly answering for the Store's default —
+ * hands a storefront with a bug a plausible number in the wrong currency (story 15).
+ */
+export const REGION_INVALID = json(
+  "`region` is not the `id` of a Region this Store has, or the request named none and this deployment has no default Region to fall back to.",
+  contract.InvalidRequest,
+);
+
+/**
+ * The query parameters the price routes **model**, and therefore keep out of the open context.
+ *
+ * Read off the schema rather than written down beside it, so that the parameter a route declares
+ * and the key its Workflow does not receive are one fact (ADR-0013, `workflow/context.ts`).
+ */
+export const PRICE_PARAMETERS = Object.keys(contract.PriceQuery.shape);
+
+/**
  * What a request that does not fit its schema is answered with.
  *
  * The same `{ error, reason }` every other kobai refusal uses, at 400 — a client parses a

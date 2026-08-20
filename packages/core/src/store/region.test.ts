@@ -73,7 +73,12 @@ async function create(
 
 describe("the Regions a Store sells into", () => {
   it("is created, read, listed, corrected and deleted", async () => {
-    await using kobai = await createTestKobai();
+    // **`defaultRegion: false`, so the list is exactly what this case made.** A booted
+    // deployment has a Region seeded from its own currency and the harness has seeded one
+    // since #292; here the whole list is the assertion, twice — once holding the Region that
+    // was created and once holding nothing after it was deleted — and a second row in it would
+    // make both of those say something weaker.
+    await using kobai = await createTestKobai({ defaultRegion: false });
     const merchant = await signInTestMerchant(kobai);
 
     const created = await create(kobai, merchant, {
@@ -245,18 +250,28 @@ describe("the Regions a Store sells into", () => {
 });
 
 describe("a Region is not a scoping key", () => {
-  it("is referenced by the Store's own fallback and by nothing else", async () => {
+  it("is referenced by the Store's own fallback and a Price's constraint, and by nothing else", async () => {
     await using kobai = await createTestKobai();
     const schema = inspectSchema(kobai.database);
     const table = await regionTable(schema);
 
     // ADR-0005 says variation *within* one Store, and this spec is the one most likely to be
     // read as an invitation — so this is the question `store.test.ts` asks about the Store,
-    // asked about the Region. The Store pointing *at* a Region is not scoping: it is a column
-    // on the singleton naming the fallback a storefront that sends no Region is answered for.
-    // A `region_id` appearing on a catalog table, a Cart or an Order is what this would name,
+    // asked about the Region. Neither of these two is scoping, and the pair is worth reading
+    // together. The Store pointing *at* a Region is a column on the singleton naming the
+    // fallback a storefront that sends no Region is answered for. `core_price.region_id` is a
+    // **constraint on a row** and the opposite of a scope: it is nullable, `null` means the
+    // Price applies everywhere, and every Price that names none still does — where a scoping
+    // key would be one every row had to carry to be visible at all.
+    //
+    // A `region_id` appearing on a Cart, an Order or a catalog table is what this would name,
     // and the day one does that is a decision to take rather than a build to fix quietly.
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
+      {
+        constraint: "core_price_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_price" },
+        to: table,
+      },
       {
         constraint: "core_store_default_region_id_core_region_id_fk",
         from: { schema: table.schema, name: "core_store" },
@@ -282,6 +297,11 @@ describe("a Region is not a scoping key", () => {
     `);
 
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
+      {
+        constraint: "core_price_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_price" },
+        to: table,
+      },
       {
         constraint: "core_scoped_region_fk",
         from: { schema: table.schema, name: "core_scoped_by_region" },

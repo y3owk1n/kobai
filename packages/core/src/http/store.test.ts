@@ -171,6 +171,12 @@ describe("resolving a price", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       variant: { id: catalog.variantId, sku: "POSTER-A2" },
+      // The market the answer is for, and this request named none of it: the Region is the one
+      // a boot seeded from what this Store prices in, and the Channel is `null` because the key
+      // was minted into no particular one. Both are on the response so that a storefront that
+      // sent no `?region=` can tell what it was answered for (#292).
+      region: { id: expect.any(String), name: "USD", currency: "USD" },
+      channel: null,
       price: { id: expect.any(String), amount: 1250, currency: "USD" },
       // Not a debugging nicety: this is what makes replacing a Step demonstrable rather
       // than asserted, so it is part of the response contract.

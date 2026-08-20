@@ -51,7 +51,11 @@ async function storeOf(
 
 describe("seeding the default Region", () => {
   it("names it from the currency this Store prices in, and points the Store at it", async () => {
-    await using kobai = await createTestKobai();
+    // **`defaultRegion: false` is what makes this file's subject reachable at all**, and every
+    // case in it takes it: since #292 the harness seeds this Region as a boot does, because a
+    // deployment that has booted has one and every price route falls back to it. This is the
+    // pre-boot state, which no request could otherwise produce.
+    await using kobai = await createTestKobai({ defaultRegion: false });
 
     const seeded = await kobai.seedDefaultRegion();
 
@@ -81,7 +85,7 @@ describe("seeding the default Region", () => {
   });
 
   it("creates no second one on the next boot, and leaves a renamed one alone", async () => {
-    await using kobai = await createTestKobai();
+    await using kobai = await createTestKobai({ defaultRegion: false });
     await kobai.seedDefaultRegion();
     const merchant = await signInTestMerchant(kobai);
     const before = await storeOf(kobai, merchant.headers);
@@ -105,7 +109,7 @@ describe("seeding the default Region", () => {
   });
 
   it("creates no second one when two processes boot against one database at once", async () => {
-    await using kobai = await createTestKobai();
+    await using kobai = await createTestKobai({ defaultRegion: false });
     // **The pool is warmed first, and that line is the whole reason this test can fail at all.**
     // `pg.Pool` opens a connection lazily, so three seeds dispatched at once against a cold pool
     // are not three concurrent transactions: the first is served by the connection that is
@@ -141,7 +145,7 @@ describe("seeding the default Region", () => {
   });
 
   it("reports rather than throws when there is nothing to derive one from", async () => {
-    await using kobai = await createTestKobai();
+    await using kobai = await createTestKobai({ defaultRegion: false });
     // A migrated database holding no Store — what a hand-run `DELETE` leaves, and the one state
     // in which there is no currency to name a Region from. It answers rather than rejecting,
     // because **nothing about seeding stops a boot**: a deployment with no default Region is a

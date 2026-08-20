@@ -60,6 +60,39 @@ async function createProduct(
   return created;
 }
 
+/** A Region selecting the currency this Store already prices in — one line of arrangement. */
+async function createRegion(
+  harness: TestKobai,
+  headers: Record<string, string>,
+  name: string,
+): Promise<string> {
+  const response = await harness.request("/admin/regions", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name, currency: "USD" }),
+  });
+  if (response.status !== 201) {
+    throw new Error(`creating a Region answered ${response.status}`);
+  }
+  return ((await response.json()) as { id: string }).id;
+}
+
+async function createChannel(
+  harness: TestKobai,
+  headers: Record<string, string>,
+  name: string,
+): Promise<string> {
+  const response = await harness.request("/admin/channels", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name }),
+  });
+  if (response.status !== 201) {
+    throw new Error(`creating a Channel answered ${response.status}`);
+  }
+  return ((await response.json()) as { id: string }).id;
+}
+
 describe("POST /admin/products", () => {
   it("creates a Product with a title and the Variant that makes it sellable", async () => {
     kobai = await createTestKobai();
@@ -857,7 +890,7 @@ describe("POST /admin/variants/:id/prices", () => {
     await expect(response.json()).resolves.toMatchObject({ reason: "invalid" });
   });
 
-  it("refuses a currency this Store does not price in", async () => {
+  it("refuses a currency this Store has not enabled", async () => {
     kobai = await createTestKobai();
     const headers = await merchantHeaders(kobai);
     const product = await createProduct(kobai, headers);
@@ -871,13 +904,120 @@ describe("POST /admin/variants/:id/prices", () => {
       },
     );
 
-    // The column holds any currency — that is the shape. What refuses this is that a second
-    // currency belongs to a Region, and there is no rule yet for choosing between two Prices
-    // in different ones. Writing the row anyway would invent that rule by accident.
+    // The column holds any currency — that is the shape. What refuses this is the vocabulary
+    // ADR-0074 makes the Store responsible for: a Price is denominated in one of the currencies
+    // the Store has enabled, and one nobody enabled would be an amount no Region could ever be
+    // answered with, since kobai converts nothing. The repair is `PATCH /admin/store`.
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({
       reason: "unsupported-currency",
     });
+    await expect(kobai.database.query("select id from core_price")).resolves.toEqual([]);
+  });
+
+  it("takes any currency the Store has enabled, which is what #292 widened", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+    // The same `EUR` the case above is refused, enabled — so this pair is the check widening
+    // rather than the check going away.
+    const enabled = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ currencies: [{ code: "USD" }, { code: "EUR" }] }),
+    });
+    expect(enabled.status).toBe(200);
+
+    const response = await kobai.request(
+      `/admin/variants/${product.variants[0]?.id}/prices`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ amount: 1250, currency: "eur" }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    // Upper-cased on the way in, exactly as a Region's is and as the Store's default is:
+    // `eur` and `EUR` are one currency.
+    await expect(response.json()).resolves.toMatchObject({ currency: "EUR" });
+  });
+
+  it("applies to a Region, to a Channel, to both, or to neither, and reads back saying which", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+    const variantId = product.variants[0]?.id ?? "";
+    const region = await createRegion(kobai, headers, "The Midwest");
+    const channel = await createChannel(kobai, headers, "Marketplace");
+
+    // The four shapes a constraint column can take, in one Variant: `null` means *applies to
+    // all*, so these are four Prices that coexist rather than four that overwrite each other.
+    for (const body of [
+      { amount: 1000 },
+      { amount: 2000, regionId: region },
+      { amount: 3000, channelId: channel },
+      { amount: 4000, regionId: region, channelId: channel },
+    ]) {
+      const created = await kobai.request(`/admin/variants/${variantId}/prices`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(created.status, `pricing ${JSON.stringify(body)}`).toBe(201);
+    }
+
+    const detail = (await (
+      await kobai.request(`/admin/products/${product.id}`, { headers })
+    ).json()) as {
+      variants: {
+        prices: {
+          amount: number;
+          region: { id: string; name: string; currency: string } | null;
+          channel: { id: string; name: string } | null;
+        }[];
+      }[];
+    };
+
+    // Named rather than by identifier, because that is what makes a list of Prices legible in
+    // the Admin without a second request per row (story 9).
+    expect(
+      detail.variants[0]?.prices.map((one) => [
+        one.amount,
+        one.region?.name ?? null,
+        one.channel?.name ?? null,
+      ]),
+    ).toEqual([
+      [1000, null, null],
+      [2000, "The Midwest", null],
+      [3000, null, "Marketplace"],
+      [4000, "The Midwest", "Marketplace"],
+    ]);
+  });
+
+  it("refuses a Region or a Channel this Store has not got", async () => {
+    kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await createProduct(kobai, headers);
+    const variantId = product.variants[0]?.id ?? "";
+    const nobodys = "2f1b8a5e-0000-4000-8000-000000000000";
+
+    for (const [field, reason] of [
+      ["regionId", "region-not-found"],
+      ["channelId", "channel-not-found"],
+    ] as const) {
+      const response = await kobai.request(`/admin/variants/${variantId}/prices`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ amount: 1250, [field]: nobodys }),
+      });
+
+      // 422 on `collection-not-found`'s distinction: the body is well formed — an identifier in
+      // the right field — and what refuses it is the state of the Store. The word is the one
+      // those two entities already answer 404 with, because it is one fact asked from two ends.
+      expect(response.status, field).toBe(422);
+      await expect(response.json()).resolves.toMatchObject({ reason });
+    }
     await expect(kobai.database.query("select id from core_price")).resolves.toEqual([]);
   });
 

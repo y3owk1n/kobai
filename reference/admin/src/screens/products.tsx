@@ -641,6 +641,8 @@ function whyNotCreated(thrown: unknown): string {
       return "One of those Collections is no longer in this Store — it has been deleted since this form read the list. Nothing was created: untick it and create the Product again.";
 
     case "unsupported-currency":
+    case "region-not-found":
+    case "channel-not-found":
     case "unknown-fulfilment-strategy":
     case "product-not-found":
     case "variant-not-found":

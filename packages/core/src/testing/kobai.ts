@@ -32,6 +32,22 @@ export type TestKobaiOptions = KobaiProjectConfig & {
    * A test that just needs somebody signed in reaches for `signInTestMerchant` instead.
    */
   readonly initialMerchant?: InitialMerchantCredentials;
+  /**
+   * Skip the default Region a boot seeds, for a test whose subject is that seeding (#292).
+   *
+   * **Seeded by default, where the first Merchant deliberately is not**, and the asymmetry is
+   * the decision. A Merchant is a credential a deployment supplies, and a test about a Role
+   * being too narrow has to control which one exists; a default Region is derived from the
+   * Store's own currency, is what every route that prices something falls back to, and a
+   * deployment that has booted has one — so a harness without it would put every test in this
+   * repository in a state a real deployment leaves within a second of starting, and
+   * `GET /store/variants/{id}/price` would answer 400 to a request that names no Region.
+   *
+   * `false` is that pre-boot state, and there is no other way back to it: nothing on the
+   * promised surface unsets `core_store.default_region_id`, because leaving a Store without one
+   * is not a state a Merchant should be able to reach (ADR-0059).
+   */
+  readonly defaultRegion?: boolean;
   readonly logger?: Logger;
 };
 
@@ -132,6 +148,16 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
   try {
     if (options?.migrate !== false) {
       migration = await kobai.migrate();
+      // Exactly what a boot does next, and for the reason a boot does it: every route that
+      // prices something falls back to this Region when a request names none, so a harness
+      // that skipped it would leave every test in a state no running deployment is in
+      // (#292, ADR-0074). A test whose subject *is* the seeding says `defaultRegion: false`
+      // and calls `kobai.seedDefaultRegion()` itself, which is what `store/seed.test.ts` does.
+      //
+      // Never without the migration ahead of it: there is no `core_store` to derive one from,
+      // and the seed reports `not-usable` rather than raising — so this would silently do
+      // nothing and the harness would look as though it had.
+      if (options?.defaultRegion !== false) await kobai.seedDefaultRegion();
     }
   } catch (cause) {
     await kobai.close();

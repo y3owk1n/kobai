@@ -14,6 +14,7 @@ import {
   holdReservations as holdReservationsFor,
   releaseReservations,
 } from "../reservation/reservation.ts";
+import { readDefaultRegion } from "../store/read.ts";
 import { runWorkflow } from "../workflow/run.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
 import { defineWorkflow } from "../workflow/workflow.ts";
@@ -303,16 +304,41 @@ export const loadCart = defineStep(
  *
  * In series rather than in parallel. A Cart has few lines, and the first refusal a Shopper is
  * told about should be the first line that has one rather than whichever query lost a race.
+ *
+ * **It prices for the Store's default Region and the unconstrained Channel, and that is a
+ * boundary rather than a decision** (#292, #293). `resolve-price` takes a market since #292, and
+ * a Cart does not carry one yet — its Region and its currency are the next ticket's, which is
+ * where this reads the Cart's instead. Until then the default Region is the honest stand-in: it
+ * selects the Store's default currency, which is what every Price written before Regions existed
+ * is denominated in, so a single-market deployment is priced exactly as it was.
+ *
+ * **What that costs a multi-market Store is worth stating exactly, because it is narrower than
+ * it sounds.** ADR-0077's property holds: `POST /store/carts/{id}/quote` slices *this*
+ * declaration, so the quote and the charge still agree by construction. What can disagree is
+ * `GET /store/variants/{id}/price`, which prices for the Region a storefront named and the
+ * Channel its key is in — so a Store that has set a Region- or Channel-constrained Price shows
+ * one number on a product page and quotes the unconstrained one at checkout. **Do not rely on
+ * either constraint in a live checkout until a Cart carries its Region.**
  */
 export const priceLines = defineStep(
   "price-lines",
   async (input: LoadedCart, context): Promise<PricedLines> => {
     const lines: PricedLine[] = [];
 
+    // Once for the placement rather than once per line: every line of one Cart is priced in one
+    // market, and a Region that changed between two lines would be a Cart charged in two
+    // currencies — which `oneCurrency` is downstream to catch and this is upstream to prevent.
+    const region = await readDefaultRegion(context.db);
+    if (!region) {
+      throw new Error(
+        "This deployment has no default Region, so a Cart cannot be priced. A Region is seeded at boot from the Store's default currency (`store/seed.ts`); a database migrated but never booted against has none.",
+      );
+    }
+
     for (const line of input.lines) {
       const run = await runWorkflow(
         priceResolutionWorkflow,
-        { variantId: line.variantId },
+        { variantId: line.variantId, region, channel: null },
         context,
       );
       // A refusal is a value the invoking Step decides about, and passing it on is the

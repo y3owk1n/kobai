@@ -30,18 +30,24 @@ import {
  *
  * Two things about it are decisions rather than implementation:
  *
- * **A Channel references nothing and is referenced by one column.** `core_api_key.channel_id` is
- * the binding, because which Channel a request is in is decided by the credential it presented
- * (ADR-0020) rather than threaded through every request — so a storefront cannot claim to be in
- * a Channel it was not issued a key for. `channel.test.ts` asks `foreignKeysTargeting` what
- * points here, so a later scoping key reddens the build instead of arriving unnoticed.
+ * **A Channel references nothing and is referenced by two columns, neither a scope.**
+ * `core_api_key.channel_id` is the binding, because which Channel a request is in is decided by
+ * the credential it presented (ADR-0020) rather than threaded through every request — so a
+ * storefront cannot claim to be in a Channel it was not issued a key for. `core_price.channel_id`
+ * is what varies per Channel (#292), and it is a constraint on a row rather than a scope: a
+ * Price naming no Channel applies through all of them. `channel.test.ts` asks
+ * `foreignKeysTargeting` what points here, so a later scoping key reddens the build instead of
+ * arriving unnoticed.
  *
  * **Deleting one is refused for nothing**, which is `DELETE /admin/collections/{id}`'s judgement
  * at a different table and for its reason: what a Channel holds is keys, and a key whose Channel
  * has gone is `null` — the unconstrained key every key was before Channels existed — rather than
  * a credential that has lost something. Refusing while keys named it would be worse than
  * useless: revocation is a column rather than a delete, so a revoked key keeps its row forever
- * and a Channel any key had ever named could never be removed at all.
+ * and a Channel any key had ever named could never be removed at all. **A Price constrained to
+ * it goes with it** (#292) rather than being refused or silently widened, and `db/schema.ts`
+ * carries that argument at the column: nothing lists Prices by Channel, so a refusal would name
+ * rows a Merchant could only find by opening every Variant.
  */
 
 /** The one word a Channel operation is refused with, past the request's own two. */
@@ -52,6 +58,20 @@ export type Channel = {
   readonly id: string;
   readonly name: string;
   readonly metadata: Record<string, unknown>;
+};
+
+/**
+ * The Channel a request is in — what it is called, and nothing else.
+ *
+ * {@link RegionIdentity}'s shape and its reason: it travels on the credential, through
+ * `resolve-price`, and out to a storefront, so it carries the name a Developer recognises and
+ * leaves `metadata` where it belongs. `null` wherever one of these is expected means the
+ * unconstrained Channel — *no particular route to market* — which is what a key minted without
+ * one presents and what a Merchant previewing a price from the Admin has.
+ */
+export type ChannelIdentity = {
+  readonly id: string;
+  readonly name: string;
 };
 
 export type ChannelCreation =

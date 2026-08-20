@@ -10,7 +10,7 @@ import type {
 } from "@kobai/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackageXIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
@@ -58,11 +58,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useCrumbTitle } from "@/lib/crumb";
+import { useOfferedChannels, useOfferedRegions } from "@/lib/markets";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { catalogReasonOf, orThrow, problemOf } from "@/lib/refusal";
 import { useRouteId } from "@/lib/route";
 import { useKobaiClient } from "@/lib/session";
+import { useEnabledCurrencies } from "@/lib/store";
 
 /**
  * One Product, and every operation kobai's admin surface offers on a catalog entry (#179).
@@ -1059,21 +1061,58 @@ function Prices({
   const client = useKobaiClient();
   const reread = useRereadProduct(productId);
   const unavailable = useCannotWrite();
+  const currencies = useEnabledCurrencies();
+  const regions = useOfferedRegions();
+  const channels = useOfferedChannels();
 
-  const form = useForm<AmountInput, unknown, AmountValues>({
-    resolver: zodResolver(AmountForm),
-    defaultValues: { amount: "" },
+  const form = useForm<PriceInput, unknown, PriceValues>({
+    resolver: zodResolver(PriceForm),
+    defaultValues: {
+      amount: "",
+      currency: THE_STORES_DEFAULT,
+      regionId: EVERYWHERE,
+      channelId: EVERYWHERE,
+    },
   });
 
+  // **The currency follows the Region as a suggestion, never as a rule.** A Price denominated in
+  // something the chosen Region does not select is a row kobai accepts and `select-price` can
+  // never pick, because a Region decides the currency and kobai converts nothing — so the field
+  // starts on the right answer rather than the form refusing the wrong one, which would be the
+  // Admin holding a rule that lives in Core (ADR-0063).
+  const chosenRegion = form.watch("regionId");
+  const suggested =
+    regions.offered.find((one) => one.id === chosenRegion)?.currency ?? null;
+  useEffect(() => {
+    // Only when a Region was chosen, and the Merchant can still put it back: *this Store's
+    // default* is an option in the list rather than a placeholder, so following the Region is a
+    // suggestion they can decline rather than a door that closes behind them.
+    if (suggested !== null) form.setValue("currency", suggested);
+  }, [suggested, form]);
+
   const add = useMutation({
-    mutationFn: async ({ amount }: AmountValues) =>
+    mutationFn: async (values: PriceValues) =>
       orThrow(
         await client.POST("/admin/variants/{id}/prices", {
           params: { path: { id: variant.id } },
-          body: { amount },
+          body: {
+            amount: values.amount,
+            // Left out rather than sent empty, because *the Store's default* is what leaving
+            // it out means — the same bargain the two constraints below take, one field along.
+            ...(values.currency === THE_STORES_DEFAULT
+              ? {}
+              : { currency: values.currency }),
+            ...constrainedTo(values.regionId, values.channelId),
+          },
         }),
       ),
-    onSuccess: () => form.reset(),
+    onSuccess: () =>
+      form.reset({
+        amount: "",
+        currency: THE_STORES_DEFAULT,
+        regionId: EVERYWHERE,
+        channelId: EVERYWHERE,
+      }),
     onSettled: reread,
   });
 
@@ -1092,6 +1131,8 @@ function Prices({
               <TableHead>Price</TableHead>
               <TableHead>Currency</TableHead>
               <TableHead>Minor units</TableHead>
+              <TableHead>Region</TableHead>
+              <TableHead>Channel</TableHead>
               <TableHead className="w-0">
                 {/* Named rather than empty: a header with no text is one a screen reader
                     announces as nothing at all. */}
@@ -1107,6 +1148,11 @@ function Prices({
                 </TableCell>
                 <TableCell>{price.currency}</TableCell>
                 <TableCell>{price.amount}</TableCell>
+                {/* **Every Region rather than a blank**, because `null` here means the Price
+                    applies to all of them — and a Merchant reading an empty cell would take it
+                    for a Price that applies to none. */}
+                <TableCell>{price.region?.name ?? "Every Region"}</TableCell>
+                <TableCell>{price.channel?.name ?? "Every Channel"}</TableCell>
                 <TableCell className="flex gap-2">
                   <Supersede
                     variantId={variant.id}
@@ -1162,10 +1208,96 @@ function Prices({
             {add.isPending ? <Spinner /> : null}
             Add Price
           </ActionButton>
+          {/* **Three pickers over three sets kobai names**, and none of them a constant here
+              (ADR-0063): the currencies this Store has enabled, and the Regions and Channels a
+              Merchant made next door. Every one of them is a deployment's decision, so a list
+              written into this file would be wrong on the first Store that made another. */}
+          <div className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
+            <ListboxField
+              id={`variant-new-price-currency-${variant.id}`}
+              control={form.control}
+              name="currency"
+              label="Currency"
+              options={[
+                { value: THE_STORES_DEFAULT, label: "This Store's default" },
+                ...currencies.options,
+              ]}
+              description={
+                suggested === null
+                  ? "Any currency this Store has enabled. Left as it is, kobai uses the Store's default."
+                  : `${suggested} is what that Region prices in. A Price in another currency is stored and never applies there.`
+              }
+              disabled={!currencies.answered && !currencies.isPending}
+            />
+            <ListboxField
+              id={`variant-new-price-region-${variant.id}`}
+              control={form.control}
+              name="regionId"
+              label="Region"
+              options={[
+                { value: EVERYWHERE, label: "Every Region" },
+                ...regions.offered.map((one) => ({
+                  value: one.id,
+                  label: `${one.name} (${one.currency})`,
+                })),
+              ]}
+              description={
+                regions.error === null
+                  ? "Where this Price applies. Every Region is the fallback a Region-specific Price beats."
+                  : problemOf(regions.error, "kobai did not say which Regions it has.")
+              }
+              disabled={regions.error !== null}
+            />
+            <ListboxField
+              id={`variant-new-price-channel-${variant.id}`}
+              control={form.control}
+              name="channelId"
+              label="Channel"
+              options={[
+                { value: EVERYWHERE, label: "Every Channel" },
+                ...channels.offered.map((one) => ({ value: one.id, label: one.name })),
+              ]}
+              description={
+                channels.error === null
+                  ? "Which route to market this Price applies through. A storefront is in the Channel its API key was minted into."
+                  : problemOf(channels.error, "kobai did not say which Channels it has.")
+              }
+              disabled={channels.error !== null}
+            />
+          </div>
         </div>
       </form>
     </fieldset>
   );
+}
+
+/**
+ * What the two constraint pickers hold for *unconstrained*.
+ *
+ * A sentinel rather than `""`, because `""` is what `ListboxField` reads as **nothing chosen**
+ * and this is a choice a Merchant makes: *every Region* is the commonest Price there is, and a
+ * picker that showed a placeholder for it would read as a field nobody had filled in.
+ */
+const EVERYWHERE = "everywhere";
+
+/**
+ * What the currency picker holds for *whatever this Store prices in*.
+ *
+ * {@link EVERYWHERE}'s argument one field along, and it earns its keep for a second reason: the
+ * field follows the chosen Region, so without an option meaning the default a Merchant who
+ * picked a Region once could never get back to leaving the currency out.
+ */
+const THE_STORES_DEFAULT = "the-store's-default";
+
+/** The two constraints as `POST /admin/variants/{id}/prices` takes them: named, or left out. */
+function constrainedTo(
+  regionId: string,
+  channelId: string,
+): { regionId?: string; channelId?: string } {
+  return {
+    ...(regionId === EVERYWHERE ? {} : { regionId }),
+    ...(channelId === EVERYWHERE ? {} : { channelId }),
+  };
 }
 
 /**
@@ -1206,7 +1338,17 @@ function Supersede({
       orThrow(
         await client.POST("/admin/variants/{id}/prices", {
           params: { path: { id: variantId } },
-          body: { amount },
+          // **The new Price applies where the old one did**, which is the whole of what
+          // superseding means: a Merchant correcting what Malaysia pays must not be handed a
+          // Price for everywhere. There is no picker here for the same reason there is no
+          // amount picker — this control replaces one row with another, and changing what a
+          // Price applies to is adding a different Price and removing this one.
+          body: {
+            amount,
+            currency: price.currency,
+            ...(price.region === null ? {} : { regionId: price.region.id }),
+            ...(price.channel === null ? {} : { channelId: price.channel.id }),
+          },
         }),
       );
       orThrow(
@@ -1299,6 +1441,23 @@ const AmountForm = z.object({
 
 type AmountInput = z.input<typeof AmountForm>;
 type AmountValues = z.output<typeof AmountForm>;
+
+/**
+ * A whole Price as the Add form holds it: the amount, and the three things it applies to.
+ *
+ * **Structure only, like every schema in this Admin** (ADR-0063). Whether this Store has enabled
+ * that currency, and whether it has that Region, are facts about the Store that arrive as
+ * refusals — the pickers offer what kobai answered, and a Region deleted since the list was read
+ * is a `region-not-found` this form can really meet.
+ */
+const PriceForm = AmountForm.extend({
+  currency: z.string(),
+  regionId: z.string(),
+  channelId: z.string(),
+});
+
+type PriceInput = z.input<typeof PriceForm>;
+type PriceValues = z.output<typeof PriceForm>;
 
 /**
  * What the Store has of this Variant, what is left to sell, and the way to say so (ADR-0018).
@@ -1609,6 +1768,8 @@ function isNoSuchProduct(thrown: unknown): boolean {
     case "variant-combination-taken":
     case "media-not-found":
     case "collection-not-found":
+    case "region-not-found":
+    case "channel-not-found":
       // Not reachable from a read of one Product as it stands, so kobai's own prose is shown
       // rather than a sentence written here for a case nobody has seen.
       return false;
@@ -1662,9 +1823,11 @@ function whyNotDeleted(thrown: unknown, fallback: string): string {
     case "variant-combination-taken":
     case "media-not-found":
     case "collection-not-found":
+    case "region-not-found":
+    case "channel-not-found":
       // Not reachable from a delete, which sends no body and names no SKU, handle, currency,
-      // Strategy, option value, combination, image or Collection. Reported as kobai said it
-      // rather than as a sentence written for a case nobody has seen.
+      // Strategy, option value, combination, image, Collection, Region or Channel. Reported as
+      // kobai said it rather than as a sentence written for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:
@@ -1740,7 +1903,17 @@ function whyNotChanged(thrown: unknown): string {
       return "It is no longer there — somebody else deleted it, or this page has been open a while.";
 
     case "unsupported-currency":
-      return "This Store does not price in that currency. Every Price carries the Store's default and no other (ADR-0065).";
+      // Widened by #292 and still one sentence: a Price is denominated in one of the currencies
+      // the Store has **enabled**, and the repair is on the Store screen rather than on this
+      // form. kobai converts nothing, so there is no second thing this could mean.
+      return "This Store has not enabled that currency. Enable it on the Store screen, or price this Variant in one it already has.";
+
+    case "region-not-found":
+    case "channel-not-found":
+      // Reachable the way `collection-not-found` is: a Region or a Channel that was in the
+      // picker when it was read has been deleted since. Nothing was written — kobai judges both
+      // before it inserts anything — so the repair is to see the lists again.
+      return "The Region or Channel this Price applies to is no longer there — somebody deleted it while this page was open. Nothing was added: reload this page and choose from what it then shows.";
 
     case "invalid":
     case "malformed-body":

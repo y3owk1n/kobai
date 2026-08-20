@@ -137,9 +137,17 @@ describe("the reference Project's configuration", () => {
       // this Project's. Without that second migration this Store would enable a currency it
       // does not sell in and not the one it does.
       currencies: [{ code: "MYR" }],
-      // Seeded at boot by `kobai.seedDefaultRegion()`, which `src/server.ts` calls and this
-      // harness does not — so a test kobai has none until it asks (#291).
-      defaultRegion: null,
+      // Seeded at boot by `kobai.seedDefaultRegion()`, which `src/server.ts` calls and the
+      // harness has called for itself since #292 — and **named `MYR` rather than `USD` is this
+      // Project's second migration showing through**: a Region selects one of the enabled
+      // currencies, and the seed runs after every migration set, so it names what this
+      // deployment actually prices in rather than Core's placeholder.
+      defaultRegion: {
+        id: expect.any(String),
+        name: "MYR",
+        currency: "MYR",
+        metadata: {},
+      },
       metadata: {},
     });
   });
@@ -549,6 +557,8 @@ describe("what this Project could not have wired", () => {
             "wants-a-cart",
             (input: LoadedPrices & { readonly cartTotal: number }): ResolvedPrice => ({
               variant: input.variant,
+              region: input.region,
+              channel: input.channel,
               price: { id: "x", amount: input.cartTotal, currency: "USD" },
             }),
           ),

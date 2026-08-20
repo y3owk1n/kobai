@@ -1333,7 +1333,7 @@ export interface paths {
   "/admin/variants/{id}/prices": {
     /**
      * Price a Variant
-     * @description An insert, never an update. Calling this twice leaves a Variant with two Prices — which is how sale prices, further currencies and quantity breaks arrive without a migration.
+     * @description An insert, never an update. Calling this twice leaves a Variant with two Prices — which is how sale prices, further currencies and quantity breaks arrive without a migration. **`regionId` and `channelId` are what tell two of them apart**: each is optional, leaving one out means *every* Region or *every* Channel, and a storefront asking for a price is answered by best match — both, then the Region, then the Channel, then the unconstrained fallback.
      */
     post: {
       parameters: {
@@ -1378,7 +1378,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description Well formed, and still refused: this Store does not price in that currency. */
+        /** @description Well formed, and still refused: `unsupported-currency`, this Store has not enabled that currency; `region-not-found` or `channel-not-found`, the Price names one this Store has not got. */
         422: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -1523,10 +1523,14 @@ export interface paths {
   "/admin/variants/{id}/price": {
     /**
      * What a storefront would be charged
-     * @description Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. The response names the Steps that ran, so a replaced one is visible. Any query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.
+     * @description Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. `region` names which market to price for and works exactly as it does on the store surface, so a Merchant previews what each Region will be charged through one declaration; the Channel is always the unconstrained one, because a Channel is decided by an API key and this route is opened by a session. The response names the Steps that ran, so a replaced one is visible. Any other query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.
      */
     get: {
       parameters: {
+        query?: {
+          /** @description The `id` of the Region to price for — currency, and later tax and shipping, all follow from it. Absent is this Store's default Region, which is seeded at its first boot. One this Store has not got is refused at 400 rather than silently defaulted. */
+          region?: string;
+        };
         path: {
           /** @description An identifier. Anything that is not one is not found. */
           id: string;
@@ -1537,6 +1541,12 @@ export interface paths {
         200: {
           content: {
             "application/json": components["schemas"]["ResolvedPrice"];
+          };
+        };
+        /** @description `region` is not the `id` of a Region this Store has, or the request named none and this deployment has no default Region to fall back to. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -3069,10 +3079,14 @@ export interface paths {
   "/store/variants/{id}/price": {
     /**
      * What a Variant costs
-     * @description Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.
+     * @description Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. **`region` decides the currency**: a Price is resolved by best match on the Region asked for and the Channel this API key is in, and a Variant with no Price denominated in that Region's currency has no price there — kobai converts nothing. Sending no `region` answers for this Store's default Region, which is exactly what this route did before the parameter existed. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.
      */
     get: {
       parameters: {
+        query?: {
+          /** @description The `id` of the Region to price for — currency, and later tax and shipping, all follow from it. Absent is this Store's default Region, which is seeded at its first boot. One this Store has not got is refused at 400 rather than silently defaulted. */
+          region?: string;
+        };
         path: {
           /** @description An identifier. Anything that is not one is not found. */
           id: string;
@@ -3083,6 +3097,12 @@ export interface paths {
         200: {
           content: {
             "application/json": components["schemas"]["ResolvedPrice"];
+          };
+        };
+        /** @description `region` is not the `id` of a Region this Store has, or the request named none and this deployment has no default Region to fall back to. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
           };
         };
         /** @description No live API key was presented. */
@@ -4118,10 +4138,28 @@ export interface components {
       /** @description Minor units of `currency` — 1250 is USD 12.50. */
       amount: number;
       currency: string;
+      /** @description The Region this Price applies to, or `null` for **every** Region. A Price constrained to a Region beats an unconstrained one there, and applies nowhere else. */
+      region: components["schemas"]["RegionIdentity"] | null;
+      /** @description The Channel this Price applies to, or `null` for **every** Channel. Which Channel a storefront is in is decided by its API key, so a Price constrained to one applies to the keys minted into it (ADR-0020). */
+      channel: components["schemas"]["ChannelIdentity"] | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
       };
+    };
+    RegionIdentity: {
+      /** Format: uuid */
+      id: string;
+      /** @description What the Merchant calls it — `Malaysia`. */
+      name: string;
+      /** @description The ISO 4217 code this Region prices in. A Price denominated in anything else does not apply here, and kobai converts nothing. */
+      currency: string;
+    };
+    ChannelIdentity: {
+      /** Format: uuid */
+      id: string;
+      /** @description What the Merchant calls it — `Marketplace`. */
+      name: string;
     };
     /** @description What the Store has of this Variant, or `null` when nobody is counting it. Untracked is not the same as none left: an untracked Variant sells freely. */
     Inventory: {
@@ -4159,7 +4197,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch" | "variant-combination-taken" | "media-not-found" | "collection-not-found";
+      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch" | "variant-combination-taken" | "media-not-found" | "collection-not-found" | "region-not-found" | "channel-not-found";
     };
     CreateProductRequest: {
       title: string;
@@ -4254,8 +4292,18 @@ export interface components {
     SetPriceRequest: {
       /** @description Minor units — 1250 for USD 12.50. Whole, and not negative. */
       amount: number;
-      /** @description ISO 4217. Defaults to the Store's default currency. */
+      /** @description ISO 4217, read case-insensitively. **Any currency this Store has enabled** — `GET /admin/store` lists them — and one it has not is refused with `unsupported-currency`, because kobai converts nothing. Defaults to the Store's default currency, which is what a Price that named none has always been denominated in; it is deliberately not the named Region's currency, so this field means one thing whatever else the body carries. */
       currency?: string;
+      /**
+       * Format: uuid
+       * @description The `id` of the Region this Price applies to — `GET /admin/regions` lists them. **Left out is every Region**, which is what every Price written before Regions existed is, and it is the fallback a Region-constrained Price beats. One this Store has not got is refused with `region-not-found`. A Price denominated in a currency this Region does not select is accepted and can never win: it is the Region that decides the currency (ADR-0074).
+       */
+      regionId?: string;
+      /**
+       * Format: uuid
+       * @description The `id` of the Channel this Price applies to — `GET /admin/channels` lists them. **Left out is every Channel.** Which Channel a request is in is decided by its API key, so this is how a marketplace listing is priced apart from a storefront without either of them asking for it (ADR-0020).
+       */
+      channelId?: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -4267,6 +4315,9 @@ export interface components {
     };
     ResolvedPrice: {
       variant: components["schemas"]["VariantIdentity"];
+      region: components["schemas"]["RegionIdentity"];
+      /** @description The Channel the presented API key is in, or `null` for a key in no particular one — and always `null` on the admin preview, which presents a session rather than a key. */
+      channel: components["schemas"]["ChannelIdentity"] | null;
       price: {
         /** Format: uuid */
         id: string;

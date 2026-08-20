@@ -106,6 +106,8 @@ const readsTheDeployment = defineStep(
     if (!chosen) throw new StepFailure("price-not-set", "Nothing to choose from.");
     return {
       variant: input.variant,
+      region: input.region,
+      channel: input.channel,
       price: { id: chosen.id, amount: chosen.amount, currency: chosen.currency },
     };
   },

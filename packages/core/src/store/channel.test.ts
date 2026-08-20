@@ -211,7 +211,7 @@ describe("which Channel a request is in", () => {
 });
 
 describe("a Channel is not a tenant", () => {
-  it("is referenced by an API key's Channel and by nothing else", async () => {
+  it("is referenced by an API key's Channel and a Price's constraint, and by nothing else", async () => {
     await using kobai = await createTestKobai();
     const schema = inspectSchema(kobai.database);
     const table = await channelTable(schema);
@@ -219,12 +219,22 @@ describe("a Channel is not a tenant", () => {
     // ADR-0005 names this one specifically: *Vendure overloads its `Channel` to mean both sales
     // channel and tenant boundary, and it is a known source of confusion. kobai's Channel means
     // sales channel only.* A `channel_id` appearing on a catalog table, a Cart or an Order is
-    // what this names — and `core_price`'s, when spec 4's next slice adds one, is a decision to
-    // take against this assertion rather than one to make quietly.
+    // what this names.
+    //
+    // **`core_price.channel_id` is the one this assertion was written expecting, and it arrived
+    // in #292** — the decision it asked to be taken deliberately. It is not a scope: the column
+    // is nullable, `null` means the Price applies through every Channel, and what a Price names
+    // constrains *that row* rather than deciding who may see anything. A key's is the same
+    // shape from the other end — which Channel a request is in, decided once at minting.
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
       {
         constraint: "core_api_key_channel_id_core_channel_id_fk",
         from: { schema: table.schema, name: "core_api_key" },
+        to: table,
+      },
+      {
+        constraint: "core_price_channel_id_core_channel_id_fk",
+        from: { schema: table.schema, name: "core_price" },
         to: table,
       },
     ]);
@@ -247,6 +257,11 @@ describe("a Channel is not a tenant", () => {
       {
         constraint: "core_api_key_channel_id_core_channel_id_fk",
         from: { schema: table.schema, name: "core_api_key" },
+        to: table,
+      },
+      {
+        constraint: "core_price_channel_id_core_channel_id_fk",
+        from: { schema: table.schema, name: "core_price" },
         to: table,
       },
       {
