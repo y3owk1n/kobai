@@ -5,6 +5,7 @@ import {
   createTestKobai,
   seedTestCatalog,
   type TestKobai,
+  type TestSession,
 } from "@kobai/core/testing";
 import { describe, expect, it } from "vitest";
 import referenceConfig from "../reference/kobai.config.ts";
@@ -63,19 +64,26 @@ import {
  *
  * That is worth saying plainly, because it is also the way the ban could be got round: the sweep
  * reads this file's **text** below the marker, so anything a helper declared above it does is
- * invisible to it. Three helpers are called from below — `aStoreWithSomethingToSell` and
- * `aStoreThatTakesBankRedirects`, which stock the Store, and `theHoldLapses`, which is the
- * clock — and none may grow into a
- * storefront doing something a storefront could not. **Arranging and acting are the line**: if a
- * helper up here starts doing what the Shopper is supposed to be doing, move it down and let the
- * sweep judge it.
+ * invisible to it. Four helpers are called from below — `aStoreWithSomethingToSell` and
+ * `aStoreThatTakesBankRedirects`, which stock the Store, `theHoldLapses`, which is the clock, and
+ * `theMerchantDispatches`, which is the **Merchant** doing a Merchant's job — and none may grow
+ * into a storefront doing something a storefront could not. **Arranging and acting are the
+ * line**: if a helper up here starts doing what the Shopper is supposed to be doing, move it down
+ * and let the sweep judge it.
+ *
+ * **The fourth is the one worth pausing on**, because it happens *after* the Shopper has bought
+ * something rather than before. It is still arrangement, and the test is whose job it is: posting
+ * a parcel is the Merchant's, exactly as stocking the shelf was, and a Shopper has no route that
+ * dispatches anything and must not. What the Shopper does with it — reading their own Order back
+ * and seeing it has gone — is below the marker, over `/store`, through the client, where the
+ * sweep can judge it.
  *
  * The sentence being walked, from ADR-0069, with what passes today in **bold**:
  *
  * > A Shopper **browses a Collection**, **opens a product page** and **picks an option**, **adds
  * > it to a Cart**, **has the stock held**, **pays through a bank redirect**, and **the Order
- * > exists once the bank has answered — whether or not the Shopper came back to the tab**. The
- * > Merchant dispatches it, and **the Shopper reads it back** dispatched. And the same purchase
+ * > exists once the bank has answered — whether or not the Shopper came back to the tab**. **The
+ * > Merchant dispatches it**, and **the Shopper reads it back dispatched**. And the same purchase
  * > completes through the hosted Checkout as through a Developer's own.
  *
  * So the journey walks as far as today's surface allows: browse the catalog, follow one of the
@@ -129,6 +137,14 @@ const DESCRIPTION = new URL("../packages/core/openapi.json", import.meta.url);
 async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
   readonly browser: KobaiClient;
   readonly server: KobaiClient;
+  /**
+   * The Merchant who stocked it, handed back so the journey can ask them to post the parcel.
+   *
+   * It is a session on the **admin** surface and is used for nothing else: the only thing below
+   * the marker that touches it is `theMerchantDispatches`, and every kobai path that helper names
+   * is written up here where the sweep expects `/admin` to appear.
+   */
+  readonly merchant: TestSession;
 }> {
   // Most of a product page in one call (#281): the copy a Merchant wrote, the Collection the
   // posters are grouped under, and the options this Product is chosen by — which
@@ -210,6 +226,7 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
   return {
     browser: clientCarrying(kobai, publishable.key),
     server: clientCarrying(kobai, posters.apiKey.key),
+    merchant: posters.merchant,
   };
 }
 
@@ -346,6 +363,59 @@ async function theHoldLapses(kobai: TestKobai): Promise<void> {
     "update core_reservation set expires_at = now() - interval '1 minute' where released_at is null",
   );
 }
+
+/**
+ * **The Merchant posts the parcel** — the clause of ADR-0069's sentence that is nobody's but
+ * theirs (#320).
+ *
+ * Arrangement, and above the marker for the same reason stocking the shelf is: a Shopper has no
+ * route that dispatches anything and must never have one. What makes it arrangement rather than a
+ * hole in the ban is *whose* act it is, not when it happens — the ban is about a journey reaching
+ * `/admin` to find out something a storefront could not know, and everything this reads is
+ * already in the Order the Shopper is holding.
+ *
+ * It reads the Order back over `/admin` first, exactly as a Merchant with a printout does, and
+ * dispatches **every** Fulfilment on it. That is one here — a poster in a parcel — and it is
+ * written as a walk rather than as `fulfilments[0]` because an Order has as many as it has ways
+ * of being delivered (ADR-0014), and the day this journey buys a download too, the Merchant's job
+ * is still to send both.
+ */
+async function theMerchantDispatches(
+  kobai: TestKobai,
+  merchant: TestSession,
+  orderId: string,
+): Promise<string> {
+  const opened = await kobai.request(`/admin/orders/${orderId}`, {
+    headers: merchant.headers,
+  });
+  expect(opened.status, "the Merchant opening the Order").toBe(200);
+  const order = (await opened.json()) as { fulfilments: readonly { id: string }[] };
+  expect(order.fulfilments.length, "an Order with nothing to dispatch").toBeGreaterThan(
+    0,
+  );
+
+  for (const fulfilment of order.fulfilments) {
+    const dispatched = await kobai.request(
+      `/admin/orders/${orderId}/fulfilments/${fulfilment.id}/dispatch`,
+      {
+        method: "POST",
+        headers: { ...merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify({ trackingReference: THE_TRACKING_REFERENCE }),
+      },
+    );
+    expect(dispatched.status, "the Merchant dispatching it").toBe(200);
+  }
+
+  return THE_TRACKING_REFERENCE;
+}
+
+/**
+ * What the Merchant writes down when they post it — opaque, and kobai reads nothing out of it.
+ *
+ * A real-looking consignment number, so that the assertion below is about a value travelling
+ * unchanged from the Merchant to the Shopper rather than about a format kobai does not have.
+ */
+const THE_TRACKING_REFERENCE = "RR123456789MY";
 
 /**
  * What the Store sells, named here so the journey asks for it by name rather than by position.
@@ -705,7 +775,7 @@ function valuesOffered(
 describe("a Shopper buys something", () => {
   it("browses a Collection, picks an option, builds a Cart and places an Order", async () => {
     await using kobai = await createTestKobai();
-    const { browser, server } = await aStoreWithSomethingToSell(kobai);
+    const { browser, server, merchant } = await aStoreWithSomethingToSell(kobai);
 
     // Browsing. A publishable key is the one shipped to a page, and it is enough to see what
     // the Store sells — which is the whole of what this spec added.
@@ -987,6 +1057,32 @@ describe("a Shopper buys something", () => {
     // And it is the Shopper's rather than a guest's, which is the one thing the Cart learned
     // between being built and being placed.
     expect(confirmation.shopper?.email).toBe(THE_SHOPPER);
+    // Nothing has moved it yet, said before the Merchant acts — otherwise the assertion below
+    // would hold just as well of a build where every Fulfilment was born `dispatched`.
+    expect(confirmation.fulfilments.map((one) => one.state)).toEqual(["pending"]);
+
+    // The Merchant posts the parcel. Arrangement, above the marker, because a Shopper has no
+    // route that dispatches anything — this is the one clause of ADR-0069's sentence that is
+    // somebody else's act, and the Shopper's half of it is the read below.
+    const tracked = await theMerchantDispatches(kobai, merchant, placed.id);
+
+    // **And the Shopper reads it back dispatched** — over `/store`, through the generated
+    // client, with the same key that placed it. That is the last Shopper-facing clause of the
+    // sentence this file exists to walk, and it is why `GET /store/orders/{id}` carries each
+    // Fulfilment's state at all: a mixed Order would show each part separately here, so a
+    // downloaded file is not waiting on a posted one.
+    const onItsWay = answered(
+      await server.GET("/store/orders/{id}", { params: { path: { id: placed.id } } }),
+      "reading the Order back once the Merchant has sent it",
+    );
+    expect(onItsWay.fulfilments.map((one) => one.state)).toEqual(["dispatched"]);
+    // The reference the Merchant wrote down, arriving at the Shopper exactly as it was written:
+    // kobai stores it and parses nothing out of it, and models no carrier at all.
+    expect(onItsWay.fulfilments[0]?.trackingReference).toBe(tracked);
+    // And the Order around it did not move, which is ADR-0014's whole claim: a part of it has a
+    // lifecycle and the financial record does not (ADR-0009).
+    expect(onItsWay.total).toBe(confirmation.total);
+    expect(onItsWay.number).toBe(confirmation.number);
   });
 
   it("refuses the browser's key at the purchase leg, which is why there are two", async () => {

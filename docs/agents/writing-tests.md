@@ -411,16 +411,34 @@ reference Project's `kobai.config.test.ts`, and every test in `order.test.ts` th
 what placing *answered* call that route by hand — for the same reason `cart.test.ts` builds
 its Carts by hand.
 
+**A mixed Order is one line too, and it is the arrangement two specs share** (#320, #321).
+`seedTestMixedOrder` places an Order carrying one `physical` line and one `digital` one — so it
+has **two Fulfilments**, on independent timelines, which is the only shape "each Fulfilment moves
+independently" and "there is no shipping charge on a download" can honestly be asserted against:
+
+```ts
+const order = await seedTestMixedOrder(kobai);          // POSTER-A2 and PDF, one Order
+const order = await seedTestMixedOrder(kobai, { merchant }); // one already signed in
+```
+
+`MIXED_ORDER_PHYSICAL_SKU` and `MIXED_ORDER_DIGITAL_SKU` are those two SKUs, exported so a test
+asks for a line **by SKU** rather than writing the strings down again. What comes back is an
+ordinary `TestOrder`. **Two convenient Orders is the thing this rules out**: a status column on
+`core_order` satisfies every assertion made against two Orders and fails on one, which is the
+whole of ADR-0014's argument. Three things it deliberately does not do — count stock, give the
+Cart an Address, or take any options — because each of those is the thing some other test is
+about, and `seedTestCatalog` and `seedTestOrder` are where a test says so in the open.
+
 **The harness is promised surface** (ADR-0047): everything `@kobai/core/testing` exports is
 covered by ADR-0019's semver commitment, because it ships for the Plugin author who needs the
 same seam Core tests through — while the five Extension Points of ADR-0003 stay five, since
 nothing attaches to a test harness at runtime. So a helper added here is designed as public
 API and documented in this section, and what a helper does *internally* — which requests it
-makes, in what order — is promised to nobody. `seedTestCatalog`'s, `seedTestCart`'s and
-`seedTestOrder`'s own contracts, including every case above, are asserted in
-`packages/core/src/testing/catalog.test.ts`, `packages/core/src/testing/cart.test.ts` and
-`packages/core/src/testing/order.test.ts` against the running application rather than against
-the object each returns.
+makes, in what order — is promised to nobody. `seedTestCatalog`'s, `seedTestCart`'s,
+`seedTestOrder`'s and `seedTestMixedOrder`'s own contracts, including every case above, are
+asserted in `packages/core/src/testing/catalog.test.ts`, `packages/core/src/testing/cart.test.ts`,
+`packages/core/src/testing/order.test.ts` and `packages/core/src/testing/mixed-order.test.ts`
+against the running application rather than against the object each returns.
 
 **Contention has a shape, and it stays in the HTTP seam.** ADR-0018 requires check-and-consume to
 be a row lock or a unique constraint and **never a `select` followed by an `update`** — and
@@ -434,8 +452,13 @@ at six Variants together and holds every count to one of the two answers that ar
 `packages/core/src/reservation/the-cart-that-held-twice.test.ts` is the third, and it is the one
 whose subject is a lock rather than a conditional update — it dispatches eight holds at one Cart
 and eight at one unit of stock, because claim-or-adopt asks about *other* rows and so takes
-ADR-0018's other mechanism (ADR-0070). Four things about how they are written carry to the next
-one:
+ADR-0018's other mechanism (ADR-0070).
+`packages/core/src/fulfilment/the-fulfilment-dispatched-twice.test.ts` is the **fourth** (#320),
+and it is the one on a path where nothing is scarce at all: two Merchants dispatching one
+Fulfilment, where the forbidden shape loses a *tracking reference* rather than a unit of stock —
+which is why its last assertion is that the row carries the **winner's**, since a lost update
+leaves the Fulfilment `dispatched` either way. Four things about how they are written carry to the
+next one:
 
 - **Assert on what the losers were told, and on the books, not only on the winner.** One 201, and
   every other request refused with the *reason that is true* rather than failing some other way;
@@ -445,9 +468,14 @@ one:
   loser has been charged and refunded for a purchase that never happened.
 - **A Cart each, not one Cart many times.** A Cart becomes exactly one Order, so the second shape
   is a test about *that* uniqueness rather than about scarcity, and it would pass either way.
-- **How many is a named constant with its reason beside it.** Big enough that more than one
-  request is inside the gap on any scheduling, small enough to stay well inside the connection
-  pool — queueing behind connections serialises the very thing the test exists to overlap.
+- **How many is a named constant with its reason beside it, and the number is *measured*.** The
+  three Reservation tests stay well inside the connection pool, because queueing behind
+  connections serialises the very thing they exist to overlap. **The fourth goes the other way and
+  says so** — it dispatches twenty-four against a pool of ten, because there the queue is what
+  makes the window visible — and the reason that departure is written down rather than merely
+  taken is that at eight the *broken* implementation answered one 200 and passed. **Watch the
+  number fail, not only the shape**: a count too small is a green run over exactly the thing the
+  test forbids.
 - **Each was watched failing before it was made to pass** — the first against a deliberately
   non-atomic hold, the second against the two loose statements it was written about — and what
   each run did is written down in its own file. **Write the next such test the same way round**;

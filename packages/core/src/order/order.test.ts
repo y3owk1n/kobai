@@ -80,6 +80,11 @@ describe("a Cart becomes an Order", () => {
           requiresShipping: true,
           tracksInventory: true,
           hasLeadTime: false,
+          // Where Capture leaves it: nothing has been recorded about this part having moved.
+          // Moving it is `fulfilment/a-fulfilment-moves.test.ts`, and it is the one thing on
+          // this record that ever changes (#320).
+          state: "pending",
+          trackingReference: null,
           lineItemIds: [expect.any(String)],
         },
       ],

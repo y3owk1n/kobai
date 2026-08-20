@@ -2372,6 +2372,16 @@
             "type": "boolean",
             "description": "Whether there is an interval between Capture and delivery. `true` is a made-to-order line; how long is the Plugin's to know, and reaches the Order as an Adjustment."
           },
+          "state": {
+            "$ref": "#/components/schemas/FulfilmentState"
+          },
+          "trackingReference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the Merchant recorded when they dispatched this — a consignment number, a carrier's own reference, anything. kobai stores it and parses nothing out of it, and models no carrier at all. `null` until a dispatch records one, and `null` for ever on a dispatch that recorded none, which is what a download has."
+          },
           "lineItemIds": {
             "type": "array",
             "items": {
@@ -2387,8 +2397,20 @@
           "requiresShipping",
           "tracksInventory",
           "hasLeadTime",
+          "state",
+          "trackingReference",
           "lineItemIds"
         ]
+      },
+      "FulfilmentState": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "dispatched",
+          "delivered",
+          "cancelled"
+        ],
+        "description": "`pending` until a Merchant moves it: `dispatched` when it has gone, `delivered` when it arrived, `cancelled` for a part that cannot be delivered. `delivered` and `cancelled` are final — an Order's record does not walk backwards — and delivering takes a dispatch first."
       },
       "OrderAddress": {
         "type": "object",
@@ -2460,6 +2482,43 @@
           "error",
           "reason"
         ]
+      },
+      "FulfilmentRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "malformed-body",
+              "order-not-found",
+              "fulfilment-not-found",
+              "fulfilment-pending",
+              "fulfilment-dispatched",
+              "fulfilment-delivered",
+              "fulfilment-cancelled"
+            ],
+            "description": "Machine-readable. Branch on this. The four `fulfilment-…` words that are not `-not-found` name the state the Fulfilment is **already in**, which is what refused the move."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "DispatchFulfilmentRequest": {
+        "type": "object",
+        "properties": {
+          "trackingReference": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional, and an **opaque** string: kobai stores it, shows it, and parses nothing out of it. A dispatch that names none records `null` — a download has nothing to track — and delivering or cancelling afterwards leaves whatever was recorded here exactly where it is."
+          }
+        }
       },
       "CartList": {
         "type": "object",
@@ -8230,6 +8289,361 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OrderRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/orders/{id}/fulfilments/{fulfilmentId}/dispatch": {
+      "post": {
+        "summary": "Dispatch a Fulfilment",
+        "description": "Says this part of the Order has gone, and records the tracking reference a Shopper follows it by. Only a `pending` Fulfilment can be dispatched. Each Fulfilment of an Order moves on its own, so dispatching the parcel leaves the emailed file exactly where it was — which is what an Order having many Fulfilments is for (ADR-0014).",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A Fulfilment of this Order. Anything else is not found."
+            },
+            "required": true,
+            "description": "A Fulfilment of this Order. Anything else is not found.",
+            "name": "fulfilmentId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchFulfilmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Fulfilment, dispatched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fulfilment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Order exists, or that Order has no Fulfilment at that address — including one belonging to a different Order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Fulfilment is already somewhere this move cannot be made from, and `reason` names that state. `delivered` and `cancelled` are final, so nothing moves out of either; a `pending` Fulfilment cannot be delivered without being dispatched first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/orders/{id}/fulfilments/{fulfilmentId}/deliver": {
+      "post": {
+        "summary": "Mark a Fulfilment delivered",
+        "description": "Says this part of the Order arrived, which is where its record ends. Only a `dispatched` Fulfilment can be delivered: something handed over the counter was still dispatched, and recording that first is one request rather than an Order whose record cannot say when it left. Whatever tracking reference the dispatch recorded stays exactly as it was.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A Fulfilment of this Order. Anything else is not found."
+            },
+            "required": true,
+            "description": "A Fulfilment of this Order. Anything else is not found.",
+            "name": "fulfilmentId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Fulfilment, delivered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fulfilment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Order exists, or that Order has no Fulfilment at that address — including one belonging to a different Order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Fulfilment is already somewhere this move cannot be made from, and `reason` names that state. `delivered` and `cancelled` are final, so nothing moves out of either; a `pending` Fulfilment cannot be delivered without being dispatched first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/orders/{id}/fulfilments/{fulfilmentId}/cancel": {
+      "post": {
+        "summary": "Cancel a Fulfilment",
+        "description": "Says this part of the Order cannot be delivered — before it went, or after it went and was lost. It is **not** a refund and not a Return: an Order is immutable (ADR-0009) and giving money back is its own spec. A `delivered` Fulfilment cannot be cancelled, because it arrived.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A Fulfilment of this Order. Anything else is not found."
+            },
+            "required": true,
+            "description": "A Fulfilment of this Order. Anything else is not found.",
+            "name": "fulfilmentId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Fulfilment, cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fulfilment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Order exists, or that Order has no Fulfilment at that address — including one belonging to a different Order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Fulfilment is already somewhere this move cannot be made from, and `reason` names that state. `delivered` and `cancelled` are final, so nothing moves out of either; a `pending` Fulfilment cannot be delivered without being dispatched first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentRefusal"
                 }
               }
             }

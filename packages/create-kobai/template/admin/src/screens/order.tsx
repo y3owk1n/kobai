@@ -1,7 +1,13 @@
-import type { OrderAddress } from "@kobai/client";
-import { useQuery } from "@tanstack/react-query";
+import { zodResolver } from "@hookform/resolvers/zod";
+import type { Order, OrderAddress } from "@kobai/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ReceiptTextIcon } from "lucide-react";
 import { Fragment } from "react";
+import { useForm } from "react-hook-form";
+import * as z from "zod";
+import { ActionButton } from "@/components/action-button";
+import { FormField } from "@/components/form-field";
+import { FulfilmentStateBadge } from "@/components/fulfilment-state-badge";
 import { LinkButton } from "@/components/link-button";
 import { PaymentBadge } from "@/components/payment-badge";
 import { Problem } from "@/components/problem";
@@ -20,6 +26,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -30,7 +37,8 @@ import {
 } from "@/components/ui/table";
 import { useCrumbTitle } from "@/lib/crumb";
 import { formatAmount } from "@/lib/money";
-import { orderReasonOf, orThrow, problemOf } from "@/lib/refusal";
+import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
+import { fulfilmentReasonOf, orderReasonOf, orThrow, problemOf } from "@/lib/refusal";
 import { useRouteId } from "@/lib/route";
 import { useKobaiClient } from "@/lib/session";
 
@@ -183,6 +191,12 @@ export function OrderScreen() {
         </CardContent>
       </Card>
 
+      <Fulfilments
+        orderId={placed.id}
+        fulfilments={placed.fulfilments}
+        lineItems={placed.lineItems}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Where it goes</CardTitle>
@@ -266,6 +280,278 @@ export function OrderScreen() {
       </Card>
     </div>
   );
+}
+
+/**
+ * **How this Order gets to the Shopper, and the controls that move it** (#320, ADR-0014).
+ *
+ * One card per Fulfilment rather than one row per Order, because an Order has as many as it has
+ * ways of being delivered and they are on independent timelines: a mixed Order ships a poster and
+ * emails a PDF, and dispatching the first leaves the second exactly where it was. There is no
+ * status on the Order itself and there must never be one — that is the argument this whole
+ * feature exists to keep true, and a card that summarised the parts into one word would be it
+ * arriving in the client instead.
+ *
+ * Three things about the controls are decisions rather than implementation.
+ *
+ * **All three are offered on every Fulfilment**, whatever state it is in, and the refusal is
+ * rendered where it was attempted. That is `ConfirmDelete`'s bargain (#179) reached by a second
+ * road: which transitions are legal is Core's table and is **not published on the wire**, so a
+ * copy here would be a second answer to a question this Admin cannot see change — and it would
+ * go stale in silence rather than reddening the build the way a closed `reason` set does. So the
+ * Admin attempts and shows what kobai said.
+ *
+ * **Each is an `ActionButton`**, so a Merchant whose Role holds `order:read` and not
+ * `fulfilment:write` sees the controls, cannot use them, and is told which word to ask a
+ * colleague for (ADR-0063). That Role is exactly the one the Permission was split out for.
+ *
+ * **The tracking reference is a field on the dispatch and on nothing else.** It is optional,
+ * because a download has nothing to track, and kobai parses nothing out of it — so the schema
+ * below checks its shape and no more, which here means checking nothing at all.
+ */
+function Fulfilments({
+  orderId,
+  fulfilments,
+  lineItems,
+}: {
+  readonly orderId: string;
+  readonly fulfilments: Order["fulfilments"];
+  readonly lineItems: Order["lineItems"];
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        {/* A plain `CardTitle`, like the four cards beside it on this screen. The Product
+            screen's cards carry an `h3` and these do not, and putting one on only this card
+            would produce an outline with a single navigable section in it — which is worse
+            than none. Whether this screen should have the outline at all is a question about
+            the screen rather than about this card. */}
+        <CardTitle>How it gets there</CardTitle>
+        <CardDescription>
+          One entry per way this Order is delivered, each on its own timeline. There is no
+          status on the Order itself: a parcel and an emailed file do not share a
+          lifecycle, so dispatching one leaves the other exactly where it was.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-6">
+        {fulfilments.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            This Order records no Fulfilments at all, which is what an Order placed before
+            kobai modelled them reads as. Nothing here can be moved.
+          </p>
+        ) : (
+          fulfilments.map((fulfilment) => (
+            <FulfilmentControls
+              key={fulfilment.id}
+              orderId={orderId}
+              fulfilment={fulfilment}
+              lineItems={lineItems}
+            />
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The shape of the dispatch form, and only the shape (ADR-0063).
+ *
+ * There is nothing to check. A tracking reference is an **opaque** string kobai stores and reads
+ * nothing out of, and it is optional — so a schema that demanded a format would be this Admin
+ * inventing a rule kobai does not have, and would refuse a Merchant whose carrier numbers it had
+ * not heard of.
+ */
+const DispatchForm = z.object({ trackingReference: z.string() });
+
+type DispatchValues = z.infer<typeof DispatchForm>;
+
+/** One Fulfilment: what it is, where it has got to, and the three things a Merchant can do. */
+function FulfilmentControls({
+  orderId,
+  fulfilment,
+  lineItems,
+}: {
+  readonly orderId: string;
+  readonly fulfilment: Order["fulfilments"][number];
+  readonly lineItems: Order["lineItems"];
+}) {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.fulfilmentWrite, "move a Fulfilment");
+
+  const form = useForm<DispatchValues>({
+    resolver: zodResolver(DispatchForm),
+    defaultValues: { trackingReference: fulfilment.trackingReference ?? "" },
+  });
+
+  const move = useMutation({
+    /**
+     * One call per action, with the path written out.
+     *
+     * A single call with the verb interpolated would typecheck and is exactly what
+     * `tests/admin-uses-only-the-public-api.test.ts` forbids: that sweep reads **quoted path
+     * literals**, so a composed path would make it silently blind to this screen.
+     */
+    mutationFn: async (asked: {
+      readonly to: FulfilmentAction;
+      readonly reference: string;
+    }) => {
+      const params = { path: { id: orderId, fulfilmentId: fulfilment.id } };
+
+      switch (asked.to) {
+        case "dispatch":
+          return orThrow(
+            await client.POST("/admin/orders/{id}/fulfilments/{fulfilmentId}/dispatch", {
+              params,
+              // Blank means the Merchant recorded none, which is a real answer rather than an
+              // empty string: kobai's field is optional and `null` is what it stores.
+              body: asked.reference === "" ? {} : { trackingReference: asked.reference },
+            }),
+          );
+
+        case "deliver":
+          return orThrow(
+            await client.POST("/admin/orders/{id}/fulfilments/{fulfilmentId}/deliver", {
+              params,
+            }),
+          );
+
+        case "cancel":
+          return orThrow(
+            await client.POST("/admin/orders/{id}/fulfilments/{fulfilmentId}/cancel", {
+              params,
+            }),
+          );
+
+        default: {
+          // Unreachable, and it is the compiler that says so.
+          const unreached: never = asked.to;
+          return unreached;
+        }
+      }
+    },
+    // Read back rather than patched in: there is no optimistic update anywhere in this Admin
+    // (ADR-0063), and where a Fulfilment has got to is kobai's answer.
+    onSettled: () => queries.invalidateQueries({ queryKey: [ORDER, orderId] }),
+  });
+
+  const covered = lineItems.filter((line) => fulfilment.lineItemIds.includes(line.id));
+
+  return (
+    // No guard of its own: Enter in the field is implicit submission, which a browser performs
+    // by clicking this form's default button — the Dispatch `ActionButton`, whose handler is the
+    // no-op for a Merchant who may not move anything.
+    <form
+      className="grid gap-4 rounded-lg border p-4"
+      onSubmit={form.handleSubmit((values) =>
+        move.mutate({ to: "dispatch", reference: values.trackingReference }),
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="grid gap-1">
+          {/* The Strategy's name as kobai holds it — a snapshot of what this was fulfilled by,
+              which is deliberately an open set and so is rendered rather than translated. */}
+          <code className="text-sm">{fulfilment.strategy}</code>
+          <span className="text-muted-foreground text-xs">
+            {covered.length === 0
+              ? "No line of this Order is recorded against it."
+              : covered.map((line) => line.sku).join(", ")}
+          </span>
+        </div>
+        <FulfilmentStateBadge state={fulfilment.state} />
+      </div>
+
+      <Problem
+        problem={move.isError ? whyItDidNotMove(move.error) : null}
+        title="That Fulfilment did not move."
+      />
+
+      <FormField
+        id={`fulfilment-${fulfilment.id}-tracking`}
+        label="Tracking reference"
+        placeholder="RR123456789MY"
+        description="Optional, and recorded when you dispatch. kobai stores it and reads nothing out of it, so anything your carrier gave you will do."
+        error={form.formState.errors.trackingReference}
+        {...form.register("trackingReference")}
+      />
+
+      <div className="flex flex-wrap gap-2">
+        <ActionButton type="submit" unavailable={unavailable} disabled={move.isPending}>
+          {move.isPending ? <Spinner /> : null}
+          Dispatch
+        </ActionButton>
+        <ActionButton
+          type="button"
+          variant="outline"
+          unavailable={unavailable}
+          disabled={move.isPending}
+          onClick={() => move.mutate({ to: "deliver", reference: "" })}
+        >
+          Mark delivered
+        </ActionButton>
+        <ActionButton
+          type="button"
+          variant="outline"
+          unavailable={unavailable}
+          disabled={move.isPending}
+          onClick={() => move.mutate({ to: "cancel", reference: "" })}
+        >
+          Cancel
+        </ActionButton>
+      </div>
+    </form>
+  );
+}
+
+/** The three things a Merchant can ask for, named as the routes are. */
+type FulfilmentAction = "dispatch" | "deliver" | "cancel";
+
+/**
+ * Why kobai would not move it, in words a Merchant can act on.
+ *
+ * Exhaustive over `FulfilmentRefusal`, so a reason added to that family in Core has no arm here
+ * and reddens this build in the same commit (ADR-0063). **Four of the arms are the four states**,
+ * and each says the repair rather than only what happened — which is the whole value of the
+ * Admin offering all three controls and letting kobai decide.
+ */
+function whyItDidNotMove(thrown: unknown): string {
+  const reason = fulfilmentReasonOf(thrown);
+
+  switch (reason) {
+    case "fulfilment-pending":
+      return "This part has not been dispatched yet, so it cannot be marked delivered. Dispatch it first — something handed over the counter was still dispatched.";
+
+    case "fulfilment-dispatched":
+      return "This part has already been dispatched. Mark it delivered when it arrives, or cancel it if it cannot be.";
+
+    case "fulfilment-delivered":
+      return "This part has already been delivered, and that is where its record ends. Sending something else is a new Order; giving money back is a Return.";
+
+    case "fulfilment-cancelled":
+      return "This part has been cancelled and cannot be moved again. Sending a replacement is a new Order.";
+
+    case "fulfilment-not-found":
+      return "This Order no longer has that Fulfilment. Reload the Order to see what it does have.";
+
+    case "order-not-found":
+      return "This Store has taken no Order at that address, so there is nothing here to move.";
+
+    case "invalid":
+    case "malformed-body":
+      // Reachable only from a build sending something kobai will not read: the form checks the
+      // shape and there is nothing about a tracking reference to get wrong.
+      return "kobai could not read that request. Reload the Order and try again.";
+
+    case undefined:
+      return problemOf(thrown, "kobai did not answer.");
+
+    default: {
+      // Unreachable, and it is the compiler that says so.
+      const unreached: never = reason;
+      return unreached;
+    }
+  }
 }
 
 /**

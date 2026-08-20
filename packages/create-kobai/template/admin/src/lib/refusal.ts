@@ -5,6 +5,7 @@ import type {
   CatalogRefusal,
   ChannelRefusal,
   CollectionRefusal,
+  FulfilmentRefusal,
   InvalidCredentials,
   InvalidRequest,
   MerchantRefusal,
@@ -218,6 +219,35 @@ const ORDER_REASONS: Record<OrderRefusal["reason"], true> = {
 
 /** Which Order refusal this was — today, only that there is no such Order. */
 export const orderReasonOf = narrowing(ORDER_REASONS);
+
+/**
+ * Every `reason` moving a Fulfilment can be refused with (#320, ADR-0014).
+ *
+ * **Four of these seven are the four states a Fulfilment can be in**, and that is the whole
+ * construction rather than a coincidence: a transition is refused by *where the Fulfilment
+ * already is*, so naming the state is the complete answer. `fulfilment-cancelled` is what
+ * cancelled going back to dispatched comes back with, and it is the same word from all three
+ * routes.
+ *
+ * The Order screen really can meet every one of them, which is unusual on this surface: it offers
+ * all three controls on every Fulfilment rather than working out which are legal, so a Merchant
+ * who clicks Deliver on a cancelled part is told, in words, by kobai. **That is deliberate** —
+ * the legal moves are Core's and are not published on the wire, so a table of them here would be
+ * a second copy of a decision this Admin cannot see change.
+ */
+const FULFILMENT_REASONS: Record<FulfilmentRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "order-not-found": true,
+  "fulfilment-not-found": true,
+  "fulfilment-pending": true,
+  "fulfilment-dispatched": true,
+  "fulfilment-delivered": true,
+  "fulfilment-cancelled": true,
+};
+
+/** Which refusal moving a Fulfilment met, for the screen that has to explain it. */
+export const fulfilmentReasonOf = narrowing(FULFILMENT_REASONS);
 
 /**
  * Every `reason` a Cart operation can be refused with (ADR-0071).

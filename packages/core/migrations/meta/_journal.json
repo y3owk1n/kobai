@@ -428,6 +428,20 @@
       "when": 1787248072451,
       "tag": "0060_address_updated_at_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1787253576139,
+      "tag": "0061_large_whistler",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1787253591082,
+      "tag": "0062_seed_fulfilment_write_permission",
+      "breakpoints": true
     }
   ]
 }

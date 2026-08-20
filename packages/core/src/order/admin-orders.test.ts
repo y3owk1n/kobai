@@ -161,6 +161,9 @@ describe("a Merchant opens one Order", () => {
           requiresShipping: true,
           tracksInventory: true,
           hasLeadTime: false,
+          // Nothing has moved it, which is where Capture leaves one (#320).
+          state: "pending",
+          trackingReference: null,
           lineItemIds: [expect.any(String)],
         },
       ],

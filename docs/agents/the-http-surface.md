@@ -17,7 +17,9 @@ one Order; those are unique indexes rather than conditional updates, and both ar
 
 No sequential assertion can see any of this, so **the guardrail is a concurrent test** —
 `packages/core/src/reservation/the-last-unit.test.ts`, dispatching many `POST /store/orders` at
-one unit of stock. **There are three of them.** The second is
+one unit of stock. **There are four of them, and the fourth is not about scarcity at all** —
+`packages/core/src/fulfilment/the-fulfilment-dispatched-twice.test.ts`, under the Fulfilment
+lifecycle below. The second is
 `packages/core/src/reservation/the-variant-that-vanished.test.ts` — the same shape on the path
 where no money is involved (#145), dispatching six
 `DELETE /admin/variants/{id}` and six `PUT …/inventory` together after the count path was found
@@ -169,8 +171,69 @@ Four things follow, and each is a decision rather than an implementation detail:
 with `core_order_line_item.fulfilment_id` pointing at it — because one Order has many on
 independent timelines and a status column would force one lifecycle onto all of them. The three
 answers are **copied onto the row** at Capture (ADR-0009): rewiring a Strategy, or removing the
-Plugin that offered one, must not rewrite an Order. Fulfilling anything is a later spec; what
-exists is the shape.
+Plugin that offered one, must not rewrite an Order.
+
+## A Fulfilment moves, and the Order around it never does
+
+**`core_fulfilment` carries a `state` and `core_order` carries none** (#320, ADR-0014). This is
+where that ADR's central claim is actually tested rather than merely made: "never a status column
+on Order" is easy to hold while nothing moves, and the first feature that wanted one is this. A
+mixed Order ships a poster, emails a PDF and produces a print job on three timelines, so the cheap
+answer is cheap today and unfixable once there is order history —
+`packages/core/src/fulfilment/a-fulfilment-moves.test.ts` asks Postgres for any column on
+`core_order` that **looks like** a lifecycle, not for one called `status`, because the cheap answer
+arrives spelled `fulfilment_status` at least as often.
+
+**The legal transitions are a table in `packages/core/src/fulfilment/lifecycle.ts`, and nothing
+else decides one.** Four states — `pending`, `dispatched`, `delivered`, `cancelled` — with
+`pending → dispatched | cancelled`, `dispatched → delivered | cancelled`, and both of the last two
+terminal. Two of those edges are decisions rather than obvious: **delivering takes a dispatch
+first**, because something handed over the counter was still dispatched and recording it is one
+request where the alternative is an Order whose record cannot say when it left; and **cancelling
+is allowed from `dispatched`**, because a parcel lost in transit is exactly the part that cannot be
+delivered. A cancelled Fulfilment is **not a Return and not a refund** — that is spec 9, and an
+Order is immutable either way (ADR-0009). Six things about the surface over it are decisions:
+
+- **Three action routes, and no `PATCH` anywhere.** `POST
+  /admin/orders/{id}/fulfilments/{fulfilmentId}/dispatch`, `…/deliver` and `…/cancel`. ADR-0062
+  makes a `PATCH` a *correction*, and a `PATCH` accepting `state: "dispatched"` would let any
+  state be set from any other — which is every refusal below made unreachable. The Order is in the
+  address although a Fulfilment's identifier is unique on its own: a `fulfilmentId` belonging to
+  another Order is a mistake, and it is answered rather than acted on.
+- **The refusals are the states**, and that is what makes them exhaustive by construction rather
+  than by care. `fulfilment-pending`, `fulfilment-dispatched`, `fulfilment-delivered` and
+  `fulfilment-cancelled` are a `Record` over the state union, so every state *has* a word and
+  there is nowhere for a default branch to live; a move is refused by where the record already is,
+  which is the whole answer. `fulfilment-cancelled` is what cancelled going back to dispatched
+  gets. Two 404s beside them, because there are two addresses. **409 rather than 422**, on
+  `cart-placed`'s distinction: the record is already somewhere this move cannot be made from, and
+  *somebody got there first* is the ordinary way a Merchant meets it — 422 is for a body refused by
+  how the Store is *configured*, and there is no configuration here to fix.
+- **The check and the write are one statement**, ADR-0018's shape reached from an ordinary
+  direction. The `where` names the states the move is legal from, derived from the same table the
+  refusals are, so two Merchants dispatching one Fulfilment at once produce one 200 and one
+  refusal rather than two 200s and a lost tracking reference. The refusal is read **after** the
+  failed write, so it names where the Fulfilment actually is. **That is the fourth concurrent
+  test** — `packages/core/src/fulfilment/the-fulfilment-dispatched-twice.test.ts`, beside the
+  three Reservation ones — and it was watched failing against the select-then-update shape, at
+  twenty of twenty-four requests answered 200. Its own header carries the one thing that departs
+  from the others: it dispatches **more** than the connection pool rather than fewer, because
+  here the queue is what makes the window visible, and at eight the broken build passed.
+- **`fulfilment:write`, and there is no `fulfilment:read`.** Dispatching is its own power so
+  warehouse staff can dispatch and do nothing else; a Fulfilment is *read* through its Order,
+  which `order:read` already covers, and the house rule adds a Permission when a route needs one
+  rather than for symmetry.
+- **A tracking reference is an opaque string, optional, and written only by a dispatch.** kobai
+  parses nothing out of it and models no carrier; a download has nothing to track, so requiring
+  one would make the field a lie for every Store that sells one. Delivering and cancelling leave
+  whatever the dispatch wrote exactly where it was.
+- **`GET /store/orders/{id}` carries each Fulfilment's state additively**, which is how a Shopper
+  reads their own Order back and sees it has gone — ADR-0069's last Shopper clause — and how a
+  mixed Order shows each part separately. There is no store route that *moves* one: which parts
+  have gone is a Merchant's statement about the world.
+
+**Nothing is emitted yet.** ADR-0085 decided the events surface and #322 builds it, with a
+Fulfilment being dispatched as its first consumer.
 
 **The Strategy from outside Core is `@kobai/plugin-made-to-order`**, and it is the proof
 ADR-0014 asked for rather than a feature — *if made-to-order cannot be expressed as a strategy

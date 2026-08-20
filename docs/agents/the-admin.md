@@ -419,6 +419,16 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   an unavailable delete opens nothing. **There is no `canDelete` prop and there must not be
   one**: whether stock is reserved is a rule living in Core that a Project may already have
   changed through a replaced Step, so the Admin attempts and renders the answer.
+- **A control is offered whether or not the state allows it, and the refusal is rendered where
+  it was attempted.** The Order screen's per-Fulfilment Dispatch, Mark delivered and Cancel are
+  the case (#320): all three are shown on every Fulfilment, and a Merchant who asks for a move
+  the state refuses is told which state refused it, in a `switch` over `FulfilmentRefusal`. That
+  is `ConfirmDelete`'s bargain reached by a second road, and the reason is a different one worth
+  knowing: **the legal transitions are Core's and are not published on the wire**, so a table of
+  them in this Admin would be a second copy of a decision it cannot see change — and unlike a
+  closed `reason` set, it would go stale in silence rather than reddening the build. The rule to
+  carry: hold what kobai's *types* close (`FulfilmentState`, and so
+  `components/fulfilment-state-badge.tsx`'s labels), and ask about everything else.
 - **The storefront price preview asks over `/store` when a storefront could and over `/admin`
   when none could, and it says which** (#276). Asking by *being* a storefront — a publishable
   key, a second client, `GET /store/variants/{id}/price` — is the whole point of that screen and

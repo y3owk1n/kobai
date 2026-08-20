@@ -83,6 +83,10 @@ import {
   fulfilmentStrategyNames,
 } from "../fulfilment/strategy.ts";
 import {
+  type FulfilmentTransition,
+  transitionFulfilment,
+} from "../fulfilment/transition.ts";
+import {
   listMedia,
   type MediaUploadOutcome,
   refuseDeclaredSize,
@@ -1982,6 +1986,112 @@ const readOrderRoute = createRoute({
 });
 
 /**
+ * **Moving one Fulfilment** — the three routes, and the one part of an Order that moves (#320).
+ *
+ * `fulfilment/lifecycle.ts` is where the states and the legal moves between them are written
+ * down; these are three doors onto that one table and decide nothing themselves.
+ *
+ * Four things about them are decisions rather than implementation.
+ *
+ * **They are action routes and not a `PATCH`.** ADR-0062 makes a `PATCH` a *correction*, and a
+ * dispatch is a transition with consequences — it emits an event, once #322 builds that surface.
+ * A `PATCH` accepting `state: "dispatched"` would let any state be set from any other, which is
+ * every refusal below made unreachable. The verb is in the path for the same reason
+ * `POST /admin/session/sign-out` is: it names what happens rather than a field to assign.
+ *
+ * **`fulfilment:write`, and there is no `fulfilment:read`.** Dispatching is its own power so
+ * that warehouse staff can dispatch and do nothing else (story 16); a Fulfilment is *read*
+ * through its Order, which `order:read` already covers, and the house rule adds a Permission
+ * when a route needs one rather than for symmetry. So a Merchant holding only `order:read` sees
+ * every Fulfilment's state and can move none of them.
+ *
+ * **They answer the Fulfilment rather than the Order.** It is the record that changed, it is the
+ * shape `GET /admin/orders/{id}` already carries, and answering the whole Order would make the
+ * response of a dispatch grow every time an Order grows a field.
+ *
+ * **There is no route on `/store`.** A Shopper reads the state back off their own Order and
+ * moves nothing: which parts have gone is a Merchant's statement about the world.
+ */
+
+/**
+ * Every way the three answer other than 200, written once because they are three doors on one
+ * function and answer identically through all of it.
+ *
+ * The alternative is the same seven entries three times over, which is three places for a status
+ * to drift from the one status map every refusal actually goes through. Each route still
+ * declares its own 200, because that is the one thing about them that differs — the sentence.
+ */
+const REFUSALS_MOVING_A_FULFILMENT = {
+  400: json(
+    "The request does not fit this endpoint's schema.",
+    contract.FulfilmentRefusal,
+  ),
+  401: REFUSALS.noSession,
+  403: REFUSALS.forbidden,
+  404: json(
+    "No such Order exists, or that Order has no Fulfilment at that address — including one belonging to a different Order.",
+    contract.FulfilmentRefusal,
+  ),
+  409: json(
+    "The Fulfilment is already somewhere this move cannot be made from, and `reason` names that state. `delivered` and `cancelled` are final, so nothing moves out of either; a `pending` Fulfilment cannot be delivered without being dispatched first.",
+    contract.FulfilmentRefusal,
+  ),
+  500: REFUSALS.serverError,
+  503: REFUSALS.unavailable,
+};
+
+const dispatchFulfilmentRoute = createRoute({
+  method: "post",
+  path: "/orders/{id}/fulfilments/{fulfilmentId}/dispatch",
+  summary: "Dispatch a Fulfilment",
+  description:
+    "Says this part of the Order has gone, and records the tracking reference a Shopper follows it by. Only a `pending` Fulfilment can be dispatched. Each Fulfilment of an Order moves on its own, so dispatching the parcel leaves the emailed file exactly where it was — which is what an Order having many Fulfilments is for (ADR-0014).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.fulfilmentWrite)] as const,
+  request: {
+    params: contract.OrderFulfilmentParams,
+    body: {
+      required: false,
+      content: { "application/json": { schema: contract.DispatchFulfilmentRequest } },
+    },
+  },
+  responses: {
+    200: json("The Fulfilment, dispatched.", contract.Fulfilment),
+    ...REFUSALS_MOVING_A_FULFILMENT,
+  },
+});
+
+const deliverFulfilmentRoute = createRoute({
+  method: "post",
+  path: "/orders/{id}/fulfilments/{fulfilmentId}/deliver",
+  summary: "Mark a Fulfilment delivered",
+  description:
+    "Says this part of the Order arrived, which is where its record ends. Only a `dispatched` Fulfilment can be delivered: something handed over the counter was still dispatched, and recording that first is one request rather than an Order whose record cannot say when it left. Whatever tracking reference the dispatch recorded stays exactly as it was.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.fulfilmentWrite)] as const,
+  request: { params: contract.OrderFulfilmentParams },
+  responses: {
+    200: json("The Fulfilment, delivered.", contract.Fulfilment),
+    ...REFUSALS_MOVING_A_FULFILMENT,
+  },
+});
+
+const cancelFulfilmentRoute = createRoute({
+  method: "post",
+  path: "/orders/{id}/fulfilments/{fulfilmentId}/cancel",
+  summary: "Cancel a Fulfilment",
+  description:
+    "Says this part of the Order cannot be delivered — before it went, or after it went and was lost. It is **not** a refund and not a Return: an Order is immutable (ADR-0009) and giving money back is its own spec. A `delivered` Fulfilment cannot be cancelled, because it arrived.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.fulfilmentWrite)] as const,
+  request: { params: contract.OrderFulfilmentParams },
+  responses: {
+    200: json("The Fulfilment, cancelled.", contract.Fulfilment),
+    ...REFUSALS_MOVING_A_FULFILMENT,
+  },
+});
+
+/**
  * The Carts this Store is holding — and the route that reverses a rule Core had written down.
  *
  * `core_cart`'s schema comment used to say there was deliberately no route that lists Carts, so
@@ -2556,6 +2666,54 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(found, 200);
   });
 
+  /**
+   * The three transitions, which differ by exactly the state they ask for.
+   *
+   * The *call* is shared and the *answer* is not: `c.json(body, status)` is typechecked against
+   * the route the handler was registered with, so a helper that answered on the context's behalf
+   * would have to be typed against a context with no route on it — which is the check that makes
+   * a promised response and a produced one the same thing. So each handler is three lines, and
+   * what they share is `transitionFulfilment` and one status map.
+   */
+  /** The two identifiers this route was addressed at, as the one thing they are. */
+  const addressed = (params: { readonly id: string; readonly fulfilmentId: string }) => ({
+    orderId: params.id,
+    fulfilmentId: params.fulfilmentId,
+  });
+
+  guarded.openapi(dispatchFulfilmentRoute, async (c) => {
+    // The body is optional — a dispatch that records no tracking reference is the ordinary case
+    // for a download — so an absent one is an empty request rather than a refused one.
+    const moved = await transitionFulfilment(
+      deps.db,
+      addressed(c.req.valid("param")),
+      "dispatched",
+      c.req.valid("json") ?? {},
+    );
+    if (!moved.ok) return refused(c, moved, FULFILMENT_TRANSITION_STATUS);
+    return c.json(moved.fulfilment, 200);
+  });
+
+  guarded.openapi(deliverFulfilmentRoute, async (c) => {
+    const moved = await transitionFulfilment(
+      deps.db,
+      addressed(c.req.valid("param")),
+      "delivered",
+    );
+    if (!moved.ok) return refused(c, moved, FULFILMENT_TRANSITION_STATUS);
+    return c.json(moved.fulfilment, 200);
+  });
+
+  guarded.openapi(cancelFulfilmentRoute, async (c) => {
+    const moved = await transitionFulfilment(
+      deps.db,
+      addressed(c.req.valid("param")),
+      "cancelled",
+    );
+    if (!moved.ok) return refused(c, moved, FULFILMENT_TRANSITION_STATUS);
+    return c.json(moved.fulfilment, 200);
+  });
+
   guarded.openapi(listCartsRoute, async (c) => {
     const page = await listCarts(deps.db, c.req.valid("query"));
     return c.json({ carts: page.items, nextCursor: page.nextCursor }, 200);
@@ -2813,6 +2971,36 @@ const CHANNEL_UPDATE_STATUS = {
 const CHANNEL_DELETION_STATUS = {
   "channel-not-found": 404,
 } as const satisfies Record<Exclude<ChannelDeletion, { ok: true }>["reason"], 404>;
+
+/**
+ * Moving a Fulfilment answers three ways, and the **409** is the one carrying a decision (#320).
+ *
+ * 409 rather than 422, on `cart-placed`'s distinction and for its reason: what refuses this is
+ * the state the record is already in — the *record* conflicts, rather than the Store's
+ * configuration disagreeing with a well-formed body, which is what 422 is for
+ * (`unknown-fulfilment-strategy`, `currency-not-enabled`) and there is nothing configured here
+ * to fix. The Admin offers all three controls on every Fulfilment and renders whichever of these
+ * comes back, so these are ordinary answers rather than a last line of defence — see
+ * `docs/agents/the-admin.md` for why it holds no copy of the transition table.
+ *
+ * Two 404s, because there are two addresses: `POST /admin/orders/{a}/fulfilments/{b}/dispatch`
+ * can be wrong about either, and naming which half is what tells a Merchant what to fix.
+ *
+ * **Exhaustive over the four states, and by construction** — the reasons *are* the states, so a
+ * fifth state has no key here and does not compile. Nothing falls through a default.
+ */
+const FULFILMENT_TRANSITION_STATUS = {
+  invalid: 400,
+  "order-not-found": 404,
+  "fulfilment-not-found": 404,
+  "fulfilment-pending": 409,
+  "fulfilment-dispatched": 409,
+  "fulfilment-delivered": 409,
+  "fulfilment-cancelled": 409,
+} as const satisfies Record<
+  Exclude<FulfilmentTransition, { ok: true }>["reason"] | "invalid",
+  400 | 404 | 409
+>;
 
 /**
  * Creating a Collection can only be got wrong by the request: nothing about one conflicts with

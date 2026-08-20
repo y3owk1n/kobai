@@ -14,6 +14,11 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { DRAFT, PRODUCT_STATUSES, type ProductStatus } from "../catalog/status.ts";
+import {
+  FULFILMENT_PENDING,
+  FULFILMENT_STATES,
+  type FulfilmentState,
+} from "../fulfilment/lifecycle.ts";
 import { DEFAULT_FULFILMENT_STRATEGY } from "../fulfilment/strategy.ts";
 
 /**
@@ -1454,10 +1459,10 @@ export type OrderRow = typeof order.$inferSelect;
  * There is deliberately no foreign key to anything about Strategies: a Strategy is an object in
  * a config file, not a row.
  *
- * `updated_at` is here on a table nothing updates **yet**, and unlike `core_order`'s it is not a
- * tamper detector: fulfilling is its own spec, and when it arrives a Fulfilment is the one part
- * of an Order that is *expected* to move — dispatched, delivered, cancelled — while the Order
- * around it never does. The trigger is attached in a `--custom` migration (ADR-0037).
+ * **This is the one Core table that is expected to move**, and unlike `core_order`'s its
+ * `updated_at` is not a tamper detector: a Fulfilment is dispatched, delivered or cancelled
+ * while the Order around it never changes at all (#320). The trigger is attached in a `--custom`
+ * migration (ADR-0037), and it advances on every transition below.
  */
 export const fulfilment = pgTable(
   "core_fulfilment",
@@ -1473,6 +1478,42 @@ export const fulfilment = pgTable(
     requiresShipping: boolean("requires_shipping").notNull(),
     tracksInventory: boolean("tracks_inventory").notNull(),
     hasLeadTime: boolean("has_lead_time").notNull(),
+    /**
+     * **Where this part of the Order has got to** — `pending`, `dispatched`, `delivered` or
+     * `cancelled`, and never a column on `core_order` (ADR-0014, #320).
+     *
+     * That absence is the decision this column exists to keep: a mixed Order ships a poster,
+     * emails a PDF and produces a print job on three timelines, and one status on the Order
+     * would force a single lifecycle onto all three — cheap today and unfixable once there is
+     * order history. `fulfilment/lifecycle.ts` is the one place the states and the legal moves
+     * between them are written down, and every route reads them from there.
+     *
+     * **`DEFAULT 'pending'` rather than ADR-0038's three migrations**, because the value is
+     * right for the rows that were already here *and* for every row after — which is exactly
+     * when a default is a default rather than a backfill wearing one. Nothing could move a
+     * Fulfilment before this column existed, so `pending` is the fact that was never recorded
+     * rather than a guess at one; and it is where Capture leaves every Fulfilment written from
+     * here on. One statement, and on Postgres 11 and later no table rewrite.
+     *
+     * **The `check` is `core_product.status`'s judgement, not `fulfilment_strategy`'s** two
+     * fields up. A Strategy is named by whatever key a deployment wired and is deliberately
+     * open; these four words are Core's own and nothing outside Core can invent a fifth, so a
+     * row holding one is a bug rather than a Merchant's choice. It arrives at rows that already
+     * satisfy it, because the statement adding the column gives every one of them `pending`.
+     */
+    state: text("state").$type<FulfilmentState>().notNull().default(FULFILMENT_PENDING),
+    /**
+     * What the Merchant wrote down when they dispatched this, or `null`.
+     *
+     * **An opaque string.** kobai parses nothing out of it and models no carrier: a tracking
+     * reference is a handle to quote somewhere else, exactly as `core_payment.reference` is,
+     * and delivery estimates and carrier modelling are out of scope in #211.
+     *
+     * Nullable, and it stays nullable: a dispatch may record none — a PDF emailed to a Shopper
+     * has nothing to track — so requiring one would make the field a lie for every Store that
+     * sells a download. It is written by a dispatch and by nothing else.
+     */
+    trackingReference: text("tracking_reference"),
     // No `metadata`, like `core_payment` and `core_reservation` beside it. ADR-0004's escape
     // hatch is for an entity somebody has something to say about, and nothing may say anything
     // about a Fulfilment yet — a column no route writes and no shape reports would be a
@@ -1483,6 +1524,13 @@ export const fulfilment = pgTable(
   (table) => [
     // Reading an Order reads its Fulfilments by `order_id`, which is every view of one.
     index("core_fulfilment_order_idx").on(table.orderId),
+    // Written from `fulfilment/lifecycle.ts`'s one list rather than retyped, and `sql.raw` for
+    // `core_product_status_is_known`'s reason: a `${value}` in a Drizzle template is a bound
+    // parameter, which is not a constraint anything could enforce.
+    check(
+      "core_fulfilment_state_is_known",
+      sql`${table.state} in (${sql.raw(FULFILMENT_STATES.map((state) => `'${state}'`).join(", "))})`,
+    ),
   ],
 );
 
