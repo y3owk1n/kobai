@@ -12,11 +12,13 @@ import type { PagedList } from "./page.ts";
 import {
   apiKey,
   cart,
+  channel,
   collection,
   media,
   merchant,
   order,
   product,
+  region,
   role,
 } from "./schema.ts";
 
@@ -200,6 +202,8 @@ const PAGED_TABLES: Record<PagedList, PagedTable> = {
   carts: cart,
   media,
   collections: collection,
+  regions: region,
+  channels: channel,
 };
 
 /**

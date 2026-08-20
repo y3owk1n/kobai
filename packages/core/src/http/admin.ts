@@ -94,7 +94,27 @@ import type { NotUsable } from "../patch.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import type { PriceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
+import {
+  type ChannelCreation,
+  type ChannelDeletion,
+  type ChannelUpdate,
+  createChannel,
+  deleteChannel,
+  listChannels,
+  readChannel,
+  updateChannel,
+} from "../store/channel.ts";
 import { readStore } from "../store/read.ts";
+import {
+  createRegion,
+  deleteRegion,
+  listRegions,
+  type RegionCreation,
+  type RegionDeletion,
+  type RegionUpdate,
+  readRegion,
+  updateRegion,
+} from "../store/region.ts";
 import { type StoreUpdate, updateStore } from "../store/write.ts";
 import { openMetadata, type WorkflowRegistry } from "../workflow/context.ts";
 import * as contract from "./contract.ts";
@@ -617,7 +637,7 @@ const updateStoreRoute = createRoute({
   path: "/store",
   summary: "Change the Store",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. `defaultCurrency` may be named and may not be moved: the code this Store already prices in is accepted and changes nothing, and any other is refused, because every Price carries the Store's default currency and no other — changing it would reinterpret each amount already stored rather than convert it. A body naming nothing that would change — `{}`, or only the `defaultCurrency` this Store already has — is refused at 400 rather than answered with the record unchanged.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. `defaultCurrency` may be named and may not be moved: the code this Store already prices in is accepted and changes nothing, and any other is refused, because every Price carrying no Region and no Channel is denominated in it — changing it would reinterpret each of those amounts rather than convert them. **A second currency is enabled rather than substituted**: `currencies` is the complete set this Store may price in, and a Region selects one of them. `defaultRegion` names the Region a storefront that sends none is answered for. A body naming nothing that would change — `{}`, or only the `defaultCurrency` this Store already has — is refused at 400 rather than answered with the record unchanged.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
   request: {
@@ -635,7 +655,7 @@ const updateStoreRoute = createRoute({
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     422: json(
-      "Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in.",
+      "Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in; `default-currency-must-be-enabled`, the `currencies` it names leave that one out; `currency-in-use`, they take away a currency a Region selects; or `region-not-found`, `defaultRegion` names no Region this Store has.",
       contract.StoreRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1481,18 +1501,305 @@ const deleteCollectionRoute = createRoute({
 });
 
 /**
+ * The Regions this Store sells into (#291, ADR-0005, ADR-0074).
+ *
+ * **Behind `store:read` and `store:write`, and there is deliberately no `region:` family beside
+ * them.** A Region is the Store's own configuration — what a deployment *is*, in the same sense
+ * its name and the currency it prices in are — so a fifth pair of Permissions would name a
+ * boundary that does not exist, which is `role:write`'s argument at a different table
+ * (ADR-0066). It also means every deployment that upgrades gets these five routes working,
+ * where a new Permission would need a `--custom` migration and would leave a Merchant unable to
+ * call them until it ran. Which gate a route sits behind is promised (ADR-0060), so that is a
+ * decision taken here rather than a break to undo later.
+ *
+ * **A Region selects a currency the Store has enabled**, and both writes refuse
+ * `currency-not-enabled` at 422 when it has not — the body is well formed and what refuses it
+ * is the state of the Store, which is `unknown-fulfilment-strategy`'s distinction. Enabling one
+ * is `currencies` on `PATCH /admin/store`.
+ */
+const createRegionRoute = createRoute({
+  method: "post",
+  path: "/regions",
+  summary: "Create a Region",
+  description:
+    "A name and the currency it prices in, which has to be one this Store has enabled — `GET /admin/store` lists them. Names are **not** unique: a Region is addressed by its identifier everywhere. Nothing about tax or shipping is here yet; both hang off this row when they arrive.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateRegionRequest } },
+    },
+  },
+  responses: {
+    201: json("The Region.", contract.Region),
+    400: json(
+      "The request does not fit this endpoint's schema, or is not JSON at all.",
+      contract.RegionRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    422: json(
+      "Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency.",
+      contract.RegionRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const listRegionsRoute = createRoute({
+  method: "get",
+  path: "/regions",
+  summary: "List Regions",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — the geographies this Store sells into. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered; \`nextCursor\` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). Which one a storefront that names none is answered for is \`GET /admin/store\`'s \`defaultRegion\`.`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeRead)] as const,
+  request: { query: contract.RegionPageQuery },
+  responses: {
+    200: json("A page of Regions.", contract.RegionList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readRegionRoute = createRoute({
+  method: "get",
+  path: "/regions/{id}",
+  summary: "Read a Region",
+  description: "One Region — its name, and the currency it prices in.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Region.", contract.Region),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Region exists.", contract.RegionRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const updateRegionRoute = createRoute({
+  method: "patch",
+  path: "/regions/{id}",
+  summary: "Change a Region",
+  description:
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. **A Region's currency may move**, unlike the Store's: a Region *selects* one of the currencies this Store has enabled, so moving the selection changes which Prices apply here rather than what any amount means.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateRegionRequest } },
+    },
+  },
+  responses: {
+    200: json("The Region, as a read of it reports it.", contract.Region),
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+      contract.RegionRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Region exists.", contract.RegionRefusal),
+    422: json(
+      "Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency.",
+      contract.RegionRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Deletes a Region, unless this Store falls back to it.
+ *
+ * **`region-in-use` is ADR-0059's shape**, and the contrast with `DELETE /admin/collections/{id}`
+ * is the decision: deleting a Collection takes away a *label*, while deleting the default Region
+ * takes away the answer every storefront that sends no `?region=` is given. The repair is a
+ * control the Merchant already has — point the Store at another Region, then delete this one —
+ * which is exactly the test ADR-0059 applies.
+ */
+const deleteRegionRoute = createRoute({
+  method: "delete",
+  path: "/regions/{id}",
+  summary: "Delete a Region",
+  description:
+    "Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Deleted." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Region exists.", contract.RegionRefusal),
+    409: json(
+      "This Store's default Region is this one, and something has to answer a storefront that names none.",
+      contract.RegionRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * The Channels this Store sells through (#291, ADR-0005).
+ *
+ * **Behind `store:read` and `store:write`**, for the Regions' reason above: a Channel is the
+ * Store's own configuration.
+ *
+ * **A Channel is a name and nothing else, and this is the spec most likely to be read as an
+ * invitation.** ADR-0005 says kobai's Channel means sales channel only — against Vendure's,
+ * which overloads it to mean tenant boundary — so nothing here scopes anything, and the one
+ * thing a Channel is joined to is an API key, which is how a request's Channel is decided
+ * (ADR-0020) rather than by anything a storefront sends.
+ */
+const createChannelRoute = createRoute({
+  method: "post",
+  path: "/channels",
+  summary: "Create a Channel",
+  description:
+    "A name, and optionally some `metadata`. A Channel is a route to market — a storefront, a marketplace listing — and it is **not** a tenant: nothing is scoped by one. Which requests are in it is decided by the API keys minted against it (`POST /admin/api-keys`).",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateChannelRequest } },
+    },
+  },
+  responses: {
+    201: json("The Channel.", contract.Channel),
+    400: json(
+      "The request does not fit this endpoint's schema, or is not JSON at all.",
+      contract.ChannelRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const listChannelsRoute = createRoute({
+  method: "get",
+  path: "/channels",
+  summary: "List Channels",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — the routes to market this Store sells through. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered; \`nextCursor\` is absent on the last page and that absence is the only end-of-list signal (ADR-0064).`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeRead)] as const,
+  request: { query: contract.ChannelPageQuery },
+  responses: {
+    200: json("A page of Channels.", contract.ChannelList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readChannelRoute = createRoute({
+  method: "get",
+  path: "/channels/{id}",
+  summary: "Read a Channel",
+  description:
+    "One Channel. It carries no list of the API keys minted against it: which requests are in a Channel is a fact about each key, and `GET /admin/api-keys` reports it.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Channel.", contract.Channel),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Channel exists.", contract.ChannelRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const updateChannelRoute = createRoute({
+  method: "patch",
+  path: "/channels/{id}",
+  summary: "Rename a Channel",
+  description:
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. Which API keys are in this Channel is **not** changed here — a key is bound to one when it is minted.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateChannelRequest } },
+    },
+  },
+  responses: {
+    200: json("The Channel, as a read of it reports it.", contract.Channel),
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+      contract.ChannelRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Channel exists.", contract.ChannelRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Deletes a Channel, and **every API key minted against it keeps working**, unconstrained.
+ *
+ * Refused for nothing but there being no such Channel, which is
+ * `DELETE /admin/collections/{id}`'s judgement at a different table. Refusing while keys named
+ * it would be worse than useless: revocation is a column rather than a delete, so a revoked key
+ * keeps its row forever and a Channel any key had ever named could then never be removed at all
+ * — a refusal whose advice names no reachable control.
+ */
+const deleteChannelRoute = createRoute({
+  method: "delete",
+  path: "/channels/{id}",
+  summary: "Delete a Channel",
+  description:
+    "**Deletes the Channel and none of the API keys minted against it.** Each of those keys becomes unconstrained — in no particular Channel, which is what every key is until one is minted against one — so this is refused for nothing but there being no such Channel.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Deleted, and every key minted against it left working." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Channel exists.", contract.ChannelRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Mints an API key — the credential the store surface is gated by (ADR-0020).
  *
  * The value is in this response and in no other, ever: only a digest is stored, so there
  * is nothing to show a second time. That is the same bargain the password column makes,
  * and it is why the route answers with the key rather than making a Merchant fetch it.
+ *
+ * **A key carries the Channel every request presenting it is in** (#291, ADR-0005). That is
+ * decided here and nowhere else: a storefront never threads a Channel through a request and so
+ * cannot claim to be in one it was not issued a credential for. Left out is unconstrained,
+ * which is every key that exists today.
  */
 const createApiKeyRoute = createRoute({
   method: "post",
   path: "/api-keys",
   summary: "Mint an API key",
   description:
-    "The value is in this response and in no other, ever — only a digest is stored. `kobai_pk_…` is publishable and `kobai_sk_…` is secret, so the kind is readable off the value itself.",
+    "The value is in this response and in no other, ever — only a digest is stored. `kobai_pk_…` is publishable and `kobai_sk_…` is secret, so the kind is readable off the value itself. A `channelId` binds every request presenting this key to that Channel; leaving it out mints a key in no particular Channel, which is what every key was before Channels existed.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.apiKeyWrite)] as const,
   request: {
@@ -1503,9 +1810,16 @@ const createApiKeyRoute = createRoute({
   },
   responses: {
     201: json("The key, shown once.", contract.IssuedApiKey),
-    400: REFUSALS.invalid,
+    400: json(
+      "The request does not fit this endpoint's schema, or is not JSON at all.",
+      contract.MintApiKeyRefusal,
+    ),
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
+    422: json(
+      "Well formed, and still refused: `channel-not-found`, `channelId` names a Channel this Store has not got.",
+      contract.MintApiKeyRefusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -2045,6 +2359,90 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.body(null, 204);
   });
 
+  guarded.openapi(createRegionRoute, async (c) => {
+    const created = await createRegion(deps.db, c.req.valid("json"));
+    if (!created.ok) return refused(c, created, REGION_STATUS);
+    return c.json(created.region, 201);
+  });
+
+  guarded.openapi(listRegionsRoute, async (c) => {
+    const page = await listRegions(deps.db, c.req.valid("query"));
+    return c.json({ regions: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(readRegionRoute, async (c) => {
+    const found = await readRegion(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Region exists. `GET /admin/regions` lists the ones this Store has.",
+          reason: "region-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  guarded.openapi(updateRegionRoute, async (c) => {
+    const changed = await updateRegion(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!changed.ok) return refused(c, changed, REGION_UPDATE_STATUS);
+    return c.json(changed.region, 200);
+  });
+
+  guarded.openapi(deleteRegionRoute, async (c) => {
+    const deleted = await deleteRegion(deps.db, c.req.valid("param").id);
+    if (!deleted.ok) return refused(c, deleted, REGION_DELETION_STATUS);
+    return c.body(null, 204);
+  });
+
+  guarded.openapi(createChannelRoute, async (c) => {
+    const created = await createChannel(deps.db, c.req.valid("json"));
+    if (!created.ok) return refused(c, created, CHANNEL_STATUS);
+    return c.json(created.channel, 201);
+  });
+
+  guarded.openapi(listChannelsRoute, async (c) => {
+    const page = await listChannels(deps.db, c.req.valid("query"));
+    return c.json({ channels: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(readChannelRoute, async (c) => {
+    const found = await readChannel(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Channel exists. `GET /admin/channels` lists the ones this Store has.",
+          reason: "channel-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  guarded.openapi(updateChannelRoute, async (c) => {
+    const changed = await updateChannel(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!changed.ok) return refused(c, changed, CHANNEL_UPDATE_STATUS);
+    return c.json(changed.channel, 200);
+  });
+
+  guarded.openapi(deleteChannelRoute, async (c) => {
+    const deleted = await deleteChannel(deps.db, c.req.valid("param").id);
+    if (!deleted.ok) return refused(c, deleted, CHANNEL_DELETION_STATUS);
+    return c.body(null, 204);
+  });
+
   guarded.openapi(listOrdersRoute, async (c) => {
     const page = await listOrders(deps.db, c.req.valid("query"));
     return c.json({ orders: page.items, nextCursor: page.nextCursor }, 200);
@@ -2152,6 +2550,17 @@ const PRODUCT_STATUS = {
 const STORE_UPDATE_STATUS = {
   invalid: 400,
   "default-currency-is-fixed": 422,
+  // The set the request named leaves out the code every unconstrained Price is denominated in.
+  // 422 for the same reason as the one above it, about the same column from the other end.
+  "default-currency-must-be-enabled": 422,
+  // …or takes away one a Region selects. Also 422 rather than 409, although another row is what
+  // refuses it: this arrives as part of a `PATCH` naming a whole set, so what a Merchant sends
+  // again is a *different* body rather than the same one after somebody else moved.
+  "currency-in-use": 422,
+  // …or the `defaultRegion` names no Region. 422 rather than 404, because the address this
+  // request was sent to exists: it is the Store, and what is missing is named inside the body —
+  // which is `collection-not-found`'s distinction on `POST /admin/products`.
+  "region-not-found": 422,
 } as const satisfies Record<Exclude<StoreUpdate, { ok: true }>["reason"], 400 | 422>;
 
 /**
@@ -2240,10 +2649,77 @@ const MEDIA_STATUS = {
   400 | 422
 >;
 
-/** Only one way to get a key wrong, and it is the request's fault. */
+/**
+ * Two ways to get a key wrong: the request's own, and a Channel this Store has not got.
+ *
+ * 422 for the second on `collection-not-found`'s distinction — the body is well formed and what
+ * refuses it is the state of the Store — and it is the same word `GET /admin/channels/{id}`
+ * answers 404 with, because one fact gets one word (ADR-0060).
+ */
 const API_KEY_STATUS = {
   invalid: 400,
-} as const satisfies Record<Exclude<ApiKeyCreation, { ok: true }>["reason"], 400>;
+  "channel-not-found": 422,
+} as const satisfies Record<Exclude<ApiKeyCreation, { ok: true }>["reason"], 400 | 422>;
+
+/**
+ * Creating a Region: the body, or a currency this Store has not enabled.
+ *
+ * 422 rather than 400 for the second, on `unknown-fulfilment-strategy`'s distinction: the code
+ * is three letters in the right field and what refuses it is the set the Store has enabled,
+ * which `currencies` on `PATCH /admin/store` is how a Merchant widens.
+ */
+const REGION_STATUS = {
+  invalid: 400,
+  "currency-not-enabled": 422,
+} as const satisfies Record<Exclude<RegionCreation, { ok: true }>["reason"], 400 | 422>;
+
+/** Correcting one: the body, the address, or a currency this Store has not enabled. */
+const REGION_UPDATE_STATUS = {
+  invalid: 400,
+  "region-not-found": 404,
+  "currency-not-enabled": 422,
+} as const satisfies Record<
+  Exclude<RegionUpdate, { ok: true }>["reason"],
+  400 | 404 | 422
+>;
+
+/**
+ * Deleting one: the address, or the Store falling back to it.
+ *
+ * **409 rather than 422**, on `role-in-use`'s distinction and for its reason: the request is
+ * well formed, what refuses it is another row, and it becomes possible by itself the moment
+ * that row changes — a Merchant points the Store at another Region and this same request is
+ * taken. `role-in-use` is the shape being copied, one noun along (ADR-0059).
+ */
+const REGION_DELETION_STATUS = {
+  "region-not-found": 404,
+  "region-in-use": 409,
+} as const satisfies Record<Exclude<RegionDeletion, { ok: true }>["reason"], 404 | 409>;
+
+/**
+ * Creating a Channel can only be got wrong by the request: a Channel conflicts with nothing,
+ * because a name is not unique and it references nothing at all.
+ */
+const CHANNEL_STATUS = {
+  invalid: 400,
+} as const satisfies Record<Exclude<ChannelCreation, { ok: true }>["reason"], 400>;
+
+/** Renaming one: the body, or the address. */
+const CHANNEL_UPDATE_STATUS = {
+  invalid: 400,
+  "channel-not-found": 404,
+} as const satisfies Record<Exclude<ChannelUpdate, { ok: true }>["reason"], 400 | 404>;
+
+/**
+ * Deleting one refuses for exactly one reason, and the absence of any other is the decision.
+ *
+ * There is no `channel-in-use` beside `region-in-use`: an API key whose Channel has gone is
+ * unconstrained rather than broken, and refusing would make a Channel any key had ever named
+ * permanently undeletable, since revocation is a column rather than a delete.
+ */
+const CHANNEL_DELETION_STATUS = {
+  "channel-not-found": 404,
+} as const satisfies Record<Exclude<ChannelDeletion, { ok: true }>["reason"], 404>;
 
 /**
  * Creating a Collection can only be got wrong by the request: nothing about one conflicts with

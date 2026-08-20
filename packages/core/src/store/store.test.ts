@@ -48,6 +48,13 @@ describe("GET /admin/store", () => {
     await expect(response.json()).resolves.toEqual({
       name: "kobai",
       defaultCurrency: "USD",
+      // The migration that created `core_store_currency` enabled the code the Store was seeded
+      // with, so a Store is never in the state its own rules forbid: the default is always in
+      // the set a Price may be denominated in (ADR-0074).
+      currencies: [{ code: "USD" }],
+      // Seeded at boot rather than by a migration, and nothing in this harness boots — see
+      // `seed.test.ts`, where that is the subject.
+      defaultRegion: null,
       metadata: {},
     });
   });
@@ -62,7 +69,13 @@ describe("GET /admin/store", () => {
 
     // An id here is the first thing a storefront would key a cache on, and the second thing
     // someone would add a `where` on. ADR-0005: the Store is never a scoping key.
-    expect(Object.keys(body).sort()).toEqual(["defaultCurrency", "metadata", "name"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "currencies",
+      "defaultCurrency",
+      "defaultRegion",
+      "metadata",
+      "name",
+    ]);
   });
 });
 
@@ -82,6 +95,8 @@ describe("PATCH /admin/store", () => {
     expect(updated).toEqual({
       name: "Kyle's posters",
       defaultCurrency: "USD",
+      currencies: [{ code: "USD" }],
+      defaultRegion: null,
       metadata: { support: "…" },
     });
     // The same bytes the read beside it answers, because a Store is one record however it is
@@ -199,6 +214,136 @@ describe("PATCH /admin/store", () => {
       name: "Kyle's posters",
       defaultCurrency: "USD",
     });
+  });
+
+  it("enables a second currency, and reports the whole set back", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ currencies: [{ code: "USD" }, { code: "myr" }] }),
+    });
+
+    // The whole set rather than an add and a remove — `media`'s and `collections`' bargain one
+    // noun along — and read case-insensitively, because `usd` and `USD` are one currency. This
+    // is story 1: a second currency without a second deployment.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      defaultCurrency: "USD",
+      currencies: [{ code: "MYR" }, { code: "USD" }],
+    });
+
+    // Disabling is the same field with an entry left out, which is the half a list of edits
+    // could never say.
+    const narrowed = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ currencies: [{ code: "USD" }] }),
+    });
+    expect(narrowed.status).toBe(200);
+    await expect(narrowed.json()).resolves.toMatchObject({
+      currencies: [{ code: "USD" }],
+    });
+  });
+
+  it("refuses a set that leaves out the currency this Store prices in", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ currencies: [{ code: "MYR" }] }),
+    });
+
+    // ADR-0065's refusal on the narrower base ADR-0074 left it: a Price carrying no Region and
+    // no Channel is denominated in the Store's default, so a Store that stopped enabling that
+    // code would be quoting those rows in a currency it does not price in. The refusal says so
+    // rather than only that it was refused.
+    expect(response.status).toBe(422);
+    const refusal = (await response.json()) as { reason: string; error: string };
+    expect(refusal.reason).toBe("default-currency-must-be-enabled");
+    expect(refusal.error).toContain("no Region and no Channel");
+
+    // And nothing moved: the set is judged before the first write.
+    await expect(
+      (await kobai.request("/admin/store", { headers: merchant.headers })).json(),
+    ).resolves.toMatchObject({ currencies: [{ code: "USD" }] });
+  });
+
+  it("refuses a set that takes away a currency a Region selects, and names it", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const headers = { ...merchant.headers, "content-type": "application/json" };
+    await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ currencies: [{ code: "USD" }, { code: "MYR" }] }),
+    });
+    await kobai.request("/admin/regions", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Malaysia", currency: "MYR" }),
+    });
+
+    const response = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ currencies: [{ code: "USD" }] }),
+    });
+
+    // ADR-0059 at a third table: the alternatives are deleting somebody's Region or leaving one
+    // denominated in a currency this Store does not price in, and the repair — move the Region
+    // or delete it — is a control the Merchant already has. The refusal names it, because a
+    // Store with twenty Regions cannot act on "one of them".
+    expect(response.status).toBe(422);
+    const refusal = (await response.json()) as { reason: string; error: string };
+    expect(refusal.reason).toBe("currency-in-use");
+    expect(refusal.error).toContain("Malaysia");
+    await expect(
+      (await kobai.request("/admin/store", { headers: merchant.headers })).json(),
+    ).resolves.toMatchObject({ currencies: [{ code: "MYR" }, { code: "USD" }] });
+  });
+
+  it("carries a default Region, and refuses one this Store has not got", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+    const headers = { ...merchant.headers, "content-type": "application/json" };
+    const region = (await (
+      await kobai.request("/admin/regions", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "United States", currency: "USD" }),
+      })
+    ).json()) as { id: string };
+
+    const set = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ defaultRegion: region.id }),
+    });
+
+    // The whole Region rather than its identifier, on `Merchant.role`'s shape: what a client
+    // wants is the geography and the currency, and a second request for them is one every
+    // client would make.
+    expect(set.status).toBe(200);
+    await expect(set.json()).resolves.toMatchObject({
+      defaultRegion: { id: region.id, name: "United States", currency: "USD" },
+    });
+
+    const unknown = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ defaultRegion: "3f6a4b2c-0d1e-4f2a-8b3c-4d5e6f708192" }),
+    });
+
+    // 422 rather than 404: the address this request was sent to exists — it is the Store — and
+    // what is missing is named inside the body, which is `collection-not-found`'s distinction
+    // on `POST /admin/products`.
+    expect(unknown.status).toBe(422);
+    await expect(unknown.json()).resolves.toMatchObject({ reason: "region-not-found" });
   });
 
   it("is refused with no session, and refused to a Role that may only read the Store", async () => {

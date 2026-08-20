@@ -279,6 +279,19 @@ export type QuoteLineItem = components["schemas"]["QuoteLineItem"];
 export type QuoteAdjustment = components["schemas"]["QuoteAdjustment"];
 export type QuoteLevelAdjustment = components["schemas"]["QuoteLevelAdjustment"];
 export type QuoteRequest = components["schemas"]["QuoteRequest"];
+/**
+ * What this deployment sells into and through, and what it may price in (#291, ADR-0074).
+ *
+ * A **Region** selects one of the Store's enabled currencies and is what a price is asked for
+ * by; a **Channel** is a route to market, decided by the API key a request presents rather than
+ * by anything a storefront sends. Neither is a tenant boundary and neither ever will be
+ * (ADR-0005).
+ */
+export type Region = components["schemas"]["Region"];
+export type RegionList = components["schemas"]["RegionList"];
+export type Channel = components["schemas"]["Channel"];
+export type ChannelList = components["schemas"]["ChannelList"];
+export type EnabledCurrency = components["schemas"]["EnabledCurrency"];
 export type Merchant = components["schemas"]["Merchant"];
 export type Role = components["schemas"]["Role"];
 export type Session = components["schemas"]["Session"];
@@ -298,6 +311,17 @@ export type RoleRefusal = components["schemas"]["RoleRefusal"];
 export type StoreRefusal = components["schemas"]["StoreRefusal"];
 export type CatalogRefusal = components["schemas"]["CatalogRefusal"];
 export type CollectionRefusal = components["schemas"]["CollectionRefusal"];
+export type RegionRefusal = components["schemas"]["RegionRefusal"];
+export type ChannelRefusal = components["schemas"]["ChannelRefusal"];
+/**
+ * Why minting an API key was refused (#291).
+ *
+ * Its own family rather than {@link ApiKeyRefusal}'s or {@link ApiKeyNotFound}'s, and the three
+ * mean three different things: this is a *Merchant* being turned back at
+ * `POST /admin/api-keys`, `ApiKeyRefusal` is the store gate rejecting a credential a storefront
+ * presented, and `ApiKeyNotFound` is a Merchant addressing a key that does not exist.
+ */
+export type MintApiKeyRefusal = components["schemas"]["MintApiKeyRefusal"];
 export type StoreCatalogRefusal = components["schemas"]["StoreCatalogRefusal"];
 export type CartRefusal = components["schemas"]["CartRefusal"];
 export type CartReservations = components["schemas"]["CartReservations"];

@@ -654,7 +654,7 @@ export interface paths {
     };
     /**
      * Change the Store
-     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. `defaultCurrency` may be named and may not be moved: the code this Store already prices in is accepted and changes nothing, and any other is refused, because every Price carries the Store's default currency and no other — changing it would reinterpret each amount already stored rather than convert it. A body naming nothing that would change — `{}`, or only the `defaultCurrency` this Store already has — is refused at 400 rather than answered with the record unchanged.
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. `defaultCurrency` may be named and may not be moved: the code this Store already prices in is accepted and changes nothing, and any other is refused, because every Price carrying no Region and no Channel is denominated in it — changing it would reinterpret each of those amounts rather than convert them. **A second currency is enabled rather than substituted**: `currencies` is the complete set this Store may price in, and a Region selects one of them. `defaultRegion` names the Region a storefront that sends none is answered for. A body naming nothing that would change — `{}`, or only the `defaultCurrency` this Store already has — is refused at 400 rather than answered with the record unchanged.
      */
     patch: {
       requestBody: {
@@ -687,7 +687,7 @@ export interface paths {
             "application/json": components["schemas"]["PermissionDenied"];
           };
         };
-        /** @description Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in. */
+        /** @description Well formed, and still refused: `default-currency-is-fixed`, the request names a currency other than the one this Store prices in; `default-currency-must-be-enabled`, the `currencies` it names leave that one out; `currency-in-use`, they take away a currency a Region selects; or `region-not-found`, `defaultRegion` names no Region this Store has. */
         422: {
           content: {
             "application/json": components["schemas"]["StoreRefusal"];
@@ -1953,6 +1953,552 @@ export interface paths {
       };
     };
   };
+  "/admin/regions": {
+    /**
+     * List Regions
+     * @description Newest first, 20 at a time — the geographies this Store sells into. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered; `nextCursor` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). Which one a storefront that names none is answered for is `GET /admin/store`'s `defaultRegion`.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Regions. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["RegionList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Create a Region
+     * @description A name and the currency it prices in, which has to be one this Store has enabled — `GET /admin/store` lists them. Names are **not** unique: a Region is addressed by its identifier everywhere. Nothing about tax or shipping is here yet; both hang off this row when they arrive.
+     */
+    post: {
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["CreateRegionRequest"];
+        };
+      };
+      responses: {
+        /** @description The Region. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Region"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/regions/{id}": {
+    /**
+     * Read a Region
+     * @description One Region — its name, and the currency it prices in.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Region. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Region"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Region exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Delete a Region
+     * @description Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again.
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description Deleted. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Region exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description This Store's default Region is this one, and something has to answer a storefront that names none. */
+        409: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Change a Region
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. **A Region's currency may move**, unlike the Store's: a Region *selects* one of the currencies this Store has enabled, so moving the selection changes which Prices apply here rather than what any amount means.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateRegionRequest"];
+        };
+      };
+      responses: {
+        /** @description The Region, as a read of it reports it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Region"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Region exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["RegionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/channels": {
+    /**
+     * List Channels
+     * @description Newest first, 20 at a time — the routes to market this Store sells through. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered; `nextCursor` is absent on the last page and that absence is the only end-of-list signal (ADR-0064).
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Channels. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["ChannelList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Create a Channel
+     * @description A name, and optionally some `metadata`. A Channel is a route to market — a storefront, a marketplace listing — and it is **not** a tenant: nothing is scoped by one. Which requests are in it is decided by the API keys minted against it (`POST /admin/api-keys`).
+     */
+    post: {
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["CreateChannelRequest"];
+        };
+      };
+      responses: {
+        /** @description The Channel. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Channel"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["ChannelRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/channels/{id}": {
+    /**
+     * Read a Channel
+     * @description One Channel. It carries no list of the API keys minted against it: which requests are in a Channel is a fact about each key, and `GET /admin/api-keys` reports it.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Channel. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Channel"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Channel exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["ChannelRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Delete a Channel
+     * @description **Deletes the Channel and none of the API keys minted against it.** Each of those keys becomes unconstrained — in no particular Channel, which is what every key is until one is minted against one — so this is refused for nothing but there being no such Channel.
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description Deleted, and every key minted against it left working. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Channel exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["ChannelRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Rename a Channel
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. Which API keys are in this Channel is **not** changed here — a key is bound to one when it is minted.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateChannelRequest"];
+        };
+      };
+      responses: {
+        /** @description The Channel, as a read of it reports it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Channel"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["ChannelRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Channel exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["ChannelRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/orders": {
     /**
      * List Orders
@@ -2222,7 +2768,7 @@ export interface paths {
     };
     /**
      * Mint an API key
-     * @description The value is in this response and in no other, ever — only a digest is stored. `kobai_pk_…` is publishable and `kobai_sk_…` is secret, so the kind is readable off the value itself.
+     * @description The value is in this response and in no other, ever — only a digest is stored. `kobai_pk_…` is publishable and `kobai_sk_…` is secret, so the kind is readable off the value itself. A `channelId` binds every request presenting this key to that Channel; leaving it out mints a key in no particular Channel, which is what every key was before Channels existed.
      */
     post: {
       requestBody: {
@@ -2240,7 +2786,7 @@ export interface paths {
         /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
         400: {
           content: {
-            "application/json": components["schemas"]["InvalidRequest"];
+            "application/json": components["schemas"]["MintApiKeyRefusal"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -2253,6 +2799,12 @@ export interface paths {
         403: {
           content: {
             "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Well formed, and still refused: `channel-not-found`, `channelId` names a Channel this Store has not got. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["MintApiKeyRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -3398,8 +3950,28 @@ export interface components {
     };
     Store: {
       name: string;
-      /** @description ISO 4217, upper case. */
+      /** @description ISO 4217, upper case. What a Price carrying no Region and no Channel is denominated in, and it does not move (ADR-0065). It is always one of `currencies`. */
       defaultCurrency: string;
+      /** @description Every currency this Store may price in, by code — the vocabulary a Region selects from and a Price is denominated in (ADR-0074). Always includes `defaultCurrency`, which is why disabling that one is refused. Enabling a currency is not the same as having Prices in it: kobai converts nothing. */
+      currencies: components["schemas"]["EnabledCurrency"][];
+      /** @description The Region a storefront that names none is answered for. Seeded at the first boot after this Store was created, from `defaultCurrency`, and renamed like any other Region; `null` only on a deployment whose Project never seeds one. */
+      defaultRegion: components["schemas"]["Region"] | null;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    EnabledCurrency: {
+      /** @description ISO 4217, upper case — `USD`, `MYR`. */
+      code: string;
+    };
+    Region: {
+      /** Format: uuid */
+      id: string;
+      /** @description What the Merchant calls it — `Malaysia`, `Eurozone`. **Not unique**: a Region is addressed by its identifier everywhere, so two carrying one name are two geographies rather than a collision. */
+      name: string;
+      /** @description The ISO 4217 code this Region prices in, which is always one of the currencies `GET /admin/store` reports. kobai converts nothing, ever: a Variant with no Price in this currency has no price here. */
+      currency: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -3412,13 +3984,20 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "default-currency-is-fixed";
+      reason: "invalid" | "malformed-body" | "default-currency-is-fixed" | "default-currency-must-be-enabled" | "currency-in-use" | "region-not-found";
     };
     UpdateStoreRequest: {
       /** @description What this Store is called. Free to change; nothing is keyed by it. */
       name?: string;
-      /** @description ISO 4217, read case-insensitively. **Only the code this Store already prices in is accepted**, and naming it changes nothing: every Price carries the Store's default currency and no other (ADR-0008), so changing this would reinterpret every amount already stored rather than convert it. Another currency is refused with `default-currency-is-fixed`. Because naming the current one changes nothing, a body naming *only* this field is refused as a request that changes nothing — send it beside a `name` or a `metadata`. */
+      /** @description ISO 4217, read case-insensitively. **Only the code this Store already prices in is accepted**, and naming it changes nothing: a Price carrying no Region and no Channel is denominated in it (ADR-0074), so changing this would reinterpret each of those amounts rather than convert them. Another currency is refused with `default-currency-is-fixed` — it is *enabled* in `currencies` and selected on a Region instead. Because naming the current one changes nothing, a body naming *only* this field is refused as a request that changes nothing — send it beside a `name` or a `metadata`. */
       defaultCurrency?: string;
+      /** @description **The complete list** of the currencies this Store may price in — so this is where one is enabled and where one is disabled, and an entry left out is a currency taken away. Each `code` is read case-insensitively. `defaultCurrency` has to be among them: leaving it out is refused with `default-currency-must-be-enabled`, because a Price carrying no Region and no Channel is denominated in it. A code a Region selects cannot be taken away either — that is `currency-in-use`, naming the Regions, and the repair is to move or delete them first. */
+      currencies?: components["schemas"]["EnabledCurrency"][];
+      /**
+       * Format: uuid
+       * @description The `id` of the Region a storefront that names none is answered for — `GET /admin/regions` lists them. One this Store has not got is refused with `region-not-found`. There is no way to say *no default Region*: a deployment is seeded one at its first boot, and taking it away would leave every storefront that sends no Region refused instead.
+       */
+      defaultRegion?: string;
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
@@ -3774,6 +4353,78 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    RegionRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "region-not-found" | "currency-not-enabled" | "region-in-use";
+    };
+    CreateRegionRequest: {
+      /** @description Required, and not empty. */
+      name: string;
+      /** @description Required. An ISO 4217 code this Store has **enabled**, read case-insensitively — `GET /admin/store` lists them and `PATCH /admin/store` enables another. One this Store has not enabled is refused at 422 with `currency-not-enabled`. */
+      currency: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    RegionList: {
+      regions: components["schemas"]["Region"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    UpdateRegionRequest: {
+      name?: string;
+      /** @description An ISO 4217 code this Store has enabled, read case-insensitively. One it has not is refused at 422 with `currency-not-enabled`. */
+      currency?: string;
+      /** @description Replaces what is stored rather than merging into it. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    Channel: {
+      /** Format: uuid */
+      id: string;
+      /** @description What the Merchant calls it — `Web`, `Marketplace`. **Not unique**: a Channel is addressed by its identifier everywhere. */
+      name: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    ChannelRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "channel-not-found";
+    };
+    CreateChannelRequest: {
+      /** @description Required, and not empty. */
+      name: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    ChannelList: {
+      channels: components["schemas"]["Channel"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    UpdateChannelRequest: {
+      name?: string;
+      /** @description Replaces what is stored rather than merging into it. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
     OrderList: {
       orders: components["schemas"]["OrderSummary"][];
       /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
@@ -3957,6 +4608,11 @@ export interface components {
       id: string;
       name: string;
       kind: components["schemas"]["ApiKeyKind"];
+      /**
+       * Format: uuid
+       * @description Which Channel a request presenting this key is in, or `null` for a key that is in no particular one — which is what every key minted without one is. It is decided here and never again: a storefront does not thread a Channel through its requests and cannot claim to be in one it was not issued a credential for (ADR-0020).
+       */
+      channelId: string | null;
       /** Format: date-time */
       createdAt: string;
       /** @description The value itself. Shown at creation and unrecoverable afterwards. */
@@ -3964,10 +4620,24 @@ export interface components {
     };
     /** @enum {string} */
     ApiKeyKind: "publishable" | "secret";
+    MintApiKeyRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "channel-not-found";
+    };
     CreateApiKeyRequest: {
       /** @description How a Merchant tells one key from another when revoking. */
       name: string;
       kind: components["schemas"]["ApiKeyKind"];
+      /**
+       * Format: uuid
+       * @description The Channel every request presenting this key is in, as `GET /admin/channels` lists them. **Left out is unconstrained** — a key in no particular Channel, which is what every key minted before Channels existed is — and it is the right answer for a deployment that sells through one route to market. A Channel this Store has not got is refused at 422 with `channel-not-found`. It cannot be changed afterwards: mint another key and revoke this one.
+       */
+      channelId?: string;
     };
     ApiKeyList: {
       apiKeys: components["schemas"]["ApiKeySummary"][];
@@ -3979,6 +4649,11 @@ export interface components {
       id: string;
       name: string;
       kind: components["schemas"]["ApiKeyKind"];
+      /**
+       * Format: uuid
+       * @description Which Channel a request presenting this key is in, or `null` for a key that is in no particular one — which is what every key minted without one is. It is decided here and never again: a storefront does not thread a Channel through its requests and cannot claim to be in one it was not issued a credential for (ADR-0020).
+       */
+      channelId: string | null;
       /** Format: date-time */
       createdAt: string;
       /**

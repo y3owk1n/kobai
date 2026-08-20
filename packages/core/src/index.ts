@@ -225,7 +225,18 @@ export type {
   HeldReservation,
   ReservationsOptions,
 } from "./reservation/reservation.ts";
+export type { Channel } from "./store/channel.ts";
+export type { EnabledCurrency } from "./store/currency.ts";
 export type { Store } from "./store/read.ts";
+export type { Region } from "./store/region.ts";
+/**
+ * What a boot's Region seeding did (`store/seed.ts`, #291).
+ *
+ * On the surface for {@link InitialMerchantSeed}'s reason: a Project calls
+ * `kobai.seedDefaultRegion()` itself, after its migrations, and decides what each outcome means
+ * for its own boot.
+ */
+export type { DefaultRegionSeed, SeededRegion } from "./store/seed.ts";
 /**
  * The background sweep (`sweep.ts`): what a Project starts at boot, and what one run of it did.
  *

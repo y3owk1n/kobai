@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
+import { ListboxField } from "@/components/listbox-field";
 import { Problem } from "@/components/problem";
 import { TextareaField } from "@/components/textarea-field";
 import {
@@ -61,11 +62,18 @@ export function StoreScreen() {
   }
 
   return (
-    <StoreSettings
-      name={store.data.name}
-      defaultCurrency={store.data.defaultCurrency}
-      metadata={store.data.metadata}
-    />
+    <div className="grid gap-6">
+      <StoreSettings
+        name={store.data.name}
+        defaultCurrency={store.data.defaultCurrency}
+        metadata={store.data.metadata}
+      />
+      <Currencies
+        defaultCurrency={store.data.defaultCurrency}
+        currencies={store.data.currencies}
+      />
+      <DefaultRegion current={store.data.defaultRegion} />
+    </div>
   );
 }
 
@@ -193,10 +201,11 @@ function StoreSettings({
               className="bg-muted/50"
             />
             <FieldDescription>
-              Fixed. Every Price this Store holds carries this code and no other, so
-              moving it would reinterpret each amount already entered rather than convert
-              it — kobai refuses the change (ADR-0065). A second currency arrives as more
-              Prices, not as a different default.
+              Fixed. A Price that names no Region and no Channel carries this code, so
+              moving it would reinterpret each of those amounts rather than convert them —
+              kobai refuses the change (ADR-0065, ADR-0074). A second currency is{" "}
+              <strong>enabled</strong> below and selected on a Region; it never replaces
+              this one.
             </FieldDescription>
           </Field>
 
@@ -228,6 +237,250 @@ function StoreSettings({
     </Card>
   );
 }
+
+/**
+ * The shape of the currencies form, and only the shape (ADR-0063).
+ *
+ * Three letters is what the column's own `char_length` check holds, and it is structure rather
+ * than a rule: **whether a code is one this Store may enable is nothing a browser can decide**,
+ * and neither is whether it is a real ISO 4217 code — kobai does not hold a table of the world
+ * either, deliberately, so a list here would be one more place to go stale.
+ */
+const CurrenciesForm = z.object({
+  typed: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z]{3}$/, "An ISO 4217 code is three letters — USD, MYR, EUR."),
+});
+
+type CurrenciesValues = z.infer<typeof CurrenciesForm>;
+
+/**
+ * Every currency this Store may price in, and the way to enable another (#291, ADR-0074).
+ *
+ * **The whole set travels on every write**, because that is how kobai reads the field: enabling
+ * sends what is here plus the new code, and disabling sends what is here minus one. A list of
+ * edits would leave no way to say *and this one is gone*, which is the same bargain a Product's
+ * `collections` takes.
+ *
+ * **The default currency's row has no Remove control**, and that is an affordance rather than
+ * the boundary: kobai refuses a set that leaves it out (`default-currency-must-be-enabled`), and
+ * a button that was always going to be turned back is exactly what ADR-0063 says not to draw.
+ * Every other row's Remove is offered and attempted — whether a Region selects that currency is
+ * a fact kobai holds, so this screen asks rather than predicts, and renders the refusal naming
+ * the Regions when it comes back.
+ */
+function Currencies({
+  defaultCurrency,
+  currencies,
+}: {
+  readonly defaultCurrency: string;
+  readonly currencies: readonly { readonly code: string }[];
+}) {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.storeWrite, "change the Store");
+
+  const form = useForm<CurrenciesValues>({
+    resolver: zodResolver(CurrenciesForm),
+    defaultValues: { typed: "" },
+  });
+
+  const write = useMutation({
+    mutationFn: async (codes: readonly string[]) =>
+      orThrow(
+        await client.PATCH("/admin/store", {
+          body: { currencies: codes.map((code) => ({ code })) },
+        }),
+      ),
+    // Read back rather than patched in place (ADR-0063), and both queries: the picker on the
+    // Regions screens reads this same set through its own key.
+    onSuccess: () => {
+      form.reset();
+      void queries.invalidateQueries();
+    },
+  });
+
+  const enabled = currencies.map((one) => one.code);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Currencies</CardTitle>
+        <CardDescription>
+          What this Store may price in. A Region selects one of these, and a Price is
+          denominated in one of these — kobai converts nothing, so a Variant with no Price
+          in a currency has no price in it.
+        </CardDescription>
+      </CardHeader>
+      <form
+        onSubmit={form.handleSubmit((values) =>
+          write.mutate([...enabled, values.typed.toUpperCase()]),
+        )}
+      >
+        <CardContent className="grid gap-6">
+          <Problem
+            problem={write.isError ? whyNotChanged(write.error) : null}
+            title="The currencies were not changed."
+          />
+
+          <ul className="grid gap-2">
+            {currencies.map((one) => (
+              <li
+                key={one.code}
+                className="flex items-center justify-between gap-4 rounded-md border px-3 py-2"
+              >
+                <span className="font-mono text-sm">
+                  {one.code}
+                  {one.code === defaultCurrency ? (
+                    <span className="ml-2 font-sans text-muted-foreground text-xs">
+                      the default
+                    </span>
+                  ) : null}
+                </span>
+                {one.code === defaultCurrency ? null : (
+                  <ActionButton
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    unavailable={unavailable}
+                    disabled={write.isPending}
+                    onClick={() =>
+                      write.mutate(enabled.filter((code) => code !== one.code))
+                    }
+                  >
+                    Disable {one.code}
+                  </ActionButton>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          <FormField
+            id="store-enable-currency"
+            label="Enable another"
+            placeholder="MYR"
+            description="An ISO 4217 code. Enabling one is not the same as having Prices in it — set those on each Variant."
+            error={form.formState.errors.typed}
+            {...form.register("typed")}
+          />
+        </CardContent>
+        <CardFooter className="mt-4">
+          <ActionButton
+            type="submit"
+            unavailable={unavailable}
+            disabled={write.isPending}
+          >
+            {write.isPending ? <Spinner /> : null}
+            Enable currency
+          </ActionButton>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * Which Region a storefront that names none is answered for (#291, ADR-0074).
+ *
+ * **A field of the Store rather than a flag on a row in the Regions list**, because one
+ * deployment has one of these — and because a Merchant deciding it is deciding something about
+ * the Store rather than about that Region.
+ *
+ * A deployment is seeded one at its first boot, so `null` here means this Store has not been
+ * booted since Regions arrived; the card says so rather than showing an empty picker with no
+ * explanation.
+ */
+function DefaultRegion({
+  current,
+}: {
+  readonly current: { readonly id: string; readonly name: string } | null;
+}) {
+  const client = useKobaiClient();
+  const queries = useQueryClient();
+  const unavailable = useUnavailable(PERMISSIONS.storeWrite, "change the Store");
+  const regions = useQuery({
+    queryKey: [OFFERED_REGIONS],
+    queryFn: async () =>
+      orThrow(
+        await client.GET("/admin/regions", {
+          params: { query: { limit: OFFERED_REGION_LIMIT } },
+        }),
+      ),
+  });
+
+  const form = useForm<{ defaultRegion: string }>({
+    // `values` rather than `defaultValues`, so a save that landed leaves the picker showing what
+    // kobai now holds. `""` is the untouched field, which the submit below refuses to send.
+    values: { defaultRegion: current?.id ?? "" },
+  });
+
+  const save = useMutation({
+    mutationFn: async (id: string) =>
+      orThrow(await client.PATCH("/admin/store", { body: { defaultRegion: id } })),
+    onSuccess: () => void queries.invalidateQueries(),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Default Region</CardTitle>
+        <CardDescription>
+          What a storefront is answered for when it asks for a price without naming a
+          Region. Every deployment is seeded one at its first boot, named after the
+          currency it prices in.
+        </CardDescription>
+      </CardHeader>
+      <form
+        onSubmit={form.handleSubmit((values) => {
+          if (values.defaultRegion !== "") save.mutate(values.defaultRegion);
+        })}
+      >
+        <CardContent className="grid gap-6">
+          <Problem
+            problem={save.isError ? whyNotChanged(save.error) : null}
+            title="The default Region was not changed."
+          />
+          <ListboxField
+            control={form.control}
+            name="defaultRegion"
+            id="store-default-region"
+            label="Region"
+            placeholder="Choose a Region"
+            options={(regions.data?.regions ?? []).map((region) => ({
+              value: region.id,
+              label: `${region.name} — ${region.currency}`,
+            }))}
+            description={
+              regions.isSuccess && (regions.data?.regions.length ?? 0) === 0
+                ? "This Store has no Regions. Define one on the Regions screen, and a storefront that names none will be answered for it."
+                : "The Regions screen is where these are defined. There is no way to have none: something has to answer a storefront that sends no Region."
+            }
+          />
+        </CardContent>
+        <CardFooter className="mt-4">
+          <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>
+            {save.isPending ? <Spinner /> : null}
+            Save default Region
+          </ActionButton>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+/**
+ * How many Regions the default picker offers, and the gap that comes with it.
+ *
+ * It does not page, which is `lib/collections.ts`'s known gap one noun along: a cursor inside
+ * this card would sit in an address that already locates the Store screen. A Store with more
+ * than a hundred Regions and an old one to pick is the case that reaches it, and the Regions
+ * section is where every one of them can be found.
+ */
+const OFFERED_REGION_LIMIT = 100;
+
+/** Its own cache key, deliberately not the Regions screen's — see `lib/store.ts`. */
+const OFFERED_REGIONS = "offered-regions";
 
 /**
  * The Store's metadata as something a person can edit.
@@ -263,7 +516,21 @@ function whyNotChanged(thrown: unknown): string {
 
   switch (reason) {
     case "default-currency-is-fixed":
-      return "This Store prices in one currency and it does not move: every Price already entered carries it, so changing it would reinterpret those amounts rather than convert them (ADR-0065).";
+      return "This Store's default currency does not move: every Price that names no Region and no Channel carries it, so changing it would reinterpret those amounts rather than convert them (ADR-0065). Enable the currency you meant instead, and select it on a Region.";
+
+    case "default-currency-must-be-enabled":
+      return "The default currency has to stay enabled — it is what a Price carrying no Region and no Channel is denominated in.";
+
+    case "currency-in-use":
+      // kobai's own prose names the Regions, which is more than this screen knows: a Store with
+      // twenty of them cannot act on "one of them".
+      return problemOf(
+        thrown,
+        "A Region prices in that currency, so it cannot be disabled.",
+      );
+
+    case "region-not-found":
+      return "That Region is no longer there — somebody else deleted it, or this page has been open a while. Choose another.";
 
     case "invalid":
     case "malformed-body":

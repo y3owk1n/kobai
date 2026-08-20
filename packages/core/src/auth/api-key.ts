@@ -11,6 +11,7 @@ import {
 } from "../db/page.ts";
 import { apiKey } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { type CHANNEL_NOT_FOUND, unknownChannel } from "../store/channel.ts";
 
 /**
  * API keys: minting one, resolving one, revoking one.
@@ -61,6 +62,14 @@ export type IssuedApiKey = {
   readonly id: string;
   readonly name: string;
   readonly kind: ApiKeyKind;
+  /**
+   * Which Channel a request presenting this key is in, or `null` for unconstrained (#291).
+   *
+   * Reported although nothing reads the column yet — a Price constrained by Channel is the next
+   * slice of this spec — because a key's Channel is fixed at minting and this response is the
+   * one place a Merchant is told what they minted.
+   */
+  readonly channelId: string | null;
   readonly createdAt: string;
   /** The value itself. Shown at creation and unrecoverable afterwards. */
   readonly key: string;
@@ -81,6 +90,8 @@ export type ApiKeySummary = {
   readonly id: string;
   readonly name: string;
   readonly kind: ApiKeyKind;
+  /** Which Channel a request presenting it is in, or `null` for unconstrained (#291). */
+  readonly channelId: string | null;
   readonly createdAt: string;
   /** When it stopped working, or `null` while it still does. */
   readonly revokedAt: string | null;
@@ -90,11 +101,24 @@ export type ApiKeySummary = {
 export type CreateApiKeyInput = {
   readonly name?: unknown;
   readonly kind?: unknown;
+  readonly channelId?: unknown;
 };
 
+/**
+ * Minting a key refuses two ways, and the second is a fact about the Store rather than the body.
+ *
+ * `channel-not-found` is the same word `GET /admin/channels/{id}` answers 404 with, at **422**
+ * here on `collection-not-found`'s distinction: the body is well formed — an identifier in the
+ * right place — and what refuses it is a Channel this Store has not got. One fact gets one word
+ * (ADR-0060).
+ */
 export type ApiKeyCreation =
   | { readonly ok: true; readonly apiKey: IssuedApiKey }
-  | { readonly ok: false; readonly reason: "invalid"; readonly detail: string };
+  | {
+      readonly ok: false;
+      readonly reason: "invalid" | typeof CHANNEL_NOT_FOUND;
+      readonly detail: string;
+    };
 
 /**
  * Why a store-surface request is not authenticated.
@@ -143,14 +167,39 @@ export async function createApiKey(
     };
   }
 
+  // **Which Channel this key is in is decided here and never again** (ADR-0005, ADR-0020). A
+  // storefront presenting it therefore cannot claim to be in a Channel it was not issued a
+  // credential for, and does not have to thread one through every request. Absent is `null`,
+  // which is unconstrained — what every key that exists today is, and what a deployment that has
+  // defined no Channel can say.
+  let channelId: string | null = null;
+  if (input.channelId !== undefined && input.channelId !== null) {
+    if (typeof input.channelId !== "string" || !isUuid(input.channelId)) {
+      return {
+        ok: false,
+        reason: "invalid",
+        detail:
+          "`channelId` must be the `id` of a Channel this Store has — `GET /admin/channels` lists them. Leave it out for a key that is in no particular Channel.",
+      };
+    }
+
+    // Asked rather than left to the foreign key, so the refusal can name the Channel and say
+    // where to find the ones this Store does have. One deleted in the window between the two
+    // travels as the 500 it is, which is `collectionsThisStoreDoesNotHave`'s bargain.
+    const missing = await unknownChannel(db, input.channelId);
+    if (missing) return missing;
+    channelId = input.channelId;
+  }
+
   const key = `${API_KEY_PREFIX[kind]}${randomBytes(KEY_BYTES).toString("base64url")}`;
 
   const [created] = await db
     .insert(apiKey)
-    .values({ name, kind, tokenHash: hashApiKey(key) })
+    .values({ name, kind, channelId, tokenHash: hashApiKey(key) })
     .returning({
       id: apiKey.id,
       name: apiKey.name,
+      channelId: apiKey.channelId,
       createdAt: apiKey.createdAt,
     });
   if (!created) throw new Error("Inserting an API key returned no row.");
@@ -161,6 +210,7 @@ export async function createApiKey(
       id: created.id,
       name: created.name,
       kind,
+      channelId: created.channelId,
       createdAt: created.createdAt.toISOString(),
       key,
     },
@@ -184,6 +234,7 @@ export async function listApiKeys(
       id: apiKey.id,
       name: apiKey.name,
       kind: apiKey.kind,
+      channelId: apiKey.channelId,
       createdAt: apiKey.createdAt,
       revokedAt: apiKey.revokedAt,
       cursorAt: cursorAt(apiKey.createdAt),
@@ -203,6 +254,7 @@ export async function listApiKeys(
       id: row.id,
       name: row.name,
       kind: asKind(row.kind),
+      channelId: row.channelId,
       createdAt: row.createdAt.toISOString(),
       revokedAt: row.revokedAt?.toISOString() ?? null,
     })),

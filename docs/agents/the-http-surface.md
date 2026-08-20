@@ -832,11 +832,59 @@ of narrowing and promises to hold no rule at all.
 **A Store's default currency does not move** (ADR-0065). `PATCH /admin/store` accepts a
 `defaultCurrency`, takes the code the Store already prices in — so a form submitting the whole
 record round-trips — and refuses any other at **422 `default-currency-is-fixed`**, whether or not
-a single Price has been written. Every Price carries the Store's default and no other (#5), so
-moving the column reinterprets each of those amounts rather than converting them, and ADR-0008
-already says where multi-currency arrives: as more rows. **Do not add a currency-change path,
-and do not narrow the refusal to "when Prices exist"** — relaxing it later is cheap, tightening
-it is a break (ADR-0060), and the narrow version is a read of `core_price` followed by a write.
+a single Price has been written. **ADR-0074 narrowed the argument and did not weaken the rule**:
+a Price carrying no Region and no Channel is denominated in the default, so moving the column
+reinterprets exactly those amounts rather than converting them, and multi-currency arrives as
+more rows (ADR-0008). **Do not add a currency-change path, and do not narrow the refusal to
+"when Prices exist"** — relaxing it later is cheap, tightening it is a break (ADR-0060), and the
+narrow version is a read of `core_price` followed by a write.
+
+**A Store *enumerates* the currencies it may price in, and a Region *selects* one** (#291,
+ADR-0074). The enabled set is `currencies` on the Store — read by `GET /admin/store` behind
+`store:read`, written whole by `PATCH /admin/store` behind `store:write` — and `POST`/`GET`/
+`PATCH`/`DELETE /admin/regions` and `/admin/channels` are the ten routes beside it, behind the
+same two Permissions. Six things about that surface are decisions rather than implementation:
+
+- **The enabled set is a field of the Store rather than a list route**, and the boundary is
+  worth reading because the answer is *not* ADR-0067's: a Merchant can enable a currency over
+  HTTP while somebody is reading, so a plural route over that table would have had to page like
+  every other list. It is a field of one record instead, the way a Product's `collections` is —
+  and it is the **whole set** on the way in, so enabling and disabling are one field and a code
+  left out is a currency taken away. `EnabledCurrency` is an object at **both** ends for
+  `MediaAttachment`'s reason: a per-currency setting arrives beside `code` and is additive,
+  where a list of strings could only grow by changing the type of every element.
+- **Two refusals guard that set, and they are two facts.** **422
+  `default-currency-must-be-enabled`** where the set leaves out the code every unconstrained
+  Price is denominated in — ADR-0065's refusal reached from the other end — and **422
+  `currency-in-use`** where it takes away one a Region selects, naming the Regions, which is
+  ADR-0059 at a third table: the repair is to move or delete them and send it again.
+- **A Region selects a currency the Store has enabled, at the create and at the correction
+  alike** — **422 `currency-not-enabled`** otherwise, on `unknown-fulfilment-strategy`'s
+  distinction. It is deliberately **not** `unsupported-currency`, the word a *Price* naming
+  another currency is refused with: there the repair is to send the Store's code, here it is to
+  enable the one you meant, and a client branching on a shared word would advise wrongly for one
+  of them.
+- **The Store carries a default Region and cannot be left without one.** `defaultRegion` is on
+  both the read and the correction — **422 `region-not-found`** for one this Store has not got —
+  and `DELETE /admin/regions/{id}` refuses **409 `region-in-use`** while the Store falls back to
+  it, because something has to answer a storefront that names no Region. **Deleting a Channel
+  refuses nothing**, and the asymmetry is the decision: an API key whose Channel has gone is
+  unconstrained rather than broken, and refusing would make a Channel any key had ever named
+  permanently undeletable, since revocation is a column rather than a delete.
+- **Which Channel a request is in is decided by the API key** (ADR-0020). `POST /admin/api-keys`
+  takes an optional `channelId` — **422 `channel-not-found`** through `MintApiKeyRefusal`, which
+  is its own family and neither the store gate's `ApiKeyRefusal` nor `ApiKeyNotFound` — and a key
+  minted without one is unconstrained, which is every key that exists today. It is decided at
+  minting and never afterwards, so a storefront cannot claim to be in a Channel it was not issued
+  a credential for.
+- **A nullable reference to a named schema is a union and never `.nullable()`.** `Store`'s
+  `defaultRegion` is `z.union([Region, z.null()])`, because `.nullable()` at a reference site is
+  applied to the **registered component**: written that way, `Region` is published as
+  `object | null` and `GET /admin/regions` promises a page whose items may each be `null` —
+  a thing no handler produces and, under ADR-0060, a `null` a client may expect for ever.
+  `Inventory` and `CartShopper` read that way in the generated client already; they are each
+  referenced from one genuinely nullable place, and `Region` is the first component shared
+  between a nullable field and a list.
 
 **A Role is a row a Merchant can make, and one Permission administers every change to one**
 (ADR-0066, ADR-0076). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are
