@@ -32,6 +32,43 @@ export type TestVariantSpec = {
    * test about price *selection* is actually about. Defaults to one Price of `1250`.
    */
   readonly prices?: readonly number[];
+  /**
+   * What this Variant **is**, for each option its Product is chosen by — `{ Size: "A2" }`.
+   *
+   * **The Product declares whichever options its Variants answer, and there is no second place
+   * to say it.** A Product's options and a Variant's values for them are one fact read from two
+   * ends, and `POST /admin/products` refuses a Variant that answers an option its Product never
+   * declared. So this helper never takes the declaration: it reads it off the Variants, which
+   * makes the mismatch unarrangeable rather than merely discouraged.
+   *
+   * **The order a storefront offers them in is the order the first Variant writes them in.** A
+   * Product's option list is ordered and the order is the Merchant's, so `{ Size, Finish }`
+   * declares Size first — object keys, in the order they are written.
+   *
+   * A record rather than the route's own `[{ name, value }]`, because a key is one key: a
+   * Variant that answers `Size` twice — which the route also refuses — cannot be written down.
+   *
+   * Two things the helper refuses before it sends anything, each because the API would refuse
+   * them and a 422 out of an arrangement names the helper rather than the test:
+   *
+   * - **Variants answering different sets of options.** One that leaves a declared option
+   *   unanswered is a Variant a picker cannot place, so every Variant of one call answers the
+   *   same option names — `{}` and nothing at all being the same answer, which is a Product
+   *   with no options and the ordinary case (ADR-0008).
+   * - **Two Variants answering one combination**, refused since #277: a storefront maps a
+   *   chosen combination to a SKU, and it can only do that where the mapping is a function.
+   *   Inside a create that is a body disagreeing with itself, so it is `invalid` at 400 rather
+   *   than the `variant-combination-taken` a Variant added to a Product that already exists
+   *   gets. A Product declaring no options has no combinations, so any number of its Variants
+   *   is fine — that is the same reading the route takes.
+   */
+  readonly options?: Readonly<Record<string, string>>;
+};
+
+/** A Collection the catalog was seeded into, by the identifier everything addresses one by. */
+export type TestCatalogCollection = {
+  readonly id: string;
+  readonly title: string;
 };
 
 /**
@@ -52,6 +89,32 @@ export type TestCatalogOptions = {
    * no handle at all, which is the case a Merchant meets first.
    */
   readonly title?: string;
+  /**
+   * The copy a Merchant wrote — its own column since #250. Left out entirely unless a test
+   * names one, so what a create does with no description is what every other test exercises.
+   */
+  readonly description?: string;
+  /**
+   * What the Product is grouped under, **created into them** by the create itself (#280).
+   *
+   * A title makes a Collection of that name; a `TestCatalogCollection` a previous seed handed
+   * back puts this Product into *that* one, which is what a second catalog in the same grouping
+   * needs — Collection titles are deliberately not unique (there is no `collection-title-taken`),
+   * so naming the same title twice would make a second Collection rather than reuse the first.
+   *
+   * ```ts
+   * const posters = await seedTestCatalog(kobai, { collections: ["Wall art"] });
+   * await seedTestCatalog(kobai, {
+   *   merchant: posters.merchant,
+   *   title: "A mug",
+   *   collections: [posters.collection("Wall art")],
+   * });
+   * ```
+   *
+   * Two entries of one title are refused here rather than sent: the route would take them, and
+   * {@link TestCatalog.collection} is asked by title.
+   */
+  readonly collections?: readonly (string | TestCatalogCollection)[];
   /**
    * What the Product ends up in — `draft`, `published` or `archived`. Defaults to `published`.
    *
@@ -104,8 +167,17 @@ export type TestCatalog = {
   /** The first Variant's id — a test with one Variant should not have to say which. */
   readonly variantId: string;
   readonly variants: readonly TestCatalogVariant[];
+  /** In the order they were asked for — `[]` where the test named none. */
+  readonly collections: readonly TestCatalogCollection[];
   /** The Variant with this SKU, or a failure naming the ones there are. */
   variant(sku: string): TestCatalogVariant;
+  /**
+   * The Collection with this title, or a failure naming the ones there are.
+   *
+   * By title rather than by position, for the reason {@link TestCatalog.variant} is by SKU: what
+   * a test knows about a Collection it asked for is what it called it.
+   */
+  collection(title: string): TestCatalogCollection;
 };
 
 const DEFAULT_TITLE = "A poster";
@@ -154,7 +226,25 @@ const DEFAULT_AMOUNT = 1250;
  * });
  * await seedTestCatalog(kobai, { merchant });             // one already signed in
  * await seedTestCatalog(kobai, { status: "draft" });      // never published
+ * await seedTestCatalog(kobai, {                          // grouped, described, and chosen by
+ *   description: "Printed to order.",                     //   two options
+ *   collections: ["Wall art"],
+ *   variants: [
+ *     { sku: "POSTER-A2-MATTE", options: { Size: "A2", Finish: "Matte" } },
+ *     { sku: "POSTER-A3-MATTE", options: { Size: "A3", Finish: "Matte" } },
+ *   ],
+ * });
  * ```
+ *
+ * **A Product's options are read off its Variants and are never given separately**, which is
+ * what makes a Variant answering an option its Product does not declare unwritable rather than
+ * merely refused — see {@link TestVariantSpec.options}, which also lists the two arrangements
+ * this helper declines to send.
+ *
+ * **No `handle`, on purpose**, and no `media`. The handle is the sharper of the two: a create
+ * that names none proposes one from the title, so every catalog seeded here exercises that
+ * path, which is the one a Merchant meets first. A test whose subject is an address of its own
+ * asks for it with a `PATCH`, in the open.
  *
  * Everything goes through the public API rather than through the database, like
  * `signInTestMerchant` and `createTestApiKey` — so a test can never prove a capability the
@@ -164,8 +254,6 @@ export async function seedTestCatalog(
   kobai: Kobai,
   options?: TestCatalogOptions,
 ): Promise<TestCatalog> {
-  const merchant = options?.merchant ?? (await signInTestMerchant(kobai));
-  const json = { ...merchant.headers, "content-type": "application/json" };
   const specs = options?.variants ?? [{ prices: options?.prices }];
   if (specs.length === 0) {
     throw new Error(
@@ -175,19 +263,69 @@ export async function seedTestCatalog(
 
   const asked = specs.map((spec, index) => ({ ...spec, sku: spec.sku ?? skuFor(index) }));
 
+  // Everything the helper can judge for itself is judged here, before a Merchant is signed in
+  // and before a byte is sent — so an arrangement the API would refuse names the arrangement,
+  // rather than arriving as a 4xx against a request this helper made and the test never saw.
+  const declared = optionsDeclaredBy(asked);
+  refuseARepeatedCombination(asked, declared);
+  const grouping = options?.collections ?? [];
+  refuseATitleTwice(grouping);
+
+  const merchant = options?.merchant ?? (await signInTestMerchant(kobai));
+  const json = { ...merchant.headers, "content-type": "application/json" };
+
+  // Before the Product, because the create names them by identifier — one request each, which
+  // is what a Merchant makes too, and none at all for the test that groups nothing.
+  const collections: TestCatalogCollection[] = [];
+  for (const wanted of grouping) {
+    if (typeof wanted !== "string") {
+      collections.push(wanted);
+      continue;
+    }
+    const collection = (await expectStatus(
+      await kobai.request("/admin/collections", {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ title: wanted }),
+      }),
+      201,
+      `making the Collection ${wanted}`,
+    )) as TestCatalogCollection;
+    collections.push({ id: collection.id, title: collection.title });
+  }
+
   const created = (await expectStatus(
     await kobai.request("/admin/products", {
       method: "POST",
       headers: json,
       body: JSON.stringify({
         title: options?.title ?? DEFAULT_TITLE,
-        variants: asked.map(({ sku, fulfilmentStrategy }) => ({
+        // Each left out entirely unless a test asked, so what a create does when a Merchant
+        // names none of them is what every other test in this repository exercises.
+        ...(options?.description === undefined
+          ? {}
+          : { description: options.description }),
+        ...(declared.length === 0 ? {} : { options: declared.map((name) => ({ name })) }),
+        ...(collections.length === 0
+          ? {}
+          : { collections: collections.map(({ id }) => ({ id })) }),
+        variants: asked.map(({ sku, fulfilmentStrategy, options: answers }) => ({
           sku,
-          // Left out entirely unless a test asked, so what the route does with a Variant that
-          // says nothing is exercised by every other test in this repository.
+          // The same rule one level down: a Variant that says nothing about its Strategy is
+          // what every other test in this repository is exercising.
           ...(fulfilmentStrategy === undefined
             ? {}
             : { fulfilment: { strategy: fulfilmentStrategy } }),
+          // A Variant answers a *set* — the order a storefront offers the options in is the
+          // Product's, declared above — so these go over as they were written.
+          ...(declared.length === 0
+            ? {}
+            : {
+                options: Object.entries(answers ?? {}).map(([name, value]) => ({
+                  name,
+                  value,
+                })),
+              }),
         })),
       }),
     }),
@@ -255,6 +393,7 @@ export async function seedTestCatalog(
     productId: created.id,
     variantId: first.id,
     variants,
+    collections,
     variant: (sku) => {
       const found = variants.find((candidate) => candidate.sku === sku);
       if (found === undefined) {
@@ -264,10 +403,115 @@ export async function seedTestCatalog(
       }
       return found;
     },
+    collection: (title) => {
+      const found = collections.find((candidate) => candidate.title === title);
+      if (found === undefined) {
+        throw new Error(
+          `this catalog is in no Collection called ${title}: ${collections.length === 0 ? "it was seeded into none" : collections.map((candidate) => candidate.title).join(", ")}`,
+        );
+      }
+      return found;
+    },
   };
 }
+
+/** A Variant as the two judgements below read it: the SKU it will be named by, and its answers. */
+type AskedVariant = TestVariantSpec & { readonly sku: string };
 
 /** `POSTER-A2`, `POSTER-A3`, `POSTER-A4` — paper sizes, so a second Variant names itself. */
 function skuFor(index: number): string {
   return `POSTER-A${index + 2}`;
+}
+
+/**
+ * The options this Product declares: whichever ones its Variants answer, in the first one's
+ * order — or a failure naming the two Variants that do not agree about them.
+ *
+ * **This is the whole of why the declaration is not an option of its own.** A Variant that
+ * answers an option its Product never declared is refused `variant-options-mismatch` at 422, and
+ * a helper taking the two halves separately could be handed exactly that; reading one off the
+ * other leaves nowhere to write it down. What is left is the *other* direction of the same rule —
+ * a Variant leaving a declared option unanswered — and it can only arise between siblings, so it
+ * is answered here, naming both, rather than by the route naming this helper's request.
+ */
+function optionsDeclaredBy(asked: readonly AskedVariant[]): readonly string[] {
+  const [first, ...rest] = asked;
+  // The caller has already refused an empty list; this is the compiler's question.
+  if (first === undefined) return [];
+
+  const declared = Object.keys(first.options ?? {});
+  for (const spec of rest) {
+    const answered = Object.keys(spec.options ?? {});
+    if (
+      answered.length !== declared.length ||
+      answered.some((name) => !declared.includes(name))
+    ) {
+      throw new Error(
+        `every Variant of one Product answers exactly the options that Product declares, and seedTestCatalog declares whichever ones the Variants answer — so ${first.sku} answering ${spelled(declared)} and ${spec.sku} answering ${spelled(answered)} is a Product neither of them fits. POST /admin/products refuses it as variant-options-mismatch.`,
+      );
+    }
+  }
+
+  return declared;
+}
+
+/**
+ * A failure where two Variants answer the options the same way — refused since #277.
+ *
+ * A storefront maps a chosen combination to a SKU, which it can only do where the mapping is a
+ * function, so `POST /admin/products` refuses a body naming one combination twice — as `invalid`
+ * rather than as `variant-combination-taken`, which is what the two routes that write a Variant
+ * into a Product that already exists answer. A Product declaring no options has no combinations
+ * at all, and any number of Variants of it is fine — the same reading the route takes.
+ */
+function refuseARepeatedCombination(
+  asked: readonly AskedVariant[],
+  declared: readonly string[],
+): void {
+  if (declared.length === 0) return;
+
+  const skuByCombination = new Map<string, string>();
+  for (const spec of asked) {
+    const combination = JSON.stringify(declared.map((name) => spec.options?.[name]));
+    const already = skuByCombination.get(combination);
+    if (already !== undefined) {
+      throw new Error(
+        `${already} and ${spec.sku} answer this Product's options the same way — ${declared.map((name) => `${name} ${JSON.stringify(spec.options?.[name])}`).join(", ")} — and a storefront maps a combination a Shopper chose to one Variant, so two of them cannot answer it (#277). POST /admin/products refuses that body as invalid.`,
+      );
+    }
+    skuByCombination.set(combination, spec.sku);
+  }
+}
+
+/**
+ * Nothing, or a failure where one Collection is asked for twice.
+ *
+ * **Keyed by title, which catches two things rather than one.** The Collection a previous seed
+ * handed back, named twice, is `collections` carrying one identifier twice — refused 400, and so
+ * the arrangement this exists to make unsendable. Two *titles* the same is the wider half and the
+ * route takes it, titles being deliberately not unique: it would make a second Collection of the
+ * name and leave {@link TestCatalog.collection} able to answer either, which is a helper choosing
+ * for the test. Both are one refusal because both are "ask for it once".
+ */
+function refuseATitleTwice(wanted: readonly (string | TestCatalogCollection)[]): void {
+  const seen = new Set<string>();
+  for (const one of wanted) {
+    const title = typeof one === "string" ? one : one.title;
+    if (seen.has(title)) {
+      throw new Error(
+        `seedTestCatalog was asked for the Collection ${JSON.stringify(title)} twice, and a catalog's Collections are asked for by title. Name it once — a Collection a previous seed handed back groups this Product into that one rather than into a second of the name.`,
+      );
+    }
+    seen.add(title);
+  }
+}
+
+/** `"Size" and "Finish"`, or `no options at all` — what a refusal above names. */
+function spelled(names: readonly string[]): string {
+  if (names.length === 0) return "no options at all";
+  const quoted = names.map((name) => JSON.stringify(name));
+  const last = quoted.at(-1);
+  return quoted.length === 1
+    ? (last ?? "")
+    : `${quoted.slice(0, -1).join(", ")} and ${last}`;
 }
