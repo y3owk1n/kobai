@@ -18,6 +18,7 @@ import {
   refocusTheWindow,
   shows,
   startAdminSeam,
+  storedInTheBrowser,
   tabTo,
   watchForWrites,
 } from "./support/admin-browser.ts";
@@ -1805,7 +1806,10 @@ describe("the Deployment screen", () => {
  * `GET /admin/openapi.json` over the API and compared against what the screen drew, which is
  * ADR-0049's rule about asking the side the assertion is not reading.
  *
- * It sends nothing. Composing and sending a request is #269, and everything here is a browse.
+ * The browsing half is #268's and the sending half is #269's, and they share one `describe`
+ * because the second is composed out of what the first read: the operation, its parameters and
+ * its body all come off the document the screen fetched. The nested `describe` at the foot is
+ * where the sending lives, and it says why only a browser can ask what it asks.
  */
 describe("the Playground", () => {
   /** As much of an OpenAPI document as a case here has any business knowing about. */
@@ -2193,17 +2197,19 @@ describe("the Playground", () => {
     await auditAccessibility(page, "the Playground that could not read the description");
   });
 
-  it("sends nothing but the read of the description, however much is browsed", async () => {
+  it("asks kobai for nothing but the description, however much is browsed", async () => {
     const page = await seam.signedIn("/developer/playground");
     await shows(
       operationList(page).getByRole("link").first(),
       "the operations this deployment serves",
     );
 
-    // **The claim this ticket rests on, and only a browser can ask it.** The Playground is a
-    // real client of the real API with a real cookie jar, and #269 is what makes it send
-    // anything — so until then a screen that browsed the Cart operations and quietly started
-    // one would be indistinguishable from this one on every other seam in this repository.
+    // **The claim the browsing half rests on, and only a browser can ask it.** The Playground
+    // is a real client of the real API with a real cookie jar and, since #269, one that can
+    // reach anything — so a screen that browsed the Cart operations and quietly started one
+    // would be indistinguishable from this one on every other seam in this repository.
+    // Sending happens when the send control is pressed and at no other moment, which is what
+    // this case is now about: reading fifty-seven operations costs one read.
     const kobai: string[] = [];
     page.on("request", (request) => {
       const { pathname } = new URL(request.url());
@@ -2271,6 +2277,382 @@ describe("the Playground", () => {
       "the operation opened with the keyboard",
     );
     expect(chosenAt(page)).toBe(chosen);
+  });
+
+  /**
+   * Sending a real request, on a credential chosen on the screen (#269, ADR-0081).
+   *
+   * **Everything here is a promise nothing else in this repository can ask about**, and the
+   * reason is one line of ADR-0081: `credentials: "omit"`. The `kobai_session` cookie names no
+   * `Path`, so a browser files it under `/admin` and attaches it to every request to that
+   * subtree — *whatever page sent it, and whatever `Authorization` header the sender also set*
+   * (ADR-0032). A request-level test has no ambient cookie to suppress, so it cannot tell a
+   * screen that omits one from a screen that does not; a real Chromium with a real cookie jar
+   * is the only place the difference exists at all.
+   */
+  describe("sending a request", () => {
+    /** The card that composes and sends, named by its own heading. */
+    function sendPanel(page: Page) {
+      return page.getByRole("region", { name: "Send", exact: true });
+    }
+
+    /** One of the three credentials, which are links because each of them is an address. */
+    function credential(page: Page, name: string) {
+      return page
+        .getByRole("navigation", { name: "Choose a credential" })
+        .getByRole("link", { name, exact: true });
+    }
+
+    function sendButton(page: Page) {
+      return page.getByRole("button", { name: "Send the request", exact: true });
+    }
+
+    /** What kobai answered, once something has been sent. */
+    function answer(page: Page) {
+      return page.getByRole("region", { name: "The response", exact: true });
+    }
+
+    /** Waits until the address really has put that credential in force. */
+    async function inForce(page: Page, name: string): Promise<void> {
+      await expect
+        .poll(() => credential(page, name).getAttribute("aria-current"))
+        .toBe("page");
+    }
+
+    /**
+     * The write these cases send, and it is the ticket's own example of the stakes.
+     *
+     * **A deletion sent from here deletes**, so each case creates the Product it deletes rather
+     * than reaching for the shared catalog — and the one that is *refused* asks kobai afterwards
+     * whether the Product is still there, which is the difference between a request that was
+     * turned back and one that was never sent.
+     */
+    const A_WRITE = "DELETE /admin/products/{id}";
+
+    it("refuses a publishable key at an admin route, because the cookie is omitted", async () => {
+      // **The single most important assertion in this ticket, and it has been watched
+      // failing.** With the request seam's one `credentials` line pinned to `"same-origin"`,
+      // this comes back **200 and a list of Products** — the browser attaching the Merchant's
+      // session to a request that selected a publishable key — and a Developer learns that a
+      // `kobai_pk_…` opens the admin surface. It does not. Nothing smaller than a real cookie
+      // jar can tell those two screens apart, which is why this case is here and not at the
+      // HTTP seam.
+      const page = await seam.signedIn(addressOf("GET /admin/products"));
+      await shows(sendPanel(page), "the panel that sends the request");
+
+      // Said before anything is sent rather than discovered by deleting a Product.
+      await shows(
+        page.getByText("There is no sandbox. Every request here is real."),
+        "the statement that these requests are real",
+      );
+
+      await credential(page, "A publishable key").click();
+      await sendButton(page).click();
+
+      await shows(answer(page), "kobai's answer");
+      await shows(answer(page).getByText("401", { exact: true }), "the refused status");
+      await shows(
+        answer(page).getByText("session-missing", { exact: true }),
+        "the reason the admin gate turned it back",
+      );
+      // The refusal renders as a refusal and not as an error state, so the prose kobai wrote
+      // is on screen beside the word a storefront would branch on.
+      await shows(answer(page).getByText(/\d+ ms/), "how long the request took");
+
+      // Audited **with a response rendered**, which is a different document from the empty
+      // one: a status, a reason and a body kobai sent are three things nothing else on this
+      // screen draws.
+      await auditAccessibility(page, "the Playground with a response rendered");
+    });
+
+    it("answers a store request on a publishable key exactly as a storefront would", async () => {
+      const product = await seam.createProduct({
+        title: `A poster the Playground prices ${Date.now()}`,
+        amount: 1250,
+      });
+      // Published, because the store surface answers no draft (#252) — arrangement through the
+      // API like everything else this seam sets up.
+      await seam.api("PATCH", `/admin/products/${product.id}`, {
+        status: "published",
+      });
+
+      const page = await seam.signedIn(addressOf("GET /store/variants/{id}/price"));
+      await shows(sendPanel(page), "the panel that sends the request");
+      await credential(page, "A publishable key").click();
+      // Waited for rather than assumed: the credential is an address like everything else on
+      // this screen, so what is in force is what the links say is in force.
+      await inForce(page, "A publishable key");
+
+      // A path parameter, as a real form field built from the description.
+      await page
+        .getByRole("textbox", { name: "id", exact: true })
+        .fill(product.variantId);
+      await sendButton(page).click();
+      await shows(answer(page).getByText("200", { exact: true }), "the answered status");
+      // This Project replaces `select-price` with `everything-costs-one-cent`, so what a
+      // storefront receives here is one cent rather than the 1250 a Merchant entered — which is
+      // the whole reason the fidelity matters. Asserted on the body kobai sent rather than on a
+      // number this case computed.
+      await shows(
+        answer(page).getByText(/"amount": 1\b/),
+        "the price a storefront would be told",
+      );
+
+      // **The same key, at an operation it may not perform, and it is offered rather than
+      // hidden** (ADR-0055): nothing here predicts a refusal, so `POST /store/orders` is on the
+      // list like everything else and comes back `secret-key-required`.
+      await operationList(page)
+        .getByRole("link", { name: "POST /store/orders", exact: true })
+        .click();
+      await shows(
+        page.getByRole("heading", { name: "POST /store/orders", level: 2 }),
+        "the operation that places an Order",
+      );
+      // The credential travelled with the operation — it is who the Developer decided to be,
+      // rather than something belonging to the route they were reading.
+      await inForce(page, "A publishable key");
+
+      await sendButton(page).click();
+      await shows(answer(page).getByText("403", { exact: true }), "the refused status");
+      await shows(
+        answer(page).getByText("secret-key-required", { exact: true }),
+        "the reason a browser's key cannot place an Order",
+      );
+    });
+
+    it("sends on a secret key that is never written to the address or to storage", async () => {
+      const minted = await seam.api<{ key: string }>("POST", "/admin/api-keys", {
+        name: `the Playground's secret ${Date.now()}`,
+        kind: "secret",
+      });
+
+      const page = await seam.signedIn(addressOf("GET /store/products"));
+      await shows(sendPanel(page), "the panel that sends the request");
+      await credential(page, "A secret key").click();
+
+      const field = page.getByRole("textbox", { name: "Secret key", exact: true });
+      await field.fill(minted.key);
+      await sendButton(page).click();
+      await shows(answer(page).getByText("200", { exact: true }), "the answered status");
+
+      // **Never in the address**, which is where the rest of the composed request lives: a
+      // secret key there is a secret key in a browser history, a proxy log, and whatever the
+      // colleague it was sent to does next.
+      expect(page.url()).not.toContain(minted.key);
+      // **And never written down.** Asked of both stores whole rather than of a named key,
+      // because an assertion about one name passes against a screen that used another.
+      expect(await storedInTheBrowser(page)).not.toContain(minted.key);
+
+      // And a **non-`GET`** on it needs no arming either, which is the other half of the rule
+      // the case below asserts for a publishable key: the guard sits on the credential nobody
+      // had to type, and a key that was pasted is a deliberate act every time.
+      await operationList(page).getByRole("link", { name: A_WRITE, exact: true }).click();
+      await shows(
+        page.getByRole("heading", { name: A_WRITE, level: 2 }),
+        "a write, on the key that was pasted",
+      );
+      await hides(
+        page.getByRole("button", { name: "Arm the Playground" }),
+        "the arming control, on a secret key that was typed rather than inherited",
+      );
+      await expect.poll(() => sendButton(page).getAttribute("aria-disabled")).toBe(null);
+
+      // Gone on reload, which is the reload teaching the distinction rather than hiding it:
+      // the publishable key survives because it always did, and this one does not.
+      await page.reload();
+      await shows(sendPanel(page), "the panel, after the reload");
+      await expect.poll(() => field.inputValue()).toBe("");
+    });
+
+    it("will not send a write on the Session until it has been armed", async () => {
+      const doomed = await seam.createProduct({
+        title: `A Product the armed Playground deletes ${Date.now()}`,
+      });
+      const page = await seam.signedIn(addressOf(A_WRITE));
+      await shows(sendPanel(page), "the panel that sends the request");
+      await page.getByRole("textbox", { name: "id", exact: true }).fill(doomed.id);
+
+      // Unavailable rather than absent, and `aria-disabled` rather than `disabled`, so it can
+      // still be reached and told why (ADR-0063). Arming is an affordance and never a
+      // boundary — Core is what enforces — and the sentence at the control says so.
+      const armed = watchForWrites(page);
+      await expect
+        .poll(() => sendButton(page).getAttribute("aria-disabled"))
+        .toBe("true");
+      // Forced past Playwright's own refusal to click something `aria-disabled`, because a
+      // browser has no such refusal: `aria-disabled` does not prevent activation, which is
+      // exactly why the handler has to genuinely no-op.
+      await sendButton(page).click({ force: true });
+      expect(await armed.settled()).toEqual([]);
+
+      await auditAccessibility(page, "the Playground before it has been armed");
+
+      await page.getByRole("button", { name: "Arm the Playground" }).click();
+      await sendButton(page).click();
+      await shows(answer(page).getByText("204", { exact: true }), "the answered status");
+      // There is no sandbox, and this is what that means: the Product is gone.
+      await expect(seam.api("GET", `/admin/products/${doomed.id}`)).rejects.toThrowError(
+        /404/,
+      );
+
+      // **Arming lasts the session**, so a Developer who refreshed to re-read a description has
+      // not changed their mind. It survives the reload because it is not this screen's state.
+      await page.reload();
+      await shows(sendPanel(page), "the panel, after the reload");
+      await hides(
+        page.getByRole("button", { name: "Arm the Playground" }),
+        "the arming control, on a session that has already armed",
+      );
+      await expect.poll(() => sendButton(page).getAttribute("aria-disabled")).toBe(null);
+    });
+
+    it("needs no arming for a write on a credential the Developer chose", async () => {
+      // The guard sits on the ambient credential and on nothing else: a key is a deliberate act
+      // every time, and ceremony around the safe case is how it gets removed from the dangerous
+      // one. Nothing has armed this browser context — each case gets its own.
+      const spared = await seam.createProduct({
+        title: `A Product the Playground may not delete ${Date.now()}`,
+      });
+      const page = await seam.signedIn(addressOf(A_WRITE));
+      await shows(sendPanel(page), "the panel that sends the request");
+      await credential(page, "A publishable key").click();
+      await inForce(page, "A publishable key");
+      await page.getByRole("textbox", { name: "id", exact: true }).fill(spared.id);
+
+      await hides(
+        page.getByRole("button", { name: "Arm the Playground" }),
+        "the arming control, on a credential that was typed rather than inherited",
+      );
+      await sendButton(page).click();
+      // Refused because the cookie was suppressed, which is the point twice over — what this
+      // case is about is that it was *sent* with nothing asked of the Developer first, and the
+      // Product it names is still there because kobai turned the request back.
+      await shows(answer(page).getByText("401", { exact: true }), "the refused status");
+      await expect(
+        seam.api("GET", `/admin/products/${spared.id}`),
+      ).resolves.toBeDefined();
+    });
+
+    it("keeps the composed request — parameters and body — in the address", async () => {
+      const page = await seam.signedIn("/developer/playground");
+      await shows(
+        operationList(page).getByRole("link").first(),
+        "the operations this deployment serves",
+      );
+      await operationList(page)
+        .getByRole("link", { name: AN_OPERATION, exact: true })
+        .click();
+
+      const parameter = page.getByRole("textbox", { name: "id", exact: true });
+      const body = page.getByRole("textbox", { name: "Request body", exact: true });
+      // Seeded from the request schema rather than left empty, so a Developer starts from
+      // something shaped right — and nothing here checks what they do to it.
+      await expect.poll(() => body.inputValue()).toContain('"sku"');
+
+      // **Typed a character at a time rather than filled**, because these fields are held in
+      // the *address*: every keystroke is a navigation, and a field that lost the keyboard or
+      // reordered what was typed would still pass a `fill`, which sets the value in one go.
+      await parameter.click();
+      await page.keyboard.type("a-product-somebody-was-looking-at");
+
+      await body.fill('{ "sku": "TYPED-BY-HAND" }');
+
+      const composed = () => new URL(page.url()).searchParams;
+      await expect
+        .poll(() => composed().get("path.id"))
+        .toBe("a-product-somebody-was-looking-at");
+      await expect.poll(() => composed().get("body")).toBe('{ "sku": "TYPED-BY-HAND" }');
+
+      // A refresh lands back on the whole of it, which is what makes an address worth sending
+      // to a colleague as the call that reproduces a problem.
+      await page.reload();
+      await shows(sendPanel(page), "the panel, after the refresh");
+      await expect
+        .poll(() => parameter.inputValue())
+        .toBe("a-product-somebody-was-looking-at");
+      await expect.poll(() => body.inputValue()).toBe('{ "sku": "TYPED-BY-HAND" }');
+
+      // And the back button still leaves the operation rather than walking a history entry per
+      // keystroke: every edit above replaced the entry the operation was chosen on, so there is
+      // one entry to leave and not thirty.
+      await page.goBack();
+      await expect.poll(() => where(page)).toBe("/developer/playground");
+
+      // Forward returns to the whole composed request and not merely to the operation, which is
+      // the half a `replace` could have quietly lost.
+      await page.goForward();
+      await shows(sendPanel(page), "the panel, after the forward button returned to it");
+      await expect
+        .poll(() => parameter.inputValue())
+        .toBe("a-product-somebody-was-looking-at");
+      await expect.poll(() => body.inputValue()).toBe('{ "sku": "TYPED-BY-HAND" }');
+    });
+
+    it("lists the two session operations and offers neither a way to send", async () => {
+      // The one exception to offering everything, and the difference is exact: Core would not
+      // refuse these, it would **obey** them. They are still listed, because reading what
+      // `POST /admin/session` takes costs nobody their tab — what they get is no send control
+      // **and a sentence saying why**, since an operation that silently lacked a button would
+      // teach a Developer nothing at all (ADR-0081, as #268 amended it).
+      const page = await seam.signedIn(addressOf("DELETE /admin/session"));
+      await shows(sendPanel(page), "the panel that would have sent the request");
+
+      await shows(
+        page.getByText("This one is not offered to send."),
+        "the reason this operation has no send control",
+      );
+      await shows(
+        page.getByText("would sign you out of the tab you are standing in"),
+        "what sending it would do",
+      );
+      await hides(sendButton(page), "a send control on an operation that has none");
+
+      // Listed, and read in full: the refusals and the answers are still there to browse.
+      await shows(
+        operationList(page).getByRole("link", {
+          name: "DELETE /admin/session",
+          exact: true,
+        }),
+        "the operation, still on the list",
+      );
+      await auditAccessibility(page, "the Playground on an operation it will not send");
+
+      await operationList(page)
+        .getByRole("link", { name: "POST /admin/session", exact: true })
+        .click();
+      await shows(
+        page.getByText("would become whoever the body named"),
+        "what sending the other one would do",
+      );
+      await hides(
+        sendButton(page),
+        "a send control on the other operation that has none",
+      );
+    });
+
+    it("reaches the credential and the send control with the keyboard alone", async () => {
+      const page = await seam.signedIn(addressOf("GET /admin/products"));
+      await shows(sendPanel(page), "the panel that sends the request");
+
+      // None of this is visible to a scanner, and this screen's send control is the last thing
+      // on a long page — which is exactly where a keyboard-only Developer pays for a screen
+      // that was only ever clicked through.
+      await keyboardTo(
+        page,
+        "Tab",
+        credential(page, "A publishable key"),
+        "the publishable credential",
+        200,
+      );
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => credential(page, "A publishable key").getAttribute("aria-current"))
+        .toBe("page");
+
+      await keyboardTo(page, "Tab", sendButton(page), "the send control", 200);
+      await page.keyboard.press("Enter");
+      await shows(answer(page).getByText("401", { exact: true }), "the refused status");
+    });
   });
 });
 

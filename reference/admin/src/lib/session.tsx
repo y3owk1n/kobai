@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { useLocation } from "react-router";
+import { disarm } from "@/lib/arming";
 import { createAdminClient } from "@/lib/kobai";
 import { clearPreviewKey } from "@/lib/preview-key";
 
@@ -74,6 +75,9 @@ export function KobaiProvider({ children }: { readonly children: ReactNode }) {
   const signOut = useCallback(async () => {
     await client.DELETE("/admin/session");
     clearPreviewKey();
+    // Arming was granted on a Merchant's session (ADR-0081), and the next person to sign in at
+    // this browser is not necessarily that Merchant.
+    disarm();
     setExpired(false);
     // This is the line that signs the Admin out on screen: the gate reads this query, and
     // writing `null` over it is what flips it. Written rather than invalidated, so signing

@@ -89,6 +89,29 @@ export function createStorefrontClient(apiKey: string): KobaiClient {
 }
 
 /**
+ * A client for the Playground, carrying the credential a Developer chose and nothing else.
+ *
+ * **It is deliberately not {@link createAdminClient}, and that is the trap this function
+ * exists to remove.** The Playground's whole subject is sending a request on a credential
+ * that is *not* the Merchant's Session and watching kobai turn it back — so a publishable key
+ * at `/admin/products` comes back **401 `session-missing`**, which is exactly the answer the
+ * admin client's middleware reads as "this session is over". On the frame's client that
+ * refusal would blank the session query and drop a Developer onto the sign-in screen, in the
+ * middle of the one demonstration ADR-0081 was written for. A 401 here is an **answer to
+ * render**, not news about the tab.
+ *
+ * Given no key it carries nothing at all, which is how the Session credential travels: the
+ * browser attaches `kobai_session` by itself on the same origin (ADR-0032), and the request
+ * seam is what decides whether it may — see `lib/playground-request.ts`.
+ */
+export function createPlaygroundClient(apiKey?: string): KobaiClient {
+  return createKobaiClient({
+    baseUrl: window.location.origin,
+    ...(apiKey === undefined ? {} : { credential: { apiKey } }),
+  });
+}
+
+/**
  * The `reason` on a 401, if it is one of the admin gate's.
  *
  * The body is read from a clone, so the caller still receives an unread one — a middleware

@@ -23,6 +23,12 @@ import { describe, expect, it } from "vitest";
  * independent of the compiler and reads as the criterion itself — a path in the Admin that
  * is in no published description would be a route somebody added for the Admin alone, which
  * is the thing ADR-0010 forbids.
+ *
+ * **And exactly one file may build a path at runtime** (ADR-0081, #269). That check exists
+ * because the one above would otherwise be **silently vacuous over the Playground**: it reads
+ * *quoted* path literals, and the Playground sends at a path read out of a document the server
+ * served a moment ago, so a screen that could reach anything would be the one screen this scan
+ * had nothing to say about — a guardrail passing by not looking. See {@link RUNTIME_PATH_SEAM}.
  */
 const adminSource = new URL("../reference/admin/src/", import.meta.url);
 const description = new URL("../packages/core/openapi.json", import.meta.url);
@@ -51,6 +57,54 @@ const NETWORK_PRIMITIVES: readonly { readonly name: string; readonly found: RegE
 
 /** The one import in the Admin that is allowed to produce something network-capable. */
 const CLIENT_PACKAGE = "@kobai/client";
+
+/**
+ * The one file allowed to reach kobai at a path it did not write down.
+ *
+ * A playground driven by a runtime description is inherently not compile-time typed —
+ * `openapi-fetch` types every call against a **literal** path — so some cast is unavoidable,
+ * and where it lives is the decision. It lives here and **not** in `@kobai/client`, whose whole
+ * promise is that every call it types is a call that exists (ADR-0006): an untyped escape hatch
+ * on that package is a hole every consumer inherits to serve one screen of one Admin.
+ */
+const RUNTIME_PATH_SEAM = "lib/playground-request.ts";
+
+/**
+ * The methods of the generated client, which is how a request leaves this Admin at all.
+ *
+ * `request` is the odd one and the point of this list: the seven named after a verb take a
+ * **literal** path the compiler checks, and `request` is `openapi-fetch`'s general entry point —
+ * the one a runtime path can be pushed through. So it is matched here like the rest *and* named
+ * below as the thing only one file may reach for.
+ */
+const CLIENT_METHODS = [
+  "GET",
+  "PUT",
+  "POST",
+  "DELETE",
+  "PATCH",
+  "HEAD",
+  "OPTIONS",
+  "TRACE",
+  "request",
+];
+
+/**
+ * A call on the client, with whatever it was handed as a path.
+ *
+ * The capture is the first character after the bracket, because what this asks is one question:
+ * **is the path a quoted literal**. Anything else — a variable, a template string, a call — is
+ * a path composed at runtime, which is exactly what the scan above cannot read.
+ */
+const CLIENT_CALL = new RegExp(`\\.(${CLIENT_METHODS.join("|")})\\(\\s*(.?)`, "g");
+
+/**
+ * The general entry point, matched where something is calling it rather than spreading a value.
+ *
+ * A character class in front, so `{ ...request }` — an object spread of something a module of
+ * this Admin happens to have called `request` — is not read as a client call.
+ */
+const GENERAL_ENTRY_POINT = /[A-Za-z_$]\.request\b/;
 
 type SourceFile = { readonly path: string; readonly text: string };
 
@@ -110,6 +164,37 @@ describe("the Admin's only route to kobai", () => {
     // `@kobai/core` in particular: importing it would put Core's internals in a browser
     // bundle and let the Admin do something over a route nobody published.
     expect(kobaiImports.join("\n")).not.toContain("@kobai/core");
+  });
+
+  it("builds a path at runtime in one file, and nowhere else", async () => {
+    const files = await adminSourceFiles();
+
+    // The emptiness guard, and here it is the whole of what makes the ban worth anything: a
+    // scan that found no client calls would report that every one of them names a literal.
+    const calls = files.flatMap((file) => [...file.text.matchAll(CLIENT_CALL)]);
+    expect(calls.length).toBeGreaterThan(20);
+
+    // And the seam really is doing the thing it is exempted for. Without this the exemption
+    // could be for a file that had stopped constructing anything, and the day a *second* screen
+    // needed one nobody would be told which file was supposed to be the only one.
+    const seam = files.find((file) => file.path === RUNTIME_PATH_SEAM);
+    expect(
+      seam,
+      `${RUNTIME_PATH_SEAM} is the one file allowed to build a path`,
+    ).toBeDefined();
+    expect(GENERAL_ENTRY_POINT.test(seam?.text ?? "")).toBe(true);
+
+    const offenders = files.flatMap((file) => {
+      if (file.path === RUNTIME_PATH_SEAM) return [];
+      const composed = [...file.text.matchAll(CLIENT_CALL)]
+        .filter((match) => match[2] !== '"')
+        .map((match) => `${file.path} calls .${match[1]}() with a path it composed`);
+      return GENERAL_ENTRY_POINT.test(file.text)
+        ? [...composed, `${file.path} reaches for the client's untyped \`request\``]
+        : composed;
+    });
+
+    expect(offenders).toEqual([]);
   });
 
   it("names only paths the published description carries", async () => {

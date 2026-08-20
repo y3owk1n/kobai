@@ -16,13 +16,8 @@ import {
 import { createStorefrontClient } from "@/lib/kobai";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
-import {
-  clearPreviewKey,
-  PREVIEW_KEY_NAME,
-  readPreviewKey,
-  writePreviewKey,
-} from "@/lib/preview-key";
-import { isApiKeyRejected, messageOf, Refused } from "@/lib/refusal";
+import { clearPreviewKey, heldPreviewKey, PreviewRefused } from "@/lib/preview-key";
+import { isApiKeyRejected } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
 /**
@@ -237,25 +232,6 @@ export function StorefrontPrice({
   );
 }
 
-/**
- * Something kobai would not do — the store surface, the mint before it, or the admin route the
- * unpublished half asks instead.
- *
- * It extends {@link Refused} rather than `Error` so that the refusal **body travels**, which is
- * the whole reason that class carries one: a screen that has to narrow still can, and
- * `problemOf` reads it like any other refusal. What it adds is the sentence to show when kobai
- * sent no prose of its own — the mint and the price want different ones, and the revoked-key
- * case has no body at all, because from kobai's side that was an ordinary `api-key-revoked`
- * and the sentence a Merchant needs is about this browser rather than about that request.
- */
-class PreviewRefused extends Refused {
-  constructor(refusal: unknown, fallback: string) {
-    super(refusal);
-    this.name = "PreviewRefused";
-    this.message = messageOf(refusal, fallback);
-  }
-}
-
 /** What to show when no price came back — never `TypeError: Failed to fetch`. */
 function whyNoPrice(thrown: unknown): string {
   if (thrown instanceof PreviewRefused) return thrown.message;
@@ -296,7 +272,7 @@ async function askAsAStorefront(
   client: KobaiClient,
   variantId: string,
 ): Promise<ResolvedPrice> {
-  const held = readPreviewKey() ?? (await mintPreviewKey(client));
+  const held = await heldPreviewKey(client);
   const storefront = createStorefrontClient(held);
 
   const { data, error } = await storefront.GET("/store/variants/{id}/price", {
@@ -316,27 +292,4 @@ async function askAsAStorefront(
   }
 
   throw new PreviewRefused(error, "The store surface refused to resolve a price.");
-}
-
-/**
- * A publishable key for this browser session, minted through the public API.
- *
- * Publishable rather than secret on purpose: `kobai_pk_` is the kind that is safe in a
- * browser, and both kinds open the price route because a resolved price is public
- * information. A secret key here would be the exact mistake the two prefixes exist to make
- * visible.
- *
- * The value is shown once and never again, so it is kept for the rest of this browser
- * session and reused. Revoke it from the API keys screen, where every key this deployment
- * has issued is listed.
- */
-async function mintPreviewKey(client: KobaiClient): Promise<string> {
-  const { data, error } = await client.POST("/admin/api-keys", {
-    body: { name: PREVIEW_KEY_NAME, kind: "publishable" },
-  });
-  if (!data) {
-    throw new PreviewRefused(error, "A publishable key could not be minted.");
-  }
-  writePreviewKey(data.key);
-  return data.key;
 }

@@ -333,11 +333,52 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   not a reason to blank the screen that reads it. And **a schema tree stops on a component it
   has already expanded**, which is what terminates a recursive document — `DEEPEST` is a
   backstop behind that and not the mechanism.
-  **This screen browses and sends nothing**, so it lists the two session operations like every
-  other; ADR-0081 excludes them from being *offered to send*, which is #269's, and it should
-  decide there whether an operation with no send control is still worth reading.
   It composes **one** read, at the screen's root rather than inside a card, so it is not a
   second use of the Deployment screen's local `ReadCard` and nothing was extracted.
+- **The Playground sends real requests, and `lib/playground-request.ts` is the whole of how**
+  (#269, ADR-0081). Four things about it are decisions rather than implementation, and the
+  first is load-bearing enough that the screen is not worth having without it.
+  **`credentials: "omit"` on anything but the Session.** The session cookie is scoped to
+  `/admin` by the path of the *request* rather than of the page (ADR-0032), so a publishable
+  key sent at an admin route **succeeds via the cookie** unless the request suppresses it — and
+  the screen then teaches that a `kobai_pk_…` opens the admin surface, which is the only outcome
+  worse than not building it. The line is written as a value on **every** request —
+  `"same-origin"` or `"omit"` — so neither branch reads as an oversight, and
+  `tests/the-admin-in-a-browser.test.ts` holds it with a case that has been **watched failing**:
+  pinned to `"same-origin"`, that request comes back 200 and a list of Products. Nothing smaller
+  than a real cookie jar can see it.
+  **It builds its own client and must not use the frame's.** `createAdminClient`'s middleware
+  reads a 401 as "this session is over" and blanks the session query, and a publishable key at
+  an admin route answers exactly that — so on the frame's client the demonstration above would
+  drop a Developer onto the sign-in screen mid-request. `createPlaygroundClient` in
+  `lib/kobai.ts` is the one without it: here a 401 is **an answer to render**, not news about
+  the tab.
+  **The cast lives in that one file**, because `openapi-fetch` types every call against a
+  literal path and a description-driven sender has none —
+  `tests/admin-uses-only-the-public-api.test.ts` names the file and fails on any other, and on
+  any call handed a path it composed. Both halves have been watched failing. Without it that
+  scan, which reads *quoted* path literals, would be **silently vacuous over the one screen that
+  can reach anything**.
+  **Arming is an affordance and never a boundary**, and it guards exactly one case: a non-`GET`
+  on the *Session*, the credential nobody had to type. `lib/arming.ts` holds it in
+  `sessionStorage` so it lasts the session rather than the render, and `lib/session.tsx` forgets
+  it on sign-out beside the preview key. A pasted or publishable credential needs none —
+  ceremony on the safe case is how a guard gets taken off the dangerous one.
+  Three more things a reader cannot infer. **The composed request is in the address** —
+  `?operation=`, `?credential=`, `path.…`/`query.…`/`header.…` and `?body=` — written with
+  `replace` rather than `push`, for the search box's reason: a history entry per keystroke sits
+  between a Developer and the back button. **The pasted secret key never is**, and is never in
+  browser storage either: it lives in the screen's own state and is gone on reload, because the
+  rule ADR-0055 protects is that the Admin never *mints* and never *stores* a secret key. And
+  **the publishable key is the one the Admin already holds** — `heldPreviewKey` in
+  `lib/preview-key.ts`, extracted there on the second caller, so a Merchant's API keys list
+  keeps one line meaning "the Admin itself".
+  **Nothing is validated in the browser.** Parameters are fields built from the description and
+  the body is a box seeded from the request schema (`seedBody`, which seeds the **required**
+  fields and invents nothing); an invalid one is refused by Core and that refusal is the
+  documentation. **The two session operations are listed and get no send control, plus a
+  sentence saying why** — ADR-0081 carries the answer in full, and the short version is that an
+  operation which silently lacked a button would teach nothing.
 - **A permission check in the Admin is an affordance and never a boundary** (#178, ADR-0063).
   `requirePermission` in Core is the enforcement; `lib/permissions.ts` is where that is written
   down at length, because the next person to read one of these checks will assume it is doing
