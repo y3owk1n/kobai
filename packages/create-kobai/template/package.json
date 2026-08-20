@@ -30,8 +30,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
-    "drizzle-kit": "^0.31.5",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@9.3.0"
+  "packageManager": "pnpm@11.22.0"
 }

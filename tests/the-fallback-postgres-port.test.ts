@@ -222,7 +222,7 @@ describe("reading the two fallbacks", () => {
   const compose = `
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     ports:
       - "\${POSTGRES_PORT:-55432}:5432"
   app:

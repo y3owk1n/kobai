@@ -2,3 +2,80 @@ packages:
   - packages/*
   - reference
   - reference/admin
+
+# Every setting below used to live under a `pnpm` key in the root `package.json`. pnpm 11
+# stopped reading that key — it warns and ignores it rather than failing, so an override
+# left behind there goes quiet instead of red. This file is its new home (https://pnpm.io/settings).
+#
+# It is also a better one, and that is worth saying rather than treating as incidental:
+# AGENTS.md § Dependency updates requires every override to record what it is for and the
+# day it can go, and a `package.json` cannot carry a comment — the `"// …"` keys that used
+# to do it were removed in 52f42fb because an editor flags every one of them. YAML takes
+# real comments, so the reasoning sits beside the thing it explains.
+
+# `minimumReleaseAge` is deliberately NOT set here, and the omission is a decision rather
+# than an oversight. pnpm 11 defaults it to 48 hours: it verifies every lockfile entry
+# against that window and **fails** the install on a violation, which catches the case
+# Dependabot's own soak cannot see — a *transitive* dependency, republished hours ago,
+# arriving under a parent nobody bumped. That is the same blind spot `overrides` below
+# exists for (#69), so the default is doing work worth keeping.
+#
+# Pinning it to three days to match `cooldown` in `.github/dependabot.yml` was tried and
+# reverted. It reaches every transitive entry, so it does not hold one number steady — it
+# drags the whole tree back to whatever is three days old, and #310's vite was pushed off
+# its current rolldown bindings by exactly that. The invariant that actually matters is
+# weaker and costs nothing: **Dependabot's soak must never be shorter than pnpm's**, or
+# Dependabot proposes bumps pnpm then refuses to install. Three days there covers 48 hours
+# here with room to spare, and that file says so. Revisit if pnpm's default ever passes it.
+
+# pnpm 11 runs no dependency's install scripts unless it is named here, and **that default is
+# the feature** — an install script is arbitrary code from the registry running on a
+# contributor's machine and in CI, which is the shape most npm supply-chain attacks take. So
+# this list is an allowlist of packages kobai has decided to let run code, not a box to tick
+# until the error goes away. `pnpm install` fails with ERR_PNPM_IGNORED_BUILDS naming any
+# package that wanted a script and is absent here, so a new one arrives as a decision.
+#
+# esbuild is the only one, and it is unavoidable rather than tolerated: the published package
+# is a stub whose `postinstall` selects the platform binary (`@esbuild/darwin-arm64` and the
+# rest), so without it there is no compiler and `vite build` cannot run at all. Two copies
+# want it — 0.28.x under vite/rolldown, and 0.25.x under drizzle-kit, see `overrides` below —
+# and the entry is by name, so it covers both.
+allowBuilds:
+  esbuild: true
+
+overrides:
+  # An advisory against a *transitive* dependency that no release of its parent moves off
+  # produces no Dependabot PR at all, so it sits in the alert list rather than arriving as
+  # work (#69). Each entry below is scoped to its parent (`parent>child`) so it moves the
+  # one vulnerable copy and a future advisory in the same package still surfaces on its own.
+  #
+  # Delete an entry the moment its parent ships a release that no longer needs it. Both
+  # were rechecked on 2026-08-21 and both parents still pull the dependency named.
+
+  # `openapi-typescript` 6 is pinned exactly by `@kobai/client` because version 7 needs the
+  # TypeScript compiler API that TypeScript 7 does not ship — see AGENTS.md § "There is no
+  # TypeScript compiler API". It still depends on undici, so the floor is held here.
+  #
+  # This rests on a reachability argument, and such an argument expires when the code
+  # changes: undici is reachable only as `openapi-typescript`'s fallback for a
+  # `globalThis.fetch` that ADR-0031's Node 22 always provides, and kobai has no direct
+  # undici use and no WebSocket use anywhere in `packages/*/src` or `reference/src`.
+  # **Recheck this the day kobai opens a WebSocket or depends on undici directly.**
+  #
+  # Held at 7 rather than raised to 8 deliberately: `shadcn` resolves undici 7 for itself,
+  # and this override is scoped to one parent, so crossing the major here would add a
+  # second copy of undici to buy nothing. 7.29.0 is the newest 7.x.
+  openapi-typescript>undici: ^7.29.0
+
+  # `drizzle-kit` still pulls the deprecated `@esbuild-kit/esm-loader`, which pulls
+  # `@esbuild-kit/core-utils`, which pulls an esbuild below the dev-server advisory floor.
+  #
+  # ^0.25.0 is the value on purpose, and raising it is a mistake that looks like an
+  # improvement: drizzle-kit's *own* direct esbuild dependency is what holds 0.25.x, so a
+  # higher range here does not deduplicate anything — it splits the deprecated shim onto a
+  # different esbuild major from the one its own parent runs, and nothing in the gate
+  # exercises `drizzle-kit generate` to catch it. This range lifts core-utils to exactly
+  # what drizzle-kit already resolves.
+  #
+  # Goes the day drizzle-kit drops `@esbuild-kit/*`, which is deprecated in favour of tsx.
+  "@esbuild-kit/core-utils>esbuild": ^0.25.0

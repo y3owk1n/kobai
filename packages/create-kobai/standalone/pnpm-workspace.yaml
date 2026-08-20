@@ -11,3 +11,14 @@
 packages:
   - .
   - admin
+
+# pnpm 11 runs no dependency's install script unless it is named here, which is a good
+# default — an install script is arbitrary code from the registry running on your machine.
+# esbuild is the one exception this Project needs, and it is not optional: the published
+# package is a stub whose `postinstall` fetches the platform binary, so without this entry
+# `pnpm install` fails with ERR_PNPM_IGNORED_BUILDS and the Admin cannot build at all.
+#
+# It is yours to extend. A dependency you add that wants to run a script will fail the
+# install by name until you decide about it, which is the point.
+allowBuilds:
+  esbuild: true

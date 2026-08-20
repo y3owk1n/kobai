@@ -138,12 +138,23 @@ secrets:
   });
 }, CONTAINER_TIMEOUT);
 
+// `CONTAINER_TIMEOUT` here too, and it is the one hook in this file that was left on
+// vitest's 30-second default. Tearing down is not the cheap half: this is the only teardown
+// in the suite that runs a `docker compose down` — stopping two containers, removing them,
+// their network and their volume — *and* deletes the application image afterwards, and it
+// does it at the end of a run that has had every other container in the gate through the
+// same daemon. Thirty seconds is a budget for none of that.
+//
+// The failure it produces is also worth knowing, because it does not look like a slow
+// teardown: every test in the file passes and the *file* fails, so the report says a suite
+// failed while naming no assertion. Worse, the hook is abandoned mid-way, which leaves the
+// containers and the image behind for the next run to trip over.
 afterAll(async () => {
   await compose?.down();
   if (compose) await imageAt(compose.appImage).remove();
   await registry?.close();
   await rm(workspace, { recursive: true, force: true });
-});
+}, CONTAINER_TIMEOUT);
 
 describe("a generated Project, brought up by its own compose file", () => {
   it(

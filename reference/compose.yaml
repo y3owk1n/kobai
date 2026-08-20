@@ -5,7 +5,7 @@
 # Core applies its own migrations at boot (see `src/server.ts`).
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-kobai}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobai}
@@ -15,7 +15,18 @@ services:
       # move. Change it in `.env` if this one is taken too.
       - "${POSTGRES_PORT:-55432}:5432"
     volumes:
-      - kobai-db:/var/lib/postgresql/data
+      # **`/var/lib/postgresql`, not `/var/lib/postgresql/data`** — and the difference is not
+      # cosmetic. Postgres 18's image moved `PGDATA` to a major-version-specific
+      # `/var/lib/postgresql/18/docker` and declares its `VOLUME` at the parent
+      # (docker-library/postgres#1259), so a mount on the old path holds nothing: Docker
+      # would satisfy the image's declared volume with an **anonymous** one, the database
+      # would live there, and a named volume that looks like the database would be empty.
+      # That failure is silent and it is data loss, which is the reason this line is not
+      # simply the one that worked under 17.
+      #
+      # Mounting the parent is also what makes `pg_upgrade --link` possible later, since
+      # both major directories then sit inside one mount rather than across a boundary.
+      - kobai-db:/var/lib/postgresql
     healthcheck:
       # Over TCP, and that `-h` is the whole of #80. `pg_isready` with no host dials the
       # **unix socket**, and this image initialises a fresh volume by starting a temporary

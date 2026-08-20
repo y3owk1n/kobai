@@ -43,7 +43,7 @@ export const STANDALONE_FILES: readonly { file: string; why: string }[] = [
   },
   {
     file: "pnpm-workspace.yaml",
-    why: "A generated Project is a two-package workspace: itself and its vendored Admin. The reference Project needs no such file because the repository root's already lists it and `reference/admin` alike.",
+    why: "A generated Project is a two-package workspace: itself and its vendored Admin. The reference Project needs no such file because the repository root's already lists it and `reference/admin` alike. It carries a second thing that is easy to mistake for boilerplate and delete: `allowBuilds`, pnpm 11's allowlist of dependencies permitted to run install scripts. Without the `esbuild` entry a Developer's very first `pnpm install` fails with ERR_PNPM_IGNORED_BUILDS, because the published esbuild is a stub whose `postinstall` fetches the platform binary the Admin's build needs.",
   },
   {
     file: "gitignore",
