@@ -123,6 +123,22 @@ export type Product = components["schemas"]["Product"];
 export type ProductDetail = components["schemas"]["ProductDetail"];
 export type Variant = components["schemas"]["Variant"];
 /**
+ * The two halves of a picker, and the reason there is no route that resolves a combination.
+ *
+ * A {@link ProductDetail} carries its `options` **in the order the Merchant put them in**, and
+ * each {@link Variant} carries its value for each — so a storefront maps a chosen combination to
+ * a SKU by zipping the two, and a combination no Variant answers is simply absent rather than an
+ * error to interpret. Both are keyed by the option's **name**, which is unique within a Product;
+ * the identifier on a `ProductOption` exists so that `PATCH /admin/products/{id}` can rename one
+ * without losing its values, which is why {@link StoreProductOption} does not carry it.
+ */
+export type ProductOption = components["schemas"]["ProductOption"];
+export type VariantOptionValue = components["schemas"]["VariantOptionValue"];
+/** One option a create declares — a name, and its place in the list it arrived in. */
+export type ProductOptionDeclaration = components["schemas"]["ProductOptionDeclaration"];
+/** One entry of a correction: `id` present is identity, `id` absent is a new option. */
+export type ProductOptionCorrection = components["schemas"]["ProductOptionCorrection"];
+/**
  * Whether a Shopper may see a Product, and the one thing a Merchant's Product list filters by.
  *
  * A **closed** set of three that partition the catalog: a `draft` is being prepared, a
@@ -146,6 +162,8 @@ export type ProductStatus = components["schemas"]["ProductStatus"];
 export type StoreProduct = components["schemas"]["StoreProduct"];
 export type StoreProductDetail = components["schemas"]["StoreProductDetail"];
 export type StoreVariant = components["schemas"]["StoreVariant"];
+export type StoreProductOption = components["schemas"]["StoreProductOption"];
+export type StoreVariantOptionValue = components["schemas"]["StoreVariantOptionValue"];
 export type FulfilmentStrategySummary =
   components["schemas"]["FulfilmentStrategySummary"];
 export type Price = components["schemas"]["Price"];

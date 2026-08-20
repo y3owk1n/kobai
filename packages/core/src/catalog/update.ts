@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
+import type { Database, Transaction } from "../db/client.ts";
 import { violatesUniqueIndex } from "../db/errors.ts";
 import { product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -9,8 +9,19 @@ import {
 } from "../fulfilment/strategy.ts";
 import { changesFrom, changesNothing, type Field, openData, text } from "../patch.ts";
 import { handleField, handleTaken } from "./handle.ts";
-import { type ProductDetail, readVariants, type Variant } from "./read.ts";
-import { productStatusField } from "./status.ts";
+import { lockProduct, lockVariant } from "./lock.ts";
+import {
+  correctProductOptions,
+  lockProductOptions,
+  type ProductOption,
+  parseOptionCorrections,
+  parseOptionValues,
+  readProductOptions,
+  replaceVariantOptionValues,
+  variantOptionsMismatch,
+} from "./options.ts";
+import { type Product, type ProductDetail, readVariants, type Variant } from "./read.ts";
+import { type ProductStatus, productStatusField } from "./status.ts";
 import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
 
 /**
@@ -46,6 +57,7 @@ export type UpdateProductInput = {
   readonly description?: unknown;
   readonly handle?: unknown;
   readonly status?: unknown;
+  readonly options?: unknown;
   readonly metadata?: unknown;
 };
 
@@ -74,7 +86,23 @@ export type ProductUpdate =
 export type UpdateVariantInput = {
   readonly sku?: unknown;
   readonly fulfilment?: unknown;
+  readonly options?: unknown;
   readonly metadata?: unknown;
+};
+
+/**
+ * The columns of a Product a body may correct, of which it names some.
+ *
+ * Named because two things now read it: {@link changesFrom} fills it, and
+ * {@link correctProductColumns} takes what it filled. `options` is deliberately not in it — the
+ * options are rows rather than a column, so there is nothing here for a `set` to be given.
+ */
+type ProductColumns = {
+  title: string;
+  description: string | null;
+  handle: string;
+  status: ProductStatus;
+  metadata: Record<string, unknown>;
 };
 
 /**
@@ -100,7 +128,8 @@ export type VariantUpdate =
         | "invalid"
         | "variant-not-found"
         | "sku-taken"
-        | "unknown-fulfilment-strategy";
+        | "unknown-fulfilment-strategy"
+        | "variant-options-mismatch";
       readonly detail: string;
     };
 
@@ -125,23 +154,36 @@ const clearableDescription: Field<string | null> = (value) =>
 /**
  * Changes what this Product says about itself, and leaves its Variants alone.
  *
- * **One statement decides everything, so this takes no lock either** — `updateVariant`'s
- * argument one table up: existence is what the `update` answers, uniqueness is what the
- * constraint on `handle` answers, and nothing here is asked of a second row. The transaction is
- * for the read back, so what this answers is the Product this write left rather than whatever
- * the next request leaves between the two statements.
+ * **One statement decides the columns, and the options are the one thing here that needs a
+ * lock.** Existence is what the `update` answers and uniqueness is what the constraint on
+ * `handle` answers, so a body naming only columns is as lock-free as it ever was. A body naming
+ * `options` is not: it reads the list this Product has and writes the list it should have, and
+ * two of those landing at once would each write over what the other had read — so it holds the
+ * Product `for share` first, which is `lock.ts`'s head of chain and ADR-0018's other answer.
+ * The transaction is for the read back either way, so what this answers is the Product this
+ * write left rather than whatever the next request leaves between two statements.
  *
- * **Its Variants are not this route's business**, in either direction: it neither creates one
- * (`POST /admin/products/{id}/variants` does) nor touches the ones that are there. A `variants`
- * key in the body is stripped by the schema and so arrives as a body naming nothing, which is
- * exactly what the refusal below is for.
+ * **`options` is the whole list, in the order it should end up in.** An entry carrying an `id`
+ * is the option that already has it — renamed, moved, or both, and its Variants' answers stay
+ * attached to it, which is the reason identity is on the wire at all. One without an `id` is a
+ * new option, and one this Product has that the list does not name is removed with every
+ * Variant's answer to it. **Adding an option leaves the Variants under it unanswered**, and
+ * that is deliberate: judging them here would refuse the correction for every Variant at once
+ * with the only remedy being to rebuild the Product, and a refusal whose advice names no
+ * reachable control is a finding rather than something to word around. Correcting each Variant
+ * is what ends it, and `catalog/options.ts` is where the whole argument lives.
+ *
+ * **Its Variants are not this route's business** otherwise, in either direction: it neither
+ * creates one (`POST /admin/products/{id}/variants` does) nor touches the ones that are there.
+ * A `variants` key in the body is stripped by the schema and so arrives as a body naming
+ * nothing, which is exactly what the refusal below is for.
  */
 export async function updateProduct(
   db: Database,
   productId: string,
   input: UpdateProductInput,
 ): Promise<ProductUpdate> {
-  const usable = changesFrom(
+  const usable = changesFrom<ProductColumns>(
     {
       title: input.title,
       description: input.description,
@@ -166,44 +208,64 @@ export async function updateProduct(
       status: productStatusField,
       metadata: openData("metadata"),
     },
-    // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
-    // in one place since #185. It does a second job here — the schema strips a field this route
-    // does not carry, so a body naming `variants` is this body, and the refusal is where a
-    // Merchant who tried to add one is told which route adds one.
-    changesNothing(
-      "a `title`, a `description`, a `handle`, a `status`, a `metadata`, or any of them",
-      "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
-    ),
+    // No `whenNothing`, because `options` is not a column and so is not one of these — a body
+    // naming only that one has named something, and the emptiness question is asked below once
+    // both halves have been read. `updateStore` waits for the same reason from the other side.
   );
   if (!usable.ok) return usable;
   const changes = usable.changes;
+
+  // Read here rather than through `changesFrom`, because these are rows rather than a column:
+  // what comes back is not a value to `set` but a list to reconcile against the one stored.
+  const options =
+    input.options === undefined ? undefined : parseOptionCorrections(input.options);
+  if (options !== undefined && !options.ok) return options;
+
+  // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
+  // in one place since #185. It does a second job here — the schema strips a field this route
+  // does not carry, so a body naming `variants` is this body, and the refusal is where a
+  // Merchant who tried to add one is told which route adds one.
+  if (Object.keys(changes).length === 0 && options === undefined) {
+    return changesNothing(
+      "a `title`, a `description`, a `handle`, a `status`, an `options`, a `metadata`, or any of them",
+      "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
+    );
+  }
 
   if (!isUuid(productId)) return noSuchProduct(productId);
 
   try {
     return await db.transaction(async (tx) => {
-      const [updated] = await tx
-        .update(product)
-        .set(changes)
-        .where(eq(product.id, productId))
-        .returning({
-          id: product.id,
-          title: product.title,
-          description: product.description,
-          handle: product.handle,
-          status: product.status,
-          metadata: product.metadata,
-        });
-      if (!updated) return noSuchProduct(productId);
+      if (options !== undefined) {
+        // **Two locks, and they do two different jobs.** The advisory one serialises corrections
+        // of *this Product's* option list against each other, because the condition is about
+        // other rows and a `select` does not lock those — a row lock cannot stand in for it, and
+        // `lockProductOptions` is where that is argued at length. The row lock underneath is
+        // existence and nothing else: the options written below reference this Product, and one
+        // deleted in between would be a foreign-key violation and a 500 on a route that declares
+        // a 404. Taken in this order, before either read.
+        await lockProductOptions(tx, productId);
+        if (!(await lockProduct(tx, productId))) return noSuchProduct(productId);
 
-      // The Variants are read back rather than left out, so this answers what
+        const corrected = await correctProductOptions(tx, productId, options.value);
+        // Every judgement it makes comes before every write it makes, so a refusal leaves the
+        // Product exactly as it was and needs no throw to unwind anything.
+        if (!corrected.ok) return corrected;
+      }
+
+      const row = await correctProductColumns(tx, productId, changes);
+      if (!row) return noSuchProduct(productId);
+
+      // The options and the Variants are read back rather than left out, so this answers what
       // `GET /admin/products/{id}` answers — one shape for a Product opened, whether it was just
-      // corrected or merely looked at. `readProduct` is not called because the row is already
-      // here, and asking for it again inside the same transaction would be a second read of what
-      // this statement just returned.
+      // corrected or merely looked at.
       return {
         ok: true,
-        product: { ...updated, variants: await readVariants(tx, productId) },
+        product: {
+          ...row,
+          options: await readProductOptions(tx, productId),
+          variants: await readVariants(tx, productId),
+        },
       } as const;
     });
   } catch (cause) {
@@ -229,6 +291,49 @@ export async function updateProduct(
   }
 }
 
+/**
+ * The Product's own columns, corrected — or read exactly as they stand where none was named.
+ *
+ * **Two statements for one job, because a body may now correct a Product without naming a single
+ * column of it**: `options` is rows, so `{ options: [...] }` leaves `changes` empty, and
+ * `set({})` is not a statement Drizzle will build. Reading instead is what makes such a request
+ * answer with the whole Product rather than with less for having asked for less — and it is a
+ * read inside the transaction that has already held the row, so it is the Product this write
+ * left rather than whatever the next request leaves between two statements.
+ *
+ * `undefined` is "no such Product", from whichever of the two asked.
+ */
+async function correctProductColumns(
+  tx: Transaction,
+  productId: string,
+  changes: Partial<ProductColumns>,
+): Promise<Product | undefined> {
+  const columns = {
+    id: product.id,
+    title: product.title,
+    description: product.description,
+    handle: product.handle,
+    status: product.status,
+    metadata: product.metadata,
+  } as const;
+
+  if (Object.keys(changes).length === 0) {
+    const [found] = await tx
+      .select(columns)
+      .from(product)
+      .where(eq(product.id, productId))
+      .limit(1);
+    return found;
+  }
+
+  const [updated] = await tx
+    .update(product)
+    .set(changes)
+    .where(eq(product.id, productId))
+    .returning(columns);
+  return updated;
+}
+
 /** The unique constraint that makes a handle name one Product — see `db/schema.ts`. */
 const ONE_PRODUCT_PER_HANDLE = "core_product_handle_unique";
 
@@ -243,24 +348,25 @@ function noSuchProduct(productId: string): ProductUpdate {
 /**
  * Changes what this Variant says about itself, and leaves everything that refers to it alone.
  *
- * **One statement decides everything, and so this takes no lock of its own** (ADR-0018).
- * Existence is answered by the `update` itself — nothing came back, so there is no such
- * Variant — and a SKU another Variant holds is answered by the unique index, which is the same
- * check `createProduct` reads off an `onConflictDoNothing`. There is nothing here for a
- * `select` to have found out first, so `catalog/lock.ts` is deliberately not called: it exists
- * for a write that *references* a Variant and must still be right that it is there, and this
- * write is the row itself.
+ * **A body naming only columns still decides everything in one statement, and takes no lock of
+ * its own** (ADR-0018). Existence is answered by the `update` itself — nothing came back, so
+ * there is no such Variant — and a SKU another Variant holds is answered by the unique index,
+ * which is the same check `createProduct` reads off an `onConflictDoNothing`. There is nothing
+ * there for a `select` to have found out first.
  *
- * The transaction around it is for the **read back**, not for the decision: it makes the
- * Variant this answers with the row this write left, rather than whatever the next request
- * leaves between the two statements.
+ * **A body naming `options` is the field that needed a second row, which `lock.ts` said would
+ * have to settle the ordering before it was written.** The values are judged against the
+ * options this Variant's *Product* declares and are then written as rows pointing at them, so
+ * two statements have to be one operation: a Product's options corrected in between would make
+ * the second a foreign-key violation and a 500 on a route that declares a 404. It takes
+ * `core_product` and then `core_variant`, in that order and both `for share`, which is the
+ * chain at the head of `lock.ts` and the order every other site in this repository takes them
+ * in. The Product is found by a plain read of `product_id` first, which is safe because no
+ * route moves a Variant between Products — and both locks then answer whether the two rows are
+ * still there.
  *
- * That is also what keeps this out of the `core_cart` hazard `lock.ts` names. A cycle needs a
- * site that holds one lock and then asks for another; this one takes the single row lock its
- * `update` implies, reads through plain `select`s that block on nothing, and commits — so it
- * can be waited *for* and can never be half of a deadlock. **A field that ever needs a second
- * row is a field that has to settle that ordering first**, which is the concrete reason the
- * Inventory row is left alone rather than a squeamishness about deleting it.
+ * The transaction is for the **read back** either way: it makes the Variant this answers with
+ * the row this write left, rather than whatever the next request leaves between two statements.
  */
 export async function updateVariant(
   db: Database,
@@ -298,16 +404,28 @@ export async function updateVariant(
       },
       metadata: openData("metadata"),
     },
-    // Here the no-op refusal is also the shape a body naming a field this route does not carry
-    // collapses to, a Price above all, because the schema strips it before the handler sees it.
-    // So the refusal says both halves: what may be changed, and where a Price is set instead.
-    changesNothing(
-      "at least one of `sku`, `fulfilment` or `metadata`",
-      "A Price is not changed here: set another with `POST /admin/variants/{id}/prices`, which supersedes it, and remove the old one with `DELETE /admin/variants/{id}/prices/{priceId}`.",
-    ),
+    // No `whenNothing`, for `updateProduct`'s reason: `options` is rows rather than a column,
+    // so a body naming only that one has named something and the emptiness question waits.
   );
   if (!usable.ok) return usable;
   const changes = usable.changes;
+
+  // Creation's own reading of the same field, so a Variant's values are judged the same way
+  // whichever route wrote them. *Which* options they must be is asked below, against the
+  // Product, because that is the half this body does not carry.
+  const values =
+    input.options === undefined ? undefined : parseOptionValues(input.options, "");
+  if (values !== undefined && !values.ok) return values;
+
+  // Here the no-op refusal is also the shape a body naming a field this route does not carry
+  // collapses to, a Price above all, because the schema strips it before the handler sees it.
+  // So the refusal says both halves: what may be changed, and where a Price is set instead.
+  if (Object.keys(changes).length === 0 && values === undefined) {
+    return changesNothing(
+      "at least one of `sku`, `fulfilment`, `options` or `metadata`",
+      "A Price is not changed here: set another with `POST /admin/variants/{id}/prices`, which supersedes it, and remove the old one with `DELETE /admin/variants/{id}/prices/{priceId}`.",
+    );
+  }
 
   // Asked after the body and before the database, exactly as `setPrice` asks it: a request
   // that is wrong in itself is wrong whatever the Store holds, so nothing is looked up to
@@ -316,12 +434,50 @@ export async function updateVariant(
 
   try {
     return await db.transaction(async (tx) => {
-      const [updated] = await tx
-        .update(variant)
-        .set(changes)
-        .where(eq(variant.id, variantId))
-        .returning({ productId: variant.productId });
-      if (!updated) return noSuchVariant(variantId);
+      let productId: string | undefined;
+      let declared: readonly ProductOption[] | undefined;
+
+      if (values !== undefined) {
+        // `product_id` is read plainly and then both rows are held, in `lock.ts`'s order. No
+        // route moves a Variant between Products, so the value cannot go stale; what the locks
+        // answer is whether the two rows are still there at all.
+        const [found] = await tx
+          .select({ productId: variant.productId })
+          .from(variant)
+          .where(eq(variant.id, variantId))
+          .limit(1);
+        if (!found) return noSuchVariant(variantId);
+        if (!(await lockProduct(tx, found.productId))) return noSuchVariant(variantId);
+        if (!(await lockVariant(tx, variantId))) return noSuchVariant(variantId);
+
+        productId = found.productId;
+        declared = await readProductOptions(tx, productId);
+
+        // Nothing has been written, so a refusal here leaves the Variant exactly as it was and
+        // the transaction is committed rather than unwound.
+        const mismatch = variantOptionsMismatch(declared, values.value, "This Variant");
+        if (mismatch) return mismatch;
+      }
+
+      if (Object.keys(changes).length > 0) {
+        const [updated] = await tx
+          .update(variant)
+          .set(changes)
+          .where(eq(variant.id, variantId))
+          .returning({ productId: variant.productId });
+        if (!updated) return noSuchVariant(variantId);
+        productId = updated.productId;
+      }
+
+      if (productId === undefined || (values !== undefined && declared === undefined)) {
+        // Unreachable: a body names columns, or it names values, or it was refused above for
+        // naming nothing at all — and the values branch sets both of these.
+        throw new Error("A Variant was corrected by a request that asked for nothing.");
+      }
+
+      if (values !== undefined && declared !== undefined) {
+        await replaceVariantOptionValues(tx, variantId, values.value, declared);
+      }
 
       // Read back rather than assembled from what went in, so a correction reports the same
       // bytes the next read reports — `createProduct`'s reason, and the reason this asks for
@@ -333,7 +489,7 @@ export async function updateVariant(
       // `DELETE` landing between the two statements would find nothing to read back and answer
       // 500 on a write that succeeded — the same two-loose-statements shape #145 found on the
       // count path, arrived at from the other side.
-      const corrected = (await readVariants(tx, updated.productId)).find(
+      const corrected = (await readVariants(tx, productId)).find(
         (row) => row.id === variantId,
       );
       if (!corrected)

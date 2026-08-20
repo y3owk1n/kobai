@@ -219,6 +219,17 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   claiming otherwise, and sending the word on spends a round trip to be refused with `invalid`.
   So the query is keyed on what the *address* said rather than on the value it narrowed to, and
   a screen keeps its own empty state for the word — different lists, different prose.
+- **A list a Merchant edits as a whole is one form over the whole list**, because that is how the
+  route reads it. The Product screen's Options card is the case (#253): kobai takes `options` as
+  what the Product's options should now *be*, so renaming, reordering, adding and removing are one
+  request and the screen is a `useFieldArray` with Up, Down and Remove beside each row — and the
+  order is the rows' own order, so there is no position to type and nothing to keep in step. Two
+  things about it are easy to get wrong. **`useFieldArray` writes a key of its own onto each field
+  and that key is called `id`**, so an option's real identifier is held under `optionId` and mapped
+  back on submit; losing it would turn every rename into a removal and an addition, taking every
+  Variant's value with it. And **Up, Down and Remove are plain `Button`s rather than
+  `ActionButton`s**: they rearrange the form and call kobai nothing, so there is no permission to
+  explain — the one control that writes is the submit, and that is where `unavailable` goes.
 - **A closed refusal family is narrowed, never matched on prose.** `lib/refusal.ts` holds one
   `Record` per family keyed by that family's own union and a `narrowing()` built from it, so a
   `reason` added in Core has no key, does not compile, and reddens the Admin in the same commit
@@ -346,6 +357,17 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   whether the read failed — which is all `FulfilmentStrategyField` and `screens/merchants.tsx`'s
   `RoleField` are now. **A third picker composed from the vendored `Select` is the thing this
   rules out**, and reaching for it anyway means answering the landmark question first.
+- **A field whose *set* comes from the record above it is built from that record.** Each Variant
+  card renders one value field per option **the Product** declares — not per value the Variant
+  happens to hold — which is what makes an option declared a moment ago appear as an empty required
+  field on every Variant rather than not at all. kobai leaves those Variants unanswered on purpose
+  and `PATCH /admin/variants/{id}` is the repair, so rendering the Product's list is rendering the
+  repair. The values are **always** sent, because that route replaces what is stored rather than
+  merging into it, exactly as `metadata` does — **so the form asks for every value even when the
+  Merchant came to fix a SKU**, which is a narrowing of what the route itself allows and is
+  deliberate: one form over a Variant is what ADR-0062's "an absent field means leave it" buys
+  the *client*, and splitting the submit to preserve it would mean two Save buttons on one
+  fieldset to spare a Merchant one field they have to fill in anyway.
 - **Card titles are headings on the Product screen and on no other.** The frame's `h1` names the
   section and a detail screen's `h2` names the record, so the cards under it are `h3` — but only
   where the cards are *sections of one record*, which is the Product screen and its repeated

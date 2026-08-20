@@ -10,6 +10,7 @@ import {
 } from "../db/page.ts";
 import { product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import { readProductOptions, readVariantOptionValues } from "./options.ts";
 import { PUBLISHED } from "./status.ts";
 
 /**
@@ -44,6 +45,15 @@ import { PUBLISHED } from "./status.ts";
  *   a Project may have replaced (ADR-0017). `GET /store/variants/{id}/price` is the question.
  * - **`fulfilment.strategy`, kept.** It is already published to a Merchant, it is what tells a
  *   storefront a download is a download, and ADR-0014 makes the set open rather than secret.
+ * - **The options and their values, kept, and they are the reason this ticket exists.** A
+ *   storefront cannot draw a Size picker out of a list of SKUs, so a Product publishes the
+ *   options it is chosen by in the order a Merchant put them in, and each Variant publishes its
+ *   value for each — which is together everything needed to map a chosen combination to a SKU
+ *   **client-side**. The combination no Variant answers is simply absent from that mapping,
+ *   which is story 21's "unavailable rather than an error" falling out of the shape rather than
+ *   being a rule anybody enforces. What is dropped is the option's **identifier**: a storefront
+ *   addresses nothing by it, the name is unique within the Product and is what a Variant's
+ *   values are keyed by, and it is `PATCH /admin/products/{id}` that needs one.
  * - **`status`, dropped — and not merely dropped: never carried.** It is a Merchant's field, and
  *   it is the one this whole split was argued about. A `status` on these shapes would tell every
  *   browser holding a publishable key which Products a Merchant has not finished writing and
@@ -82,11 +92,24 @@ export type StoreVariantFulfilment = {
   readonly strategy: string;
 };
 
+/** One option a Product is chosen by, as a storefront sees it: the name, and no identifier. */
+export type StoreProductOption = {
+  readonly name: string;
+};
+
+/** A Variant's value for one option — `Size` is `M` — named as its Product names it. */
+export type StoreVariantOptionValue = {
+  readonly name: string;
+  readonly value: string;
+};
+
 /** A Variant as a storefront sees it: no count, and no Prices. */
 export type StoreVariant = {
   readonly id: string;
   readonly sku: string;
   readonly fulfilment: StoreVariantFulfilment;
+  /** What this Variant is, in its Product's option order — the storefront's half of the pair. */
+  readonly options: readonly StoreVariantOptionValue[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -103,6 +126,8 @@ export type StoreProduct = {
 
 /** A Product opened — its Variants, so a product page is one request rather than N. */
 export type StoreProductDetail = StoreProduct & {
+  /** The options a Shopper chooses by, in the order the Merchant put them in. */
+  readonly options: readonly StoreProductOption[];
   readonly variants: readonly StoreVariant[];
 };
 
@@ -198,7 +223,21 @@ export async function readStoreProduct(
     // stable, where `created_at` ties for Variants created together — and they always are.
     .orderBy(asc(variant.sku));
 
-  return { ...row, variants: variants.map(asStoreVariant) };
+  // The declared options and the answers to them are read through the same two functions the
+  // admin reader asks, because *which* rows are a Product's options is not a question the two
+  // surfaces may come to different answers about. What differs is the shape each publishes,
+  // and that is decided here — the identifier is projected away one line down.
+  const options = await readProductOptions(db, row.id);
+  const chosenBy = await readVariantOptionValues(
+    db,
+    variants.map((one) => one.id),
+  );
+
+  return {
+    ...row,
+    options: options.map((one) => ({ name: one.name })),
+    variants: variants.map((one) => asStoreVariant(one, chosenBy.get(one.id) ?? [])),
+  };
 }
 
 /**
@@ -229,8 +268,10 @@ export async function readStoreVariant(
     .from(variant)
     .where(eq(variant.id, id))
     .limit(1);
+  if (!row) return undefined;
 
-  return row && asStoreVariant(row);
+  const chosenBy = await readVariantOptionValues(db, [row.id]);
+  return asStoreVariant(row, chosenBy.get(row.id) ?? []);
 }
 
 /**
@@ -252,16 +293,20 @@ const STORE_VARIANT_COLUMNS = {
  * One Variant row as the store surface reports it — the one place a column name becomes a
  * response field, so both readers above answer in the same shape by construction.
  */
-function asStoreVariant(row: {
-  readonly id: string;
-  readonly sku: string;
-  readonly fulfilmentStrategy: string;
-  readonly metadata: Record<string, unknown>;
-}): StoreVariant {
+function asStoreVariant(
+  row: {
+    readonly id: string;
+    readonly sku: string;
+    readonly fulfilmentStrategy: string;
+    readonly metadata: Record<string, unknown>;
+  },
+  options: readonly StoreVariantOptionValue[],
+): StoreVariant {
   return {
     id: row.id,
     sku: row.sku,
     fulfilment: { strategy: row.fulfilmentStrategy },
+    options,
     metadata: row.metadata,
   };
 }

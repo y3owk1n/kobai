@@ -195,7 +195,7 @@ const readStoreProductRoute = createRoute({
   path: "/products/{idOrHandle}",
   summary: "Read a Product",
   description:
-    "One Product with its Variants, so a product page is one request rather than one per Variant. **Addressed by its identifier or by its handle** — a UUID is read as the first and anything else as the second, so `/store/products/blue-poster` is the request behind a readable storefront URL. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.",
+    "One Product with its Variants, so a product page is one request rather than one per Variant. **Addressed by its identifier or by its handle** — a UUID is read as the first and anything else as the second, so `/store/products/blue-poster` is the request behind a readable storefront URL. **This is everything a picker needs**: the Product's `options` in the order the Merchant put them in, and each Variant's value for each — so a chosen combination maps to a SKU in the storefront, and a combination no Variant answers is simply absent rather than an error. There is no route that takes a combination and answers a Variant, deliberately. A Variant carries no Price and no stock count: ask `GET /store/variants/{id}/price` for the first, and ADR-0018 makes the second a conditional write rather than a readable fact.",
   security: API_KEY,
   request: { params: contract.IdOrHandleParam },
   responses: {

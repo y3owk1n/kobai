@@ -161,6 +161,7 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
   "stock-is-reserved": true,
   "unsupported-currency": true,
   "unknown-fulfilment-strategy": true,
+  "variant-options-mismatch": true,
 };
 
 /**

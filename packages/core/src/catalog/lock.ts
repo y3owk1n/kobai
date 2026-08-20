@@ -13,13 +13,14 @@ import { product, variant } from "../db/schema.ts";
  * the Variant continuing to exist, the other is what ends it. It takes them in the order below
  * like everything else, and ADR-0059 is where its side of the argument lives.
  *
- * Four writes need this one, and they are otherwise unrelated: `setPrice` inserts a Price,
- * `addLineItem` inserts a Cart line, `setInventory` upserts a count and `capture-order` writes
- * an Order's Line Items. Each asks whether a Variant is there and then writes a row referencing
- * it, and each has to still be right about that when its own statement lands — a Merchant may
- * delete a Variant at any moment (`catalog/delete.ts`). The failure is the same one every time:
- * a foreign key pointing at a row that has just gone, which Postgres refuses and which reaches
- * a caller as a **500** on a route that declares a 404.
+ * Five writes need this one, and they are otherwise unrelated: `setPrice` inserts a Price,
+ * `addLineItem` inserts a Cart line, `setInventory` upserts a count, `capture-order` writes an
+ * Order's Line Items, and `updateVariant` writes a Variant's option values (#253). Each asks
+ * whether a Variant is there and then writes a row referencing it, and each has to still be
+ * right about that when its own statement lands — a Merchant may delete a Variant at any moment
+ * (`catalog/delete.ts`). The failure is the same one every time: a foreign key pointing at a row
+ * that has just gone, which Postgres refuses and which reaches a caller as a **500** on a route
+ * that declares a 404.
  *
  * **A row lock is ADR-0018's other answer, and existence is why it is the one available here.**
  * The rule is that a check and the write it authorises are one operation — a unique constraint
@@ -44,11 +45,13 @@ import { product, variant } from "../db/schema.ts";
  * **A caller need not hold all three, and none of these three tables is a caller's to choose.**
  * What the order constrains is only the rows a site actually takes: **a prefix nobody holds
  * cannot make a cycle**, so a site that takes no Product lock is free not to. Concretely, a
- * fifth caller of this function has two things to get right:
+ * sixth caller of this function has two things to get right:
  *
  * - take this lock **before** anything it does to `core_inventory` — a count, or
  *   `variantsWithClaimedStock`;
- * - take it **after** any lock on the Product, which today only `catalog/delete.ts` takes.
+ * - take it **after** any lock on the Product, which today `catalog/delete.ts`, `addVariant`,
+ *   `updateProduct` and `updateVariant` take — the last two because a Product's options and a
+ *   Variant's values for them are two tables one request reads across (#253).
  *
  * **`core_cart` sits outside that chain, and only shared locks keep it there.** `addLineItem`
  * arrives here already holding its Cart row `for update` (`cart/write.ts`'s `mutate`), while
@@ -78,7 +81,17 @@ import { product, variant } from "../db/schema.ts";
  * `for update`. And a caller need hold no more of the chain than it uses — a prefix nobody
  * holds cannot make a cycle — so `addVariant` takes this row and nothing else. **A caller that
  * ever needs a Variant or an Inventory row as well takes them after this one**, in the order
- * at the head of this file.
+ * at the head of this file, which is what `updateVariant` does when a body names `options`.
+ *
+ * **`updateProduct` takes it for existence too, and for nothing else — and that boundary is
+ * worth knowing before the next caller reaches for this against a set of rows.** Correcting a
+ * Product's options reads the list it has and writes the list it should have, and this lock
+ * serialises **none** of that: `for share` keeps a `DELETE` out and two `FOR SHARE` holders do
+ * not conflict with each other, so two corrections would both read the old list and both write
+ * theirs. What serialises them is `catalog/options.ts`'s `lockProductOptions`, a
+ * `pg_advisory_xact_lock` per Product taken *before* this one — ADR-0018's other answer, the
+ * same one `the-last-administrator` and claim-or-adopt take, because the condition is about
+ * **other rows** and a `select` does not lock those.
  */
 export async function lockProduct(tx: Transaction, productId: string): Promise<boolean> {
   const rows = await tx
@@ -96,7 +109,7 @@ export async function lockProduct(tx: Transaction, productId: string): Promise<b
  * The lock is held until the caller's transaction ends, so the answer is still true when the
  * row referencing it is written. **Take it after any lock on the Product and before anything
  * you do to `core_inventory`** — `core_product` → `core_variant` → `core_inventory`, argued at
- * the head of this file, where a fifth caller should read the rest before writing one.
+ * the head of this file, where a sixth caller should read the rest before writing one.
  *
  * Why a given route needs it at all stays at that route, because the reason is different at
  * each of them.

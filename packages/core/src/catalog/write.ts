@@ -13,6 +13,15 @@ import { readStore } from "../store/read.ts";
 import { handleField, handleTaken, noHandleToPropose, proposeHandle } from "./handle.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
 import {
+  declareProductOptions,
+  parseOptionDeclarations,
+  parseOptionValues,
+  readProductOptions,
+  type VariantOptionValue,
+  variantOptionsMismatch,
+  writeVariantOptionValues,
+} from "./options.ts";
+import {
   type Price,
   type ProductDetail,
   readProduct,
@@ -48,6 +57,7 @@ export type CreateProductInput = {
   readonly description?: unknown;
   readonly handle?: unknown;
   readonly metadata?: unknown;
+  readonly options?: unknown;
   readonly variants?: unknown;
 };
 
@@ -59,14 +69,16 @@ export type ProductCreation =
         | "invalid"
         | "handle-taken"
         | "sku-taken"
-        | "unknown-fulfilment-strategy";
+        | "unknown-fulfilment-strategy"
+        | "variant-options-mismatch";
       readonly detail: string;
     };
 
-/** Unvalidated, and the same three keys a Variant of a create names. */
+/** Unvalidated, and the same four keys a Variant of a create names. */
 export type CreateVariantInput = {
   readonly sku?: unknown;
   readonly fulfilment?: unknown;
+  readonly options?: unknown;
   readonly metadata?: unknown;
 };
 
@@ -85,7 +97,8 @@ export type VariantCreation =
         | "invalid"
         | "product-not-found"
         | "sku-taken"
-        | "unknown-fulfilment-strategy";
+        | "unknown-fulfilment-strategy"
+        | "variant-options-mismatch";
       readonly detail: string;
     };
 
@@ -155,8 +168,26 @@ export async function createProduct(
     return { ok: false, reason: "invalid", detail: metadataDetail("`metadata`") };
   }
 
+  // The options this Product is chosen by, in the order the body listed them — `[]` where it
+  // named none, which is the ordinary Product rather than the exception.
+  const options = parseOptionDeclarations(input.options);
+  if (!options.ok) return options;
+
   const variants = parseVariants(input.variants);
   if (!variants.ok) return variants;
+
+  // Every Variant answers exactly these options, and it is asked here — before anything is
+  // written and in the same request the options were declared in, which is what "a Variant
+  // cannot exist naming an option its Product has not declared" means at a create. The same
+  // question is asked at the two other routes that write a Variant, in the same words.
+  for (const row of variants.value) {
+    const mismatch = variantOptionsMismatch(
+      options.value,
+      row.options,
+      `The Variant ${JSON.stringify(row.sku)}`,
+    );
+    if (mismatch) return mismatch;
+  }
 
   // Refused at the moment of the mistake rather than at the first Order for it. A Variant
   // pointing at a Strategy this deployment has not wired is one nothing can answer the three
@@ -190,6 +221,11 @@ export async function createProduct(
       // zero-Variant state this whole function exists to prevent.
       if (!created) throw new HandleTaken(handle);
 
+      // In the same transaction as the Product and the Variants, which is the whole of why
+      // options belong in this body: a Variant naming an option its Product has not declared is
+      // not a state that exists for an instant, rather than one detected afterwards.
+      const declared = await declareProductOptions(tx, created.id, options.value);
+
       const inserted = await tx
         .insert(variant)
         .values(
@@ -204,7 +240,7 @@ export async function createProduct(
         // select-then-insert would let two requests offering the same SKU both find nothing,
         // and the loser would surface as a 500 rather than as the conflict it is.
         .onConflictDoNothing({ target: variant.sku })
-        .returning({ sku: variant.sku });
+        .returning({ id: variant.id, sku: variant.sku });
 
       if (inserted.length !== variants.value.length) {
         const kept = new Set(inserted.map((row) => row.sku));
@@ -214,6 +250,16 @@ export async function createProduct(
           variants.value.map((row) => row.sku).filter((sku) => !kept.has(sku)),
         );
       }
+
+      // One statement for every Variant's values rather than one per Variant, and paired **by
+      // SKU** rather than by position, for the reason a read reports Variants in SKU order:
+      // `returning` is under no obligation to answer in the order the values were given.
+      const bySku = new Map(variants.value.map((row) => [row.sku, row.options]));
+      await writeVariantOptionValues(
+        tx,
+        inserted.map((row) => ({ variantId: row.id, values: bySku.get(row.sku) ?? [] })),
+        declared,
+      );
 
       return created.id;
     });
@@ -272,8 +318,23 @@ export async function addVariant(
     // **Held**, not merely read. The row inserted below references this Product, and one
     // deleted in between would make that a foreign-key violation and a 500 — a broken server
     // reported for what is only a Product no longer there. `lock.ts` is what the lock is and
-    // what order these rows are taken in; this is the only row this operation locks.
+    // what order these rows are taken in; this is the only row this operation locks — and it is
+    // what makes the options read below still this Product's when the values are written.
     if (!(await lockProduct(tx, productId))) return noSuchProduct(productId);
+
+    // Read from the Product rather than from the body, which is the whole difference between
+    // this route and a create: there the options are being declared in the same request, and
+    // here they are rows a Merchant declared earlier. The question asked of them is the same
+    // one, in the same words.
+    const declared = await readProductOptions(tx, productId);
+    const mismatch = variantOptionsMismatch(
+      declared,
+      parsed.value.options,
+      `The Variant ${JSON.stringify(parsed.value.sku)}`,
+    );
+    // Nothing has been written, so there is nothing to unwind — the shape `createProduct` needs
+    // a throw for only because a refused Variant has to take a Product with it.
+    if (mismatch) return mismatch;
 
     const [created] = await tx
       .insert(variant)
@@ -291,6 +352,14 @@ export async function addVariant(
     // Nothing was written, so there is nothing to roll back and this needs no throw — the
     // shape `createProduct` needs only because a refused Variant has to take a Product with it.
     if (!created) return skuTaken([parsed.value.sku]);
+
+    // A Variant that has just been inserted has nothing to replace, so this is the insert
+    // rather than `replaceVariantOptionValues`.
+    await writeVariantOptionValues(
+      tx,
+      [{ variantId: created.id, values: parsed.value.options }],
+      declared,
+    );
 
     // Read back rather than assembled from what went in, so what this answers is what a read
     // of the Product answers — `createProduct`'s property, and the reason this asks the one
@@ -450,6 +519,8 @@ type ParsedVariant = {
    * the `{ strategy }` object the body carries are two different things and this is the first.
    */
   readonly fulfilmentStrategy: string;
+  /** Its value for each of its Product's options — `[]` where the body named none. */
+  readonly options: readonly VariantOptionValue[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -527,7 +598,20 @@ function parseVariant(
   const fulfilment = parseFulfilment(entry.fulfilment, `${possessive}\`fulfilment\``);
   if (!fulfilment.ok) return fulfilment;
 
-  return { ok: true, value: { sku, fulfilmentStrategy: fulfilment.value, metadata } };
+  // Read out of the body here; whether these are the options its Product declares is asked once,
+  // against the declared list, by the caller — for the same reason the Strategy is.
+  const options = parseOptionValues(entry.options, possessive);
+  if (!options.ok) return options;
+
+  return {
+    ok: true,
+    value: {
+      sku,
+      fulfilmentStrategy: fulfilment.value,
+      options: options.value,
+      metadata,
+    },
+  };
 }
 
 type ParsedFulfilment =
