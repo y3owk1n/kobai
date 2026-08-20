@@ -13,5 +13,5 @@
   // an enumerated list opened: a root-level file no `include` happened to name. It is not
   // `**/*.ts` — every package and the reference Project own their own `tsconfig.json`, and
   // typechecking a file twice under two configs is how the two quietly stop agreeing.
-  "include": ["tests/**/*.ts", "*.ts"]
+  "include": ["tests/**/*.ts", "scripts/**/*.ts", "*.ts"]
 }

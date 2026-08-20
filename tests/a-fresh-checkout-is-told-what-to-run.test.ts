@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
-import { readDevbox } from "./support/init-hook.ts";
+import { readDevbox } from "./support/devbox-config.ts";
 
 /**
  * A checkout that has never installed is an ordinary state, and every command has to say so.
@@ -328,45 +328,12 @@ describe("the same guard, in every tree that ships one", () => {
   });
 });
 
-describe("a script may depend on nothing the init_hook defines", () => {
-  it("calls no function the init_hook declares", async () => {
-    // The guard was a shell function in the `init_hook` first, and every script called it.
-    // That is broken, invisibly: devbox generates one script per key and has it source the
-    // hook **only** when `__DEVBOX_SKIP_INIT_HOOK_<hash>` is unset — so inside `devbox shell`,
-    // the second way AGENTS.md says to run these commands, the hook never runs and every
-    // guarded script died at 127 with `kobai_require_install: command not found`. An exported
-    // *variable* survives into that child shell, which is why the port derivation in the same
-    // hook never showed this and why the whole suite stayed green.
-    //
-    // So the rule is the one that failure teaches: the hook may export variables a script
-    // reads, and may define functions for its own lines, but a script may call none of them.
-    // Swept in every tree, though only the workspace's hook declares any today — a Project's
-    // hook growing one is exactly when this would matter and nobody would think to look.
-    const reaching: string[] = [];
-    let declaredAnywhere = 0;
-
-    for (const tree of TREES) {
-      const { shell } = await readDevbox(at(tree, "devbox.json"));
-      const declared = (shell?.init_hook ?? []).flatMap(
-        (line) => /^\s*([A-Za-z_][\w]*)\s*\(\)\s*\{/.exec(line)?.slice(1, 2) ?? [],
-      );
-      declaredAnywhere += declared.length;
-
-      for (const [name, command] of Object.entries(await scripts(tree))) {
-        for (const fn of declared) {
-          if (new RegExp(`\\b${fn}\\b`).test(command)) {
-            reaching.push(`${at(tree, "devbox.json")}: ${name} calls ${fn}`);
-          }
-        }
-      }
-    }
-
-    // Two today. None at all would make the sweep above pass by looking for nothing.
-    expect(declaredAnywhere).toBeGreaterThan(0);
-
-    expect(
-      reaching,
-      "devbox sources the init_hook only when a devbox shell is not already active, so a script calling a function it defines fails at 127 inside `devbox shell`. Put what the script needs in a file it runs, the way scripts/require-install.sh is.",
-    ).toEqual([]);
-  });
-});
+/**
+ * There was a describe here holding a rule the `init_hook` no longer has anything to break:
+ * the hook may export variables a script reads, but a script may call none of its functions,
+ * because devbox skips the hook whenever a devbox shell is already active and every guarded
+ * script then died at 127. Under ADR-0084 the hook declares no functions at all — the
+ * derivation it used to hold is `scripts/ports.ts` — so the sweep had nothing left to look
+ * for, and a sweep that finds nothing to check is decoration. The reasoning is in
+ * `scripts/require-install.sh`'s own header, which is where it has to be true.
+ */

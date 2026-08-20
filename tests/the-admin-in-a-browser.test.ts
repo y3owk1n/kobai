@@ -22,7 +22,7 @@ import {
   tabTo,
   watchForWrites,
 } from "./support/admin-browser.ts";
-import { readDevbox } from "./support/init-hook.ts";
+import { readDevbox } from "./support/devbox-config.ts";
 
 /**
  * The Admin, in a real browser, against a really-booted reference Project (#175, ADR-0063).

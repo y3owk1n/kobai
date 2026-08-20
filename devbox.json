@@ -6,108 +6,11 @@
   },
   "shell": {
     "init_hook": [
-      "corepack enable --install-directory \"$DEVBOX_PROJECT_ROOT/.devbox/virtenv/nodejs/corepack-bin\"",
-
-      // One number, derived from the checkout's path, decides the two ports compose
-      // publishes, the compose project the containers belong to, and the address the test
-      // harness dials. They are set here, in front of every script, because the failure
-      // this prevents is them disagreeing: the container comes up on one port while the
-      // suite dials another, and neither error names the other. See AGENTS.md
-      // § Development.
-      //
-      // The path is what distinguishes two checkouts of kobai — a second clone, a git
-      // worktree — and a path does not change between runs, so the container a run left
-      // behind is still where the next run looks for it. A random port would not be.
-      //
-      // An explicit value still wins, and from `.env` as well as from the environment,
-      // because `.env` is where a Developer is told to put these and docker compose reads
-      // it too — a pin compose honoured while the harness ignored it would be the same
-      // disagreement in a new place.
-      //
-      // Two helpers do that, and both are read the way docker compose reads `.env`, because
-      // that is the file they are reading (ADR-0046):
-      //
-      // `kobai_dotenv` takes the last assignment of a name — with or without a leading
-      // `export` — and hands back its whole value: double-quoted with `\n`, `\r`, `\t`,
-      // `\"` and `\\` interpreted, single-quoted raw, or bare, where leading blanks go and
-      // an inline comment needs a space in front of it. Each of those was checked against
-      // `docker compose config` reading the same file rather than against its
-      // documentation. A port is a bare token and survived a much smaller reader;
-      // POSTGRES_PASSWORD is not, and reading one with that reader truncated it silently at
-      // the first punctuation mark, which is the whole reason #21 left the credentials
-      // alone. What is deliberately *not* copied is compose's interpolation of `${VAR}`
-      // inside a value — `.env.example` says to keep `$` out of a password, because a
-      // reader that expanded it and one that did not would be this ticket's bug again. It
-      // returns rather than failing when there is no `.env` at all — devbox sources this
-      // file under `set -e`, so a non-zero status here stops every `devbox run …` with a
-      // bare exit code and no message.
-      //
-      // `kobai_urlencode` puts one of those values into a URL, and takes which half of the
-      // URL it is going into, because the `pg` driver decodes the two halves differently.
-      // `unreserved` escapes everything outside RFC 3986's unreserved set, for the user and
-      // the password, which pg reads with decodeURIComponent. `reserved` leaves a reserved
-      // character alone, for the database name in the path, which pg reads with decodeURI —
-      // that one never unescapes a reserved character, so an over-encoded `=` would arrive
-      // as a literal `%3D` and Postgres would report a database nobody named. It walks
-      // bytes rather than lines: a value can hold a newline, since `\n` inside double
-      // quotes is one, and awk's own record separator would otherwise eat it.
-      "kobai_dotenv() { [ -r \"$DEVBOX_PROJECT_ROOT/.env\" ] || return 0; LC_ALL=C awk -v name=\"$1\" 'BEGIN { anchor = \"^[ \\t]*(export[ \\t]+)?\" name \"[ \\t]*=\"; apostrophe = sprintf(\"%c\", 39) } $0 ~ anchor { line = $0; sub(/\\r$/, \"\", line); sub(anchor, \"\", line); quote = substr(line, 1, 1); if (quote == \"\\\"\" || quote == apostrophe) { value = \"\"; i = 2; while (i <= length(line)) { c = substr(line, i, 1); if (quote == \"\\\"\" && c == \"\\\\\" && i < length(line)) { e = substr(line, i + 1, 1); value = value (e == \"n\" ? sprintf(\"%c\", 10) : (e == \"r\" ? sprintf(\"%c\", 13) : (e == \"t\" ? sprintf(\"%c\", 9) : e))); i += 2; continue } if (c == quote) break; value = value c; i++ } } else { value = line; sub(/^[ \\t]+/, \"\", value); sub(/[ \\t]+#.*$/, \"\", value); sub(/[ \\t]+$/, \"\", value) } found = 1 } END { if (found) print value }' \"$DEVBOX_PROJECT_ROOT/.env\"; }",
-      "kobai_urlencode() { printf %s \"$2\" | LC_ALL=C awk -v keep=\"$1\" 'BEGIN { for (i = 0; i < 256; i++) byte[sprintf(\"%c\", i)] = i } { out = NR > 1 ? \"%0A\" : \"\"; for (i = 1; i <= length($0); i++) { c = substr($0, i, 1); out = out (byte[c] > 32 && byte[c] < 127 && index(\" \\\"<>\\\\^`{|}%?#/[]\", c) == 0 && (keep == \"reserved\" || c ~ /[A-Za-z0-9._~-]/) ? c : sprintf(\"%%%02X\", byte[c])) } printf \"%s\", out }'; }",
-      "kobai_pinned_port=${POSTGRES_PORT:-$(kobai_dotenv POSTGRES_PORT)}",
-      "kobai_pinned_app_port=${PORT:-$(kobai_dotenv PORT)}",
-      "kobai_pinned_project=${COMPOSE_PROJECT_NAME:-$(kobai_dotenv COMPOSE_PROJECT_NAME)}",
-      "kobai_pg_user=${POSTGRES_USER:-$(kobai_dotenv POSTGRES_USER)}",
-      "kobai_pg_password=${POSTGRES_PASSWORD:-$(kobai_dotenv POSTGRES_PASSWORD)}",
-      "kobai_pg_database=${POSTGRES_DB:-$(kobai_dotenv POSTGRES_DB)}",
-      "kobai_hash=$(printf %s \"$DEVBOX_PROJECT_ROOT\" | cksum | cut -d' ' -f1)",
-
-      // 55000-55999: the neighbourhood of the 55432 this repo has always used, and
-      // nowhere near the 5432 a Developer's own Postgres sits on.
-      "export POSTGRES_PORT=\"${kobai_pinned_port:-$((55000 + kobai_hash % 1000))}\"",
-
-      // 53000-53999, and read it the way 55432 reads: the port the service is known by
-      // with a 5 in front of it. The application's 3000 is *not* left where it is, for the
-      // same reason the database's 5432 is not — 3000 is where every other dev server on
-      // the machine already sits, so a fixed one collides with a Developer's other work as
-      // well as with their other checkout (#61).
-      //
-      // Same `kobai_hash % 1000` as the database's on purpose. The two ports then carry
-      // the same three digits — 53154 beside 55154 — so a `docker ps` reads as one
-      // checkout rather than as two unrelated numbers, and two checkouts that collide
-      // collide on both at once rather than half-sharing a stack.
-      "export PORT=\"${kobai_pinned_app_port:-$((53000 + kobai_hash % 1000))}\"",
-
-      // The project name carries the whole hash rather than the port, so two checkouts
-      // that happened to derive the same port stay separate projects: they collide
-      // loudly on the port instead of quietly sharing a volume. Without this the project
-      // name is the checkout directory's basename, and two checkouts both called `kobai`
-      // would share one database.
-      "export COMPOSE_PROJECT_NAME=\"${kobai_pinned_project:-kobai-$(printf %08x \"$kobai_hash\")}\"",
-
-      // Both addresses below are one string: what the container was started with, encoded
-      // once. The `:-kobai` defaults here are a third copy of the literals `compose.yaml`
-      // falls back to and the harness's fallback URL carries — all three are held together
-      // by tests/the-postgres-credentials-belong-to-dot-env.test.ts, the way
-      // tests/the-fallback-postgres-port.test.ts holds the port.
-      "kobai_pg_address=\"$(kobai_urlencode unreserved \"${kobai_pg_user:-kobai}\"):$(kobai_urlencode unreserved \"${kobai_pg_password:-kobai}\")@127.0.0.1:$POSTGRES_PORT/$(kobai_urlencode reserved \"${kobai_pg_database:-kobai}\")\"",
-      "export KOBAI_TEST_DATABASE_URL=\"${KOBAI_TEST_DATABASE_URL:-postgres://$kobai_pg_address}\"",
-
-      // `devbox run dev` runs the reference Project on the host against this same
-      // container, so its DATABASE_URL is a third address that must not disagree either.
-      // This asks `.env` whether it already has one rather than exporting over the top:
-      // `node --env-file` does not overwrite a variable already in the environment, so an
-      // unconditional export would silently beat a Developer's own. It asks through the
-      // same reader as everything else — a second one, with its own idea of what an
-      // assignment line looks like, would be two answers to what `.env` says.
-      "if [ -z \"$(kobai_dotenv DATABASE_URL)\" ]; then export DATABASE_URL=\"${DATABASE_URL:-postgres://$kobai_pg_address}\"; fi",
-
-      "unset kobai_pinned_port kobai_pinned_app_port kobai_pinned_project kobai_hash",
-      "unset kobai_pg_user kobai_pg_password kobai_pg_database kobai_pg_address",
-      "unset -f kobai_dotenv kobai_urlencode"
+      "corepack enable --install-directory \"$DEVBOX_PROJECT_ROOT/.devbox/virtenv/nodejs/corepack-bin\""
     ],
     "scripts": {
       "install": "pnpm install --frozen-lockfile",
-      "db": "docker compose up -d --wait db",
+      "db": "node scripts/ensure-env.ts && docker compose up -d --wait db",
       "db:down": "docker compose down -v",
       // Explanations here are real comments, never `"// …"` keys: devbox turns every key
       // into a script and eats the leading slashes, so such a key becomes the command it
@@ -121,18 +24,17 @@
       // manager never ran, on the command AGENTS.md tells a reader to reach for first
       // (#133). `install` and `ci` carry no guard, because they *are* the install, and a
       // guard on either would refuse the way out of the state it exists to report.
+
+      // A worktree gets ports of its own, and it gets them by being given a `.env`.
+      // `scripts/ensure-env.ts` writes one — from `.env.example`, once, never over an
+      // existing file — so `docker compose` reads the derived ports itself and a hand-typed
+      // `docker compose up db` reaches the same container these scripts do. Everywhere else
+      // it does nothing at all, and the ports are `compose.yaml`'s ordinary `${…:-}`
+      // fallbacks. See docs/adr/0084-a-linked-worktree-seeds-its-own-dot-env.md.
       //
-      // A guard rather than an install in front of each script: prefixing
-      // `pnpm install --frozen-lockfile` would make the fast commands pay for an install
-      // every time, and would make them refuse whenever the lockfile is stale — so
-      // `devbox run format`, the command you reach for to fix a finding, would stop working
-      // exactly while a dependency change is in flight.
-      //
-      // A file rather than a shell function defined in the `init_hook` above, and that part
-      // is not a preference: devbox skips the hook when a devbox shell is already active, so
-      // a function there is missing from every script run the second way AGENTS.md documents.
-      // `scripts/require-install.sh` says the rest;
-      // tests/a-fresh-checkout-is-told-what-to-run.test.ts holds both halves.
+      // It is chained onto the commands that bring something up rather than run from
+      // `postinstall`, which would fire inside the image build where there may be neither
+      // `git` nor `.git`, or from a `pre*` script, which pnpm does not run by default.
 
       // db:generate builds first because a Plugin's drizzle.config.ts imports
       // defineKobaiDrizzleConfig from @kobai/core/migrations, and that specifier resolves
@@ -163,22 +65,22 @@
       // source of truth for both. Run it after changing anything under `reference/` — the
       // gate fails until you do, because
       // tests/create-kobai-matches-the-reference-project.test.ts regenerates the template
-      // and compares it byte for byte with what is checked in. Same arrangement as
-      // openapi:generate above, and for the same reason: a generated artifact nobody
-      // regenerates is a generated artifact that has quietly stopped being true.
+      // and compares it byte for byte with what is checked in.
       "template:generate": "sh scripts/require-install.sh template:generate && pnpm --filter create-kobai template:generate",
 
       // `build` then `up` rather than `up --build`, so the address is printed between the
       // build output and the log stream rather than scrolling away above a cold build. It
-      // has to be printed at all because `PORT` is derived from this checkout's path
-      // (init_hook above): a Developer opens the application in a browser, and a port they
-      // have to work out from `docker ps` is a worse answer than one 3000 always gave.
-      // `${PORT:-3000}` covers a bare `docker compose` outside devbox, which falls back to
-      // the same literal `compose.yaml` does.
-      "up": "docker compose build && printf '\\n  kobai is serving on http://localhost:%s — health at /health, the Admin at /admin-ui\\n\\n' \"${PORT:-3000}\" && docker compose up",
+      // is printed by a script rather than by the shell because the port may live in `.env`,
+      // which compose reads and the shell does not — an address printed from a different
+      // source than the one compose publishes on would be worse than no address at all.
+      "up": "node scripts/ensure-env.ts && docker compose build && node scripts/serving-on.ts && docker compose up",
       "down": "docker compose down",
       "build": "sh scripts/require-install.sh build && pnpm -r build",
-      "dev": "sh scripts/require-install.sh dev && pnpm -r build && pnpm --filter kobai-reference dev",
+
+      // `scripts/dev.ts` exists to assemble one variable: DATABASE_URL, from the parts, at
+      // the moment it is needed. Nothing exports one any more, because a written-down URL
+      // goes stale the moment the password above it changes (#63, ADR-0084).
+      "dev": "sh scripts/require-install.sh dev && node scripts/ensure-env.ts && pnpm -r build && node scripts/dev.ts",
 
       // The Admin, with a reload loop, in a second terminal beside `devbox run dev`.
       //
@@ -224,8 +126,8 @@
       "lint": "sh scripts/require-install.sh lint && pnpm exec biome ci . --error-on-warnings",
       "format": "sh scripts/require-install.sh format && pnpm exec biome check --write .",
       "typecheck": "sh scripts/require-install.sh typecheck && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit",
-      "test": "sh scripts/require-install.sh test && docker compose up -d --wait db && pnpm -r build && pnpm exec playwright install --only-shell chromium && pnpm exec vitest run",
-      "ci": "pnpm install --frozen-lockfile && docker compose up -d --wait db && pnpm exec biome ci . --error-on-warnings && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit && pnpm -r build && pnpm exec playwright install --only-shell chromium && pnpm exec vitest run"
+      "test": "sh scripts/require-install.sh test && node scripts/ensure-env.ts && docker compose up -d --wait db && pnpm -r build && pnpm exec playwright install --only-shell chromium && pnpm exec vitest run",
+      "ci": "pnpm install --frozen-lockfile && node scripts/ensure-env.ts && docker compose up -d --wait db && pnpm exec biome ci . --error-on-warnings && pnpm -r typecheck && pnpm exec tsc -p tsconfig.json --noEmit && pnpm -r build && pnpm exec playwright install --only-shell chromium && pnpm exec vitest run"
     }
   }
 }
