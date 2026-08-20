@@ -267,15 +267,18 @@ export { defineStep, StepFailure } from "./workflow/step.ts";
  * `StepInput`/`StepOutput`, which are what let a replacement be measured against the Step it
  * replaces (spec story 27), `InsertedStep` and the two insertion maps, which are what pin an
  * observing Step to the value it may not change (story 29), and the shape of an override map
- * for a Project that assembles one outside `kobai.config.ts`. The builder's own types, the
- * shape map behind those helpers, and `rewireWorkflow` itself stay internal — a Project
- * rewires a Workflow by declaring it in its config, and a second way in would be
+ * for a Project that assembles one outside `kobai.config.ts`. `StepOrigin` is here because
+ * `WorkflowStep` carries one (ADR-0080) and a name a public type refers to should be one a
+ * Project can spell. The builder's own types, the
+ * shape map behind those helpers, `STEP_ORIGINS` and `rewireWorkflow` itself stay internal — a
+ * Project rewires a Workflow by declaring it in its config, and a second way in would be
  * customisation this repository's one config file could not show.
  */
 export type {
   InsertedStep,
   StepDescriptor,
   StepInput,
+  StepOrigin,
   StepOutput,
   StepOverrides,
   StepsAfter,

@@ -264,6 +264,21 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
   // fit. It is set where routes with schemas are registered — `admin.ts` and `store.ts`.
   const app = new OpenAPIHono();
 
+  /**
+   * This application's own description, for the route that serves it.
+   *
+   * A closure rather than a value, for two reasons that both have to hold. It is asked *after*
+   * this function has returned — `/admin/openapi.json` is answered by a request — so the app it
+   * describes is the finished one, with both sub-apps mounted and the security schemes
+   * registered; building it here would describe a router that is half-empty. And it is
+   * remembered on the first ask, because the routes cannot change once the server is listening:
+   * a document rebuilt per request would convert several hundred schemas each time to produce
+   * the identical bytes. `kobai.openapi()` stays a fresh build and is unaffected — nothing but
+   * this route reads this.
+   */
+  let described: OpenApiDocument | undefined;
+  const describeThisApp = () => (described ??= describeHttpApp(app));
+
   // Every failure leaves the process as one JSON line and reaches the client as one JSON
   // body. Hono's default writes a stack trace to stdout and plain text to the client, which
   // is two shapes to parse and a stack trace handed to whoever asked.
@@ -341,6 +356,10 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       fulfilment: deps.fulfilment,
       mediaStorage: deps.mediaStorage,
       sessionPolicy: deps.sessionPolicy,
+      workflows: deps.workflows,
+      paymentProvider: deps.paymentProvider,
+      coreVersion,
+      describeApi: describeThisApp,
     }),
   );
   app.route("/admin", admin);

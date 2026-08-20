@@ -162,8 +162,8 @@ Four things follow, and each is a decision rather than an implementation detail:
   hard-coding `physical` and `digital` is the closed set ADR-0014 exists to rule out, moved into
   every client and wrong on the first deployment that wires a Plugin's. **It answers a name and
   nothing else** — the three questions are asked *of a Variant*, so there is no answer to carry
-  without one — and it deliberately **does not page**, which is the one departure from ADR-0064
-  on the whole surface.
+  without one — and it deliberately **does not page**, which was the one departure from ADR-0064
+  on the whole surface until `GET /admin/deployment` joined it on the same argument (ADR-0080).
 
 **Fulfilment is its own entity** — `core_fulfilment`, one row per way an Order is delivered,
 with `core_order_line_item.fulfilment_id` pointing at it — because one Order has many on
@@ -558,17 +558,21 @@ that matters and the one nothing
 else can see — a page fetched across a concurrent insert — and it was watched failing against
 an offset implementation first, which is the discipline the two race tests already use.
 
-**One route answers a list and does not page, and the boundary is written down** (ADR-0067).
+**Two routes answer a set and do not page, and the boundary is written down** (ADR-0067).
 `GET /admin/fulfilment-strategies` hands back every Strategy this deployment has wired, in one
-response, with no `limit`, no `after` and no `nextCursor`. It is the only exception there is and
-it is not a precedent to copy loosely: ADR-0064's whole argument is about **rows arriving
+response, with no `limit`, no `after` and no `nextCursor`; `GET /admin/deployment` is the second
+and arrived on the identical argument (ADR-0080), carrying every declared Workflow's positions
+in one answer. They are the only exceptions there are and
+they are not a precedent to copy loosely: ADR-0064's whole argument is about **rows arriving
 between one page and the next**, and this set is `Object.keys` of what `kobai.config.ts` wired —
 decided at boot, unable to change while the process runs, with no `created_at` a cursor could be
 built over. **The test is "can this set change under a reader", not "is it small"**:
 `GET /admin/roles` pages although a deployment may have three Roles, because a Merchant can
 create a fourth over HTTP while somebody is paging. **A borderline case is a list route**, since
 paging something that did not need it costs a parameter nobody sends and the reverse costs a
-break. Adding a second unpaged plural route means reopening ADR-0067, not following it.
+break. Adding a **third** unpaged plural route means reopening ADR-0067, not following it — the
+second was taken in ADR-0080 and argued there, which is the shape to copy if a third is ever
+wanted.
 
 **A correction is a `PATCH`, and there is one way to do that too** (ADR-0062). Every route that
 corrects a record which already exists behaves identically on purpose: **an absent field means
@@ -707,10 +711,44 @@ it asked the same question inside its handler; #25 moved the first Merchant to a
 seed and the route took the ordinary middleware, so every refusal every operation declares is
 now made by a gate this check can see.
 
-**The description is not served.** `/store` refuses an unauthenticated request *before*
-saying whether a path exists, and an endpoint handing out the whole surface anonymously would
-undo that. A Developer reads it from the package (`@kobai/core/openapi.json`); a TypeScript
-one installs `@kobai/client`.
+**The description is not served *anonymously*** (ADR-0080). `/store` refuses an
+unauthenticated request *before* saying whether a path exists, and an endpoint handing out the
+whole surface to anyone who asks would undo that — so the objection was always to the
+anonymity, and it still stands. **`GET /admin/openapi.json` serves it behind a Merchant session
+and `deployment:read`**, which is a caller who has already presented a credential `/store`
+never accepts. Three things about that route are decisions rather than implementation:
+
+- **It is served rather than bundled, and that is the narrow argument.** `@kobai/client`'s
+  `schema.ts` is types, erased at build, so a browser client holds no description at runtime at
+  all; and importing `@kobai/core/openapi.json` would ship a *package's* build artifact as
+  though it were a server's answer, in a Project where `@kobai/core` and `@kobai/client` are
+  two independently pinned dependencies in a lockfile the Developer owns.
+- **The body is an open object**, described in prose in `contract.ts` the way `OpenMetadata` is.
+  An OpenAPI document is a recursive schema kobai does not own, and modelling it in zod would
+  be a second and worse copy of a specification for a value every consumer feeds to a tool that
+  already knows the shape.
+- **It describes itself** — its own path is in the document it returns, which follows from the
+  description being produced from the route table the declaration is registered in.
+
+A Developer may still read it from the package (`@kobai/core/openapi.json`); a TypeScript one
+installs `@kobai/client`.
+
+**`GET /admin/deployment` is the route beside it, and the one that answers what nothing else
+does** (ADR-0080): the release of Core, every declared Workflow's positions with the **origin**
+of the Step in each, and whether a Payment Provider is wired. It carries neither the Fulfilment
+Strategies nor the migration sets, because `GET /admin/fulfilment-strategies` and `GET /health`
+already answer those and a second description of one fact is one that can disagree. **It is the
+second route on the far side of ADR-0067's boundary** and does not page. Two things to carry:
+
+- **A Step's origin is recorded where the rewiring happens and never inferred.** `slot` and
+  `step` agree for a Core default — and for an **inserted** Step, which occupies a position
+  under its own name, and for a **replacement** that answers to the slot's name — so
+  `slot === step.name` reads two customised deployments as stock, confidently and silently.
+  `rewireWorkflow` holds both the stock declaration and the result, so `WorkflowStep.origin` is
+  written there.
+- **The version is `coreVersion()`**, the same function that fills the description's
+  `info.version`. The surface's version *is* the package's (ADR-0060), so the route is a second
+  reader of that fact and not a second copy of it.
 
 **A path no route serves is a refusal too, and it is not in the description.** One
 `app.notFound` in `app.ts` answers every unrouted path — on both surfaces and at the root —

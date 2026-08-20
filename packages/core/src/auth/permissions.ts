@@ -101,6 +101,28 @@ export const PERMISSIONS = {
    * it equals `ALL_PERMISSIONS` exactly, so this list's order is the order the migrations ran.
    */
   cartRead: "cart:read",
+  /**
+   * Read what this deployment *is* — the version of Core it runs, the Steps filling each
+   * Workflow's positions, whether a Payment Provider is wired, and the OpenAPI description of
+   * the surface it serves (ADR-0080).
+   *
+   * **There is no `deployment:write` beside it and there will not be one from here.**
+   * Everything behind this word is decided by a file a Developer edits and a process restart,
+   * so there is nothing on this surface for a write to gate. That makes it the second
+   * Permission with one half, beside `order:read`, and for the same kind of reason: an Order is
+   * immutable, and a deployment's shape is not the API's to change.
+   *
+   * Its own word rather than a second use of `store:read`, on the split every other pair here
+   * draws. A Store is the commercial identity — its name, its metadata, its currency — and a
+   * Role granted that so somebody could correct one would otherwise silently also see which
+   * Steps this deployment has replaced. Which gate a route sits behind is promised surface
+   * (ADR-0060), so that is a decision to take now rather than a break to undo later.
+   *
+   * It reads oddly last, like the four above it, and belongs there for the same reason: the
+   * seeded `owner` Role is a text array appended to one migration at a time and a test asserts
+   * it equals `ALL_PERMISSIONS` exactly, so this list's order is the order the migrations ran.
+   */
+  deploymentRead: "deployment:read",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

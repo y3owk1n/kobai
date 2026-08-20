@@ -13,11 +13,12 @@ import * as contract from "./contract.ts";
  * authentication schemes a route refers to.
  *
  * The document is generated at build time and checked in
- * (`packages/core/openapi.json`), never served: `/store` deliberately refuses an
- * unauthenticated request *before* saying whether a path exists, and an endpoint that
- * handed out the whole surface anonymously would undo that. A Developer gets the
- * description from the package, and a TypeScript one gets `@kobai/client`, which is
- * generated from it.
+ * (`packages/core/openapi.json`), and served only to a caller who has presented a Merchant
+ * session holding `deployment:read` — `GET /admin/openapi.json` (ADR-0080). Never
+ * *anonymously*: `/store` deliberately refuses an unauthenticated request *before* saying
+ * whether a path exists, and an endpoint that handed out the whole surface to anyone who
+ * asked would undo that. A Developer may still get the description from the package, and a
+ * TypeScript one gets `@kobai/client`, which is generated from it.
  */
 
 /** What `getOpenAPI31Document` hands back. Named so callers need not spell it. */

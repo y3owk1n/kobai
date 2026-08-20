@@ -33,16 +33,36 @@ export type StepShapes = { readonly [slot: string]: StepShape };
 export type NoStepShapes = Readonly<Record<never, never>>;
 
 /**
- * One position in a Workflow: the **slot** the declaration named, and the Step filling it.
+ * Where the Step in a position came from: Core's own declaration, a Project's replacement, or
+ * a Project's insertion (ADR-0080).
  *
- * The two are separate because they stop being the same thing the moment a Project replaces
- * a Step (ADR-0017): the slot is what the override map is keyed by and what stays stable
- * across the swap, while `step.name` is whatever the implementation calls itself. They agree
- * in Core's own declaration and part company in a Project that has overridden one.
+ * **Recorded, never inferred.** The obvious inference is `slot === step.name`, and it is wrong
+ * in both directions: an inserted Step occupies a position under its own name, so it reads as
+ * stock; and a replacement is free to answer to the slot's own name, so it reads as stock too.
+ * Both mistakes are confident and silent, and both land on the flagship Extension Point
+ * (ADR-0003). {@link rewireWorkflow} is the one place that holds both the stock declaration and
+ * the result, so the answer is known there for free and written down there.
+ */
+export const STEP_ORIGINS = ["stock", "replaced", "inserted"] as const;
+
+/** {@link STEP_ORIGINS}, as a type. */
+export type StepOrigin = (typeof STEP_ORIGINS)[number];
+
+/**
+ * One position in a Workflow: the **slot** the declaration named, the Step filling it, and
+ * where that Step came from.
+ *
+ * The first two are separate because they stop being the same thing the moment a Project
+ * replaces a Step (ADR-0017): the slot is what the override map is keyed by and what stays
+ * stable across the swap, while `step.name` is whatever the implementation calls itself. They
+ * agree in Core's own declaration and part company in a Project that has overridden one.
+ *
+ * `origin` is the third because the first two cannot answer for it — see {@link StepOrigin}.
  */
 export type WorkflowStep = {
   readonly slot: string;
   readonly step: AnyStep;
+  readonly origin: StepOrigin;
 };
 
 /**
@@ -266,7 +286,13 @@ export function rewireWorkflow<In, Out, Shapes extends StepShapes>(
     for (const step of before[entry.slot] ?? [])
       rewired.push(insertedAt(workflow.name, step, slots));
     const replacement = replacements[entry.slot];
-    rewired.push(replacement ? { slot: entry.slot, step: replacement } : entry);
+    // The `origin` is written here rather than derived later, and here is the only place it can
+    // be: this line holds both what Core declared for the slot and what is going into it, and
+    // one line down that difference is gone. `entry` is carried through unchanged when nothing
+    // replaced it, so a slot a Project said nothing about keeps whatever it already was.
+    rewired.push(
+      replacement ? { slot: entry.slot, step: replacement, origin: "replaced" } : entry,
+    );
     for (const step of after[entry.slot] ?? [])
       rewired.push(insertedAt(workflow.name, step, slots));
   }
@@ -285,7 +311,7 @@ function insertedAt(
       `An inserted Step may not be called ${JSON.stringify(step.name)}: the Workflow ${JSON.stringify(workflow)} already declares a Step ${JSON.stringify(step.name)}, and a slot is what an override map is keyed by.`,
     );
   }
-  return { slot: step.name, step };
+  return { slot: step.name, step, origin: "inserted" };
 }
 
 /** A replacement map with its declared types discharged: slot to the Step filling it. */
@@ -327,7 +353,10 @@ function builder<In, Current, Shapes extends StepShapes>(
     step(step) {
       // The declaration is rebuilt rather than mutated, so a builder is never half a
       // Workflow and holding on to an earlier one keeps meaning what it meant.
-      return builder(name, [...steps, { slot: step.name, step: step as AnyStep }]);
+      return builder(name, [
+        ...steps,
+        { slot: step.name, step: step as AnyStep, origin: "stock" },
+      ]);
     },
 
     build: () => createWorkflow<In, Current, Shapes>(name, steps),
