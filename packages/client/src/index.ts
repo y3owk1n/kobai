@@ -118,6 +118,24 @@ export function createKobaiClient(options: KobaiClientOptions): KobaiClient {
  */
 export type Health = components["schemas"]["Health"];
 export type MigrationState = components["schemas"]["MigrationState"];
+export type Deployment = components["schemas"]["Deployment"];
+export type DeployedWorkflow = components["schemas"]["DeployedWorkflow"];
+export type DeployedStep = components["schemas"]["DeployedStep"];
+/**
+ * Where the Step in a Workflow position came from — `stock`, `replaced` or `inserted`.
+ *
+ * **Not derivable from the two fields beside it.** `slot` and `step` are equal for a Core
+ * default, for an inserted Step, and for a replacement that answers to the slot's own name, so
+ * a client comparing them reads two customised deployments as stock (ADR-0080).
+ */
+export type StepOrigin = components["schemas"]["StepOrigin"];
+/**
+ * This deployment's own OpenAPI description — an **open object**, deliberately.
+ *
+ * An OpenAPI document is a recursive schema kobai does not own, so it is not modelled here:
+ * hand it to a tool that already knows the shape.
+ */
+export type OpenApiDescription = components["schemas"]["OpenApiDescription"];
 export type Store = components["schemas"]["Store"];
 export type Product = components["schemas"]["Product"];
 export type ProductDetail = components["schemas"]["ProductDetail"];

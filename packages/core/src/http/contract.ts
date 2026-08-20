@@ -30,6 +30,7 @@ import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
 import type { HoldCartRefusal } from "../reservation/hold-cart.ts";
 import type { InventoryUpdate } from "../reservation/inventory.ts";
 import type { StoreUpdate } from "../store/write.ts";
+import { STEP_ORIGINS } from "../workflow/workflow.ts";
 
 /**
  * Every shape kobai's HTTP surface accepts or answers with, as one set of schemas.
@@ -428,6 +429,104 @@ export const Unavailable = z
     migrations: MigrationState,
   })
   .openapi("Unavailable");
+
+// ---- The deployment -------------------------------------------------------------------
+
+/**
+ * Where the Step in a Workflow position came from (ADR-0080).
+ *
+ * Built from the constant in `workflow/workflow.ts` rather than retyped, so a word added there
+ * arrives here — and in `@kobai/client` — instead of quietly widening what the route may
+ * answer. A member added to this enum is additive on the wire and is **not** additive for a
+ * client that narrowed exhaustively, which is ADR-0060's sharp edge and is owed a release note.
+ */
+export const StepOrigin = z.enum(STEP_ORIGINS).openapi("StepOrigin");
+
+/**
+ * One position in a Workflow, as `GET /admin/deployment` reports it.
+ *
+ * `origin` is the field this shape exists for. `slot` and `step` agree for a Core default —
+ * **and for an inserted Step, and for a replacement that answers to the slot's own name** — so
+ * a client comparing them would read two customised deployments as stock. Core records the
+ * answer where the rewiring happens and reports it here.
+ */
+export const DeployedStep = z
+  .object({
+    slot: z.string().meta({
+      description:
+        "The position Core declared, and what a `kobai.config.ts` override map is keyed by. Stable across a replacement.",
+    }),
+    step: z.string().meta({
+      description:
+        "What the Step filling that position calls itself. Free — a replacement is a different Step and may say so — so it is not a second spelling of `slot`.",
+    }),
+    origin: StepOrigin.meta({
+      description:
+        "Where this Step came from: `stock` is Core's own, `replaced` is a Project's Step filling the slot, `inserted` is a Project's Step watching the position without owning it. **Do not derive this from `slot` and `step`**: they are equal for an inserted Step and may be equal for a replacement.",
+    }),
+  })
+  .openapi("DeployedStep");
+
+/** One declared Workflow, and every position in it in the order it runs. */
+export const DeployedWorkflow = z
+  .object({
+    name: z.string().meta({
+      description:
+        "What the Workflow answers to — `resolve-price`, `place-order` — and the key a Project's `workflows` config uses.",
+    }),
+    steps: z.array(DeployedStep).readonly().meta({
+      description: "Every position, in the order it runs.",
+    }),
+  })
+  .openapi("DeployedWorkflow");
+
+/**
+ * What this deployment is: the release, the Workflows, and whether money can move.
+ *
+ * Three things and deliberately nothing else. The Fulfilment Strategies are
+ * `GET /admin/fulfilment-strategies` and the migration sets are `GET /health`, and restating
+ * either here would be two descriptions of one fact that can disagree — permanently, since
+ * both would be promised (ADR-0060, ADR-0080).
+ */
+export const Deployment = z
+  .object({
+    version: z.string().meta({
+      description:
+        "The release of `@kobai/core` this deployment is running — the same value the OpenAPI description's `info.version` carries, read from Core's own manifest rather than kept as a second copy.",
+    }),
+    workflows: z.array(DeployedWorkflow).readonly().meta({
+      description:
+        "Every Workflow this deployment declares, in name order, with the Step occupying each position and where that Step came from. **This list does not page**, for `GET /admin/fulfilment-strategies`' reason: it is what a deployment was configured with rather than a table, so it cannot change while the process runs (ADR-0067).",
+    }),
+    payments: z
+      .object({
+        configured: z.boolean().meta({
+          description:
+            "Whether this deployment was wired with a Payment Provider. `false` is a working deployment that refuses to place an Order with `no-payment-provider` and serves everything else (ADR-0053).",
+        }),
+      })
+      .meta({
+        description:
+          "An object rather than a bare boolean, so that whatever a provider can one day say about itself arrives beside `configured`. Core ships no provider and reports no name: there is none to report that is not a Project's own variable.",
+      }),
+  })
+  .openapi("Deployment");
+
+/**
+ * This deployment's own OpenAPI description — **an open object, deliberately**.
+ *
+ * An OpenAPI document is a recursive schema kobai does not own, and modelling it in zod would
+ * be a second and worse copy of a specification, for a value every consumer feeds to a tool
+ * that already knows the shape. So it is described in prose here the way {@link OpenMetadata}
+ * is, and a client receives an object it can hand straight to a generator.
+ */
+export const OpenApiDescription = z
+  .record(z.string(), z.unknown())
+  .meta({
+    description:
+      "The OpenAPI 3.1 description of the surface **this server** serves, produced from the routes it is built from rather than read off a package. It describes itself: `/admin/openapi.json` is one of the paths in it. Not served anonymously — publishing which routes a deployment serves, which gates they sit behind and which refusals they make is a decision about a Project's exposure that kobai does not take by default (ADR-0080).",
+  })
+  .openapi("OpenApiDescription");
 
 // ---- Merchants, Roles and Sessions ----------------------------------------------------
 
@@ -1284,8 +1383,9 @@ export const FulfilmentStrategySummary = z
 /**
  * Every Strategy this deployment has, and deliberately **not** a page of them (ADR-0067).
  *
- * No `limit`, no `after` and no {@link NextCursor}, which is the one place kobai's surface
- * departs from ADR-0064's "every list route". The reason is that this is not a list over a
+ * No `limit`, no `after` and no {@link NextCursor}, which is the first of the two places
+ * kobai's surface departs from ADR-0064's "every list route" — {@link Deployment} is the second
+ * and arrived on the same argument. The reason is that this is not a list over a
  * table: the set is `Object.keys` of what `kobai.config.ts` wired, fixed at boot, with no rows,
  * no `created_at` to order by and nothing that can be inserted between one page and the next —
  * so the failure a cursor exists to prevent cannot happen here, and the cursor could not be

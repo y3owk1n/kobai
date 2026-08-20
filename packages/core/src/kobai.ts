@@ -63,9 +63,12 @@ export type Kobai = {
   /**
    * This instance's OpenAPI description, produced from the routes it serves.
    *
-   * Not served over HTTP — `/store` refuses an unauthenticated request before saying
-   * whether a path exists, and an endpoint handing out the whole surface anonymously would
-   * undo that. It is generated at build time into `packages/core/openapi.json`, which is
+   * **Not served *anonymously*** — `/store` refuses an unauthenticated request before saying
+   * whether a path exists, and an endpoint handing out the whole surface to anyone who asks
+   * would undo that. `GET /admin/openapi.json` serves this value behind a Merchant session
+   * and `deployment:read` (ADR-0080), which is a caller who has already presented a
+   * credential `/store` never accepts; the objection was always to the anonymity and it still
+   * stands. It is *also* generated at build time into `packages/core/openapi.json`, which is
    * what `@kobai/client` is generated from and what a Developer in another language reads.
    */
   openapi(): OpenApiDocument;

@@ -66,6 +66,7 @@ import {
 } from "../catalog/write.ts";
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
+import { describeDeployment } from "../deployment/deployment.ts";
 import {
   type FulfilmentStrategies,
   fulfilmentStrategyNames,
@@ -73,14 +74,17 @@ import {
 import { listMedia, type MediaUploadOutcome, uploadMedia } from "../media/media.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { listOrders, readOrder } from "../order/read.ts";
+import type { PaymentProvider } from "../payment/provider.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
 import { type StoreUpdate, updateStore } from "../store/write.ts";
+import type { WorkflowRegistry } from "../workflow/context.ts";
 import * as contract from "./contract.ts";
 import {
   invalidRequestHook,
   json,
   MERCHANT_SESSION,
+  type OpenApiDocument,
   PAGE_QUERY_INVALID,
   REFUSALS,
 } from "./openapi.ts";
@@ -134,6 +138,39 @@ export type AdminDependencies = {
    * per instance and every other route on this surface is a module-level constant.
    */
   readonly sessionPolicy: SessionPolicy;
+  /**
+   * Every Workflow declaration this deployment runs, so `GET /admin/deployment` can report the
+   * Step in each position and where it came from (ADR-0080).
+   *
+   * The rewired declarations rather than Core's own: what a Developer is asking is what *this*
+   * deployment runs, and Core's default is the answer only where nothing was wired over it.
+   */
+  readonly workflows: WorkflowRegistry;
+  /**
+   * The Payment Provider this deployment was wired with, or `undefined` for one wired with none
+   * (ADR-0053). Reported as a boolean and never as itself — see `deployment/deployment.ts`.
+   */
+  readonly paymentProvider: PaymentProvider | undefined;
+  /**
+   * The release of Core this is, asked rather than read here.
+   *
+   * A function, and deliberately the very one that fills the description's `info.version`: the
+   * surface's version *is* the package's (ADR-0060), so this route is a second reader of that
+   * one fact rather than a second copy of it. It is called per request for the reason
+   * `coreVersion` is lazy at all — a manifest read belongs where somebody asked for the value,
+   * not in front of every boot.
+   */
+  readonly coreVersion: () => string;
+  /**
+   * This deployment's own OpenAPI description, asked for when somebody asks for it.
+   *
+   * A function because the document is a property of the **whole** application — both surfaces,
+   * the open Media route, the security schemes registered after the sub-apps — and this module
+   * builds one of its halves. `http/app.ts` closes over the finished app and hands the answer
+   * back through here, which is also what stops these routes needing a reference to their own
+   * parent.
+   */
+  readonly describeApi: () => OpenApiDocument;
 };
 
 // ---- The way in --------------------------------------------------------------------------
@@ -595,6 +632,78 @@ const listFulfilmentStrategiesRoute = createRoute({
     200: json(
       "Every Fulfilment Strategy this deployment has, in name order.",
       contract.FulfilmentStrategyList,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * What this deployment is — the release, the Workflows, and whether money can move.
+ *
+ * The one route on this surface whose subject is the **deployment** rather than the Store
+ * (ADR-0080). Everything a Project configures in `kobai.config.ts` disappears into a process,
+ * and until this there was no way back: a Developer answered "which Steps has this replaced" by
+ * reading the config file they hoped had shipped.
+ *
+ * **It carries three things and deliberately not five.** The Fulfilment Strategies are
+ * `GET /admin/fulfilment-strategies` and the migration sets are `GET /health`; restating either
+ * here would be two descriptions of one fact that can disagree, and both would be promised under
+ * ADR-0060 for ever. A screen that wants the whole picture composes three reads.
+ *
+ * **It does not page**, and it is the second route on the far side of ADR-0067's boundary: a set
+ * fixed by the deployment's own configuration, readable in full, unable to change without a
+ * restart. There are no rows here, no `created_at`, and nothing that can be inserted between one
+ * request and the next.
+ */
+const readDeploymentRoute = createRoute({
+  method: "get",
+  path: "/deployment",
+  summary: "Read the deployment",
+  description:
+    "What this running kobai is: the release of Core it serves, every Workflow it declares with the Step in each position and **where that Step came from**, and whether a Payment Provider is wired. A Step's `origin` is recorded where the rewiring happens rather than inferred — `slot` and `step` are equal for an inserted Step and may be equal for a replacement, so comparing them reads two customised deployments as stock. It deliberately carries neither the Fulfilment Strategies nor the migration sets: `GET /admin/fulfilment-strategies` and `GET /health` already answer those. **This does not page** (ADR-0067). Everything here is decided by a file a Developer edits and a process restart, which is why there is no write half.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.deploymentRead)] as const,
+  responses: {
+    200: json("What this deployment was configured into.", contract.Deployment),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * This deployment's own OpenAPI description, served.
+ *
+ * It reverses a sentence Core used to carry, and reads the objection precisely: the objection
+ * was to serving the description **anonymously**, and that objection still stands (ADR-0080).
+ * `/store` refuses an unauthenticated request before saying whether a path exists, and an open
+ * endpoint handing out the whole surface would undo that. Behind a Merchant session and
+ * `deployment:read`, a caller has already presented a credential `/store` never accepts.
+ *
+ * **Serving it rather than bundling it is the decision.** `@kobai/client`'s `schema.ts` is
+ * types, erased at build, so the Admin holds no description at runtime at all — and importing
+ * `@kobai/core/openapi.json` would ship a *package's* build artifact as though it were a
+ * server's answer, in a Project where those are two independently pinned dependencies.
+ *
+ * **It describes itself**: this path is in the document it returns, which follows from the
+ * description being produced from the route table this declaration is registered in.
+ */
+const readOpenApiDescriptionRoute = createRoute({
+  method: "get",
+  path: "/openapi.json",
+  summary: "Read this deployment's OpenAPI description",
+  description:
+    "The OpenAPI 3.1 description of the surface **this server** serves, produced from the routes it is built from — so a client reading it is reading this deployment's answer rather than what some package was built with. It describes itself: `/admin/openapi.json` is one of the paths in it. **It is not served anonymously**, and that is a decision rather than an oversight: publishing which routes a deployment serves, which gates they sit behind and which refusals they make is a decision about a Project's exposure that kobai does not take on a Developer's behalf. A Project that wants it public serves it from a route of its own.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.deploymentRead)] as const,
+  responses: {
+    200: json(
+      "This deployment's OpenAPI description, as an OpenAPI 3.1 document.",
+      contract.OpenApiDescription,
     ),
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
@@ -1401,6 +1510,30 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     // deployment's own configuration, sorted, rather than two spellings of it.
     const strategies = fulfilmentStrategyNames(deps.fulfilment).map((name) => ({ name }));
     return c.json({ strategies }, 200);
+  });
+
+  guarded.openapi(readDeploymentRoute, (c) =>
+    c.json(
+      describeDeployment({
+        version: deps.coreVersion(),
+        workflows: deps.workflows,
+        paymentProvider: deps.paymentProvider,
+      }),
+      200,
+    ),
+  );
+
+  guarded.openapi(readOpenApiDescriptionRoute, (c) => {
+    // The very value `kobai.openapi()` produces, which is the whole point: a client reading
+    // this is reading what this server serves rather than what a package was built with.
+    //
+    // The cast is where kobai's types meet OpenAPI's. `OpenAPIObject` is a closed interface
+    // with no index signature and this route's schema is deliberately an **open object**
+    // (ADR-0080) — modelling a recursive specification kobai does not own would be a second
+    // and worse copy of it — so neither type is assignable to the other although both describe
+    // the same bytes. Nothing is reshaped here: the same object goes out.
+    const document = deps.describeApi() as unknown as Record<string, unknown>;
+    return c.json(document, 200);
   });
 
   guarded.openapi(createProductRoute, async (c) => {

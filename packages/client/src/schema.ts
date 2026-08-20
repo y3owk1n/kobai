@@ -748,6 +748,86 @@ export interface paths {
       };
     };
   };
+  "/admin/deployment": {
+    /**
+     * Read the deployment
+     * @description What this running kobai is: the release of Core it serves, every Workflow it declares with the Step in each position and **where that Step came from**, and whether a Payment Provider is wired. A Step's `origin` is recorded where the rewiring happens rather than inferred — `slot` and `step` are equal for an inserted Step and may be equal for a replacement, so comparing them reads two customised deployments as stock. It deliberately carries neither the Fulfilment Strategies nor the migration sets: `GET /admin/fulfilment-strategies` and `GET /health` already answer those. **This does not page** (ADR-0067). Everything here is decided by a file a Developer edits and a process restart, which is why there is no write half.
+     */
+    get: {
+      responses: {
+        /** @description What this deployment was configured into. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Deployment"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/openapi.json": {
+    /**
+     * Read this deployment's OpenAPI description
+     * @description The OpenAPI 3.1 description of the surface **this server** serves, produced from the routes it is built from — so a client reading it is reading this deployment's answer rather than what some package was built with. It describes itself: `/admin/openapi.json` is one of the paths in it. **It is not served anonymously**, and that is a decision rather than an oversight: publishing which routes a deployment serves, which gates they sit behind and which refusals they make is a decision about a Project's exposure that kobai does not take on a Developer's behalf. A Project that wants it public serves it from a route of its own.
+     */
+    get: {
+      responses: {
+        /** @description This deployment's OpenAPI description, as an OpenAPI 3.1 document. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["OpenApiDescription"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/products": {
     /**
      * List Products
@@ -3017,6 +3097,39 @@ export interface components {
     FulfilmentStrategySummary: {
       /** @description The name a Variant's `fulfilment.strategy` points at — Core's own `physical` and `digital`, and whatever key this deployment's `kobai.config.ts` wired beside them. */
       name: string;
+    };
+    Deployment: {
+      /** @description The release of `@kobai/core` this deployment is running — the same value the OpenAPI description's `info.version` carries, read from Core's own manifest rather than kept as a second copy. */
+      version: string;
+      /** @description Every Workflow this deployment declares, in name order, with the Step occupying each position and where that Step came from. **This list does not page**, for `GET /admin/fulfilment-strategies`' reason: it is what a deployment was configured with rather than a table, so it cannot change while the process runs (ADR-0067). */
+      workflows: components["schemas"]["DeployedWorkflow"][];
+      /** @description An object rather than a bare boolean, so that whatever a provider can one day say about itself arrives beside `configured`. Core ships no provider and reports no name: there is none to report that is not a Project's own variable. */
+      payments: {
+        /** @description Whether this deployment was wired with a Payment Provider. `false` is a working deployment that refuses to place an Order with `no-payment-provider` and serves everything else (ADR-0053). */
+        configured: boolean;
+      };
+    };
+    DeployedWorkflow: {
+      /** @description What the Workflow answers to — `resolve-price`, `place-order` — and the key a Project's `workflows` config uses. */
+      name: string;
+      /** @description Every position, in the order it runs. */
+      steps: components["schemas"]["DeployedStep"][];
+    };
+    DeployedStep: {
+      /** @description The position Core declared, and what a `kobai.config.ts` override map is keyed by. Stable across a replacement. */
+      slot: string;
+      /** @description What the Step filling that position calls itself. Free — a replacement is a different Step and may say so — so it is not a second spelling of `slot`. */
+      step: string;
+      origin: components["schemas"]["StepOrigin"];
+    };
+    /**
+     * @description Where this Step came from: `stock` is Core's own, `replaced` is a Project's Step filling the slot, `inserted` is a Project's Step watching the position without owning it. **Do not derive this from `slot` and `step`**: they are equal for an inserted Step and may be equal for a replacement.
+     * @enum {string}
+     */
+    StepOrigin: "stock" | "replaced" | "inserted";
+    /** @description The OpenAPI 3.1 description of the surface **this server** serves, produced from the routes it is built from rather than read off a package. It describes itself: `/admin/openapi.json` is one of the paths in it. Not served anonymously — publishing which routes a deployment serves, which gates they sit behind and which refusals they make is a decision about a Project's exposure that kobai does not take by default (ADR-0080). */
+    OpenApiDescription: {
+      [key: string]: unknown;
     };
     ProductDetail: components["schemas"]["Product"] & {
       /** @description The options a Shopper chooses this Product by — Size, Colour — **in the order the Merchant put them in**, because Size before Colour is a decision a storefront should not have to invent. Empty for a Product sold as one thing. On the detail shape and not on the list, which is not a detail view. */
