@@ -722,6 +722,114 @@ export const variantMedia = pgTable(
 export type VariantMediaRow = typeof variantMedia.$inferSelect;
 
 /**
+ * A **Collection** — a Merchant's grouping of Products, so a storefront has navigation
+ * (#256, stories 13 and 18).
+ *
+ * **Core's table and not the content Plugin's**, which is ADR-0074's neighbour decision taken
+ * rather than deferred: the *grouping* is a catalog relationship — it decides which Products a
+ * storefront lists together, and it is what `GET /admin/products` and `GET /store/products`
+ * narrow by — while the **page** that renders one, its copy and its layout, is content and
+ * belongs to the Plugin. Putting the grouping in a Plugin would have made `?collection=` a
+ * filter Core could not implement.
+ *
+ * **No handle, and that is a decision rather than an omission.** `core_product.handle` exists
+ * because `GET /store/products/{idOrHandle}` resolves one, and nothing resolves a Collection by
+ * name: a storefront browses one through `?collection=`, by the identifier the Product it is
+ * already holding reports. The address a Collection is *published* at is a property of the page
+ * that renders it, which is #216's, and a second unique string on this table would be ADR-0038's
+ * whole dance taken now for a route that does not exist yet. It is additive under ADR-0060 the
+ * day one does.
+ *
+ * **The title is not unique either**, unlike `core_role.name`. A Role's name is how a Merchant is
+ * *created against* one, so two of them could not be told apart; a Collection is addressed by its
+ * identifier everywhere, so two called `Summer` are two groupings a Merchant may perfectly well
+ * have meant — and a constraint is the one place a relaxation cannot reach the rows already
+ * written.
+ *
+ * There is no position, no parent and no rule that fills one: nesting, ordering and automatic
+ * membership are all named out of scope by #209, and a flat, manually-managed grouping is what
+ * story 14 asks for.
+ */
+export const collection = pgTable(
+  "core_collection",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** What the Merchant calls it — `Summer`, `Under 20`. Not unique; see above. */
+    title: text("title").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // What `GET /admin/collections` pages along — see `core_api_key`'s for why both columns.
+    index("core_collection_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
+
+export type CollectionRow = typeof collection.$inferSelect;
+
+/**
+ * Which Products are in which Collections — a **join table and never a column** (story 14).
+ *
+ * A `collection_id` on `core_product` would make grouping the hierarchy story 14 exists to
+ * refuse: a poster belonging in Summer *and* in Under 20 would have to be two Products, or one
+ * of the two groupings would have to lose. So membership is a row, a Product has as many as
+ * somebody wrote, and a Collection holds as many Products as were put in it.
+ *
+ * **Both foreign keys cascade, and neither cascade reaches a principal row** — which is the
+ * whole of story 17, and the property #256 asked to be asserted directly rather than left for
+ * the DDL to imply. Deleting a Collection deletes **these rows** and stops: every Product it
+ * held is still in the catalog, still published, still sellable, and merely ungrouped. The
+ * mirror image holds for a deleted Product, which takes its memberships and leaves every
+ * Collection standing. Organising is never destructive in either direction, and
+ * `catalog/collection.test.ts` watches both.
+ *
+ * **`cascade` here is the opposite judgement from `core_product_media.media_id`'s `restrict`,
+ * for the opposite reason.** A Media a Product is showing must not vanish out from under it
+ * (ADR-0082), so that one is refused-while-attached by construction. A Collection is a *label*,
+ * and removing a label from a Product is exactly what deleting it should do — refusing would
+ * mean a Merchant had to empty a Collection before they could remove it, which is tidying up in
+ * order to delete a name.
+ *
+ * **There is no `position`**, unlike {@link productMedia} and {@link productOption}. The order
+ * images are shown in is a Merchant's decision and story 9 says so; the order of a set is not a
+ * fact this table has, because ordering rules are named out of scope by #209. What a Product
+ * reports is therefore its Collections **by title**, which is the only column of one a Merchant
+ * would recognise, with `id` breaking the tie because titles are not unique.
+ *
+ * **The unique index is what makes a Product a member once.** The same pair twice is the same
+ * fact twice, and every write here replaces a Product's whole set — delete then insert — so
+ * nothing on its way in can collide with a row on its way out.
+ */
+export const productCollection = pgTable(
+  "core_product_collection",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      // A deleted Product takes its memberships with it, and no Collection with them.
+      .references(() => product.id, { onDelete: "cascade" }),
+    collectionId: uuid("collection_id")
+      .notNull()
+      // A deleted Collection takes its memberships with it, and no Product with them — story 17,
+      // stated in the database rather than in a function somebody has to remember to call.
+      .references(() => collection.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("core_product_collection_product_collection_idx").on(
+      table.productId,
+      table.collectionId,
+    ),
+    // How both Product lists narrow by `?collection=`: every membership of one Collection.
+    index("core_product_collection_collection_idx").on(table.collectionId),
+  ],
+);
+
+export type ProductCollectionRow = typeof productCollection.$inferSelect;
+
+/**
  * A Cart — a Shopper's **mutable, disposable, unauthoritative** selection before purchase
  * (`CONTEXT.md`, ADR-0009).
  *

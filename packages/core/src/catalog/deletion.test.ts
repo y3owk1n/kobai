@@ -219,6 +219,8 @@ describe("DELETE /admin/products/{id}", () => {
           // Nothing attached, and named for the same reason `status` is: this is a whole-body
           // assertion, and a field that went missing from a Merchant's list should fail it.
           media: [],
+          // Nothing grouped it either, and named for the same reason again.
+          collections: [],
           metadata: {},
         },
       ],

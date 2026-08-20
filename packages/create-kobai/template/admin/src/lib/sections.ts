@@ -1,6 +1,7 @@
 import {
   ImageIcon,
   KeyRoundIcon,
+  LayersIcon,
   PackageIcon,
   ReceiptTextIcon,
   ShieldCheckIcon,
@@ -115,6 +116,28 @@ export const SECTIONS = [
     path: "/media",
     label: "Media",
     Icon: ImageIcon,
+    permission: PERMISSIONS.catalogRead,
+    group: "Commerce",
+  },
+  {
+    /**
+     * Beside Products and Media, because a Collection is catalog data too (#256, ADR-0074) and
+     * `catalog:read` is what opens all three — the grouping is a catalog relationship, while the
+     * *page* that renders a Collection is content and belongs to the Plugin. So it is
+     * `Commerce`, and it is authored beside the two it shares a Permission with rather than at
+     * the end of the group, which is what #266 asks of the next section added.
+     *
+     * A section of its own rather than a card on the Products screen, because a Collection is a
+     * record a Merchant makes, renames and deletes, and it outlives every Product in it. Which
+     * Products are in one is asked from the Products list, which narrows by `?collection=`.
+     *
+     * **It moves no Role's landing**, which is the thing to check before adding a section: the
+     * front door heads the narrowed list, and every Role that can read Collections can read
+     * Products, which is still ahead of it.
+     */
+    path: "/collections",
+    label: "Collections",
+    Icon: LayersIcon,
     permission: PERMISSIONS.catalogRead,
     group: "Commerce",
   },

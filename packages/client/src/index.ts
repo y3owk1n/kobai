@@ -218,6 +218,29 @@ export type UploadMediaRequest = components["schemas"]["UploadMediaRequest"];
  * Media** — it stays in the Store's library and may still be showing elsewhere (ADR-0082).
  */
 export type MediaAttachment = components["schemas"]["MediaAttachment"];
+/**
+ * A **Collection** — a Merchant's grouping of Products, so a storefront has navigation.
+ *
+ * A title, and no handle: nothing resolves a Collection by name, because a storefront browses
+ * one through `GET /store/products?collection=` by the `id` each Product's own `collections`
+ * reports. Titles are not unique — a Collection is addressed by its identifier everywhere.
+ *
+ * `StoreCollection` is what a publishable key reads and carries the same three fields, declared
+ * apart so a field added for a Merchant is not published by the deploy that adds it.
+ */
+export type Collection = components["schemas"]["Collection"];
+export type CollectionList = components["schemas"]["CollectionList"];
+export type StoreCollection = components["schemas"]["StoreCollection"];
+export type CreateCollectionRequest = components["schemas"]["CreateCollectionRequest"];
+export type UpdateCollectionRequest = components["schemas"]["UpdateCollectionRequest"];
+/**
+ * One entry of the set saying which Collections a Product is in.
+ *
+ * The whole set is sent, so grouping and ungrouping are one request and an empty list takes the
+ * Product out of every Collection. Unlike `MediaAttachment` the **order carries no meaning**: a
+ * Product is in a Collection or it is not, and a read answers by title.
+ */
+export type CollectionMembership = components["schemas"]["CollectionMembership"];
 export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
 export type Payment = components["schemas"]["Payment"];
@@ -274,6 +297,7 @@ export type MerchantRefusal = components["schemas"]["MerchantRefusal"];
 export type RoleRefusal = components["schemas"]["RoleRefusal"];
 export type StoreRefusal = components["schemas"]["StoreRefusal"];
 export type CatalogRefusal = components["schemas"]["CatalogRefusal"];
+export type CollectionRefusal = components["schemas"]["CollectionRefusal"];
 export type StoreCatalogRefusal = components["schemas"]["StoreCatalogRefusal"];
 export type CartRefusal = components["schemas"]["CartRefusal"];
 export type CartReservations = components["schemas"]["CartReservations"];

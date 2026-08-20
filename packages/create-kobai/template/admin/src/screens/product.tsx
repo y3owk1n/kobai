@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type {
+  Collection,
   Media,
   Price,
   ProductOption,
@@ -10,7 +11,7 @@ import type {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackageXIcon } from "lucide-react";
 import { useState } from "react";
-import { useFieldArray, useForm } from "react-hook-form";
+import { useController, useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
@@ -37,6 +38,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Empty,
   EmptyDescription,
@@ -44,6 +46,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -55,6 +64,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useOfferedCollections } from "@/lib/collections";
 import { useCrumbTitle } from "@/lib/crumb";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
@@ -167,6 +177,8 @@ export function ProductScreen() {
       <ProductOptions id={id} options={product.data.options} />
 
       <ProductMedia id={id} media={product.data.media} />
+
+      <ProductCollections id={id} collections={product.data.collections} />
 
       {product.data.variants.map((variant) => (
         <VariantCard
@@ -597,6 +609,160 @@ function ProductMedia({
           problemOf={whyNotChanged}
         />
       </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Which Collections this Product is in (#256, stories 13 and 14).
+ *
+ * A card of its own beside Images, and the same bargain: kobai takes `collections` as the whole
+ * **set** of what this Product should now be in, so putting it into one and taking it out of one
+ * are one field and one request. Where this parts company with Images is that a set has no
+ * order — there is no first Collection and nothing to move up or down — which is why this is a
+ * list of checkboxes rather than `useFieldArray` with Up and Down beside each row.
+ *
+ * **The set is read from kobai, never written down here**, through `lib/collections.ts` — which
+ * the Products list's own filter reads from too, so the two ask one question in one place and
+ * inherit the same known gap about the hundred-and-first Collection.
+ *
+ * **Removing a Collection here takes this Product out of it and deletes nothing** — not the
+ * Collection, and not the other Products in it. That sentence is in the card because a Merchant
+ * who is unsure will not press it, and because the same word is true from the other end:
+ * deleting a Collection leaves every Product it held alone (story 17).
+ */
+function ProductCollections({
+  id,
+  collections,
+}: {
+  readonly id: string;
+  readonly collections: readonly Collection[];
+}) {
+  const client = useKobaiClient();
+  const reread = useRereadProduct(id);
+  const unavailable = useCannotWrite();
+
+  const offered = useOfferedCollections();
+
+  const form = useForm<{ collections: string[] }>({
+    // `values` rather than `defaultValues`, so a change that landed leaves the form showing what
+    // kobai now holds rather than what was clicked at it.
+    values: { collections: collections.map((one) => one.id) },
+  });
+  const { field } = useController({ control: form.control, name: "collections" });
+  const held = Array.isArray(field.value) ? field.value : [];
+
+  const save = useMutation({
+    mutationFn: async (values: { collections: string[] }) =>
+      orThrow(
+        await client.PATCH("/admin/products/{id}", {
+          params: { path: { id } },
+          body: { collections: values.collections.map((one) => ({ id: one })) },
+        }),
+      ),
+    onSuccess: reread,
+  });
+
+  /**
+   * Every Collection this card can draw a row for.
+   *
+   * The offered list, plus any this Product is already in that the list did not carry — which is
+   * `PermissionsField`'s rule about a word Core has never heard of, arriving here as the
+   * hundred-and-first Collection. A card that quietly dropped one would take the Product out of
+   * it on the next save, which is data loss spelled as a form.
+   */
+  const rows = [
+    ...offered.collections,
+    ...collections.filter(
+      (one) => !offered.collections.some((each) => each.id === one.id),
+    ),
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h3>Collections</h3>
+        </CardTitle>
+        <CardDescription>
+          How a storefront groups this Product — it can be in as many as you like, or
+          none. Unticking one takes this Product out of that Collection and deletes
+          nothing: the Collection stays, and so does every other Product in it.
+        </CardDescription>
+      </CardHeader>
+      <form onSubmit={form.handleSubmit((values) => save.mutate(values))}>
+        <CardContent className="grid gap-6">
+          <Problem
+            problem={save.isError ? whyNotChanged(save.error) : null}
+            title="The Collections were not changed."
+          />
+          <Problem
+            problem={
+              offered.error === null
+                ? null
+                : problemOf(offered.error, "The Collections could not be read.")
+            }
+          />
+
+          {offered.pending ? (
+            <div
+              className="grid gap-3"
+              role="status"
+              aria-label="Reading the Collections"
+            >
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-6 w-48" />
+            </div>
+          ) : null}
+
+          {offered.read && rows.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              This Store has no Collections yet. Make one in the Collections section and
+              it will be offered here.
+            </p>
+          ) : null}
+
+          {rows.length > 0 ? (
+            <FieldSet>
+              <FieldLegend variant="label">In these Collections</FieldLegend>
+              {/* `checkbox-group` is what `Field`'s own spacing rules key off, so the list is
+                  spaced the way shadcn spaces a set of checkboxes. */}
+              <FieldGroup data-slot="checkbox-group">
+                {rows.map((collection) => (
+                  <Field key={collection.id} orientation="horizontal">
+                    <Checkbox
+                      id={`product-collection-${collection.id}`}
+                      checked={held.includes(collection.id)}
+                      onCheckedChange={(inIt) =>
+                        field.onChange(
+                          inIt
+                            ? [...held, collection.id]
+                            : held.filter((each) => each !== collection.id),
+                        )
+                      }
+                    />
+                    {/* A `<label for>` reaches the checkbox because Base UI's root is a
+                        `<button>`, which is labelable — so clicking the title toggles it and a
+                        screen reader announces the Collection as the control's name. */}
+                    <FieldLabel
+                      htmlFor={`product-collection-${collection.id}`}
+                      className="font-normal"
+                    >
+                      {collection.title}
+                    </FieldLabel>
+                  </Field>
+                ))}
+              </FieldGroup>
+            </FieldSet>
+          ) : null}
+        </CardContent>
+        <CardFooter className="mt-4">
+          <ActionButton type="submit" unavailable={unavailable} disabled={save.isPending}>
+            {save.isPending ? <Spinner /> : null}
+            Save Collections
+          </ActionButton>
+        </CardFooter>
+      </form>
     </Card>
   );
 }
@@ -1497,6 +1663,7 @@ function isNoSuchProduct(thrown: unknown): boolean {
     case "unknown-fulfilment-strategy":
     case "variant-options-mismatch":
     case "media-not-found":
+    case "collection-not-found":
       // Not reachable from a read of one Product as it stands, so kobai's own prose is shown
       // rather than a sentence written here for a case nobody has seen.
       return false;
@@ -1548,9 +1715,10 @@ function whyNotDeleted(thrown: unknown, fallback: string): string {
     case "unknown-fulfilment-strategy":
     case "variant-options-mismatch":
     case "media-not-found":
+    case "collection-not-found":
       // Not reachable from a delete, which sends no body and names no SKU, handle, currency,
-      // Strategy, option value or image. Reported as kobai said it rather than as a sentence
-      // written for a case nobody has seen.
+      // Strategy, option value, image or Collection. Reported as kobai said it rather than as a
+      // sentence written for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:
@@ -1605,6 +1773,13 @@ function whyNotChanged(thrown: unknown): string {
       // is worded rather than deferred to kobai's prose because when that route arrives this is
       // exactly what a Merchant will meet, and the sentence is the same either way.
       return "One of the images chosen is no longer in this Store's Media. Reload this page and pick from the Media it then shows.";
+
+    case "collection-not-found":
+      // Its twin, and this one is reachable today: a colleague deleted a Collection between
+      // this card reading the list and the Merchant saving it. The Product is untouched and the
+      // repair is to see the list again — which is why the sentence says reload rather than
+      // apologising.
+      return "One of the Collections ticked is no longer there — somebody deleted it while this page was open. Reload this page and tick from the Collections it then shows.";
 
     case "product-not-found":
     case "variant-not-found":

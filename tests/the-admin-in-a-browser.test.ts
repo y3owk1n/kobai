@@ -808,7 +808,7 @@ describe("the frame on a narrow screen", () => {
  */
 describe("the sections, in three groups", () => {
   /** What each group holds, in the order the sidebar draws them — `lib/sections.ts`'s order. */
-  const COMMERCE = ["Products", "Media", "Orders", "Carts"];
+  const COMMERCE = ["Products", "Media", "Collections", "Orders", "Carts"];
   const SETTINGS = ["Merchants", "Roles", "Store"];
   const DEVELOPER = ["API keys"];
 
@@ -990,6 +990,7 @@ describe("the command palette", () => {
       .toEqual([
         "Products",
         "Media",
+        "Collections",
         "Orders",
         "Carts",
         "Merchants",
@@ -1009,18 +1010,18 @@ describe("the command palette", () => {
     await page.keyboard.press("ArrowDown");
     await expect.poll(() => selected(page)).toEqual(["Media"]);
     await page.keyboard.press("ArrowDown");
-    await expect.poll(() => selected(page)).toEqual(["Orders"]);
+    await expect.poll(() => selected(page)).toEqual(["Collections"]);
     await page.keyboard.press("ArrowDown");
-    await expect.poll(() => selected(page)).toEqual(["Carts"]);
+    await expect.poll(() => selected(page)).toEqual(["Orders"]);
     // Both directions, because a list that only walks one way is one a Merchant who overshoots
     // has to close and reopen.
     await page.keyboard.press("ArrowUp");
-    await expect.poll(() => selected(page)).toEqual(["Orders"]);
+    await expect.poll(() => selected(page)).toEqual(["Collections"]);
 
     await page.keyboard.press("Enter");
 
-    expect(where(page)).toBe("/orders");
-    await shows(page.getByText("Every Order this Store has taken"), "the Orders screen");
+    expect(where(page)).toBe("/collections");
+    await shows(page.getByText("How this catalog is grouped"), "the Collections screen");
   });
 
   it("closes on Escape and hands the keyboard back to the button that opens it", async () => {
@@ -1710,11 +1711,11 @@ describe("what a Role may do", () => {
     await shows(page.getByText("Everything this Store sells"), "the Products screen");
 
     // Orders and API keys would 403 on load for this Role, and an empty screen that refuses
-    // teaches nothing — so they are absent rather than present and dead (ADR-0063). Media is
-    // here because it is catalog data behind `catalog:read` (ADR-0015): the pair is what this
-    // Role can read, and a section list that named only one of them would be hiding a section
-    // this Merchant may open.
-    await expect.poll(() => sections(page)).toEqual(["Products", "Media"]);
+    // teaches nothing — so they are absent rather than present and dead (ADR-0063). Media and
+    // Collections are here because both are catalog data behind `catalog:read` (ADR-0015,
+    // ADR-0074): the three are what this Role can read, and a section list that named only one
+    // of them would be hiding a section this Merchant may open.
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Collections"]);
 
     // The palette reads the same list, which is the whole reason `lib/sections.ts` is a module:
     // two navigation affordances over one list cannot disagree about what this Admin has.
@@ -1725,7 +1726,7 @@ describe("what a Role may do", () => {
     );
     await expect
       .poll(() => page.getByRole("option").allInnerTexts())
-      .toEqual(["Products", "Media"]);
+      .toEqual(["Products", "Media", "Collections"]);
 
     await auditAccessibility(page, "the Admin's palette on a narrow Role");
   });
@@ -1920,7 +1921,9 @@ describe("what a Role may do", () => {
     const narrow = await seam.merchantOnARole([CATALOG_READ, ORDER_READ]);
     const page = await seam.signedInAs(narrow, "/products");
     // Media is beside Products because both are behind `catalog:read` (ADR-0015).
-    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Orders"]);
+    await expect
+      .poll(() => sections(page))
+      .toEqual(["Products", "Media", "Collections", "Orders"]);
 
     // Somebody else, in another browser, widens this Role. The Merchant's session is untouched
     // — a Role is read on every request rather than copied into the session — so the Admin is
@@ -1936,7 +1939,7 @@ describe("what a Role may do", () => {
     // as well as on window focus, so the frame catches up without anybody signing out.
     await expect
       .poll(() => sections(page))
-      .toEqual(["Products", "Media", "Orders", "API keys"]);
+      .toEqual(["Products", "Media", "Collections", "Orders", "API keys"]);
 
     // And back the other way, which is the direction that actually takes an offer away — a
     // frame that only ever grew would be wrong in the one case a Merchant is *meant* to stop
@@ -1945,13 +1948,13 @@ describe("what a Role may do", () => {
       permissions: [CATALOG_READ],
     });
     await page.getByRole("link", { name: "Products" }).click();
-    await expect.poll(() => sections(page)).toEqual(["Products", "Media"]);
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Collections"]);
   });
 
   it("takes a Role edited elsewhere when the window is focused, with no navigation", async () => {
     const narrow = await seam.merchantOnARole([CATALOG_READ]);
     const page = await seam.signedInAs(narrow, "/products");
-    await expect.poll(() => sections(page)).toEqual(["Products", "Media"]);
+    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Collections"]);
 
     await seam.api("PATCH", `/admin/roles/${narrow.roleId}`, {
       permissions: [CATALOG_READ, ORDER_READ],
@@ -1966,7 +1969,9 @@ describe("what a Role may do", () => {
     await refocusTheWindow(page);
 
     expect(where(page)).toBe("/products");
-    await expect.poll(() => sections(page)).toEqual(["Products", "Media", "Orders"]);
+    await expect
+      .poll(() => sections(page))
+      .toEqual(["Products", "Media", "Collections", "Orders"]);
   });
 });
 
@@ -2337,6 +2342,90 @@ describe("the catalog screens", () => {
     await expect(page.getByRole("alertdialog").count()).resolves.toBe(0);
     await expect(watching.settled()).resolves.toEqual([]);
     await auditAccessibility(page, "the Product screen on a read-only Role");
+  });
+});
+
+/**
+ * The Collections screens, and the one promise about them a request cannot ask (#256).
+ *
+ * Everything a Merchant does *to* a Collection is asserted through the API, in
+ * `packages/core/src/catalog/collection.test.ts` — created, renamed, deleted, and what deleting
+ * one leaves behind. Two things are here instead, and neither is screen behaviour:
+ *
+ * - **The two new screens are audited**, which is what makes `axe-core` cover them at all: it
+ *   runs on every screen a case visits, so a section nothing visits is a section nothing checks.
+ * - **The Products list keeps its status narrowing when a Collection is chosen**, which is a
+ *   fact about an address rather than about a table. It is also the only change this ticket made
+ *   to a component two other screens already use, and the failure it guards is invisible: two
+ *   filters that each clear the other look exactly like two filters that work, one click at a
+ *   time (`components/list-filter.tsx`).
+ *
+ * **The second was watched failing** against the `ListFilter` as #252 left it — a `to` built from
+ * this parameter alone — and it reddens naming the status that was cleared, which is what says
+ * the case reaches the thing it is about.
+ */
+describe("the Collections screens", () => {
+  it("makes a Collection, opens it, and reaches its Products from it", async () => {
+    const named = `Summer ${Date.now()}`;
+    const page = await seam.signedIn("/collections");
+    await shows(
+      page.getByRole("heading", { name: "Collections" }),
+      "the Collections list",
+    );
+    await auditAccessibility(page, "the Collections list");
+
+    await page.getByLabel("Title").fill(named);
+    await page.getByRole("button", { name: "Create Collection" }).click();
+
+    // Read back off kobai rather than patched in: there is no optimistic update anywhere in
+    // this Admin (ADR-0063), so the row appearing is the list having been re-read.
+    const row = page.getByRole("row").filter({ hasText: named });
+    await shows(row, "the new Collection's row");
+
+    await row.getByRole("link", { name: "Open" }).click();
+    await shows(
+      page.getByRole("heading", { level: 2, name: named }),
+      "the Collection's title",
+    );
+    await auditAccessibility(page, "the Collection screen");
+
+    // The one navigation this screen owes, and the reason there is no second paged list on it:
+    // what is in a Collection is the Products list narrowed to it, cursor and all.
+    await page.getByRole("link", { name: "See its Products" }).click();
+    await expect
+      .poll(() => where(page), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The Collection screen did not reach its Products.",
+      })
+      .toMatch(/^\/products\?collection=/);
+    await auditAccessibility(page, "the Products list narrowed to one Collection");
+  });
+
+  it("keeps the status narrowing when a Collection is chosen, and the other way round", async () => {
+    const named = `Autumn ${Date.now()}`;
+    await seam.api("POST", "/admin/collections", { title: named });
+
+    const page = await seam.signedIn("/products?status=published");
+
+    // Both navs are drawn, and choosing from the second must not undo the first — a cursor is
+    // dropped when either moves, and nothing else is.
+    await page.getByRole("link", { name: named }).click();
+    await expect
+      .poll(() => new URLSearchParams(where(page).split("?")[1] ?? "").get("status"), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "Choosing a Collection cleared the status the Merchant was already on.",
+      })
+      .toBe("published");
+
+    // And back the other way, because a rule kept in one direction and not the other is the
+    // same bug with one of its two symptoms fixed.
+    await page.getByRole("link", { name: "Draft", exact: true }).click();
+    const search = new URLSearchParams(where(page).split("?")[1] ?? "");
+    expect(search.get("status")).toBe("draft");
+    expect(
+      search.get("collection"),
+      "Choosing a status cleared the Collection the Merchant was already in.",
+    ).toEqual(expect.any(String));
   });
 });
 

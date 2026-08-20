@@ -338,6 +338,11 @@ describe("browsing the catalog", () => {
           // catalog grid is nothing but leading images, so the list is on this shape and not
           // only on the detail (#255). `catalog/media.test.ts` follows one all the way through.
           media: [],
+          // Published on purpose, and empty here because nothing has grouped this Product: it
+          // is what a storefront draws a breadcrumb from and what it links a catalog tile at,
+          // so a request per tile is the alternative (#256). `catalog/collection.test.ts`
+          // follows one all the way through.
+          collections: [],
           metadata: { blurb: "Printed on heavy stock." },
         },
       ],
@@ -359,6 +364,7 @@ describe("browsing the catalog", () => {
       description: "Printed on 200gsm uncoated stock.",
       handle: "a-poster",
       media: [],
+      collections: [],
       metadata: { blurb: "Printed on heavy stock." },
       // The options a Shopper chooses by, in the Merchant's order — empty for a Product sold
       // as one thing, and carrying **no identifier** when it is not, which is the one field

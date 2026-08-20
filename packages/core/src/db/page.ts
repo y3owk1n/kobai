@@ -73,7 +73,8 @@ export type PagedList =
   | "merchants"
   | "store-products"
   | "carts"
-  | "media";
+  | "media"
+  | "collections";
 
 /** What a caller asked for: how many, and what they have already seen. */
 export type PageRequest = {

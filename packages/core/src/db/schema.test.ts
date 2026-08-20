@@ -9,7 +9,16 @@ import {
   seedTestOrder,
 } from "../testing/index.ts";
 import type { PagedList } from "./page.ts";
-import { apiKey, cart, media, merchant, order, product, role } from "./schema.ts";
+import {
+  apiKey,
+  cart,
+  collection,
+  media,
+  merchant,
+  order,
+  product,
+  role,
+} from "./schema.ts";
 
 /**
  * Core's tables, as Postgres holds them.
@@ -22,8 +31,8 @@ import { apiKey, cart, media, merchant, order, product, role } from "./schema.ts
 /**
  * The principal entities — the rows a Plugin is most likely to want one more field on.
  *
- * Store, Merchant, Role, the catalog's Product, Variant and Price, the Cart and its Line
- * Items, and now the Order with its own and its Adjustments. Each must arrive carrying
+ * Store, Merchant, Role, the catalog's Product, Variant, Price and Collection, the Cart and its
+ * Line Items, and the Order with its own and its Adjustments. Each must arrive carrying
  * `metadata`, because ADR-0004's bargain is that Core's tables are closed *and* there is a
  * cheap way to stash a field anyway. Adding an entity here without the column fails this test,
  * which is the point of the list.
@@ -55,6 +64,7 @@ const PRINCIPAL_ENTITIES = [
   "core_product",
   "core_variant",
   "core_price",
+  "core_collection",
   "core_cart",
   "core_cart_line_item",
   "core_order",
@@ -189,6 +199,7 @@ const PAGED_TABLES: Record<PagedList, PagedTable> = {
   merchants: merchant,
   carts: cart,
   media,
+  collections: collection,
 };
 
 /**

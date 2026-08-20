@@ -12,6 +12,7 @@ import { product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import type { Media } from "../media/media.ts";
 import type { MediaStorage } from "../media/storage.ts";
+import { type Collection, inCollection, readProductCollections } from "./collection.ts";
 import { readProductMedia, readVariantMedia } from "./media.ts";
 import { readProductOptions, readVariantOptionValues } from "./options.ts";
 import { PUBLISHED } from "./status.ts";
@@ -67,6 +68,16 @@ import { PUBLISHED } from "./status.ts";
  *   something about an object a CDN in front is free to change (ADR-0060 makes taking one back
  *   out a major). What is left is what a page lays out with: the address, the alt text, and the
  *   dimensions that let it reserve the space before the image arrives.
+ * - **The Collections, kept — and that is the field #256 added here.** A storefront browsing a
+ *   Collection has to be able to say what it is browsing and offer the way back out, and a
+ *   Product page has to draw its breadcrumbs; both are questions about *this* Product, so the
+ *   answer travels with it rather than costing a second request. It is a shape of its own for
+ *   `StoreMedia`'s reason, and it drops nothing today — a Collection's whole record is its title
+ *   and its `metadata`, and the second is ADR-0004's escape hatch doing on a Collection what it
+ *   already does on a Product: it is where a Project's own copy for one lives until the content
+ *   Plugin has a page (#216). What is deliberately **not** here is a route: nothing on the store
+ *   surface enumerates Collections, so a storefront's navigation is built from what the Products
+ *   it read are in. Adding one is additive under ADR-0060 the day something needs it.
  * - **`status`, dropped — and not merely dropped: never carried.** It is a Merchant's field, and
  *   it is the one this whole split was argued about. A `status` on these shapes would tell every
  *   browser holding a publishable key which Products a Merchant has not finished writing and
@@ -78,6 +89,9 @@ import { PUBLISHED } from "./status.ts";
  * **That filtering is in the route rather than a parameter, deliberately.** `?status=` on
  * `/store/products` would be a client able to ask for drafts, and a client that can is one that
  * will — so a storefront would be publishing what a Merchant had not, by a query string.
+ * **`?collection=` is the filter this list *does* take, and it is no way round that** (#256):
+ * it narrows to the Products in one Collection and sits beside `IS_PUBLISHED` in the same `and`,
+ * so a draft in a Collection is answered by neither the filtered list nor the whole one.
  * `GET /store/products/{idOrHandle}` answers a draft or an archived Product with the same
  * `product-not-found` an unknown handle gets, so a draft is **invisible** rather than forbidden:
  * a 403 there would tell an anonymous browser that a handle is taken, which is the leak the
@@ -121,6 +135,21 @@ export type StoreMedia = {
   readonly alt: string | null;
   readonly width: number | null;
   readonly height: number | null;
+};
+
+/**
+ * One Collection a Product is in, as a storefront sees it.
+ *
+ * The same three fields {@link Collection} carries, and deliberately a type of its own for
+ * {@link StoreVariantFulfilment}'s reason: two shapes that happen to agree is the cheap half of
+ * #207's split, and one shape two surfaces share is the expensive half, arriving later and as a
+ * major. The `id` is published because it is what `?collection=` takes — a storefront listing a
+ * Collection sends back the identifier the Product it was looking at reported.
+ */
+export type StoreCollection = {
+  readonly id: string;
+  readonly title: string;
+  readonly metadata: Record<string, unknown>;
 };
 
 /** One option a Product is chosen by, as a storefront sees it: the name, and no identifier. */
@@ -170,6 +199,16 @@ export type StoreProduct = {
    * making a request per tile.
    */
   readonly media: readonly StoreMedia[];
+  /**
+   * The Collections this Product is in, by title — **so a storefront renders breadcrumbs without
+   * a second request** (#256, story 18).
+   *
+   * On the list shape as well as on the detail, because a catalog grid is where a storefront
+   * decides what to link each tile to and one that had to open every Product to find out would
+   * be making a request per tile — the same argument `media` makes one field up. Empty for a
+   * Product nobody has grouped.
+   */
+  readonly collections: readonly StoreCollection[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -181,17 +220,30 @@ export type StoreProductDetail = StoreProduct & {
 };
 
 /**
+ * What the store's Product list was asked for: a page, and the one thing it may be narrowed by.
+ *
+ * **`collection` and deliberately nothing else** — a storefront browses a Collection (story 18)
+ * and has no business asking for a status, which is the one rule this route enforces rather than
+ * offers. `contract.StoreProductPageQuery` produces this shape.
+ */
+export type StoreProductPageRequest = PageRequest & { readonly collection?: string };
+
+/**
  * A page of Products, newest first and paged exactly as every other list is (ADR-0064).
  *
  * The same ordering and the same `(created_at, id)` index as the Merchant's list, because the
  * failure a cursor prevents is the same one on both: a Product created between one page and the
  * next must neither hide a row nor repeat one. What differs is the shape each answers with, and
  * the cursor's own name — see {@link PagedList}.
+ *
+ * **`collection` narrows it and `published` is not negotiable**: the two sit in one `and`, so
+ * this route answers the published Products of one Collection and there is no spelling of the
+ * parameter that reaches a draft.
  */
 export async function listStoreProducts(
   db: Database,
   storage: MediaStorage,
-  page: PageRequest,
+  page: StoreProductPageRequest,
 ): Promise<Page<StoreProduct>> {
   const rows = await db
     .select({
@@ -203,7 +255,14 @@ export async function listStoreProducts(
       cursorAt: cursorAt(product.createdAt),
     })
     .from(product)
-    .where(and(rowsAfter(page, product.createdAt, product.id), IS_PUBLISHED))
+    .where(
+      and(
+        rowsAfter(page, product.createdAt, product.id),
+        IS_PUBLISHED,
+        // `undefined` where nothing was asked, which `and` drops: absent means unfiltered.
+        page.collection === undefined ? undefined : inCollection(page.collection),
+      ),
+    )
     // `id` breaks the tie, so two Products created in the same instant come back in one stable
     // order and the cursor above names one row rather than a group of them.
     .orderBy(desc(product.createdAt), desc(product.id))
@@ -219,8 +278,15 @@ export async function listStoreProducts(
     found.map((row) => row.id),
   );
 
+  // A second, for the same reason: a Product nobody has grouped has no row there at all, and a
+  // storefront drawing a grid decides what to link each tile to from this.
+  const grouped = await readProductCollections(
+    db,
+    found.map((row) => row.id),
+  );
+
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
-  // response by being forgotten about. A Product reports six fields here and these are them.
+  // response by being forgotten about. A Product reports seven fields here and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
@@ -228,6 +294,7 @@ export async function listStoreProducts(
       description: row.description,
       handle: row.handle,
       media: asStoreMedia(shown.get(row.id)),
+      collections: asStoreCollections(grouped.get(row.id)),
       metadata: row.metadata,
     })),
     nextCursor,
@@ -305,6 +372,9 @@ export async function readStoreProduct(
   return {
     ...row,
     media: asStoreMedia(shownOnProduct.get(row.id)),
+    collections: asStoreCollections(
+      (await readProductCollections(db, [row.id])).get(row.id),
+    ),
     options: options.map((one) => ({ name: one.name })),
     variants: variants.map((one) =>
       asStoreVariant(one, chosenBy.get(one.id) ?? [], shownOnVariants.get(one.id)),
@@ -405,5 +475,26 @@ function asStoreMedia(media: readonly Media[] | undefined): StoreMedia[] {
     alt: one.alt,
     width: one.width,
     height: one.height,
+  }));
+}
+
+/**
+ * The Collections the admin surface reports, narrowed to what a storefront is published — and
+ * the one place that narrowing happens.
+ *
+ * Field by field rather than by spread, for {@link asStoreMedia}'s reason: it drops nothing
+ * today, and the *next* field added to a Collection for a Merchant reaches a browser only by
+ * somebody editing this function. A three-field record whose fields all happen to be published
+ * is exactly where a spread would look harmless.
+ *
+ * `undefined` is the map having no entry, which is a Product nobody has grouped.
+ */
+function asStoreCollections(
+  collections: readonly Collection[] | undefined,
+): StoreCollection[] {
+  return (collections ?? []).map((one) => ({
+    id: one.id,
+    title: one.title,
+    metadata: one.metadata,
   }));
 }

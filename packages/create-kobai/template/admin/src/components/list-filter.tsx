@@ -15,10 +15,11 @@ export type FilterOption<Value extends string> = {
  * "which one is in force" comparison and the same three comments between them — which is the
  * shape `components/listbox-field.tsx` exists to stop happening a third time (#245): each defect
  * in a composition copied by hand is then fixed by hand, once per copy, with nothing going red
- * for the one that was missed. `?collection=` on this same Products list is the third
- * (#209), so extracting on the second is not early.
+ * for the one that was missed. `?collection=` on this same Products list is the third (#256),
+ * and it is what settled the argument rather than merely confirming it: a hand-copied third nav
+ * would have carried the missing rule below, quietly clearing whichever filter it was not.
  *
- * Three things it decides, and none of them is a preference:
+ * Four things it decides, and none of them is a preference:
  *
  * - **Links, not a `Select`.** Each value *is* a URL, so a Merchant can send "the live Carts" or
  *   "my drafts" to a colleague, a refresh lands back on it, and the back button walks between
@@ -26,10 +27,15 @@ export type FilterOption<Value extends string> = {
  *   live in the query string. A control beside the table would be the same list behind a value
  *   nothing outside that tab can see.
  * - **Choosing one drops the cursor**, because a cursor locates a page of the list that issued
- *   it: carrying one across a filter asks for the middle of a list nobody was looking at. That
- *   is why the `to` here is built from the parameter alone rather than from the current search.
- *   Paging *within* a filter keeps it, which is the `Pager`'s half of the same rule — it carries
- *   the rest of the query string over untouched.
+ *   it: carrying one across a filter asks for the middle of a list nobody was looking at. Paging
+ *   *within* a filter keeps it, which is the `Pager`'s half of the same rule — it carries the
+ *   rest of the query string over untouched.
+ * - **And it keeps every *other* narrowing** (#256). The Products list narrows by two things
+ *   now, `?status=` and `?collection=`, so a `to` built from this parameter alone — which is what
+ *   it was until there was a second filter — would silently clear the other one every time a
+ *   Merchant used either. Two filters that each undo the other look exactly like a filter that
+ *   works, so this is the one part of this component a second copy could not have been trusted
+ *   with.
  * - **`aria-current` says which is in force**, because the filled recipe is a colour and a colour
  *   says nothing to anybody listening.
  *
@@ -60,6 +66,26 @@ export function ListFilter<Value extends string>({
   /** Everything on offer, in the order it is offered. "All" is prepended and is not one. */
   readonly options: readonly FilterOption<Value>[];
 }) {
+  const [params] = useSearchParams();
+
+  /**
+   * The address one of these links goes to: this parameter set to that value, the cursor gone,
+   * and every other narrowing left exactly as it stands.
+   *
+   * Built from the *current* search rather than from nothing, which is the third bullet above:
+   * a Products list narrowing by two things has to survive a Merchant using either of them.
+   */
+  const searchFor = (value: Value | undefined): string => {
+    const next = new URLSearchParams(params);
+    // A cursor locates a page of the list that issued it, and narrowing differently issues a
+    // different list — so it goes, whichever of the filters on this screen moved.
+    next.delete("after");
+    if (value === undefined) next.delete(parameter);
+    else next.set(parameter, value);
+    const search = next.toString();
+    return search === "" ? "" : `?${search}`;
+  };
+
   return (
     <nav aria-label={label} className="mb-4 flex flex-wrap gap-2">
       {[undefined, ...options].map((option) => {
@@ -67,10 +93,7 @@ export function ListFilter<Value extends string>({
         return (
           <LinkButton
             key={option?.value ?? "all"}
-            to={{
-              pathname: section,
-              search: option === undefined ? "" : `?${parameter}=${option.value}`,
-            }}
+            to={{ pathname: section, search: searchFor(option?.value) }}
             size="sm"
             variant={inForce ? "default" : "outline"}
             aria-current={inForce ? "page" : undefined}

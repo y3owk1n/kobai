@@ -304,21 +304,37 @@ this is not the shape the paragraph above rules out.
 **A list that also *filters* still names its list once, through the same builder** (#227).
 `contract.CartPageQuery` was the first — `GET /admin/carts` takes ADR-0064's `limit` and `after`
 unchanged and `state=live|expired|spent` beside them — and `contract.ProductPageQuery` is the
-second, with `status=draft|published|archived` on `GET /admin/products` (#252). Both are
-**module-level constants**, because a list's name is the only thing `pageQuery` is a factory *for*
-and there is one of each list. What such a schema must not become is one assembled out of the
-pieces: the whole point of #183's factory is that one argument settles both ends of a cursor, so
-anything built here goes through `pageQueryOf(list, filters)` and adds *filters only*. Everything
-else on the surface stays a module-level constant.
+second, with `status=draft|published|archived` on `GET /admin/products` (#252), and
+`contract.StoreProductPageQuery` is the third — `collection=` on `GET /store/products`, the first
+filter on the **store** surface (#256). All three are **module-level constants**, because a list's
+name is the only thing `pageQuery` is a factory *for* and there is one of each list. What such a
+schema must not become is one assembled out of the pieces: the whole point of #183's factory is
+that one argument settles both ends of a cursor, so anything built here goes through
+`pageQueryOf(list, filters)` and adds *filters only*. Everything else on the surface stays a
+module-level constant.
+
+**A list may take more than one filter, and they compose rather than choose.** `GET
+/admin/products` takes `status` and `collection` together, because each is an
+`undefined`-droppable predicate in one `and` rather than a branch — so a Merchant asks for the
+drafts in one Collection and is answered by neither list alone. **One filter may be shared
+between two lists and is written once**: `collection` is the same optional parameter on both
+Product page queries, with a `description` per surface, because what narrowing by a Collection
+means to a Merchant and to a storefront are two sentences and the parameter is one.
 
 **The filtering convention is three promises, and they are asserted for every filter at once in
 `packages/core/src/http/filtering.test.ts`** (#209, #252):
 
 - **Absent means unfiltered**, which is what made each of these additive.
-- **A value outside the set is refused at 400, from the schema, never ignored** — a filter quietly
+- **A value outside the set is refused at 400, never ignored** — a filter quietly
   dropped answers a different question from the one that was asked and hands back a page the
   caller reads as the truth. The refusal is `pageQuery`'s existing `invalid`; an unusable
-  parameter does not fit the endpoint's schema and needs no `reason` of its own.
+  parameter does not fit the endpoint's schema and needs no `reason` of its own. **From the
+  schema where the schema can know, and from the handler where it cannot** (#256): the three
+  statuses are a set `contract.ts` holds, and whether a Collection *exists* is a fact about the
+  Store — so `unknownCollection` is asked **before the page is read**, in both Product list
+  handlers, and answers the same word at the same status. A value that is not even a UUID gets
+  that one sentence too, on `IdParam`'s argument: an identifier nothing carries and a string that
+  could never be one are the same answer to the caller.
 - **A filter composes with the cursor**, and a filtered page being short is still not an
   end-of-list signal — this is the case `nextCursor` was designed for.
 
@@ -326,13 +342,25 @@ That file is **its own** rather than another table in `pagination.test.ts`, and 
 file's argument turned round: the page envelope is the same on every list, and filters are not.
 Its table is checked against the description, so **a route declaring a query parameter that is
 neither `limit` nor `after` and has no entry reddens the build** — which is what stops the next
-filter opting out of the sweep silently. A filter whose values are not a closed set (a Collection
-identifier, say) fits it: an entry names its own values and its own unusable one.
+filter opting out of the sweep silently. A filter whose values are **not** a closed set fits it,
+and `?collection=` is that case (#256): an entry names its own unusable value, and the values it
+sweeps are the keys of the arrangement it builds rather than a list in the table, because a
+Collection identifier is something the arrangement has just created. Two other things about that
+table are #256's and are worth knowing before adding an entry: **`matching` is a map rather than a
+partition**, since a Product may be in several Collections and most are in none, so the values
+overlap and their union is not the list; and it carries **which credential opens each list**, as
+`pagination.test.ts`'s does and for the same reason — a store list read with a cookie answers 401,
+which looks like an ordinary failure in a file that is not about credentials.
 
 **A filter is not how a surface hides something.** `status` narrows the *Merchant's* list;
 `GET /store/products` and `GET /store/products/{idOrHandle}` answer published Products only, and
 that is enforced in `catalog/store-read.ts` rather than offered as a parameter, because a client
-that could ask for drafts is a client that will. A draft answers the same `product-not-found` an
+that could ask for drafts is a client that will. **`?collection=` on the store surface is not an
+exception to that and must not become one**: it narrows to a Collection's membership and sits
+beside `IS_PUBLISHED` in the same `and`, so a draft in a Collection is answered by neither the
+filtered list nor the whole one. Browsing a Collection is a Shopper choosing what to look at
+(story 18); asking for a status would be a client choosing what is visible, which is a different
+kind of parameter. A draft answers the same `product-not-found` an
 unknown handle does — invisible rather than forbidden, which is also what stops the store surface
 leaking that a handle is taken. And **`status` is on `Product` and `ProductDetail` and on neither
 store shape**: it is a Merchant's field, so #207's split is what keeps it off a publishable key's
@@ -455,6 +483,50 @@ rather than implementation:
   response that carries them. `catalog/store-read.ts`'s `asStoreMedia` names the five fields that
   are published, field by field rather than by omission, so the next field added to `Media` for a
   Merchant reaches a browser only by somebody editing that function.
+
+**A Collection groups Products, and it is Core's rather than the content Plugin's** (#256,
+ADR-0074). The *grouping* is a catalog relationship — it is what both Product lists narrow by —
+while the **page** that renders a Collection is content and belongs to #216; splitting it the
+other way would have left `?collection=` a filter Core could not implement without reading a
+Plugin's tables, which ADR-0004 forbids in both directions. `POST`/`GET`/`PATCH`/`DELETE
+/admin/collections` are the five routes, behind **`catalog:write` and `catalog:read`** and no
+`collection:` family of its own: a Merchant who may write the catalog may group it, which is
+`role:write`'s argument (ADR-0066) at a different table, and it means an upgrading deployment
+gets the routes working rather than a Permission nobody holds. Five things about it are decisions
+rather than implementation:
+
+- **Deleting a Collection ungroups its Products and deletes none of them** (story 17), and it is
+  the **one catalog deletion that refuses nothing**. `DELETE /admin/products/{id}` refuses while
+  stock is reserved and `DELETE /admin/roles/{id}` refuses while Merchants hold the Role, because
+  both take something away from somebody (ADR-0059); this takes away a *label*. So
+  `core_product_collection.collection_id` is `on delete cascade` — reaching the join row and
+  stopping — where `core_product_media.media_id` is `restrict`, and the two opposite judgements
+  are the same rule read from two sides. Refusing here would mean emptying a Collection before it
+  could be removed, which is tidying up in order to delete a name.
+- **Membership is a whole set on `PATCH /admin/products/{id}` and nowhere else.** `collections` is
+  `media`'s bargain one noun along, taken for half of `media`'s reason: a list of edits leaves no
+  way to say *and this one is gone*. The other half does **not** carry — a Product's images are
+  shown in an order a Merchant chose and a Product's Collections are a **set**, so there is no
+  `position`, the order of the array means nothing on the way in, and a read answers by title.
+  There is deliberately no `products` on `PATCH /admin/collections/{id}`: two fields writing one
+  fact would be permanent under ADR-0060 and could disagree about what an empty list means.
+- **A Collection has no handle and no unique title, and both absences are decisions.** Nothing
+  resolves one by name — a storefront browses one through `?collection=`, by the `id` the Product
+  it was already holding reports — so a second unique string would be ADR-0038's whole dance taken
+  for a route that does not exist. The address a Collection is *published* at belongs to the page
+  that renders it. And a title identifies nothing, which is exactly what `core_role.name`'s
+  uniqueness rests on and this has not got: a Merchant is created *against a Role by name*.
+- **`collection-not-found` is one word for one fact, whichever end asks.** It is
+  `CollectionRefusal`'s and `CatalogRefusal`'s alike — 404 from the Collection routes, **422**
+  from a `collections` list naming an asset the Store has not got, on `media-not-found`'s
+  distinction — and it is asked before the correction's first write, for #255's reason: a refusal
+  returned from inside a transaction commits it.
+- **`StoreProduct` carries its Collections and there is no `GET /store/collections`.** A
+  storefront renders breadcrumbs, and links a catalog tile at what it belongs to, from the Product
+  it already has — on the list shape as well as the detail, so a grid is one request. `StoreCollection`
+  is declared apart from `Collection` for `StoreMedia`'s reason though it drops nothing today, and
+  `asStoreCollections` names the published fields one by one. Nothing on that surface enumerates
+  Collections; adding a route is additive under ADR-0060 the day something needs one.
 
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.

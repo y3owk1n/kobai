@@ -813,6 +813,29 @@
           "alt"
         ]
       },
+      "Collection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "description": "What the Merchant calls it — `Summer`, `Under 20`. **Not unique**: a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "metadata"
+        ]
+      },
       "ProductOption": {
         "type": "object",
         "properties": {
@@ -1002,6 +1025,13 @@
             },
             "description": "The Media this Product shows, **in the order a Merchant put them in** — so the first one is the one that leads. On the list shape as well as on the detail, because a catalog grid is nothing but leading images and a client that had to open every Product to draw one would be making a request per tile. Attaching, reordering and detaching are all `media` on `PATCH /admin/products/{id}`; detaching removes the attachment and never the Media."
           },
+          "collections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Collection"
+            },
+            "description": "The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections` on `PATCH /admin/products/{id}`, which takes the whole set. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -1015,6 +1045,7 @@
           "handle",
           "status",
           "media",
+          "collections",
           "metadata"
         ]
       },
@@ -1040,7 +1071,8 @@
               "unsupported-currency",
               "unknown-fulfilment-strategy",
               "variant-options-mismatch",
-              "media-not-found"
+              "media-not-found",
+              "collection-not-found"
             ],
             "description": "Machine-readable. Branch on this."
           }
@@ -1194,6 +1226,13 @@
             },
             "description": "**The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for."
           },
+          "collections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionMembership"
+            },
+            "description": "**The complete set of the Collections this Product is in** — so this is where it is put into one and where it is taken out of one. An empty list takes it out of every Collection. A Product may be in as many as a Merchant likes, and the order carries no meaning: this is a set, not an ordered list like `media` beside it, so what a read answers with is by title. **Nothing here deletes a Collection**, and deleting one takes its Products out of it rather than deleting them. A Collection this Store does not have is refused at 422 with `collection-not-found`."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -1229,6 +1268,19 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "CollectionMembership": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Collection this Product should be in, as `POST /admin/collections` answered with and `GET /admin/collections` lists. One this Store has no Collection for is refused at 422 with `collection-not-found`."
+          }
+        },
+        "required": [
+          "id"
         ]
       },
       "UpdateVariantRequest": {
@@ -1337,6 +1389,76 @@
         "required": [
           "media"
         ]
+      },
+      "CollectionRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, in prose."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "malformed-body",
+              "collection-not-found"
+            ],
+            "description": "Machine-readable. Branch on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
+      "CreateCollectionRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Required, and not empty."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "CollectionList": {
+        "type": "object",
+        "properties": {
+          "collections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Collection"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one."
+          }
+        },
+        "required": [
+          "collections"
+        ]
+      },
+      "UpdateCollectionRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        }
       },
       "OrderList": {
         "type": "object",
@@ -2051,6 +2173,13 @@
             },
             "description": "The images this Product shows, **in the order a Merchant put them in** — the first one leads. On the list shape as well as on the detail, so a catalog grid is one request rather than one per tile. Empty for a Product nobody has attached an image to."
           },
+          "collections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreCollection"
+            },
+            "description": "The Collections this Product is in, by title — so a page can render breadcrumbs, or link a catalog tile at the Collection it belongs to, without a second request. A **set**: a Product may be in several and most are in none, and the order carries no meaning. Send an `id` back as `?collection=` to list that Collection; nothing on this surface enumerates them."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -2063,6 +2192,7 @@
           "description",
           "handle",
           "media",
+          "collections",
           "metadata"
         ]
       },
@@ -2105,6 +2235,30 @@
           "alt",
           "width",
           "height"
+        ]
+      },
+      "StoreCollection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "What `GET /store/products?collection=` takes, to list this Collection."
+          },
+          "title": {
+            "type": "string",
+            "description": "What the Merchant calls it. Not unique across the Store."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "metadata"
         ]
       },
       "ApiKeyRefusal": {
@@ -4393,6 +4547,16 @@
             "description": "Narrow to the Products in one status — `draft` to find what is still being prepared, `published` for what is on sale, `archived` for what has been taken off it. The three partition the catalog, so omitting this answers all of them. A value that is not one of the three is **refused** rather than ignored, because a filter quietly dropped answers a different question from the one that was asked.",
             "name": "status",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Narrow to the Products in one Collection, by its `id`. Collections do **not** partition the catalog — a Product may be in several and most are in none — so this composes with `status` rather than replacing it, and omitting it answers the whole list. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page, because an empty page is a truthful-looking answer to a question nobody asked."
+            },
+            "required": false,
+            "description": "Narrow to the Products in one Collection, by its `id`. Collections do **not** partition the catalog — a Product may be in several and most are in none — so this composes with `status` rather than replacing it, and omitting it answers the whole list. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page, because an empty page is a truthful-looking answer to a question nobody asked.",
+            "name": "collection",
+            "in": "query"
           }
         ],
         "responses": {
@@ -5586,6 +5750,449 @@
         }
       }
     },
+    "/admin/collections": {
+      "post": {
+        "summary": "Create a Collection",
+        "description": "A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections` on `PATCH /admin/products/{id}`, which takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCollectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, or is not JSON at all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Collections",
+        "description": "Newest first, 20 at a time — how a Store's catalog is grouped. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered; `nextCursor` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). What is *in* one is `GET /admin/products?collection=`, which pages the same way.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list."
+            },
+            "required": false,
+            "description": "How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page."
+            },
+            "required": false,
+            "description": "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page.",
+            "name": "after",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of Collections.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/collections/{id}": {
+      "get": {
+        "summary": "Read a Collection",
+        "description": "One Collection. It carries no Products and no count of them: what is in it is `GET /admin/products?collection=`, which pages, where a count beside a title would be a second query over the catalog on every read of every row.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Collection exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Rename a Collection",
+        "description": "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. Which Products are in the Collection is **not** changed here — `collections` on `PATCH /admin/products/{id}` is the whole set of the Collections one Product is in, and it is the only thing that writes a membership.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCollectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Collection, as a read of it reports it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Collection exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a Collection",
+        "description": "**Deletes the grouping and none of the Products in it.** Every Product it held is still in the catalog, still in whatever other Collections it was in, and merely no longer in this one — so organising is never destructive, and this is refused for nothing but there being no such Collection.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, and every Product it held left alone."
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Collection exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/orders": {
       "get": {
         "summary": "List Orders",
@@ -6282,7 +6889,7 @@
     "/store/products": {
       "get": {
         "summary": "List what the Store sells",
-        "description": "Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064). A Product carries no Variants here: open one for those. What each Variant costs is `GET /store/variants/{id}/price`, because a Price is resolved by a Workflow rather than read off a row.",
+        "description": "Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064). `collection` narrows to the Products of one Collection, by the `id` each Product's own `collections` reports; it is how a storefront browses one, and it answers **published** Products like every read here. A Product carries no Variants: open one for those. What each Variant costs is `GET /store/variants/{id}/price`, because a Price is resolved by a Workflow rather than read off a row.",
         "security": [
           {
             "apiKey": []
@@ -6310,6 +6917,16 @@
             "required": false,
             "description": "The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page.",
             "name": "after",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Narrow to the published Products of one Collection, by the `id` each Product's own `collections` reports — this is how a storefront browses one. It composes with the page rather than replacing it, so a short page is still not the end of the list. `published` is not negotiable here: a draft in this Collection is answered by neither the filtered list nor the whole one. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page."
+            },
+            "required": false,
+            "description": "Narrow to the published Products of one Collection, by the `id` each Product's own `collections` reports — this is how a storefront browses one. It composes with the page rather than replacing it, so a short page is still not the end of the list. `published` is not negotiable here: a draft in this Collection is answered by neither the filtered list nor the whole one. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page.",
+            "name": "collection",
             "in": "query"
           }
         ],

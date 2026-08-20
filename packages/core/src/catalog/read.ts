@@ -13,6 +13,7 @@ import { isUuid } from "../db/uuid.ts";
 import type { Media } from "../media/media.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
+import { type Collection, inCollection, readProductCollections } from "./collection.ts";
 import { readProductMedia, readVariantMedia } from "./media.ts";
 import {
   type ProductOption,
@@ -147,6 +148,19 @@ export type Product = {
    * and never the Media (ADR-0082).
    */
   readonly media: readonly Media[];
+  /**
+   * The Collections this Product is in, **by title** — a set rather than an ordered list, so
+   * there is no position to report and nothing a Merchant has to keep in step (story 14).
+   *
+   * On the list shape as well as on the detail, which is the same answer `StoreProduct` gives
+   * one surface along: which Collections a Product ended up in is the thing a Merchant checks
+   * *after* grouping one, and a list they had to open every Product from would be a request per
+   * row. Empty for a Product nobody has grouped, which is every Product until somebody does.
+   *
+   * Putting a Product in a Collection and taking it out of one are both `collections` on
+   * `PATCH /admin/products/{id}` — the whole list of the Collections it should now be in.
+   */
+  readonly collections: readonly Collection[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -165,13 +179,21 @@ export type ProductDetail = Product & {
 };
 
 /**
- * What the Product list was asked for: a page, and the one status it may be narrowed to.
+ * What the Product list was asked for: a page, and the two things it may be narrowed by.
  *
- * One argument rather than two, exactly as `CartPageRequest` is one — `contract.ProductPageQuery`
+ * One argument rather than three, exactly as `CartPageRequest` is one — `contract.ProductPageQuery`
  * produces this shape, so the route hands over what it was given instead of taking the same
- * object apart and passing half of it twice.
+ * object apart and passing pieces of it separately.
+ *
+ * **`collection` is an identifier rather than a word, and it is checked before the page is
+ * read.** Whether a Collection exists is a fact about the Store rather than about the schema, so
+ * `unknownCollection` is what refuses one this Store has not got and the route asks it — see
+ * `catalog/collection.ts`. What arrives here is a Collection, or nothing.
  */
-export type ProductPageRequest = PageRequest & { readonly status?: ProductStatus };
+export type ProductPageRequest = PageRequest & {
+  readonly status?: ProductStatus;
+  readonly collection?: string;
+};
 
 /**
  * A page of Products, newest first — a Merchant listing them has just created one and is
@@ -182,12 +204,16 @@ export type ProductPageRequest = PageRequest & { readonly status?: ProductStatus
  * and nothing about the route said when to stop. `page.after` is the record the caller last
  * saw, so a Product created since changes nothing about what follows it.
  *
- * **`status` narrows it, and absent means unfiltered** — the filtering convention, whose second
- * consumer this is. The filter is applied in the same statement as the page, so a filtered page
- * that comes back short is still a page: `nextCursor` is what says whether there is more, which
- * is the clause of ADR-0064 a filter is the first thing to exercise. A Merchant's list is the
- * one place a draft is visible at all — the store surface answers `published` and nothing else,
- * in the route rather than through this parameter.
+ * **`status` and `collection` narrow it, and absent means unfiltered** — the filtering
+ * convention, whose second and fourth consumers these are. Both are applied in the same statement
+ * as the page, so a filtered page that comes back short is still a page: `nextCursor` is what
+ * says whether there is more, which is the clause of ADR-0064 a filter is the first thing to
+ * exercise. **The two compose**, because they are two `undefined`-droppable predicates in one
+ * `and` rather than two branches — a Merchant looking for the drafts in Summer asks for both and
+ * gets what is in neither list alone.
+ *
+ * A Merchant's list is the one place a draft is visible at all — the store surface answers
+ * `published` and nothing else, in the route rather than through a parameter.
  */
 export async function listProducts(
   db: Database,
@@ -211,6 +237,9 @@ export async function listProducts(
         // `undefined` where nothing was asked, which `and` drops: absent means unfiltered, and
         // that is the convention rather than this list's own choice.
         page.status === undefined ? undefined : eq(product.status, page.status),
+        // The second of them, and the reason the two are spelled the same way: they compose in
+        // one `and` rather than branching, so asking for both narrows by both.
+        page.collection === undefined ? undefined : inCollection(page.collection),
       ),
     )
     // `id` breaks the tie, so two Products created in the same instant still come back in
@@ -231,9 +260,16 @@ export async function listProducts(
     found.map((row) => row.id),
   );
 
+  // A third, and the same reason again: a Product nobody has grouped has no row here at all, and
+  // that is every Product until somebody puts it in something.
+  const grouped = await readProductCollections(
+    db,
+    found.map((row) => row.id),
+  );
+
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
   // response by being forgotten about — the same reason a Payment is rebuilt rather than
-  // spread. A Product reports seven fields, and these are them.
+  // spread. A Product reports eight fields, and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
@@ -242,6 +278,7 @@ export async function listProducts(
       handle: row.handle,
       status: row.status,
       media: shown.get(row.id) ?? [],
+      collections: grouped.get(row.id) ?? [],
       metadata: row.metadata,
     })),
     nextCursor,
@@ -279,6 +316,7 @@ export async function readProduct(
   return {
     ...row,
     media: (await readProductMedia(db, storage, [row.id])).get(row.id) ?? [],
+    collections: (await readProductCollections(db, [row.id])).get(row.id) ?? [],
     options: await readProductOptions(db, row.id),
     variants: await readVariants(db, storage, row.id),
   };
