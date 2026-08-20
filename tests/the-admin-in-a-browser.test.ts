@@ -810,7 +810,7 @@ describe("the sections, in three groups", () => {
   /** What each group holds, in the order the sidebar draws them — `lib/sections.ts`'s order. */
   const COMMERCE = ["Products", "Media", "Collections", "Orders", "Carts"];
   const SETTINGS = ["Merchants", "Roles", "Store"];
-  const DEVELOPER = ["API keys", "Deployment"];
+  const DEVELOPER = ["API keys", "Deployment", "Playground"];
 
   it("draws Commerce, Settings and Developer, and every section inside one of them", async () => {
     const page = await seam.signedIn("/products");
@@ -1001,6 +1001,7 @@ describe("the command palette", () => {
         "Store",
         "API keys",
         "Deployment",
+        "Playground",
       ]);
     // **Flat, and one heading over the lot** (#266, ADR-0079). The sidebar draws three groups
     // and the palette draws none of them: what a palette is good at is answering a typed word
@@ -1792,6 +1793,484 @@ describe("the Deployment screen", () => {
       .poll(() => strategies(page))
       .toEqual(["digital", "made-to-order", "physical"]);
     await auditAccessibility(page, "the Deployment screen refused the deployment read");
+  });
+});
+
+/**
+ * The Playground, which browses this deployment's own description (#268, ADR-0080, ADR-0081).
+ *
+ * **The one screen whose data cannot be arranged and must not be written down.** Every other
+ * case in this file seeds what it asserts on; this one asserts that a screen renders the
+ * *whole* of a document only the running server has — so the expectation is read from
+ * `GET /admin/openapi.json` over the API and compared against what the screen drew, which is
+ * ADR-0049's rule about asking the side the assertion is not reading.
+ *
+ * It sends nothing. Composing and sending a request is #269, and everything here is a browse.
+ */
+describe("the Playground", () => {
+  /** As much of an OpenAPI document as a case here has any business knowing about. */
+  type DescriptionBody = {
+    readonly paths: Record<string, Record<string, unknown>>;
+    readonly components: { readonly schemas: Record<string, Record<string, unknown>> };
+  };
+
+  /**
+   * The methods an OpenAPI path item may carry an operation under.
+   *
+   * Written out rather than "every key of the path item", because a path item may also hold
+   * `parameters`, `summary` and `$ref`, none of which is an operation. It is the same list the
+   * screen reads by, and that is not a tautology: this file derives its expectation from the
+   * **document the server served**, and what the screen derives from is the document it
+   * fetched — so a screen that dropped an operation, or invented one, disagrees here.
+   */
+  const METHODS = ["get", "put", "post", "delete", "patch", "head", "options", "trace"];
+
+  /** One operation of the served document, as much of it as these cases read. */
+  type DescribedOperation = { readonly key: string; readonly summary: string };
+
+  /** Every operation the document carries, in the form the screen names them by. */
+  function operationsIn(description: DescriptionBody): DescribedOperation[] {
+    return Object.entries(description.paths).flatMap(([path, item]) =>
+      METHODS.filter((method) => method in item).map((method) => ({
+        key: `${method.toUpperCase()} ${path}`,
+        summary: String((item[method] as { summary?: unknown }).summary ?? ""),
+      })),
+    );
+  }
+
+  /** The list of operations, which is the whole of what this ticket's screen offers. */
+  function operationList(page: Page) {
+    return page.getByRole("navigation", {
+      name: "Every operation this deployment serves",
+    });
+  }
+
+  /**
+   * The operations on offer, in the order the screen drew them.
+   *
+   * Whitespace is collapsed because the method and the path are two elements inside the link,
+   * laid out beside each other — what a case is asserting is which operations are listed, not
+   * how the two halves of one are spaced.
+   */
+  async function shownOperations(page: Page): Promise<string[]> {
+    const texts = await operationList(page).getByRole("link").allInnerTexts();
+    return texts.map((text) => text.replace(/\s+/g, " ").trim());
+  }
+
+  /** The one control that narrows the list. */
+  function searchBox(page: Page) {
+    return page.getByRole("searchbox", { name: "Search the operations" });
+  }
+
+  /** The document's own account of one operation, which is what the screen is held to. */
+  function operationAt(
+    description: DescriptionBody,
+    key: string,
+  ): Record<string, unknown> {
+    const [method = "", path = ""] = key.split(" ");
+    const operation = description.paths[path]?.[method.toLowerCase()];
+    if (operation === undefined) {
+      throw new Error(`This deployment does not serve \`${key}\`.`);
+    }
+    return operation as Record<string, unknown>;
+  }
+
+  /** A schema, with a `$ref` followed — the one piece of OpenAPI these cases have to know. */
+  function schemaOf(
+    description: DescriptionBody,
+    schema: unknown,
+  ): Record<string, unknown> {
+    const ref = (schema as { $ref?: unknown } | undefined)?.$ref;
+    if (typeof ref !== "string") return (schema ?? {}) as Record<string, unknown>;
+    return description.components.schemas[ref.replace("#/components/schemas/", "")] ?? {};
+  }
+
+  /** The `application/json` schema a response carries, resolved. */
+  function bodySchemaOf(
+    description: DescriptionBody,
+    holder: unknown,
+  ): Record<string, unknown> {
+    const content = (holder as { content?: Record<string, { schema?: unknown }> })
+      ?.content;
+    return schemaOf(description, content?.["application/json"]?.schema);
+  }
+
+  it("lists every operation this deployment's own description carries", async () => {
+    // Asked of the server rather than of `packages/core/openapi.json`: the whole point of
+    // ADR-0080 is that the screen reads what *this process* serves, so an expectation taken
+    // from a checked-in build artifact would agree with the description this deployment might
+    // not be serving.
+    const description = await seam.api<DescriptionBody>("GET", "/admin/openapi.json");
+    const operations = operationsIn(description);
+    // The emptiness guard and deliberately not a size: **never write down how big the admin
+    // surface is** (#188, ADR-0049). What this stops is the one failure a derived expectation
+    // has — two empty lists comparing equal — and a number would be one more place a route
+    // added to Core has to be counted.
+    expect(operations.length, "This deployment described no operations.").toBeGreaterThan(
+      0,
+    );
+
+    const page = await seam.signedIn("/developer/playground");
+    const list = operationList(page);
+
+    await shows(list.getByRole("link").first(), "the operations this deployment serves");
+    await expect.poll(() => list.getByRole("link").count()).toBe(operations.length);
+
+    // Named one at a time rather than counted, because a count agrees with a screen that
+    // listed the same operation fifty-seven times. Gathered into one array so a failure names
+    // every operation that is missing rather than the first.
+    const missing: string[] = [];
+    for (const operation of operations) {
+      const shown = await list
+        .getByRole("link", { name: operation.key, exact: true })
+        .count();
+      if (shown !== 1) missing.push(`${operation.key} (${shown} entries)`);
+    }
+    expect(missing).toEqual([]);
+
+    await auditAccessibility(page, "the Playground");
+  });
+
+  it("finds an operation by what was typed, in its path and in its summary", async () => {
+    const described = operationsIn(
+      await seam.api<DescriptionBody>("GET", "/admin/openapi.json"),
+    );
+    const page = await seam.signedIn("/developer/playground");
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations this deployment serves",
+    );
+
+    // Derived from the served document, not written down: what the screen is being held to is
+    // the description's own answer to "which operations carry this word".
+    const byPath = described
+      .filter((one) => one.key.toLowerCase().includes("reservations"))
+      .map((one) => one.key);
+    expect(byPath.length, "No operation's path carried the word.").toBeGreaterThan(0);
+
+    await searchBox(page).fill("reservations");
+    await expect.poll(() => shownOperations(page)).toEqual(byPath);
+
+    // And by summary, which is the half a path cannot answer: nothing on this surface has
+    // `sign` in its path, and the two operations that sign a Merchant in and out say so in
+    // their summaries. A Developer who knows what they want and not where it lives is the
+    // whole case for a search box over a list of fifty-seven.
+    const bySummary = described
+      .filter((one) => one.summary.toLowerCase().includes("sign"))
+      .map((one) => one.key);
+    expect(bySummary.length, "No operation's summary carried the word.").toBeGreaterThan(
+      0,
+    );
+    expect(bySummary.some((key) => key.toLowerCase().includes("sign"))).toBe(false);
+
+    await searchBox(page).fill("sign");
+    await expect.poll(() => shownOperations(page)).toEqual(bySummary);
+
+    // A search matching nothing says so, rather than leaving an empty panel that reads as a
+    // list still loading — the same distinction every list in this Admin draws.
+    await searchBox(page).fill("nothing-in-this-api-is-called-this");
+    await shows(page.getByText("No operation matches"), "the empty search state");
+    await expect.poll(() => shownOperations(page)).toEqual([]);
+    await auditAccessibility(page, "the Playground with a search matching nothing");
+  });
+
+  /**
+   * The operation these cases open, and the reason it is this one.
+   *
+   * It is the only shape on the surface that carries all four halves at once — a path
+   * parameter, a request body, an answer with a body of its own, and refusals from three
+   * different families — so one open operation exercises the whole of what this screen renders.
+   */
+  const AN_OPERATION = "POST /admin/products/{id}/variants";
+
+  function addressOf(operation: string): string {
+    return `/developer/playground?operation=${encodeURIComponent(operation)}`;
+  }
+
+  /**
+   * The operation the address is naming, read the way a browser reads a query string.
+   *
+   * Read back rather than compared as text, because the two spellings of a space in a query
+   * string — `%20` and `+` — are the same address, and what a case is asserting is which
+   * operation the address names rather than which of them the screen wrote.
+   */
+  function chosenAt(page: Page): string | null {
+    return new URL(page.url()).searchParams.get("operation");
+  }
+
+  it("shows what an operation takes, and every answer and refusal it declares", async () => {
+    const description = await seam.api<DescriptionBody>("GET", "/admin/openapi.json");
+    const operation = operationAt(description, AN_OPERATION);
+    const responses = operation.responses as Record<string, { description: string }>;
+
+    const page = await seam.signedIn(addressOf(AN_OPERATION));
+    await shows(
+      page.getByRole("heading", { name: AN_OPERATION, level: 2 }),
+      "the operation the address named",
+    );
+
+    // Every clause below is read off the served document. What is being asserted is that the
+    // screen renders *the deployment's own answer*, so an expectation written down here would
+    // be a second description that can disagree with the first (ADR-0049).
+    await shows(page.getByText(String(operation.summary)), "what the operation does");
+
+    // **The parameters, as the document declares them.** #269 turns each of these into a form
+    // field; this ticket has to say what they are.
+    const parameters = page.getByRole("region", { name: "Parameters" });
+    const declared = operation.parameters as { name: string; description: string }[];
+    expect(declared.length, "The operation declared no parameters.").toBeGreaterThan(0);
+    for (const parameter of declared) {
+      await shows(
+        parameters.getByText(parameter.name, { exact: true }).first(),
+        `the ${parameter.name} parameter`,
+      );
+      await shows(
+        parameters.getByText(parameter.description).first(),
+        `what the ${parameter.name} parameter is`,
+      );
+    }
+
+    // **The request body**, down to the field names — which is what a Developer needs before
+    // they send anything, and the thing that cannot be read anywhere else in this Admin.
+    const body = page.getByRole("region", { name: "Request body" });
+    const fields = Object.keys(
+      bodySchemaOf(description, operation.requestBody).properties as object,
+    );
+    expect(fields.length, "The request body declared no fields.").toBeGreaterThan(0);
+    for (const field of fields) {
+      await shows(body.getByText(field, { exact: true }).first(), `the ${field} field`);
+    }
+
+    // **Every response it declares**, split by what a caller does about it: an answer is a
+    // shape to read, a refusal is a rule to handle. Both are asserted exhaustively, because
+    // "some of the responses" is what a screen that dropped the awkward ones would show.
+    const answers = page.getByRole("region", { name: "Answers" });
+    const refusals = page.getByRole("region", { name: "Refusals" });
+    for (const [status, response] of Object.entries(responses)) {
+      const region = Number(status) < 400 ? answers : refusals;
+      await shows(
+        region.getByText(status, { exact: true }).first(),
+        `the ${status} response`,
+      );
+      await shows(
+        region.getByText(response.description).first(),
+        `what the ${status} response means`,
+      );
+    }
+
+    // **And the `reason` each refusal carries** (story 12) — the part a storefront Developer
+    // meets in production and can read nowhere today. The words come off the refusal families
+    // the document declares, so a family gaining a reason in Core appears here by itself.
+    const reasons = new Set<string>();
+    for (const [status, response] of Object.entries(responses)) {
+      if (Number(status) < 400) continue;
+      const schema = bodySchemaOf(description, response);
+      const reason = (
+        schema.properties as Record<string, { enum?: string[] }> | undefined
+      )?.reason;
+      for (const word of reason?.enum ?? []) reasons.add(word);
+    }
+    expect(
+      reasons.size,
+      "No refusal this operation makes declared a reason.",
+    ).toBeGreaterThan(0);
+    for (const word of reasons) {
+      await shows(
+        refusals.getByText(word, { exact: true }).first(),
+        `the ${word} refusal`,
+      );
+    }
+
+    // Audited with the operation open, which is the most structurally complex document this
+    // Admin renders — a schema tree, three regions of tables and a list of refusal words.
+    await auditAccessibility(page, "the Playground with an operation open");
+  });
+
+  it("keeps the chosen operation in the address, across a refresh and the back button", async () => {
+    const page = await seam.signedIn("/developer/playground");
+    const chosen = page.getByRole("heading", { name: AN_OPERATION, level: 2 });
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations this deployment serves",
+    );
+    await hides(chosen, "an operation nobody has chosen");
+
+    await operationList(page)
+      .getByRole("link", { name: AN_OPERATION, exact: true })
+      .click();
+    await shows(chosen, "the operation that was chosen");
+    // The address is what a Developer sends a colleague, and #269 puts the parameters and the
+    // body in the same place — so the operation living there is the frame's promise rather
+    // than a convenience (ADR-0081).
+    expect(chosenAt(page)).toBe(AN_OPERATION);
+    expect(where(page).startsWith("/developer/playground?")).toBe(true);
+
+    await page.reload();
+    await shows(chosen, "the operation, after a refresh landed back on it");
+
+    await page.goBack();
+    await hides(chosen, "the operation, after the back button left it");
+    expect(where(page)).toBe("/developer/playground");
+
+    await page.goForward();
+    await shows(chosen, "the operation, after the forward button returned to it");
+    expect(chosenAt(page)).toBe(AN_OPERATION);
+  });
+
+  it("says so when the address names an operation this deployment does not serve", async () => {
+    // Not a contrived state: a link is composed against the surface the *sender* is running,
+    // and a Project upgrading Core is exactly when the two differ. A blank panel would read as
+    // a screen still loading, which is the distinction every list in this Admin draws.
+    const page = await seam.signedIn(addressOf("POST /admin/nothing-here"));
+
+    await shows(
+      page.getByText("No such operation"),
+      "the operation kobai does not serve",
+    );
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations, still offered beside it",
+    );
+    expect(chosenAt(page)).toBe("POST /admin/nothing-here");
+    await auditAccessibility(page, "the Playground on an operation that is not served");
+  });
+
+  it("says it is reading the description rather than showing an empty list", async () => {
+    const page = await seam.signedIn("/developer/playground");
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations this deployment serves",
+    );
+
+    // Held long enough for the state between "asking" and "answered" to be a thing a test can
+    // see at all — the description is the largest thing this Admin fetches, so the state is
+    // real rather than theoretical. Nothing about kobai's answer is changed.
+    await page.route(
+      (url) => url.pathname === "/admin/openapi.json",
+      async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await route.continue();
+      },
+    );
+    await page.reload();
+
+    const reading = page.getByRole("status", { name: "Reading the description" });
+    await shows(reading, "the description skeleton");
+    await auditAccessibility(page, "the Playground while it is reading the description");
+    await hides(reading, "the description skeleton");
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations, once the description arrived",
+    );
+  });
+
+  it("says the description could not be read, rather than listing nothing", async () => {
+    const page = await seam.signedIn("/developer/playground");
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations this deployment serves",
+    );
+
+    // **The one place this file answers a route with something other than what kobai said**,
+    // and the argument the harness asks for: the network being gone is not a state any request
+    // can arrange, and it is the state the screen's fallback — "kobai did not answer." — was
+    // written for. The *refused* read is a request-level question and is asserted where those
+    // belong: `deployment:read` gates this route in Core, and a Role without it meets a 403 at
+    // the HTTP seam. What only a browser can say is that the screen renders the failure where
+    // the operations would have been instead of an empty list that reads as one still loading.
+    await page.route(
+      (url) => url.pathname === "/admin/openapi.json",
+      async (route) => {
+        await route.abort();
+      },
+    );
+    await page.reload();
+
+    await shows(
+      page.getByText("This deployment's description could not be read."),
+      "the failure, where the operations would have been",
+    );
+    await auditAccessibility(page, "the Playground that could not read the description");
+  });
+
+  it("sends nothing but the read of the description, however much is browsed", async () => {
+    const page = await seam.signedIn("/developer/playground");
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations this deployment serves",
+    );
+
+    // **The claim this ticket rests on, and only a browser can ask it.** The Playground is a
+    // real client of the real API with a real cookie jar, and #269 is what makes it send
+    // anything — so until then a screen that browsed the Cart operations and quietly started
+    // one would be indistinguishable from this one on every other seam in this repository.
+    const kobai: string[] = [];
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      if (/^\/(admin|store|health)(\/|$)/.test(pathname)) {
+        kobai.push(`${request.method()} ${pathname}`);
+      }
+    });
+    const writes = watchForWrites(page);
+
+    // Reloaded under the listener, so the description read is *on* the list rather than
+    // cached out of sight of it: an assertion that a list holds nothing but two known entries
+    // is worth something only when it is watching a load that really made them.
+    await page.reload();
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations, on a load this case is watching",
+    );
+
+    await operationList(page)
+      .getByRole("link", { name: AN_OPERATION, exact: true })
+      .click();
+    await shows(
+      page.getByRole("heading", { name: AN_OPERATION, level: 2 }),
+      "the operation that was chosen",
+    );
+    await searchBox(page).fill("orders");
+    await operationList(page)
+      .getByRole("link", { name: "POST /store/orders", exact: true })
+      .click();
+    await shows(
+      page.getByRole("heading", { name: "POST /store/orders", level: 2 }),
+      "the operation that places an Order",
+    );
+
+    expect(await writes.settled()).toEqual([]);
+    // Two reads and no others. `GET /admin/session` is the **frame's**, re-read on navigation
+    // so a Role edited elsewhere reaches this tab (#178) and asserted here because a list
+    // holding neither would satisfy an emptiness check while proving nothing; the description
+    // is the screen's, and it is the whole of what this screen asks kobai for.
+    expect([...new Set(kobai)].sort()).toEqual([
+      "GET /admin/openapi.json",
+      "GET /admin/session",
+    ]);
+  });
+
+  it("reaches the search box and an operation with the keyboard alone", async () => {
+    const page = await seam.signedIn("/developer/playground");
+    await shows(
+      operationList(page).getByRole("link").first(),
+      "the operations this deployment serves",
+    );
+
+    // None of this is visible to a scanner, and a list of fifty-seven links is exactly where a
+    // Developer without a mouse pays for a screen that was only ever clicked through.
+    await tabTo(page, searchBox(page), "the search box");
+    await page.keyboard.type("reservations");
+
+    const remaining = operationList(page).getByRole("link").first();
+    await tabTo(page, remaining, "the operation the search left");
+    const chosen = (await remaining.innerText()).replace(/\s+/g, " ").trim();
+    await page.keyboard.press("Enter");
+
+    await shows(
+      page.getByRole("heading", { name: chosen, level: 2 }),
+      "the operation opened with the keyboard",
+    );
+    expect(chosenAt(page)).toBe(chosen);
   });
 });
 

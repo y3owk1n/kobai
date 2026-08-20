@@ -28,6 +28,7 @@ import { MediaScreen } from "@/screens/media";
 import { Merchants } from "@/screens/merchants";
 import { OrderScreen } from "@/screens/order";
 import { Orders } from "@/screens/orders";
+import { Playground } from "@/screens/playground";
 import { ProductScreen } from "@/screens/product";
 import { Products } from "@/screens/products";
 import { RoleScreen } from "@/screens/role";
@@ -150,6 +151,12 @@ function Admin() {
             (ADR-0080). It joins the group API keys was moved into rather than standing
             beside it, because what it answers is the deployment rather than the Store. */}
         <Route path="developer/deployment" element={<DeploymentScreen />} />
+        {/* The description, browsed (#268). The chosen operation is a search parameter rather
+            than a segment, so the address can hold a path with slashes in it without the
+            router having to — and so that #269's parameters and body join it in the same
+            place, which is where this frame already keeps a cursor and every filter
+            (ADR-0064). */}
+        <Route path="developer/playground" element={<Playground />} />
         <Route path="merchants" element={<Merchants />} />
         <Route path="roles" element={<Roles />} />
         <Route path="roles/:id" element={<RoleScreen />} />

@@ -309,6 +309,35 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   source `kobai-upgrade` can never reach. `sectionOf` is why an address a hyphen away from
   another still lights the right entry — it matches at the `/` boundary and never by bare
   prefix.
+- **The Playground reads the description over HTTP, and it is the only screen whose data is a
+  document rather than a record** (#268, ADR-0080, ADR-0081). `screens/playground.tsx` renders
+  it and `lib/description.ts` is the reading — every field narrowed out of an **open object**,
+  because `@kobai/client` types this one as `{ [key: string]: unknown }` and an OpenAPI document
+  is a recursive schema kobai does not own. What follows is what a reader cannot infer from it.
+  **It could not have been bundled**: the client is types and TypeScript erases them, so the
+  Admin's bundle holds no description at all, and `@kobai/core/openapi.json` is a *package's
+  build artifact* rather than this server's answer — which is why `GET /admin/openapi.json`
+  exists at all, and the ban on importing `@kobai/core` is only the second reason.
+  **The chosen operation is in the address**, as `?operation=GET /admin/products` — the method
+  and the path, because an OpenAPI document promises no `operationId` and kobai's carries none,
+  and because #269 puts the parameters and the body in that same search.
+  **What is typed into the search box is deliberately *not*** — this is the one narrowing in
+  this Admin that is not a link, and the difference is that it narrows a document already in
+  memory rather than issuing a list: a history entry per keystroke would sit between a
+  Developer and the back button they leave an operation with.
+  **The grouping is derived from the paths and never written down here.** kobai's description
+  carries no `tags`, and a table of resource names in this tree would be exactly the closed set
+  ADR-0067 rules out — so a heading is the path up to its second segment, and the surface alone
+  where that segment is a parameter. **Every reader in `lib/description.ts` answers `undefined`
+  rather than throwing**: a document missing a field is a deployment describing itself oddly,
+  not a reason to blank the screen that reads it. And **a schema tree stops on a component it
+  has already expanded**, which is what terminates a recursive document — `DEEPEST` is a
+  backstop behind that and not the mechanism.
+  **This screen browses and sends nothing**, so it lists the two session operations like every
+  other; ADR-0081 excludes them from being *offered to send*, which is #269's, and it should
+  decide there whether an operation with no send control is still worth reading.
+  It composes **one** read, at the screen's root rather than inside a card, so it is not a
+  second use of the Deployment screen's local `ReadCard` and nothing was extracted.
 - **A permission check in the Admin is an affordance and never a boundary** (#178, ADR-0063).
   `requirePermission` in Core is the enforcement; `lib/permissions.ts` is where that is written
   down at length, because the next person to read one of these checks will assume it is doing
@@ -424,9 +453,15 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   deliberate: one form over a Variant is what ADR-0062's "an absent field means leave it" buys
   the *client*, and splitting the submit to preserve it would mean two Save buttons on one
   fieldset to spare a Merchant one field they have to fill in anyway.
-- **Card titles are headings on the Product screen and on no other.** The frame's `h1` names the
-  section and a detail screen's `h2` names the record, so the cards under it are `h3` — but only
-  where the cards are *sections of one record*, which is the Product screen and its repeated
-  Variants. A screen whose cards are a list of records is right to have none. `CardTitle` is a
-  `div` in this distribution and is left alone; the heading is an element inside it.
+- **Card titles are headings where the cards are sections of one record**, and on the two
+  screens where they are. The frame's `h1` names the section and a detail screen's `h2` names
+  the record, so the cards under it are `h3` — which is the Product screen with its repeated
+  Variants, and the Playground's operation panel, whose Parameters, Request body, Answers and
+  Refusals are four sections of one operation. A screen whose cards are a list of records is
+  right to have none. **The Playground's operation *list* is the one exception and it argues
+  itself at the line** (#268): that card is a list, and it carries an `h2` anyway because the
+  screen is two panels standing beside each other and the groups inside it are `h3`s — with no
+  `h2` over them the outline would jump straight from the frame's `h1`, and somebody navigating
+  by heading would have no way back to the list from an operation. `CardTitle` is a `div` in
+  this distribution and is left alone; the heading is an element inside it.
 
