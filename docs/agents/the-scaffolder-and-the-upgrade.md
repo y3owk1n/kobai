@@ -57,6 +57,26 @@ on an ephemeral port, holding this commit's packages — generates a Project, in
 and boots it. It is a module rather than a detail inside one test because **#12's upgrade
 gate reuses it** to bump Core across a synthetic major.
 
+**A Merchant's uploads are the one thing the generated `compose.yaml` carries and the
+reference one must not** (#283). The storage Core ships writes them under the process's
+working directory (ADR-0078) — `/app/kobai-media` inside the image — and the reference Project
+wires no `media` storage on purpose, because that absence is what proves a Project which
+configured nothing still serves its images. The gate's uploads are fixtures, so a volume there
+would persist nothing but the leftovers of somebody's run; a Developer's are their catalog, so
+losing them at the first redeploy is data loss. Hence a named volume in the **adaptation**
+rather than a line in `reference/compose.yaml`. **The `Dockerfile` half of it is not an
+adaptation and must not become one**: `COPY` leaves `/app` owned by root while the container
+runs as `node`, so the first upload failed with `EACCES` and there was never anything to
+persist — and a *fresh named volume is populated from the image's own directory, ownership
+included*, so mounting one over a path the image does not carry gets a root-owned directory
+and the same refusal. Creating and chowning it is correct for a Project whether or not a
+volume is mounted there, so it is in `reference/Dockerfile` — shared by both trees, and needing
+no adaptation. **Reading the YAML would have passed while the fix did not work**, which is why
+the assertion is an upload, a `docker compose up --force-recreate app` and a read-back in
+`tests/a-project-boots-from-its-own-compose-file.test.ts`. The **workspace's** own image is a
+third Dockerfile and is not covered by any of this; #283 left it alone deliberately, and it has
+the same root-owned working directory.
+
 **A generated Project is the root of its own two-package workspace**, so `pnpm -r` skips it:
 every recursive command in a Project needs `--include-workspace-root`, or it silently builds
 only the Admin and leaves no `dist/src/server.js` behind.

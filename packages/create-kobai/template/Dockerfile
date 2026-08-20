@@ -67,6 +67,18 @@ RUN find admin -mindepth 1 -maxdepth 1 \
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=build /app /app
+# Where a Merchant's uploads land. The `MediaStorage` kobai ships — what a Project that
+# configures no `media` storage gets — writes them to `kobai-media/` under the process's
+# working directory (ADR-0078), which is this one.
+#
+# Two things about this line, and neither is tidiness. **`COPY` leaves `/app` owned by root**,
+# so the `USER node` below cannot create a directory in it: without this the very first upload
+# fails with `EACCES` and no image is ever stored at all. And **a fresh named volume is
+# populated from the image's own directory, ownership included** — so mounting one over a path
+# the image does not have gets a directory Docker creates as root, which is that same refusal
+# wearing a volume. Creating it here, owned by the user that writes to it, is what makes both
+# work; whether a volume is mounted here is `compose.yaml`'s decision, not this file's.
+RUN mkdir -p /app/kobai-media && chown node:node /app/kobai-media
 USER node
 EXPOSE 3000
 # No separate migration step and no entrypoint script: Core applies its migrations at boot

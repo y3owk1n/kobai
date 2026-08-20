@@ -72,9 +72,29 @@ services:
       - STRIPE_PAYMENT_PAGE_URL
     ports:
       - "${PORT:-3000}:3000"
+    volumes:
+      # This Store's images, and everything else a Merchant uploads. The storage kobai ships
+      # — what a Project that configures no `media` storage gets — writes them to
+      # `kobai-media/` beside the application *inside* the container, and a container's own
+      # filesystem goes away with the container. Without this line every image in this
+      # catalog is gone the next time you rebuild and bring this up, and nothing tells you
+      # until a page renders without them.
+      #
+      # A named volume rather than a bind mount, for the same reason `kobai-db` is one. The
+      # application runs as an unprivileged user inside the container, and Docker populates a
+      # fresh named volume from the image's own directory, ownership included — whereas a
+      # host directory Docker has to create arrives owned by root, and the first upload is
+      # refused. It also keeps the bytes off whatever filesystem this Project happens to be
+      # checked out on. `docker compose down` keeps them; `docker compose down --volumes`
+      # deletes them, along with the database.
+      #
+      # Point `media` at an object store in `kobai.config.ts` and no bytes come here at all:
+      # this volume is then holding nothing, and can go.
+      - kobai-media:/app/kobai-media
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   kobai-db:
+  kobai-media:

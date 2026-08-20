@@ -49,6 +49,24 @@ const CONTAINER_TIMEOUT = 1_500_000;
  */
 const LEAKABLE_TOKEN = "kobai-gate-npm-token-do-not-ship-this";
 
+/**
+ * The Merchant this deployment is told about at boot, so there is somebody to upload as.
+ *
+ * `compose.yaml` forwards both by bare name and Core seeds the first Merchant from them
+ * (ADR-0041), which makes this the whole of what it takes to have an authenticated caller
+ * here — no fixture reaches inside the container. Comfortably past Core's minimum length,
+ * because a password Core refuses would be reported in a boot log nothing in this file reads
+ * and would surface here as a sign-in that fails for no visible reason.
+ */
+const MERCHANT_EMAIL = "owner@example.test";
+const MERCHANT_PASSWORD = "compose-gate-password";
+
+/** A one-pixel PNG: real bytes of a real content type, small enough to write out here. */
+const PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 let registry: LocalRegistry;
 let workspace: string;
 let project: string;
@@ -110,7 +128,12 @@ secrets:
     directory: project,
     files: [join(project, "compose.yaml"), overlay],
     projectName: `kobai-gate-project-${randomBytes(6).toString("hex")}`,
-    env: { POSTGRES_PORT: String(postgresPort), PORT: String(appPort) },
+    env: {
+      POSTGRES_PORT: String(postgresPort),
+      PORT: String(appPort),
+      KOBAI_INITIAL_MERCHANT_EMAIL: MERCHANT_EMAIL,
+      KOBAI_INITIAL_MERCHANT_PASSWORD: MERCHANT_PASSWORD,
+    },
     appPort,
   });
 }, CONTAINER_TIMEOUT);
@@ -212,6 +235,75 @@ describe("a generated Project, brought up by its own compose file", () => {
       // the container runs as, and root's.
       await expect(image.has("/home/node/.npmrc")).resolves.toBe(false);
       await expect(image.has("/root/.npmrc")).resolves.toBe(false);
+    },
+    CONTAINER_TIMEOUT,
+  );
+
+  // **Last, and it has to stay last.** It replaces the shared `app` container, which resets
+  // what `compose.logs()` can say about the boot every case above reads. A case appended after
+  // this one would be asking a Project that has already been redeployed once.
+  it(
+    "still serves an uploaded image after the container is replaced",
+    async () => {
+      // #283. This Project configures no `media` storage, so it gets the one kobai ships,
+      // which writes a Merchant's uploads to a directory inside the container. A container's
+      // own filesystem goes away with the container — so a Developer's second deploy used to
+      // lose every image in their catalog, and nothing said so until a page rendered without
+      // them. The compose file a Developer receives now mounts a volume there, and this is
+      // that claim asked of a running Project rather than read off the YAML.
+      //
+      // **Reading the YAML would have passed while the fix did not work.** A named volume
+      // mounted over a path the image does not contain is created by Docker owned by root,
+      // and this application runs as `node`, so the *first* upload failed with `EACCES` and
+      // there was never anything to persist. That is why the `Dockerfile` creates the
+      // directory and chowns it, and why this test uploads before it redeploys.
+      const signIn = await fetch(`${compose.origin}/admin/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: MERCHANT_EMAIL, password: MERCHANT_PASSWORD }),
+      });
+      expect(
+        signIn.status,
+        `Signing in as the Merchant this deployment was seeded with answered ${signIn.status}. Its output:\n${await compose.logs()}`,
+      ).toBe(201);
+
+      // The cookie only, without its attributes: `fetch` here is not a browser and sends
+      // back exactly what it is given.
+      const session = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      expect(session).toContain("kobai_session=");
+
+      const form = new FormData();
+      form.set("file", new File([PIXEL_PNG], "pixel.png", { type: "image/png" }));
+
+      const upload = await fetch(`${compose.origin}/admin/media`, {
+        method: "POST",
+        headers: { cookie: session },
+        body: form,
+      });
+      // Read once and parsed from the text, because the failure message wants the body too
+      // and a `Response` gives it up exactly once — a message that read it left `json()` with
+      // nothing, and the case failed with `Body is unusable` instead of with the status.
+      const uploaded = await upload.text();
+      expect(
+        upload.status,
+        `Uploading an image answered ${upload.status}: ${uploaded}\n\nIf this is a 500, look at whether the process can write its media directory at all — \`COPY\` leaves /app owned by root and the container runs as \`node\`.`,
+      ).toBe(201);
+
+      const { url } = JSON.parse(uploaded) as { url: string };
+      const before = await fetch(`${compose.origin}${url}`);
+      expect(before.status, `The image was not served back from ${url}.`).toBe(200);
+
+      await compose.recreateApp();
+
+      const after = await fetch(`${compose.origin}${url}`);
+      expect(
+        after.status,
+        `${url} answered ${after.status} after the container was replaced, so this deployment lost an image the moment it was redeployed. The \`app\` service's Media volume in this Project's compose.yaml is what keeps it.`,
+      ).toBe(200);
+      expect(
+        Buffer.from(await after.arrayBuffer()).equals(PIXEL_PNG),
+        `${url} answered after the redeploy with bytes that are not the ones uploaded.`,
+      ).toBe(true);
     },
     CONTAINER_TIMEOUT,
   );
