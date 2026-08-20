@@ -113,6 +113,34 @@ Three things follow, and each has a test rather than a convention behind it:
 | `pnpm run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
 | `pnpm run template:generate` | Regenerate what `create-kobai` generates, from the reference Project. |
 
+**A Postgres major does not upgrade a volume it finds, and 18 moved where the volume goes.**
+The compose files are on `postgres:18-alpine`, and three things came with it.
+
+The first is loud: a data directory initialised by 17 makes 18 refuse to start, so `pnpm run
+up` waits on a healthcheck that will never pass. Nothing in this repository's volume is worth
+keeping, so the answer here is `pnpm run db:down` (which drops it) and then `pnpm run up`,
+which initialises a fresh 18 and re-applies every migration set. **That answer is wrong for a
+Project holding real data**, which needs `pg_upgrade` or a dump and restore before its image
+tag moves; kobai ships no tooling for it, and `kobai-upgrade` does not reach a database
+(ADR-0035). Treat moving a Project's Postgres major as its own piece of work.
+
+The second is silent, and it is why **every `db` service now mounts `/var/lib/postgresql`
+rather than `/var/lib/postgresql/data`.** 18 moved `PGDATA` to a major-version-specific
+subdirectory and declares its `VOLUME` at the parent, so the old path names a directory
+Postgres no longer writes to. A mount left there does not fail — Docker satisfies the image's
+declared volume with an **anonymous** one, the database lives in that, and `kobai-db` sits
+empty looking like the database. On an existing volume the image catches this and says so; on
+a fresh one nothing does, and the first `docker compose down` takes the data with it. The
+compose files carry the reasoning at the mount.
+
+A third came with it and is neither loud nor about volumes: **a Postgres major can change the
+SQLSTATE a refusal arrives under.** 18 reports a key declared `on delete restrict` as
+`restrict_violation` (23001) where 17 said `foreign_key_violation` (23503), and since kobai
+*reads* those refusals rather than asking first, matching one code turned two ordinary 422s
+into 500s. `packages/core/src/db/errors.ts` carries both codes and says why. When a Postgres
+major moves, the refusals read through that module are the thing to re-check — nothing about
+them fails to compile.
+
 **`pnpm run dev` watches two things, because an edit lands in one of two places.** Every
 workspace package the Project resolves at runtime does so through its `exports` to `dist` —
 the same path a Developer outside this repository takes — so `scripts/dev.ts` runs
@@ -256,7 +284,8 @@ full; the second lives in the root `package.json`. What is durable enough to bel
   hazard worth knowing before you edit it: **an `ignore` entry suppresses a security fix
   as well as a version one**, and cannot be scoped to version updates alone.
 
-**When Dependabot cannot fix an advisory, the lever is `pnpm.overrides`.** An advisory
+**When Dependabot cannot fix an advisory, the lever is `overrides` in
+`pnpm-workspace.yaml`.** An advisory
 against a *transitive* dependency that no release of its parent moves off produces no
 pull request at all — Dependabot has nothing to bump — so it sits in the alert list
 indefinitely rather than arriving as work. #69 is the worked example: thirteen alerts,
@@ -264,13 +293,26 @@ three of them high, every one a transitive pin under a parent already at its lat
 release. Write the override **scoped to the parent** (`parent>child`), never as a bare
 package name, so it moves the one vulnerable copy and a future advisory in the same
 package still surfaces as its own alert. Never write one that pins backwards — that
-silences an alert instead of fixing it. Each entry carries a `"// pnpm.overrides.…"` key
-in `package.json` saying what it is for and when it can go; **delete it the moment its
+silences an alert instead of fixing it. Each entry carries a comment saying what it is for
+and when it can go; **delete it the moment its
 parent ships a release that no longer needs it**, and check that before adding a new one.
+
+**Every pnpm setting lives in `pnpm-workspace.yaml`, not in a `pnpm` key in
+`package.json`.** pnpm 11 stopped reading that key — it *warns and ignores*, so an override
+left behind there goes quiet rather than red, which is the worst way for a security floor to
+stop applying. The move is also what finally lets the rule above hold: a `package.json`
+cannot carry a comment, and the `"// …"` keys that used to do this job were removed in
+`52f42fb` because an editor flags every one of them. YAML takes real comments, so an
+override's reason and its expiry sit beside it. Two other settings live there and each says
+why in the file: **`allowBuilds`**, the allowlist of dependencies permitted to run install
+scripts — pnpm 11 runs none by default and fails the install by name, so a new one arrives
+as a decision — and a deliberately *unset* **`minimumReleaseAge`**, whose 48-hour default
+must never exceed the `cooldown` in `.github/dependabot.yml`, or Dependabot proposes bumps
+pnpm then refuses to install.
 
 Taking an override rests on a reachability argument, and **an argument that a package is
 unreachable expires when the code changes** — so it is written down with the day it
-expires, next to the override in `package.json` rather than only in a pull request.
+expires, next to the override in `pnpm-workspace.yaml` rather than only in a pull request.
 #69's is the shape to copy: undici was reachable only as `openapi-typescript`'s fallback
 for a `globalThis.fetch` that ADR-0031's Node 22 always provides, and kobai has no direct
 `undici` use and no WebSocket use anywhere in `packages/*/src` or `reference/src`. **The

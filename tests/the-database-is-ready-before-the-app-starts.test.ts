@@ -29,7 +29,7 @@ import { parse as parseYaml } from "yaml";
 const run = promisify(execFile);
 const repoRoot = new URL("../", import.meta.url);
 
-/** Pulling `postgres:17-alpine` on a cold runner, then initialising a database twice. */
+/** Pulling `postgres:18-alpine` on a cold runner, then initialising a database twice. */
 const TIMEOUT = 300_000;
 
 /**
@@ -54,7 +54,7 @@ const DATABASE_ENVIRONMENT = {
   POSTGRES_DB: "kobai",
 } as const;
 
-const IMAGE = "postgres:17-alpine";
+const IMAGE = "postgres:18-alpine";
 
 /** The line the image prints once initialisation is behind it and the real server is next. */
 const INITIALISED = "PostgreSQL init process complete";

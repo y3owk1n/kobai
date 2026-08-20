@@ -15,8 +15,22 @@ const UNIQUE_VIOLATION = "23505";
 /** And for a `check` constraint refusing a value — how Inventory refuses to go negative. */
 const CHECK_VIOLATION = "23514";
 
-/** And for a foreign key refusing a delete — how a Role held by Merchants refuses to go. */
-const FOREIGN_KEY_VIOLATION = "23503";
+/**
+ * And for a foreign key refusing a delete — how a Role held by Merchants refuses to go.
+ *
+ * **There are two codes, not one, and which one arrives depends on the Postgres major.** A key
+ * declared `on delete restrict` — which is every key read through here — refuses under
+ * `restrict_violation` (23001) on Postgres 18, where 17 and earlier reported the same refusal
+ * as `foreign_key_violation` (23503). 23503 is still what an orphan `insert` raises, and what
+ * a `no action` key raises when its deferred check fails, so neither code can be dropped.
+ *
+ * This is worth stating rather than merely handling: matching only 23503 is not a rule that
+ * fails when a Postgres major moves, it is a rule that goes on compiling and turns both
+ * refusals read through here — `role-in-use`, and the Store refusing to lose the Region it
+ * falls back to — into 500s for what are ordinary conflicts. The constraint name is matched
+ * as well (see `violates`), so widening the code set costs no precision.
+ */
+const FOREIGN_KEY_VIOLATION = ["23503", "23001"] as const;
 
 /**
  * How far down a `cause` chain to look, so that a cycle cannot become a hung request.
@@ -72,14 +86,26 @@ export function violatesForeignKey(cause: unknown, key: string): boolean {
  * constraint by name as well as by code is what keeps each one narrow — a second constraint on
  * the same table must not be mistaken for the one being claimed against.
  */
-function violates(cause: unknown, sqlstate: string, constraint: string): boolean {
+function violates(
+  cause: unknown,
+  sqlstate: string | readonly string[],
+  constraint: string,
+): boolean {
+  const codes = typeof sqlstate === "string" ? [sqlstate] : sqlstate;
   let error: unknown = cause;
 
   for (let depth = 0; depth < DEEPEST_CAUSE; depth++) {
     if (error === null || typeof error !== "object") return false;
 
     const failure = error as { code?: unknown; constraint?: unknown; cause?: unknown };
-    if (failure.code === sqlstate && failure.constraint === constraint) return true;
+    const code = failure.code;
+    if (
+      typeof code === "string" &&
+      codes.includes(code) &&
+      failure.constraint === constraint
+    ) {
+      return true;
+    }
     error = failure.cause;
   }
 

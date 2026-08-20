@@ -174,8 +174,23 @@ updates:
       # unnoticed. The update that most needs to surface does not get extra latency. A
       # minor takes `default-days`; `semver-minor-days` is omitted because it would only
       # restate it.
+      #
+      # `semver-patch-days` was `0` — patches proposed the moment they were published — and
+      # that stopped being free when kobai moved to pnpm 11. pnpm now verifies the lockfile
+      # against a `minimumReleaseAge` policy at install time and **fails** on any entry
+      # published inside the window, so a same-day patch bump would have opened a PR that
+      # could not install: red at `pnpm install --frozen-lockfile`, before the gate it was
+      # meant to run. Worse, it would go green on its own a day later without a commit,
+      # which is the least diagnosable kind of red there is.
+      #
+      # The rule to keep is one-directional, not an equality: **this soak must never be
+      # shorter than pnpm's**, which defaults to 48 hours and is left there on purpose
+      # (`pnpm-workspace.yaml` says why — pinning it higher drags every transitive entry
+      # backwards). Three days clears 48 hours with room to spare. Lowering `default-days`
+      # or putting `semver-patch-days` back to `0` re-opens the failure; raising pnpm's past
+      # three days would too, from the other end.
       default-days: 3
-      semver-patch-days: 0
+      semver-patch-days: 3
 
     commit-message:
       # DECISION: kobai writes Conventional Commits, and Dependabot otherwise infers the

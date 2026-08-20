@@ -10,7 +10,7 @@ Part of [`AGENTS.md`](../../AGENTS.md), which is the source of truth and says wh
 component under `src/components/ui/` is an ordinary file in this repository because
 that is how shadcn works: `shadcn add` copies source in. Edit them.
 
-**The frame is conventional, because a Developer inherits it** (ADR-0063). react-router v7,
+**The frame is conventional, because a Developer inherits it** (ADR-0063). react-router v8,
 TanStack Query with **no optimistic updates**, react-hook-form with zod checking **structure
 only**, and shadcn on Base UI. Not one of the four is kobai's own invention, and that is the
 decision rather than a shortcut around one: a dependency taken here
