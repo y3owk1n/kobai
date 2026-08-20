@@ -204,13 +204,16 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   **A list that narrows keeps its narrowing across a page** (#228). The pager moves the cursor
   and carries the rest of the query string over untouched, because one that rebuilt the search
   out of the cursor alone answers the second page of the *whole* table — which looks exactly
-  like paging working, and is a different question being answered. Two lists narrow today —
-  Carts by `?state=live|expired|spent` (ADR-0071) and Products by
-  `?status=draft|published|archived` (#252) — and **a narrowing is
-  `components/list-filter.tsx`, of which there is one** (#252). A filter is a set of **links**
+  like paging working, and is a different question being answered. Two lists narrow today and one
+  of them narrows twice — Carts by `?state=live|expired|spent` (ADR-0071), Products by
+  `?status=draft|published|archived` (#252) **and** by `?collection=` (#256) — and **a narrowing
+  is `components/list-filter.tsx`, of which there is one** (#252). A filter is a set of **links**
   rather than a control with a value, for the reason the cursor is in the URL at all: each value
   is an address a Merchant can send and a refresh lands on. Choosing one **drops** the cursor,
-  since a cursor locates a page of the list that issued it. The second copy of that nav was
+  since a cursor locates a page of the list that issued it, **and keeps every other narrowing
+  untouched** — which is the rule the third caller added and the one a hand-copied nav would not
+  have had: two filters that each clear the other look exactly like two filters that work, one
+  click at a time, and the browser seam is where that is watched (#256). The second copy of that nav was
   verbatim, comments included, which is `listbox-field.tsx`'s lesson arriving one noun along:
   extract on the second, because the third is what gets to reintroduce every defect the first
   two had fixed by hand. `useListFilter` is the other half and holds the part that is easy to
@@ -355,7 +358,13 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   `CreateVariantRequest` promises "Defaults to `physical`" under ADR-0060, so a new Variant
   starts on the Strategy the same request without that field would have got. Starting on the
   first name the route answers with was the alternative and is worse — it is alphabetical, so
-  the picker would default to `digital`.
+  the picker would default to `digital`. **A set two controls both ask for is a module**, on the
+  extract-on-the-second rule the two components above already carry: `lib/collections.ts` is that
+  set for Collections (#256), read by the Products list's second filter and by the Product
+  screen's Collections card, and it reports *whether kobai has answered* beside the list because
+  both callers need to tell "the Store has none" from "nobody has asked yet". It asks for a
+  hundred and **does not page**, which is `components/media-attachments.tsx`'s known gap arriving
+  one noun along, and it is written down there rather than here for that reason.
 - **A field whose options are still loading must not say the value is wrong.** The "not wired
   here" option is gated on the query having **succeeded**, not on the name being absent from an
   empty list — otherwise every ordinary `physical` Variant is labelled broken for the length of

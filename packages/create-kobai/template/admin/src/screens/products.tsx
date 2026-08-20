@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { PackageIcon } from "lucide-react";
+import { LayersIcon, PackageIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
@@ -45,6 +45,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useOfferedCollections } from "@/lib/collections";
 import { slugify } from "@/lib/handle";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { catalogReasonOf, orThrow, problemOf, Refused } from "@/lib/refusal";
@@ -66,8 +67,9 @@ import { useKobaiClient } from "@/lib/session";
  */
 const PRODUCTS = "products";
 
-/** The query parameter the filter lives in, spelled as `GET /admin/products` spells it. */
+/** The query parameters the two filters live in, spelled as `GET /admin/products` spells them. */
 const STATUS = "status";
+const COLLECTION = "collection";
 
 /** Where this section lives, exactly as `app.tsx` and `lib/sections.ts` spell it. */
 const HERE = "/products";
@@ -77,23 +79,61 @@ export function Products() {
   const after = usePageCursor();
   const { asked, value: status, unknownValue } = useListFilter(STATUS, OFFERED_STATUSES);
 
+  // Every Collection this Store has, so the filter can offer them by name — through
+  // `lib/collections.ts`, which the Product screen's own card reads from too.
+  const { collections: offered, read: collectionsRead } = useOfferedCollections();
+  const { asked: askedCollection, unknownValue: unknownCollection } = useListFilter(
+    COLLECTION,
+    offered.map((one) => one.id),
+  );
+
+  /**
+   * Whether the address names a Collection this Store has not got — and **only once the list
+   * has really been read**.
+   *
+   * `useListFilter` compares against what was offered, and what is offered is empty until kobai
+   * answers — so a bare reading of `unknownValue` would call every perfectly good address
+   * unknown for the length of a round trip, and permanently if that read failed. That is the
+   * trap the Fulfilment Strategy field's "not wired here" option is gated on success for, one
+   * screen along, and it is why `useOfferedCollections` reports `read` at all.
+   */
+  const noSuchCollection = collectionsRead ? unknownCollection : null;
+
+  /**
+   * What is actually sent as `?collection=`: **what the address said**, not the value the list
+   * above matched it to.
+   *
+   * This is where a Collection filter parts company with a status one, and the reason is that
+   * the offered set is a round trip away. Sending the matched value would mean sending
+   * *nothing* while that read is in flight or after it failed — and a filter dropped rather than
+   * refused answers the whole catalog under a heading saying otherwise, which is the exact
+   * failure the convention exists to rule out (#209), arriving through the Admin instead of
+   * through the API. kobai narrows by whatever this is or refuses it with `invalid`; the query
+   * above is only ever an affordance, and the `enabled` below is what saves the round trip in
+   * the one case this screen genuinely knows the answer.
+   */
+  const collection = askedCollection ?? undefined;
+
   const page = useQuery({
     // The cursor is part of the key, so each page is cached as itself — and so is the filter
     // beside it, because a page of drafts and a page of published Products are two different
     // answers to two different questions.
     //
-    // Keyed on what the **address** asked for rather than on the status it narrowed to, so that
-    // a word kobai does not have is its own key rather than the unfiltered catalog's.
-    queryKey: [PRODUCTS, asked, after ?? null],
+    // Keyed on what the **address** asked for rather than on the values it narrowed to, so that
+    // a word kobai does not have is its own key rather than the unfiltered catalog's — and on
+    // **both** narrowings, because a page of drafts in Summer is a fourth answer again.
+    queryKey: [PRODUCTS, asked, askedCollection, after ?? null],
     queryFn: async () =>
       orThrow(
         await client.GET("/admin/products", {
           params: {
             query: {
               // Each omitted rather than sent empty. An empty `after` is a cursor kobai never
-              // issued and is refused as one, and an empty `status` is not one of the three.
+              // issued and is refused as one, an empty `status` is not one of the three, and an
+              // empty `collection` is not a Collection identifier.
               ...(after === undefined ? {} : { after }),
               ...(status === undefined ? {} : { status }),
+              ...(collection === undefined ? {} : { collection }),
             },
           },
         }),
@@ -101,16 +141,19 @@ export function Products() {
     // The previous page stays on screen while the next one is fetched, so moving through a
     // list is a spinner over what you were reading rather than the whole table disappearing.
     placeholderData: keepPreviousData,
-    // Nothing is asked for while the address names a status kobai has never heard of: the
-    // screen has an answer already, and it is not one kobai could improve on.
-    enabled: unknownValue === null,
+    // Nothing is asked for while the address names a status or a Collection kobai has never
+    // heard of: the screen has an answer already, and it is not one kobai could improve on.
+    // While the Collections are still being read, `noSuchCollection` is `null` and this asks —
+    // with whatever the address said, which kobai either narrows by or refuses.
+    enabled: unknownValue === null && noSuchCollection === null,
   });
 
-  // Nothing at all while the address names no status kobai has, and that is the assertion
-  // rather than a tidiness: `placeholderData` hands this observer the page it was last showing
-  // while a new key is in flight, so a screen that read `page.data` here would print "no such
-  // status" over the rows of whichever filter the Merchant came from.
-  const products = unknownValue === null ? page.data?.products : undefined;
+  // Nothing at all while the address names a value kobai does not have, and that is the
+  // assertion rather than a tidiness: `placeholderData` hands this observer the page it was last
+  // showing while a new key is in flight, so a screen that read `page.data` here would print "no
+  // such status" over the rows of whichever filter the Merchant came from.
+  const products =
+    unknownValue === null && noSuchCollection === null ? page.data?.products : undefined;
 
   return (
     <div className="grid gap-6">
@@ -129,12 +172,26 @@ export function Products() {
         </CardHeader>
         <CardContent>
           <ListFilter
-            label="Filter the Products"
+            label="Filter the Products by status"
             section={HERE}
             parameter={STATUS}
             asked={asked}
             options={PRODUCT_STATUS_OPTIONS}
           />
+
+          {/* The second narrowing, and the two compose: choosing a Collection keeps whichever
+              status is in force and the other way round, which is `ListFilter`'s own rule. It is
+              drawn only where there is something to draw — a Store with no Collections would
+              otherwise get a nav offering nothing but "All". */}
+          {offered.length > 0 ? (
+            <ListFilter
+              label="Filter the Products by Collection"
+              section={HERE}
+              parameter={COLLECTION}
+              asked={askedCollection}
+              options={offered.map((one) => ({ value: one.id, label: one.title }))}
+            />
+          ) : null}
 
           <Problem
             problem={
@@ -145,8 +202,11 @@ export function Products() {
           />
 
           {unknownValue === null ? null : <NoSuchStatus asked={unknownValue} />}
+          {noSuchCollection === null ? null : <NoSuchCollection />}
 
-          {page.isPending && unknownValue === null ? <ProductsLoading /> : null}
+          {page.isPending && unknownValue === null && noSuchCollection === null ? (
+            <ProductsLoading />
+          ) : null}
 
           {products !== undefined && products.length === 0 ? (
             <Empty className="border">
@@ -154,19 +214,15 @@ export function Products() {
                 <EmptyMedia variant="icon">
                   <PackageIcon />
                 </EmptyMedia>
-                <EmptyTitle>
-                  {status === undefined
-                    ? "No Products yet"
-                    : `No ${PRODUCT_STATUS_LABELS[status].toLowerCase()} Products`}
-                </EmptyTitle>
+                <EmptyTitle>{narrowedTitle(status, collection)}</EmptyTitle>
                 <EmptyDescription>
-                  {/* Which of the two sentences this is matters: "there is nothing here"
-                      and "there is nothing here *in this status*" are different facts, and
-                      a filtered list saying the first would send a Merchant looking for a
-                      catalog they still have. */}
-                  {status === undefined
+                  {/* Which of these sentences this is matters: "there is nothing here" and
+                      "there is nothing here *in this Collection*" are different facts, and a
+                      filtered list saying the first would send a Merchant looking for a catalog
+                      they still have. */}
+                  {status === undefined && collection === undefined
                     ? "Nothing is for sale until a Product exists. Create one below — a title, a SKU and a Price is the thinnest sellable thing."
-                    : "Nothing in this Store is in that status. Choose All above to see the whole catalog."}
+                    : "Nothing in this Store matches that. Choose All above to widen it — a Product is put into a Collection on the Product's own screen."}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -227,6 +283,28 @@ export function Products() {
 }
 
 /**
+ * What an empty page is called, given what narrowed it.
+ *
+ * Four sentences rather than three, because the two filters compose and "no drafts" and "no
+ * drafts in this Collection" are different facts — the second one is what tells a Merchant to
+ * widen rather than to go looking for a catalog they still have.
+ */
+function narrowedTitle(
+  status: (typeof OFFERED_STATUSES)[number] | undefined,
+  collection: string | undefined,
+): string {
+  const inStatus =
+    status === undefined
+      ? "Products"
+      : `${PRODUCT_STATUS_LABELS[status].toLowerCase()} Products`;
+  return collection === undefined
+    ? status === undefined
+      ? "No Products yet"
+      : `No ${inStatus}`
+    : `No ${inStatus} in this Collection`;
+}
+
+/**
  * An address naming a status kobai does not have.
  *
  * Only ever reached by typing or by following a stale link, and it says so rather than quietly
@@ -246,6 +324,35 @@ function NoSuchStatus({ asked }: { readonly asked: string }) {
         <EmptyDescription>
           kobai knows no Product status called “{asked}”. A Product is a draft, published
           or archived, and the three above are the whole of it.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+/**
+ * An address naming a Collection this Store does not have.
+ *
+ * `NoSuchStatus`'s twin, and it deliberately does **not** quote the value back: a status is a
+ * word a Merchant typed or recognises, and this is a UUID out of a link, which quoting turns
+ * into a line of noise that says nothing about what went wrong. What it says instead is where a
+ * real one is found.
+ *
+ * Only reached once the Collections have really been read — see `noSuchCollection` above, and
+ * the round trip it deliberately does not save while that read is in flight.
+ */
+function NoSuchCollection() {
+  return (
+    <Empty className="border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <LayersIcon />
+        </EmptyMedia>
+        <EmptyTitle>No such Collection</EmptyTitle>
+        <EmptyDescription>
+          This Store has no Collection at that address — it may have been deleted since
+          the link was made, which leaves the Products that were in it exactly where they
+          were. Choose All above, or see Collections for the ones there are.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
@@ -502,10 +609,11 @@ function whyNotCreated(thrown: unknown): string {
     case "stock-is-reserved":
     case "variant-options-mismatch":
     case "media-not-found":
-      // Not reachable from this form as it stands — it declares no options and attaches no
-      // image, so the Variant it creates answers none of either. Both are done on the Product
-      // screen, once the Product exists. Reported as kobai said it rather than as a sentence
-      // written here for a case nobody has seen.
+    case "collection-not-found":
+      // Not reachable from this form as it stands — it declares no options, attaches no image
+      // and joins no Collection, so the Product it creates is in none of the three. All of them
+      // are done on the Product screen, once the Product exists. Reported as kobai said it
+      // rather than as a sentence written here for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:

@@ -842,6 +842,8 @@ export interface paths {
           after?: string;
           /** @description Narrow to the Products in one status — `draft` to find what is still being prepared, `published` for what is on sale, `archived` for what has been taken off it. The three partition the catalog, so omitting this answers all of them. A value that is not one of the three is **refused** rather than ignored, because a filter quietly dropped answers a different question from the one that was asked. */
           status?: components["schemas"]["ProductStatus"];
+          /** @description Narrow to the Products in one Collection, by its `id`. Collections do **not** partition the catalog — a Product may be in several and most are in none — so this composes with `status` rather than replacing it, and omitting it answers the whole list. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page, because an empty page is a truthful-looking answer to a question nobody asked. */
+          collection?: string;
         };
       };
       responses: {
@@ -1621,6 +1623,270 @@ export interface paths {
       };
     };
   };
+  "/admin/collections": {
+    /**
+     * List Collections
+     * @description Newest first, 20 at a time — how a Store's catalog is grouped. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered; `nextCursor` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). What is *in* one is `GET /admin/products?collection=`, which pages the same way.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Collections. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["CollectionList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Create a Collection
+     * @description A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections` on `PATCH /admin/products/{id}`, which takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.
+     */
+    post: {
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["CreateCollectionRequest"];
+        };
+      };
+      responses: {
+        /** @description The Collection. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Collection"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CollectionRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/admin/collections/{id}": {
+    /**
+     * Read a Collection
+     * @description One Collection. It carries no Products and no count of them: what is in it is `GET /admin/products?collection=`, which pages, where a count beside a title would be a second query over the catalog on every read of every row.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The Collection. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Collection"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Collection exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CollectionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Delete a Collection
+     * @description **Deletes the grouping and none of the Products in it.** Every Product it held is still in the catalog, still in whatever other Collections it was in, and merely no longer in this one — so organising is never destructive, and this is refused for nothing but there being no such Collection.
+     */
+    delete: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description Deleted, and every Product it held left alone. */
+        204: {
+          content: never;
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Collection exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CollectionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Rename a Collection
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. Which Products are in the Collection is **not** changed here — `collections` on `PATCH /admin/products/{id}` is the whole set of the Collections one Product is in, and it is the only thing that writes a membership.
+     */
+    patch: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      requestBody: {
+        content: {
+          "application/json": components["schemas"]["UpdateCollectionRequest"];
+        };
+      };
+      responses: {
+        /** @description The Collection, as a read of it reports it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["Collection"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["CollectionRefusal"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description No such Collection exists. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["CollectionRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/orders": {
     /**
      * List Orders
@@ -2031,7 +2297,7 @@ export interface paths {
   "/store/products": {
     /**
      * List what the Store sells
-     * @description Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064). A Product carries no Variants here: open one for those. What each Variant costs is `GET /store/variants/{id}/price`, because a Price is resolved by a Workflow rather than read off a row.
+     * @description Newest first, 20 at a time. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered — `nextCursor` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064). `collection` narrows to the Products of one Collection, by the `id` each Product's own `collections` reports; it is how a storefront browses one, and it answers **published** Products like every read here. A Product carries no Variants: open one for those. What each Variant costs is `GET /store/variants/{id}/price`, because a Price is resolved by a Workflow rather than read off a row.
      */
     get: {
       parameters: {
@@ -2040,6 +2306,8 @@ export interface paths {
           limit?: number;
           /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
           after?: string;
+          /** @description Narrow to the published Products of one Collection, by the `id` each Product's own `collections` reports — this is how a storefront browses one. It composes with the page rather than replacing it, so a short page is still not the end of the list. `published` is not negotiable here: a draft in this Collection is answered by neither the filtered list nor the whole one. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page. */
+          collection?: string;
         };
       };
       responses: {
@@ -3156,6 +3424,16 @@ export interface components {
       /** @description What this shows, for a Shopper who cannot see it — or `null` where nobody has written it yet. Never an empty string: that is what a *decorative* image says, and it is a different fact from nobody having been asked. */
       alt: string | null;
     };
+    Collection: {
+      /** Format: uuid */
+      id: string;
+      /** @description What the Merchant calls it — `Summer`, `Under 20`. **Not unique**: a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision. */
+      title: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
     ProductOption: {
       /** Format: uuid */
       id: string;
@@ -3222,6 +3500,8 @@ export interface components {
       status: components["schemas"]["ProductStatus"];
       /** @description The Media this Product shows, **in the order a Merchant put them in** — so the first one is the one that leads. On the list shape as well as on the detail, because a catalog grid is nothing but leading images and a client that had to open every Product to draw one would be making a request per tile. Attaching, reordering and detaching are all `media` on `PATCH /admin/products/{id}`; detaching removes the attachment and never the Media. */
       media: components["schemas"]["Media"][];
+      /** @description The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections` on `PATCH /admin/products/{id}`, which takes the whole set. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round. */
+      collections: components["schemas"]["Collection"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -3234,7 +3514,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch" | "media-not-found";
+      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch" | "media-not-found" | "collection-not-found";
     };
     CreateProductRequest: {
       title: string;
@@ -3281,6 +3561,8 @@ export interface components {
       media?: components["schemas"]["MediaAttachment"][];
       /** @description **The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for. */
       options?: components["schemas"]["ProductOptionCorrection"][];
+      /** @description **The complete set of the Collections this Product is in** — so this is where it is put into one and where it is taken out of one. An empty list takes it out of every Collection. A Product may be in as many as a Merchant likes, and the order carries no meaning: this is a set, not an ordered list like `media` beside it, so what a read answers with is by title. **Nothing here deletes a Collection**, and deleting one takes its Products out of it rather than deleting them. A Collection this Store does not have is refused at 422 with `collection-not-found`. */
+      collections?: components["schemas"]["CollectionMembership"][];
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {
         [key: string]: unknown;
@@ -3301,6 +3583,13 @@ export interface components {
       id?: string;
       /** @description What it should now be called. */
       name: string;
+    };
+    CollectionMembership: {
+      /**
+       * Format: uuid
+       * @description The Collection this Product should be in, as `POST /admin/collections` answered with and `GET /admin/collections` lists. One this Store has no Collection for is refused at 422 with `collection-not-found`.
+       */
+      id: string;
     };
     UpdateVariantRequest: {
       /** @description A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused. */
@@ -3342,6 +3631,35 @@ export interface components {
       media: components["schemas"]["Media"][];
       /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
       nextCursor?: string;
+    };
+    CollectionRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "collection-not-found";
+    };
+    CreateCollectionRequest: {
+      /** @description Required, and not empty. */
+      title: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
+    };
+    CollectionList: {
+      collections: components["schemas"]["Collection"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    UpdateCollectionRequest: {
+      title?: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata?: {
+        [key: string]: unknown;
+      };
     };
     OrderList: {
       orders: components["schemas"]["OrderSummary"][];
@@ -3594,6 +3912,8 @@ export interface components {
       handle: string;
       /** @description The images this Product shows, **in the order a Merchant put them in** — the first one leads. On the list shape as well as on the detail, so a catalog grid is one request rather than one per tile. Empty for a Product nobody has attached an image to. */
       media: components["schemas"]["StoreMedia"][];
+      /** @description The Collections this Product is in, by title — so a page can render breadcrumbs, or link a catalog tile at the Collection it belongs to, without a second request. A **set**: a Product may be in several and most are in none, and the order carries no meaning. Send an `id` back as `?collection=` to list that Collection; nothing on this surface enumerates them. */
+      collections: components["schemas"]["StoreCollection"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -3610,6 +3930,19 @@ export interface components {
       width: number | null;
       /** @description Likewise, in pixels, or `null`. */
       height: number | null;
+    };
+    StoreCollection: {
+      /**
+       * Format: uuid
+       * @description What `GET /store/products?collection=` takes, to list this Collection.
+       */
+      id: string;
+      /** @description What the Merchant calls it. Not unique across the Store. */
+      title: string;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
     };
     ApiKeyRefusal: {
       error: string;

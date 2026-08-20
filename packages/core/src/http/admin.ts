@@ -42,6 +42,17 @@ import {
 } from "../auth/session-cookie.ts";
 import { listCarts, readCart } from "../cart/read.ts";
 import {
+  type CollectionCreation,
+  type CollectionDeletion,
+  type CollectionUpdate,
+  createCollection,
+  deleteCollection,
+  listCollections,
+  readCollection,
+  unknownCollection,
+  updateCollection,
+} from "../catalog/collection.ts";
+import {
   deletePrice,
   deleteProduct,
   deleteVariant,
@@ -74,6 +85,7 @@ import {
 import { listMedia, type MediaUploadOutcome, uploadMedia } from "../media/media.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { listOrders, readOrder } from "../order/read.ts";
+import type { NotUsable } from "../patch.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
@@ -1173,6 +1185,148 @@ const listMediaRoute = createRoute({
 });
 
 /**
+ * The Collections a Merchant groups Products into (#256, stories 13, 14, 17 and 18).
+ *
+ * **Behind `catalog:read` and `catalog:write`, and there is deliberately no `collection:` family
+ * beside them.** A Collection is catalog data — a Merchant who may write the catalog may group
+ * it, and one who may read the catalog may see how it is grouped — so a fifth pair of
+ * Permissions would name a boundary that does not exist, which is `role:write`'s argument
+ * arriving at a different table (ADR-0066). It also means every deployment that upgrades gets
+ * these five routes working, where a new Permission would need a `--custom` migration and would
+ * leave a Merchant unable to call them until it ran.
+ *
+ * **Which Products are in a Collection is not here, in either direction.** There is no `products`
+ * on the correction and no `POST /admin/collections/{id}/products`: membership is `collections`
+ * on `PATCH /admin/products/{id}`, the whole set of the Collections one Product is in, and
+ * `GET /admin/products?collection=` is how the question is asked from this side. Two routes
+ * writing one fact would be permanent under ADR-0060 and could disagree about what an empty list
+ * means.
+ */
+const createCollectionRoute = createRoute({
+  method: "post",
+  path: "/collections",
+  summary: "Create a Collection",
+  description:
+    "A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections` on `PATCH /admin/products/{id}`, which takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.CreateCollectionRequest } },
+    },
+  },
+  responses: {
+    201: json("The Collection.", contract.Collection),
+    400: json(
+      "The request does not fit this endpoint's schema, or is not JSON at all.",
+      contract.CollectionRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const listCollectionsRoute = createRoute({
+  method: "get",
+  path: "/collections",
+  summary: "List Collections",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — how a Store's catalog is grouped. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered; \`nextCursor\` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). What is *in* one is \`GET /admin/products?collection=\`, which pages the same way.`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { query: contract.CollectionPageQuery },
+  responses: {
+    200: json("A page of Collections.", contract.CollectionList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const readCollectionRoute = createRoute({
+  method: "get",
+  path: "/collections/{id}",
+  summary: "Read a Collection",
+  description:
+    "One Collection. It carries no Products and no count of them: what is in it is `GET /admin/products?collection=`, which pages, where a count beside a title would be a second query over the catalog on every read of every row.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json("The Collection.", contract.Collection),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Collection exists.", contract.CollectionRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const updateCollectionRoute = createRoute({
+  method: "patch",
+  path: "/collections/{id}",
+  summary: "Rename a Collection",
+  description:
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. Which Products are in the Collection is **not** changed here — `collections` on `PATCH /admin/products/{id}` is the whole set of the Collections one Product is in, and it is the only thing that writes a membership.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    params: contract.IdParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: contract.UpdateCollectionRequest } },
+    },
+  },
+  responses: {
+    200: json("The Collection, as a read of it reports it.", contract.Collection),
+    400: json(
+      "The request does not fit this endpoint's schema, is not JSON at all, or names nothing this route would change.",
+      contract.CollectionRefusal,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Collection exists.", contract.CollectionRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
+ * Deletes a Collection, and **every Product it held stays exactly where it was** (story 17).
+ *
+ * **This is the one catalog deletion that refuses nothing**, and the contrast with the two
+ * beside it is the decision rather than an oversight. `DELETE /admin/products/{id}` refuses
+ * while stock is reserved and `DELETE /admin/roles/{id}` refuses while Merchants hold the Role,
+ * because in both cases the delete would take something away from somebody (ADR-0059). Deleting
+ * a Collection takes away a *label*: the Products it grouped are still in the catalog, still
+ * published, still sellable, and merely ungrouped. Refusing while it held Products would mean a
+ * Merchant had to empty a Collection before they could remove it — tidying up in order to delete
+ * a name — which is why the cascade stops at the join row rather than reaching a Product.
+ */
+const deleteCollectionRoute = createRoute({
+  method: "delete",
+  path: "/collections/{id}",
+  summary: "Delete a Collection",
+  description:
+    "**Deletes the grouping and none of the Products in it.** Every Product it held is still in the catalog, still in whatever other Collections it was in, and merely no longer in this one — so organising is never destructive, and this is refused for nothing but there being no such Collection.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    204: { description: "Deleted, and every Product it held left alone." },
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json("No such Collection exists.", contract.CollectionRefusal),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Mints an API key — the credential the store surface is gated by (ADR-0020).
  *
  * The value is in this response and in no other, ever: only a digest is stored, so there
@@ -1548,7 +1702,18 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(listProductsRoute, async (c) => {
-    const page = await listProducts(deps.db, deps.mediaStorage, c.req.valid("query"));
+    const query = c.req.valid("query");
+
+    // **Before the page, so an unknown Collection cannot arrive as a 200 with an empty list** —
+    // the filtering convention's second promise, at the first filter whose values a schema
+    // cannot hold (#209, #252). `status` is refused by the schema because the schema knows the
+    // three words; whether a Collection exists is a fact about the Store.
+    if (query.collection !== undefined) {
+      const missing = await unknownCollection(deps.db, query.collection);
+      if (missing) return refused(c, missing, PAGE_FILTER_STATUS);
+    }
+
+    const page = await listProducts(deps.db, deps.mediaStorage, query);
     // `undefined` rather than `null`, and `JSON.stringify` drops the key — which is the wire
     // shape ADR-0064 asks for: absent means there is no further page.
     return c.json({ products: page.items, nextCursor: page.nextCursor }, 200);
@@ -1650,6 +1815,48 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   guarded.openapi(listMediaRoute, async (c) => {
     const page = await listMedia(deps.db, deps.mediaStorage, c.req.valid("query"));
     return c.json({ media: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(createCollectionRoute, async (c) => {
+    const created = await createCollection(deps.db, c.req.valid("json"));
+    if (!created.ok) return refused(c, created, COLLECTION_STATUS);
+    return c.json(created.collection, 201);
+  });
+
+  guarded.openapi(listCollectionsRoute, async (c) => {
+    const page = await listCollections(deps.db, c.req.valid("query"));
+    return c.json({ collections: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
+  guarded.openapi(readCollectionRoute, async (c) => {
+    const found = await readCollection(deps.db, c.req.valid("param").id);
+    if (!found) {
+      return c.json(
+        {
+          error:
+            "No such Collection exists. `GET /admin/collections` lists the ones this Store has.",
+          reason: "collection-not-found" as const,
+        },
+        404,
+      );
+    }
+    return c.json(found, 200);
+  });
+
+  guarded.openapi(updateCollectionRoute, async (c) => {
+    const changed = await updateCollection(
+      deps.db,
+      c.req.valid("param").id,
+      c.req.valid("json"),
+    );
+    if (!changed.ok) return refused(c, changed, COLLECTION_UPDATE_STATUS);
+    return c.json(changed.collection, 200);
+  });
+
+  guarded.openapi(deleteCollectionRoute, async (c) => {
+    const deleted = await deleteCollection(deps.db, c.req.valid("param").id);
+    if (!deleted.ok) return refused(c, deleted, COLLECTION_DELETION_STATUS);
+    return c.body(null, 204);
   });
 
   guarded.openapi(listOrdersRoute, async (c) => {
@@ -1775,6 +1982,9 @@ const PRODUCT_UPDATE_STATUS = {
   // Store is what refuses it. Not 404 — that belongs to the Product this request addressed and
   // found — and not 409, which would say somebody got there first and invite a retry.
   "media-not-found": 422,
+  // 422 again, for a `collections` naming a Collection this Store has none of — the same
+  // distinction one noun along, and answered with the word `GET /admin/collections/{id}` uses.
+  "collection-not-found": 422,
 } as const satisfies Record<
   Exclude<ProductUpdate, { ok: true }>["reason"],
   400 | 404 | 409 | 422
@@ -1816,6 +2026,46 @@ const MEDIA_STATUS = {
 const API_KEY_STATUS = {
   invalid: 400,
 } as const satisfies Record<Exclude<ApiKeyCreation, { ok: true }>["reason"], 400>;
+
+/**
+ * Creating a Collection can only be got wrong by the request: nothing about one conflicts with
+ * anything a Store already holds, because a title is not unique.
+ */
+const COLLECTION_STATUS = {
+  invalid: 400,
+} as const satisfies Record<Exclude<CollectionCreation, { ok: true }>["reason"], 400>;
+
+/** Renaming one: the body, or the address. */
+const COLLECTION_UPDATE_STATUS = {
+  invalid: 400,
+  "collection-not-found": 404,
+} as const satisfies Record<Exclude<CollectionUpdate, { ok: true }>["reason"], 400 | 404>;
+
+/**
+ * Deleting one refuses for exactly one reason, and the absence of any other is story 17.
+ *
+ * There is no `collection-in-use` beside `role-in-use`: a Collection full of Products deletes as
+ * cleanly as an empty one, ungrouping them rather than taking anything away.
+ */
+const COLLECTION_DELETION_STATUS = {
+  "collection-not-found": 404,
+} as const satisfies Record<Exclude<CollectionDeletion, { ok: true }>["reason"], 404>;
+
+/**
+ * A `?collection=` naming no Collection this Store has: **400 and never an empty page.**
+ *
+ * The filtering convention's second promise, and it is `pageQuery`'s own `invalid` rather than a
+ * `reason` of its own — an unusable query parameter does not fit the endpoint, which is what
+ * that word already means everywhere on this surface, and a new one would be permanent under
+ * ADR-0060 for a distinction no client can act on (`db/page.ts`).
+ *
+ * Keyed off `NotUsable`'s own union rather than the literal, like every map beside it: the word
+ * is `patch.ts`'s, and a rename there has to redden here rather than leave a map agreeing with
+ * a string it wrote down itself.
+ */
+const PAGE_FILTER_STATUS = {
+  invalid: 400,
+} as const satisfies Record<NotUsable["reason"], 400>;
 
 /**
  * 409 for stock already claimed: the request is well formed and the state of the Store refuses

@@ -69,6 +69,7 @@ const LISTS = [
   { path: "/admin/merchants", key: "merchants", credential: "session" },
   { path: "/admin/carts", key: "carts", credential: "session" },
   { path: "/admin/media", key: "media", credential: "session" },
+  { path: "/admin/collections", key: "collections", credential: "session" },
   { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
 
@@ -680,6 +681,23 @@ async function seedThree(
       });
       expect(uploaded.status, "uploading Media").toBe(201);
       seeded.push(((await uploaded.json()) as { id: string }).id);
+    }
+    return seeded;
+  }
+
+  // Three Collections, which is the whole of arranging this list: a Collection is a title and
+  // nothing else, and what is *in* one is a different list (`GET /admin/products?collection=`).
+  if (list.key === "collections") {
+    for (let index = 0; index < 3; index += 1) {
+      const created = await kobai.request("/admin/collections", {
+        method: "POST",
+        headers: { ...merchant.headers, "content-type": "application/json" },
+        // Titles are deliberately not unique, so these need no mark of their own — the reason
+        // `seedProducts` takes one is a SKU and a handle, and a Collection has neither.
+        body: JSON.stringify({ title: `Collection ${index}` }),
+      });
+      expect(created.status, `creating Collection ${index}`).toBe(201);
+      seeded.push(((await created.json()) as { id: string }).id);
     }
     return seeded;
   }

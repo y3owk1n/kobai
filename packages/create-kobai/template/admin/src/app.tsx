@@ -21,6 +21,8 @@ import { ThemeProvider } from "@/lib/theme";
 import { ApiKeys } from "@/screens/api-keys";
 import { CartScreen } from "@/screens/cart";
 import { Carts } from "@/screens/carts";
+import { CollectionScreen } from "@/screens/collection";
+import { Collections } from "@/screens/collections";
 import { MediaScreen } from "@/screens/media";
 import { Merchants } from "@/screens/merchants";
 import { OrderScreen } from "@/screens/order";
@@ -131,6 +133,8 @@ function Admin() {
         <Route path="products" element={<Products />} />
         <Route path="products/:id" element={<ProductScreen />} />
         <Route path="media" element={<MediaScreen />} />
+        <Route path="collections" element={<Collections />} />
+        <Route path="collections/:id" element={<CollectionScreen />} />
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderScreen />} />
         <Route path="carts" element={<Carts />} />

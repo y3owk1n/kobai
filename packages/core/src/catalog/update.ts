@@ -9,6 +9,13 @@ import {
 } from "../fulfilment/strategy.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { changesFrom, changesNothing, type Field, openData, text } from "../patch.ts";
+import {
+  collectionsThisStoreDoesNotHave,
+  lockCollectionsOf,
+  parseCollectionMemberships,
+  readProductCollections,
+  setProductCollections,
+} from "./collection.ts";
 import { handleField, handleTaken } from "./handle.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
 import {
@@ -70,11 +77,12 @@ export type UpdateProductInput = {
   readonly status?: unknown;
   readonly options?: unknown;
   readonly media?: unknown;
+  readonly collections?: unknown;
   readonly metadata?: unknown;
 };
 
 /**
- * Correcting a Product refuses four ways, and the last two are about the state of the Store.
+ * Correcting a Product refuses five ways, and the last three are about the state of the Store.
  *
  * There is no `title-taken` and there is not going to be one: a title is what a Product is
  * called, not what identifies it, and two Products may perfectly well share one. The **handle**
@@ -90,6 +98,11 @@ export type UpdateProductInput = {
  * fact from the other end: `media` names an asset this Store has none of. It is 422 rather than
  * 400 — the body is well formed and the Store is what refuses it — and rather than 404, which
  * belongs to the Product this request addressed and found.
+ *
+ * **`collection-not-found` is the fifth and is the same shape one noun along** (#256): a
+ * `collections` naming a Collection this Store has not got, refused 422 for those reasons, and
+ * carrying the word `GET /admin/collections/{id}` already answers with — one fact gets one word,
+ * whichever end it is asked from (ADR-0060).
  */
 export type ProductUpdate =
   | { readonly ok: true; readonly product: ProductDetail }
@@ -99,7 +112,8 @@ export type ProductUpdate =
         | "invalid"
         | "product-not-found"
         | "handle-taken"
-        | "media-not-found";
+        | "media-not-found"
+        | "collection-not-found";
       readonly detail: string;
     };
 
@@ -196,6 +210,14 @@ const clearableDescription: Field<string | null> = (value) =>
  * reachable control is a finding rather than something to word around. Correcting each Variant
  * is what ends it, and `catalog/options.ts` is where the whole argument lives.
  *
+ * **`collections` is the whole set of the Collections this Product is in** (#256, stories 13 and
+ * 14). Putting it in one and taking it out of one are the same field — an entry left out is a
+ * membership removed, and an empty list takes it out of everything — because a list of edits
+ * leaves no way to say *and this one is gone*. What does **not** carry over from `media` is the
+ * order: a set has none, so there is no position on the wire, nothing to keep in step, and what
+ * comes back is by title. Nothing here deletes a Collection, and there is deliberately no
+ * `products` on `PATCH /admin/collections/{id}` saying the same fact from the other side.
+ *
  * **Its Variants are not this route's business** otherwise, in either direction: it neither
  * creates one (`POST /admin/products/{id}/variants` does) nor touches the ones that are there.
  * A `variants` key in the body is stripped by the schema and so arrives as a body naming
@@ -251,13 +273,27 @@ export async function updateProduct(
     input.media === undefined ? undefined : parseMediaAttachments(input.media);
   if (shown !== undefined && !shown.ok) return shown;
 
+  // And a third time: `collections` is the whole set of the Collections this Product should now
+  // be in, so grouping it and ungrouping it are this one field. Unlike the two above there is no
+  // order to it at all — a Product is in a Collection or it is not (`catalog/collection.ts`).
+  const grouped =
+    input.collections === undefined
+      ? undefined
+      : parseCollectionMemberships(input.collections);
+  if (grouped !== undefined && !grouped.ok) return grouped;
+
   // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
   // in one place since #185. It does a second job here — the schema strips a field this route
   // does not carry, so a body naming `variants` is this body, and the refusal is where a
   // Merchant who tried to add one is told which route adds one.
-  if (Object.keys(changes).length === 0 && options === undefined && shown === undefined) {
+  if (
+    Object.keys(changes).length === 0 &&
+    options === undefined &&
+    shown === undefined &&
+    grouped === undefined
+  ) {
     return changesNothing(
-      "a `title`, a `description`, a `handle`, a `status`, an `options`, a `media`, a `metadata`, or any of them",
+      "a `title`, a `description`, a `handle`, a `status`, an `options`, a `media`, a `collections`, a `metadata`, or any of them",
       "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
     );
   }
@@ -276,7 +312,8 @@ export async function updateProduct(
       // requests naming both lists cannot each hold the key the other is waiting for.
       if (options !== undefined) await lockProductOptions(tx, productId);
       if (shown !== undefined) await lockMediaOf(tx, productId);
-      if (options !== undefined || shown !== undefined) {
+      if (grouped !== undefined) await lockCollectionsOf(tx, productId);
+      if (options !== undefined || shown !== undefined || grouped !== undefined) {
         if (!(await lockProduct(tx, productId))) return noSuchProduct(productId);
       }
 
@@ -284,8 +321,14 @@ export async function updateProduct(
       // *returned* from inside a transaction commits it, so a `media` judged after the options
       // had been corrected would answer 422 over a Product whose options really had been
       // renamed — which is why `catalog/media.ts` exports the question apart from the write.
+      // Both questions are asked here, ahead of all three writes, for that one reason.
       if (shown !== undefined) {
         const missing = await mediaThisStoreDoesNotHave(tx, shown.value);
+        if (missing) return missing;
+      }
+
+      if (grouped !== undefined) {
+        const missing = await collectionsThisStoreDoesNotHave(tx, grouped.value);
         if (missing) return missing;
       }
 
@@ -305,6 +348,12 @@ export async function updateProduct(
       // be showing on another Product (ADR-0082).
       if (shown !== undefined) await setProductMedia(tx, productId, shown.value);
 
+      // Ungrouping is what a Collection left out of this set *is*, and what it removes is the
+      // membership rather than the Collection: the Collection is still there and may still hold
+      // every other Product that was in it (story 17, from the Product's side).
+      if (grouped !== undefined)
+        await setProductCollections(tx, productId, grouped.value);
+
       const row = await correctProductColumns(tx, productId, changes);
       if (!row) return noSuchProduct(productId);
 
@@ -316,6 +365,8 @@ export async function updateProduct(
         product: {
           ...row,
           media: (await readProductMedia(tx, storage, [productId])).get(productId) ?? [],
+          collections:
+            (await readProductCollections(tx, [productId])).get(productId) ?? [],
           options: await readProductOptions(tx, productId),
           variants: await readVariants(tx, storage, productId),
         },
@@ -356,15 +407,15 @@ export async function updateProduct(
  *
  * `undefined` is "no such Product", from whichever of the two asked.
  *
- * It answers the Product **without its Media**, which is the one field of that shape that is
- * rows rather than a column: the caller reads those back beside the options and the Variants,
- * from the same transaction and in the same breath.
+ * It answers the Product **without its Media and without its Collections**, which are the two
+ * fields of that shape that are rows rather than columns: the caller reads those back beside the
+ * options and the Variants, from the same transaction and in the same breath.
  */
 async function correctProductColumns(
   tx: Transaction,
   productId: string,
   changes: Partial<ProductColumns>,
-): Promise<Omit<Product, "media"> | undefined> {
+): Promise<Omit<Product, "media" | "collections"> | undefined> {
   const columns = {
     id: product.id,
     title: product.title,

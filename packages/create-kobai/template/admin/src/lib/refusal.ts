@@ -3,6 +3,7 @@ import type {
   ApiKeyRefusal,
   CartRefusal,
   CatalogRefusal,
+  CollectionRefusal,
   InvalidCredentials,
   InvalidRequest,
   MerchantRefusal,
@@ -163,6 +164,7 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
   "unknown-fulfilment-strategy": true,
   "variant-options-mismatch": true,
   "media-not-found": true,
+  "collection-not-found": true,
 };
 
 /**
@@ -174,6 +176,28 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
  * arms for each thing it can say, and the compiler counts them.
  */
 export const catalogReasonOf = narrowing(CATALOG_REASONS);
+
+/**
+ * Every `reason` a Collection operation can be refused with (#256).
+ *
+ * **The smallest closed family on this surface, and its size is the decision rather than a
+ * coincidence.** A Collection's title is not unique, so there is no `collection-title-taken`;
+ * deleting one is never refused for holding Products, because it ungroups them rather than
+ * taking anything away (story 17). What is left is the request being unusable and the address
+ * naming nothing.
+ *
+ * `collection-not-found` is in {@link CATALOG_REASONS} as well, and it is the same word for the
+ * same fact reached from the other side: a `collections` on `PATCH /admin/products/{id}` naming
+ * a Collection this Store has not got. Two screens narrow it, and each says what to do.
+ */
+const COLLECTION_REASONS: Record<CollectionRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "collection-not-found": true,
+};
+
+/** Which Collection refusal this was, for a screen with something better to say than the prose. */
+export const collectionReasonOf = narrowing(COLLECTION_REASONS);
 
 /**
  * The one way reading an Order can be turned back, past the gates above every admin route.

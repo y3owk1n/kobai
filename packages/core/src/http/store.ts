@@ -11,6 +11,7 @@ import {
   updateCart,
   updateLineItem,
 } from "../cart/write.ts";
+import { unknownCollection } from "../catalog/collection.ts";
 import {
   listStoreProducts,
   readStoreProduct,
@@ -175,9 +176,9 @@ const listStoreProductsRoute = createRoute({
   method: "get",
   path: "/products",
   summary: "List what the Store sells",
-  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal (ADR-0064). A Product carries no Variants here: open one for those. What each Variant costs is \`GET /store/variants/{id}/price\`, because a Price is resolved by a Workflow rather than read off a row.`,
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered — \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064). \`collection\` narrows to the Products of one Collection, by the \`id\` each Product's own \`collections\` reports; it is how a storefront browses one, and it answers **published** Products like every read here. A Product carries no Variants: open one for those. What each Variant costs is \`GET /store/variants/{id}/price\`, because a Price is resolved by a Workflow rather than read off a row.`,
   security: API_KEY,
-  request: { query: contract.pageQuery("store-products") },
+  request: { query: contract.StoreProductPageQuery },
   responses: {
     200: json("A page of Products.", contract.StoreProductList),
     400: PAGE_QUERY_INVALID,
@@ -700,11 +701,19 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   });
 
   store.openapi(listStoreProductsRoute, async (c) => {
-    const page = await listStoreProducts(
-      deps.db,
-      deps.mediaStorage,
-      c.req.valid("query"),
-    );
+    const query = c.req.valid("query");
+
+    // **Before the page, so an unknown Collection cannot arrive as a 200 with an empty list.**
+    // A storefront that read that would render *this Collection is empty* over a Collection that
+    // does not exist, which is the truthful-looking answer the filtering convention rules out
+    // (#209). It is the same `invalid` the admin list answers with, from the same function, so
+    // the two surfaces cannot come to different answers about what a Collection is.
+    if (query.collection !== undefined) {
+      const missing = await unknownCollection(deps.db, query.collection);
+      if (missing) return c.json({ error: missing.detail, reason: missing.reason }, 400);
+    }
+
+    const page = await listStoreProducts(deps.db, deps.mediaStorage, query);
     // `undefined` rather than `null`, and `JSON.stringify` drops the key — the wire shape
     // ADR-0064 asks for: absent means there is no further page.
     return c.json({ products: page.items, nextCursor: page.nextCursor }, 200);

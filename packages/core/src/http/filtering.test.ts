@@ -1,11 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  createTestApiKey,
   createTestKobai,
   seedTestCart,
   seedTestCatalog,
   seedTestOrder,
   signInTestMerchant,
+  type TestApiKey,
   type TestKobai,
   type TestSession,
 } from "../testing/index.ts";
@@ -22,6 +24,13 @@ import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
  * the handful of promises below, and those are what this file holds. A list with no filter has
  * no entry here and needs none; a filter added to a list already in `LISTS` is one entry here
  * and inherits the lot.
+ *
+ * **A list may have more than one filter, and two entries is how that is swept** (#256).
+ * `/admin/products` narrows by `status` and by `collection`, and each is held to the convention
+ * on its own — which is right, because the promises are about *a* filter rather than about a
+ * list. That the two also **compose** is not this file's question: it is a fact about the
+ * Product list, and it is asserted in `catalog/collection.test.ts` beside what each of them
+ * means.
  *
  * The three promises, which are the convention (#209):
  *
@@ -78,31 +87,51 @@ const PAGING = ["limit", "after"];
  * A deployment arranged for one entry: every row the unfiltered list holds, and which of them
  * each value should answer.
  *
- * **`matching` is a map rather than a partition**, deliberately. Today's two filters do
- * partition their lists — a Cart is live, expired or spent, and a Product is a draft, published
- * or archived — but `?collection=` does not: a Product may be in several Collections and in
- * none, so the values overlap and their union is not the list. Assuming a partition here would
- * be a rule this convention does not have, written into the one place the next filter has to
- * pass through.
+ * **`matching` is a map rather than a partition**, deliberately, and #256 is what that was
+ * written for. The first two filters do partition their lists — a Cart is live, expired or
+ * spent, and a Product is a draft, published or archived — and `?collection=` does not: a
+ * Product may be in several Collections and most are in none, so the values overlap and their
+ * union is not the list. Assuming a partition here would have been a rule this convention does
+ * not have, written into the one place the next filter has to pass through.
+ *
+ * **Its keys are the values the entry means to sweep**, which is how an entry names its own: a
+ * closed-set filter names three words it wrote down, and `?collection=` names identifiers it has
+ * only just created. A value that should narrow to nothing is an explicit `[]`, so "the filter
+ * answered nothing" and "the entry forgot to mention the value" are not the same line.
  */
 type Arranged = {
   /** Every row of the list, newest first — what the unfiltered page must contain. */
   readonly all: readonly string[];
-  /** Per value, the rows that value narrows to, newest first. */
+  /** Per value, the rows that value narrows to, newest first. Its keys are this filter's values. */
   readonly matching: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The value the two cursor cases walk, which the arrangement has to give at least three rows.
+   *
+   * On the arrangement rather than on the {@link Filter} beside `unknown`, because #256's is an
+   * identifier the arrangement has just created rather than a word anybody could write down —
+   * and one field that is sometimes static and sometimes not is a field with two meanings.
+   */
+  readonly paged: string;
 };
 
 /**
- * One filter: which list, which parameter, what it accepts, and how to arrange a deployment
- * where the answer is known.
+ * One filter: which list, which parameter, **which credential opens it**, and how to arrange a
+ * deployment where the answer is known.
  *
  * A table rather than a copy of each assertion per filter, so the next one is one entry and is
  * held to the whole convention rather than to a copy of it — which is `pagination.test.ts`'s
  * bargain with `LISTS`, made again about the thing that table deliberately does not cover.
  *
- * `paged` is the value the cursor case walks, and it has to be one the arrangement gives at
- * least three rows: a page of one, then another, then a last one that reports no cursor is the
- * smallest arrangement in which "the filter survives the cursor" can fail.
+ * **What each value narrows to, and which of them the cursor cases walk, live on the
+ * {@link Arranged} an entry produces rather than here** (#256). A closed-set filter could name
+ * its three words in this table and `?collection=` cannot: its values are identifiers the
+ * arrangement has just created. One field with two meanings is worse than the field being where
+ * the answer comes from.
+ *
+ * `credential` arrived with the first filter on the **store** surface, which is a bearer API
+ * key's rather than a Merchant session's (ADR-0020) — the same column `pagination.test.ts` grew
+ * for the same reason, and for the same failure: a store list read with a cookie answers 401,
+ * which is a plausible-looking failure in a file that is not about credentials at all.
  */
 type Filter = {
   readonly path: string;
@@ -110,58 +139,105 @@ type Filter = {
   readonly key: string;
   /** The query parameter, spelled as the route spells it. */
   readonly parameter: string;
-  /** Every value the route accepts, in no particular order. */
-  readonly values: readonly string[];
+  /** Which credential opens this list. */
+  readonly credential: "session" | "apiKey";
   /**
    * A value the route does not accept.
    *
-   * Named by the entry rather than derived from the description, because the next filter's
-   * values are not a closed set at all: `?collection=` will take an identifier, and what makes a
-   * value unusable there is a different question from what makes `sold-out` unusable here.
+   * Named by the entry rather than derived from the description, because a filter's values need
+   * not be a closed set: `?collection=` takes an identifier, and what makes a value unusable
+   * there — no Collection answers to it — is a different question from what makes `sold-out`
+   * unusable on a status.
    */
   readonly unknown: string;
-  /** The value the cursor case pages through. The arrangement must give it three rows. */
-  readonly paged: string;
   readonly arrange: (kobai: TestKobai, merchant: TestSession) => Promise<Arranged>;
 };
 
+/**
+ * A well formed identifier that names no Collection, and never will.
+ *
+ * A constant rather than a `randomUUID`, because the value is quoted back in the refusal a
+ * failure would print.
+ */
+const ABSENT_COLLECTION = "00000000-0000-4000-8000-000000000000";
+
 const FILTERS: readonly Filter[] = [
   {
-    // The filter the convention was inferred from (#227, ADR-0071), and until now nothing
+    // The filter the convention was inferred from (#227, ADR-0071), and until #252 nothing
     // asserted any of it: `GET /admin/carts?state=` shipped with the three promises above true
     // and untested, which is exactly the drift this file exists to stop.
     path: "/admin/carts",
     key: "carts",
     parameter: "state",
-    values: ["live", "expired", "spent"],
+    credential: "session",
     unknown: "abandoned",
-    paged: "live",
     arrange: arrangeCarts,
   },
   {
     // The filter this convention was written down for (#252): a Merchant's way to find their
-    // drafts. `GET /store/products` takes no filter of its own and is deliberately not an entry
-    // here — the store surface answers published Products in the *route*, because a client that
-    // could ask for drafts is a client that will.
+    // drafts.
     path: "/admin/products",
     key: "products",
     parameter: "status",
-    values: ["draft", "published", "archived"],
+    credential: "session",
     unknown: "retired",
-    paged: "published",
     arrange: arrangeProducts,
   },
+  {
+    // The first filter whose values are not a closed set (#256), and the reason `matching` was
+    // always a map: a Product may be in several Collections and most are in none, so these
+    // values overlap and their union is not the list.
+    path: "/admin/products",
+    key: "products",
+    parameter: "collection",
+    credential: "session",
+    unknown: ABSENT_COLLECTION,
+    arrange: arrangeCollections,
+  },
+  {
+    // The first entry on the **store** surface, and the reason this table grew a credential
+    // column. It is also the one filter here that narrows a list which is *already* narrowed:
+    // `/store/products` answers published Products in the route (#252), so what this sweeps is
+    // the filter composing with that rather than reaching around it — which is asserted in
+    // `catalog/collection.test.ts`, where what a narrowing *means* belongs.
+    path: "/store/products",
+    key: "products",
+    parameter: "collection",
+    credential: "apiKey",
+    unknown: ABSENT_COLLECTION,
+    arrange: arrangeCollections,
+  },
 ];
+
+/**
+ * The headers a filter's list is read with, minted on demand from the one Merchant a deployment
+ * has.
+ *
+ * **Lazily**, exactly as `pagination.test.ts`'s is: minting an API key writes a row, and the
+ * deployments below that are counting rows are the ones that never ask for a key.
+ */
+function opener(kobai: TestKobai, merchant: TestSession) {
+  let storefront: Promise<TestApiKey> | undefined;
+
+  return async (filter: Filter): Promise<Record<string, string>> => {
+    if (filter.credential === "session") return { ...merchant.headers };
+    storefront ??= createTestApiKey(kobai, merchant, { name: "a storefront" });
+    return (await storefront).headers;
+  };
+}
+
+/** What {@link opener} hands back: the headers for whichever list is being read. */
+type Opener = ReturnType<typeof opener>;
 
 /** One page of one list, with the item key normalised away so the assertions can be shared. */
 async function fetchPage(
   kobai: TestKobai,
   filter: Filter,
-  merchant: TestSession,
+  open: Opener,
   query = "",
 ): Promise<{ readonly status: number; readonly items: readonly string[] }> {
   const response = await kobai.request(`${filter.path}${query}`, {
-    headers: merchant.headers,
+    headers: await open(filter),
   });
   const body = (await response.json()) as Record<string, unknown>;
   return {
@@ -176,11 +252,11 @@ async function fetchPage(
 async function fetchPageWithCursor(
   kobai: TestKobai,
   filter: Filter,
-  merchant: TestSession,
+  open: Opener,
   query: string,
 ): Promise<{ readonly items: readonly string[]; readonly nextCursor?: string }> {
   const response = await kobai.request(`${filter.path}${query}`, {
-    headers: merchant.headers,
+    headers: await open(filter),
   });
   expect(response.status, `${filter.path}${query}`).toBe(200);
   const body = (await response.json()) as Record<string, unknown>;
@@ -196,9 +272,10 @@ describe("every filter narrows the same way", () => {
   it.each(FILTERS)("$path?$parameter is absent and the list is whole", async (filter) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = opener(kobai, merchant);
     const arranged = await filter.arrange(kobai, merchant);
 
-    const unfiltered = await fetchPage(kobai, filter, merchant, "?limit=100");
+    const unfiltered = await fetchPage(kobai, filter, open, "?limit=100");
 
     expect(unfiltered.status).toBe(200);
     // Every row, and in the order the list promises — a filter that had somehow reached this
@@ -209,13 +286,22 @@ describe("every filter narrows the same way", () => {
   it.each(FILTERS)("$path?$parameter answers exactly what it names", async (filter) => {
     await using kobai = await createTestKobai();
     const merchant = await signInTestMerchant(kobai);
+    const open = opener(kobai, merchant);
     const arranged = await filter.arrange(kobai, merchant);
 
-    for (const value of filter.values) {
+    // The arrangement's own keys, which is how an entry names the values it means to sweep —
+    // three words for a closed set, and identifiers it has just created for `?collection=`.
+    const values = Object.keys(arranged.matching);
+    expect(
+      values.length,
+      `${filter.path}?${filter.parameter} arranged no value to narrow by, so this case is vacuous`,
+    ).toBeGreaterThan(0);
+
+    for (const value of values) {
       const narrowed = await fetchPage(
         kobai,
         filter,
-        merchant,
+        open,
         `?limit=100&${filter.parameter}=${value}`,
       );
 
@@ -223,7 +309,7 @@ describe("every filter narrows the same way", () => {
       expect(narrowed.status, where).toBe(200);
       // Equality rather than a containment check in either direction: a filter that answered
       // too much and one that answered too little are two different bugs and both are here.
-      expect(narrowed.items, where).toEqual(arranged.matching[value] ?? []);
+      expect(narrowed.items, where).toEqual(arranged.matching[value]);
     }
   });
 
@@ -232,11 +318,12 @@ describe("every filter narrows the same way", () => {
     async (filter) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = opener(kobai, merchant);
       await filter.arrange(kobai, merchant);
 
       const response = await kobai.request(
         `${filter.path}?${filter.parameter}=${filter.unknown}`,
-        { headers: merchant.headers },
+        { headers: await open(filter) },
       );
 
       // 400 and not a page. A filter silently dropped hands back the whole list under a
@@ -255,16 +342,17 @@ describe("every filter narrows the same way", () => {
     async (filter) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = opener(kobai, merchant);
       const arranged = await filter.arrange(kobai, merchant);
-      const expected = arranged.matching[filter.paged] ?? [];
+      const expected = arranged.matching[arranged.paged] ?? [];
       // The arrangement rather than the subject, so it is asserted rather than assumed: with
       // fewer than three rows the walk below ends on its first page and proves nothing.
       expect(
         expected.length,
-        `${filter.path}?${filter.parameter}=${filter.paged} needs three rows to page through`,
+        `${filter.path}?${filter.parameter}=${arranged.paged} needs three rows to page through`,
       ).toBeGreaterThanOrEqual(3);
 
-      const narrowing = `${filter.parameter}=${filter.paged}`;
+      const narrowing = `${filter.parameter}=${arranged.paged}`;
       const seen: string[] = [];
       let cursor: string | undefined;
       // A page size of one, so every boundary in the filtered list is a boundary between two
@@ -273,7 +361,7 @@ describe("every filter narrows the same way", () => {
         const answered = await fetchPageWithCursor(
           kobai,
           filter,
-          merchant,
+          open,
           `?limit=1&${narrowing}${cursor === undefined ? "" : `&after=${encodeURIComponent(cursor)}`}`,
         );
         seen.push(...answered.items);
@@ -294,14 +382,15 @@ describe("every filter narrows the same way", () => {
     async (filter) => {
       await using kobai = await createTestKobai();
       const merchant = await signInTestMerchant(kobai);
+      const open = opener(kobai, merchant);
       const arranged = await filter.arrange(kobai, merchant);
-      const expected = arranged.matching[filter.paged] ?? [];
+      const expected = arranged.matching[arranged.paged] ?? [];
 
-      const narrowing = `${filter.parameter}=${filter.paged}`;
+      const narrowing = `${filter.parameter}=${arranged.paged}`;
       const first = await fetchPageWithCursor(
         kobai,
         filter,
-        merchant,
+        open,
         `?limit=2&${narrowing}`,
       );
 
@@ -319,7 +408,7 @@ describe("every filter narrows the same way", () => {
       const rest = await fetchPageWithCursor(
         kobai,
         filter,
-        merchant,
+        open,
         `?limit=100&${narrowing}&after=${encodeURIComponent(first.nextCursor ?? "")}`,
       );
 
@@ -421,6 +510,7 @@ async function arrangeCarts(kobai: TestKobai, merchant: TestSession): Promise<Ar
   return {
     all: [spent, expired, ...[...live].reverse()],
     matching: { live: [...live].reverse(), expired: [expired], spent: [spent] },
+    paged: "live",
   };
 }
 
@@ -480,5 +570,104 @@ async function arrangeProducts(
       archived: [archived],
       published: [...published].reverse(),
     },
+    paged: "published",
+  };
+}
+
+/**
+ * A catalog grouped into two Collections, one of which holds three Products and one of which
+ * holds none — plus a Product in neither, and a Product in both.
+ *
+ * **The arrangement is where this filter stops looking like the two above.** A status partitions
+ * the catalog and a Collection does not, so all three of the shapes that fall out of that are
+ * here on purpose: a Product in **two** Collections at once (story 14), a Product in **none**,
+ * and a Collection matching **nothing** — which is a value the sweep above still asks for and
+ * still expects an exact answer to, because "narrows to nothing" is a real answer and not a
+ * missing entry.
+ *
+ * **Every Product is published, whichever surface is asking.** `/store/products` answers
+ * published Products in the route (#252), so a draft would make the store entry's arrangement
+ * and the admin entry's disagree about the same rows for a reason that has nothing to do with
+ * the filter under test. What the store surface does with a *draft* in a Collection is asserted
+ * where a narrowing's meaning belongs, in `catalog/collection.test.ts`.
+ */
+async function arrangeCollections(
+  kobai: TestKobai,
+  merchant: TestSession,
+): Promise<Arranged> {
+  const json = { ...merchant.headers, "content-type": "application/json" };
+
+  const collectionOf = async (title: string): Promise<string> => {
+    const response = await kobai.request("/admin/collections", {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ title }),
+    });
+    expect(response.status, `creating the ${title} Collection`).toBe(201);
+    return ((await response.json()) as { id: string }).id;
+  };
+
+  const summer = await collectionOf("Summer");
+  const winter = await collectionOf("Winter");
+  // A Collection nothing is in, so the sweep above asks for a value that narrows to nothing —
+  // which is exactly what a partition-shaped filter never has.
+  const empty = await collectionOf("Nothing at all");
+
+  const created: string[] = [];
+  // One at a time, so `created_at` orders them and the pages below are predictable. A title and
+  // a SKU each, because both are unique across the Store — a handle is proposed from the title,
+  // so two Products called the same thing are refused `handle-taken`.
+  for (let index = 0; index < 5; index += 1) {
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({
+        title: `Poster ${index}`,
+        variants: [{ sku: `POSTER-${index}` }],
+      }),
+    });
+    expect(response.status, `creating Poster ${index}`).toBe(201);
+    const id = ((await response.json()) as { id: string }).id;
+    created.push(id);
+
+    // Published, always: `/store/products` answers nothing else, and a Merchant's list answers
+    // everything, so this is the one status at which the two entries see the same rows.
+    const published = await kobai.request(`/admin/products/${id}`, {
+      method: "PATCH",
+      headers: json,
+      body: JSON.stringify({ status: "published" }),
+    });
+    expect(published.status, `publishing Poster ${index}`).toBe(200);
+  }
+
+  const [ungrouped, inBoth, ...inSummer] = created;
+  if (ungrouped === undefined || inBoth === undefined) {
+    throw new Error("unreachable: five Products were created");
+  }
+
+  const group = async (productId: string, collections: readonly string[]) => {
+    const response = await kobai.request(`/admin/products/${productId}`, {
+      method: "PATCH",
+      headers: json,
+      body: JSON.stringify({ collections: collections.map((id) => ({ id })) }),
+    });
+    expect(response.status, `grouping ${productId}`).toBe(200);
+  };
+
+  await group(inBoth, [summer, winter]);
+  for (const id of inSummer) await group(id, [summer]);
+
+  // Newest first, which is what both lists answer — so Summer's is the three later Products in
+  // reverse and then the one created before them. `inBoth` is in Winter as well, so the two
+  // values overlap, and `ungrouped` is in neither: their union is not the list, which is the
+  // property `matching` is a map rather than a partition for.
+  return {
+    all: [...created].reverse(),
+    matching: {
+      [summer]: [...[...inSummer].reverse(), inBoth],
+      [winter]: [inBoth],
+      [empty]: [],
+    },
+    paged: summer,
   };
 }

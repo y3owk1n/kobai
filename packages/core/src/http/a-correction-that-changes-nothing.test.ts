@@ -68,6 +68,7 @@ const CORRECTIONS = [
   "/admin/store",
   "/admin/products/{id}",
   "/admin/variants/{id}",
+  "/admin/collections/{id}",
   "/admin/roles/{id}",
   "/admin/merchants/{id}",
   "/store/carts/{id}",
@@ -121,6 +122,15 @@ async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]>
   expect(session.status, "the arrangement could not read the session").toBe(200);
   const who = (await session.json()) as { readonly merchant: { readonly id: string } };
 
+  // Nothing seeds one, for the Role's reason: it goes through the route a Merchant would use.
+  const grouped = await kobai.request("/admin/collections", {
+    method: "POST",
+    headers: { ...merchant, "content-type": "application/json" },
+    body: JSON.stringify({ title: "Summer" }),
+  });
+  expect(grouped.status, "the arrangement could not create a Collection").toBe(201);
+  const collection = (await grouped.json()) as { readonly id: string };
+
   return [
     { described: "/admin/store", path: "/admin/store", headers: merchant },
     {
@@ -131,6 +141,11 @@ async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]>
     {
       described: "/admin/variants/{id}",
       path: `/admin/variants/${cart.catalog.variantId}`,
+      headers: merchant,
+    },
+    {
+      described: "/admin/collections/{id}",
+      path: `/admin/collections/${collection.id}`,
       headers: merchant,
     },
     {

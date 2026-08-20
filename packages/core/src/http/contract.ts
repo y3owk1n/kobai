@@ -5,6 +5,11 @@ import type { RoleCreation, RoleDeletion, RoleUpdate } from "../auth/role.ts";
 import type { SessionPolicy, SessionRejection } from "../auth/session.ts";
 import type { CartRefusal as CartRefusalReason } from "../cart/write.ts";
 import type {
+  CollectionCreation,
+  CollectionDeletion,
+  CollectionUpdate,
+} from "../catalog/collection.ts";
+import type {
   PriceDeletion,
   ProductDeletion,
   VariantDeletion,
@@ -1114,6 +1119,131 @@ export const MediaAttachment = z
   })
   .openapi("MediaAttachment");
 
+// ---- Collections ------------------------------------------------------------------------
+
+/**
+ * A **Collection** — a Merchant's grouping of Products, and the whole of what one is (#256).
+ *
+ * Three fields, and the two that are absent are the decisions. **There is no `handle`**: nothing
+ * resolves a Collection by name, because a storefront browses one through `?collection=` by the
+ * identifier the Product it was already holding reports — the address a Collection is *published*
+ * at belongs to the page that renders it, which is the content Plugin's (#216, ADR-0074). And
+ * **there is no count of the Products in it**: that is a second question with its own answer
+ * (`GET /admin/products?collection=`), and a number beside a name is one that has to be computed
+ * on every read of every row of a list.
+ *
+ * `metadata` is here for the reason every principal entity carries one (ADR-0004): a Project's
+ * own copy for a Collection has nowhere else to live until the content Plugin gives it a page.
+ */
+export const Collection = z
+  .object({
+    id: z.uuid(),
+    title: z.string().meta({
+      description:
+        "What the Merchant calls it — `Summer`, `Under 20`. **Not unique**: a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("Collection");
+
+/** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
+export const CollectionList = z
+  .object({ collections: z.array(Collection).readonly(), nextCursor: NextCursor })
+  .openapi("CollectionList");
+
+/** ADR-0064's two parameters and nothing else: this list narrows by nothing. */
+export const CollectionPageQuery = pageQuery("collections");
+
+export const CreateCollectionRequest = z
+  .object({
+    title: z.string().meta({ description: "Required, and not empty." }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("CreateCollectionRequest");
+
+/**
+ * Name what should change; naming neither is refused rather than treated as a no-op (ADR-0062).
+ *
+ * **There is deliberately no `products` here.** Which Products are in a Collection is
+ * `collections` on `PATCH /admin/products/{id}` — the whole set of the Collections *one Product*
+ * is in — and a second field saying the same fact from this side would be permanent under
+ * ADR-0060 and could disagree with the first about what an empty list means.
+ */
+export const UpdateCollectionRequest = z
+  .object({
+    title: z.string().optional(),
+    metadata: Metadata.optional(),
+  })
+  .openapi("UpdateCollectionRequest");
+
+/**
+ * One entry of the set saying which Collections a Product is in — an identifier, and nothing
+ * else.
+ *
+ * **An object rather than a bare `uuid`**, for {@link MediaAttachment}'s reason: whatever a
+ * membership one day needs to say for itself arrives as a field beside this one and is additive,
+ * where a list of strings could only grow by changing the type of every element (ADR-0060).
+ *
+ * **There is no `position`, and here that is stronger than it is for Media.** A Product's images
+ * are shown in an order a Merchant chose (story 9); a Product's Collections are a **set**, so the
+ * order of the array means nothing on the way in and the answer comes back by title.
+ */
+export const CollectionMembership = z
+  .object({
+    id: z.uuid().meta({
+      description:
+        "The Collection this Product should be in, as `POST /admin/collections` answered with and `GET /admin/collections` lists. One this Store has no Collection for is refused at 422 with `collection-not-found`.",
+    }),
+  })
+  .openapi("CollectionMembership");
+
+/**
+ * Every way a Collection operation can be refused, as a closed set.
+ *
+ * Two words past the request ones, and the set is small because a Collection conflicts with
+ * nothing: its title is not unique, so there is no `collection-title-taken`, and deleting one is
+ * never refused for holding Products — it ungroups them, which is story 17 and the whole point.
+ * The keys are checked against the unions `catalog/collection.ts` declares, so a rename there
+ * turns *this* red naming the reason.
+ */
+const COLLECTION_REASONS = {
+  ...REQUEST_REASONS,
+  "collection-not-found": "collection-not-found",
+} as const satisfies {
+  [R in
+    | Refused<CollectionCreation>
+    | Refused<CollectionUpdate>
+    | Refused<CollectionDeletion>
+    | RequestReason]: R;
+};
+
+export const CollectionRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(COLLECTION_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("CollectionRefusal");
+
+/**
+ * `?collection=` — written once here and used by **both** Product lists, which is the whole of
+ * what makes them one filter rather than two that happen to agree.
+ *
+ * **A plain optional string, for {@link IdParam}'s reason.** Declaring it `uuid` would refuse a
+ * malformed value with one sentence and a well-formed value naming no Collection with another,
+ * for what is one mistake: this parameter takes the identifier of a Collection this Store has,
+ * and neither of those is one. So the shape and the existence are judged together, in
+ * `catalog/collection.ts`'s `unknownCollection`, and answered with the same `invalid` at 400 that
+ * every other unusable query parameter already gets (ADR-0060) — **never with an empty page**,
+ * which is the truthful-looking answer the filtering convention exists to rule out.
+ *
+ * Each caller adds its own `description`, because what narrowing by a Collection means on a
+ * Merchant's list and on a storefront's are two sentences: one of them composes with `status`
+ * and the other cannot reach a draft at all.
+ */
+const CollectionFilter = z.string().optional();
+
 // ---- Catalog --------------------------------------------------------------------------
 
 export const Price = z
@@ -1316,6 +1446,10 @@ export const Product = z
       description:
         "The Media this Product shows, **in the order a Merchant put them in** — so the first one is the one that leads. On the list shape as well as on the detail, because a catalog grid is nothing but leading images and a client that had to open every Product to draw one would be making a request per tile. Attaching, reordering and detaching are all `media` on `PATCH /admin/products/{id}`; detaching removes the attachment and never the Media.",
     }),
+    collections: z.array(Collection).readonly().meta({
+      description:
+        "The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections` on `PATCH /admin/products/{id}`, which takes the whole set. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round.",
+    }),
     metadata: Metadata,
   })
   .openapi("Product");
@@ -1347,13 +1481,22 @@ export const ProductList = z
  * is that it goes through {@link pageQueryOf}: a filter is added, and nothing about paging is
  * re-decided here.
  *
- * **`GET /store/products` takes no filter of its own and must not grow this one.** It is a
- * different list with a different name, and the only status it answers is `published`.
+ * **`GET /store/products` must never grow the `status` half of this.** It is a different list
+ * with a different name, and the only status it answers is `published`. It does take
+ * {@link CollectionFilter}, which is why that one is written once and used twice.
+ *
+ * **The two compose**, because they are two optional parameters on one schema and two
+ * `undefined`-droppable predicates in one `and`: a Merchant looking for the drafts in Summer
+ * sends both.
  */
 export const ProductPageQuery = pageQueryOf("products", {
   status: ProductStatus.optional().meta({
     description:
       "Narrow to the Products in one status — `draft` to find what is still being prepared, `published` for what is on sale, `archived` for what has been taken off it. The three partition the catalog, so omitting this answers all of them. A value that is not one of the three is **refused** rather than ignored, because a filter quietly dropped answers a different question from the one that was asked.",
+  }),
+  collection: CollectionFilter.meta({
+    description:
+      "Narrow to the Products in one Collection, by its `id`. Collections do **not** partition the catalog — a Product may be in several and most are in none — so this composes with `status` rather than replacing it, and omitting it answers the whole list. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page, because an empty page is a truthful-looking answer to a question nobody asked.",
   }),
 });
 
@@ -1521,6 +1664,10 @@ export const UpdateProductRequest = z
       description:
         "**The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for.",
     }),
+    collections: z.array(CollectionMembership).optional().meta({
+      description:
+        "**The complete set of the Collections this Product is in** — so this is where it is put into one and where it is taken out of one. An empty list takes it out of every Collection. A Product may be in as many as a Merchant likes, and the order carries no meaning: this is a set, not an ordered list like `media` beside it, so what a read answers with is by title. **Nothing here deletes a Collection**, and deleting one takes its Products out of it rather than deleting them. A Collection this Store does not have is refused at 422 with `collection-not-found`.",
+    }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
     }),
@@ -1622,6 +1769,11 @@ const CATALOG_REASONS = {
   // (ADR-0060) — which is also why {@link MediaNotFound} carries it as a literal rather than as
   // a family of its own.
   "media-not-found": "media-not-found",
+  // The one word #256 added, and it is `GET /admin/collections/{id}`'s own said about the same
+  // fact from the other end: `collections` names a Collection this Store has none of. One fact
+  // gets one word — which is also why {@link CollectionRefusal} carries it rather than a second
+  // spelling of its own.
+  "collection-not-found": "collection-not-found",
 } as const satisfies {
   [R in
     | Refused<ProductCreation>
@@ -1726,6 +1878,32 @@ export const StoreProductOption = z
   .openapi("StoreProductOption");
 
 /**
+ * One Collection a Product is in, as a storefront sees it (#256, story 18).
+ *
+ * The same three fields {@link Collection} carries, and deliberately a schema of its own for
+ * {@link StoreVariantFulfilment}'s reason: two schemas that happen to agree is the cheap half of
+ * #207's split, and one schema two surfaces share is the expensive half, arriving later and as a
+ * major. The `id` is published because it is what `?collection=` takes — a storefront listing a
+ * Collection sends back the identifier the Product it was looking at reported.
+ *
+ * **Nothing on this surface enumerates Collections**, deliberately: a storefront's navigation is
+ * built from what the Products it read are in, and a `GET /store/collections` is additive under
+ * ADR-0060 the day something needs one.
+ */
+export const StoreCollection = z
+  .object({
+    id: z.uuid().meta({
+      description:
+        "What `GET /store/products?collection=` takes, to list this Collection.",
+    }),
+    title: z.string().meta({
+      description: "What the Merchant calls it. Not unique across the Store.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("StoreCollection");
+
+/**
  * A Variant's value for one option, as a storefront sees it.
  *
  * The same two fields {@link VariantOptionValue} carries, and deliberately a schema of its own
@@ -1804,6 +1982,16 @@ export const StoreProduct = z
       description:
         "The images this Product shows, **in the order a Merchant put them in** — the first one leads. On the list shape as well as on the detail, so a catalog grid is one request rather than one per tile. Empty for a Product nobody has attached an image to.",
     }),
+    /**
+     * **Published deliberately, so a storefront renders breadcrumbs without a second request**
+     * (#256, story 18). A page browsing a Collection has to say what it is browsing and offer
+     * the way back out; a product page has to say where it sits. Both are questions about *this*
+     * Product, so the answer travels with it.
+     */
+    collections: z.array(StoreCollection).readonly().meta({
+      description:
+        "The Collections this Product is in, by title — so a page can render breadcrumbs, or link a catalog tile at the Collection it belongs to, without a second request. A **set**: a Product may be in several and most are in none, and the order carries no meaning. Send an `id` back as `?collection=` to list that Collection; nothing on this surface enumerates them.",
+    }),
     metadata: Metadata,
   })
   .openapi("StoreProduct");
@@ -1849,6 +2037,25 @@ export const IdOrHandleParam = z.object({
 export const StoreProductList = z
   .object({ products: z.array(StoreProduct).readonly(), nextCursor: NextCursor })
   .openapi("StoreProductList");
+
+/**
+ * The store Product list's query: ADR-0064's two parameters, and the one thing it narrows by.
+ *
+ * A **constant**, like every other schema on this surface, and built by {@link pageQueryOf} so
+ * that a filter is added and nothing about paging is re-decided (#183).
+ *
+ * **`?collection=` is the only filter this list will ever take from a client, and `?status=` is
+ * the one it must never grow.** Which Products a storefront may see is enforced in the route —
+ * `published` and nothing else — because a client that could ask for drafts is a client that
+ * will. Narrowing to a Collection is a Shopper *browsing* (story 18) rather than a client
+ * choosing what is visible, which is why the two are not the same kind of parameter at all.
+ */
+export const StoreProductPageQuery = pageQueryOf("store-products", {
+  collection: CollectionFilter.meta({
+    description:
+      "Narrow to the published Products of one Collection, by the `id` each Product's own `collections` reports — this is how a storefront browses one. It composes with the page rather than replacing it, so a short page is still not the end of the list. `published` is not negotiable here: a draft in this Collection is answered by neither the filtered list nor the whole one. A value that names no Collection this Store has is **refused at 400** rather than answered with an empty page.",
+  }),
+});
 
 /**
  * Reading a Product or a Variant that is not there.
