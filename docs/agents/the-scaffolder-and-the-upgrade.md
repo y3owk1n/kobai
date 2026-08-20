@@ -12,6 +12,25 @@ the template and byte-compares it with what is checked in, exactly as `openapi.t
 for the description. **Never hand-edit anything under `template/`**; the next regeneration
 deletes it.
 
+**The walk that generates the template reads no ignore file, and that divergence is named
+rather than silent** (#279). `projectFiles` in `packages/create-kobai/src/tree.ts` keeps its
+own `SKIPPED_DIRECTORIES`, which makes it a **third** ignore mechanism beside `.gitignore` and
+`.dockerignore` — and like a `.dockerignore` it cannot delegate to the first (ADR-0068). What
+that produces is a failure with a peculiarly bad signature: a run of the reference Project
+writes into a gitignored directory, `.gitignore` keeps it out of `git status` so the tree looks
+clean, `devbox run template:generate` sweeps it into the checked-in template anyway, and the
+drift check above goes red naming a file nobody committed. **No fast check can see it** — that
+is #254, and it cost a full CI round trip.
+`tests/the-template-walk-is-held-to-what-git-ignores.test.ts` is what connects the two: every
+directory `.gitignore` names at every depth is either skipped by the walk or carries a written
+exemption there, and the assertion is an **equality**, so a stale exemption fails as loudly as
+a directory nobody has decided about. **Adding a runtime-artifact directory to `.gitignore` is
+therefore the moment to decide about the walk too**, and the gate names the directory and both
+answers to it. Two exemptions stand today — `.scratch` and `.idea` — each saying which
+judgement it is and carrying the one thing that would show it false. It judges directories and
+says so: a bare name or a glob like `*.swp` names a file or a directory indifferently, and the
+walk's answer for files, `isSkippedFile`, is held by nothing.
+
 Every legitimate difference between the two trees is a named entry in
 `packages/create-kobai/src/adaptations.ts`, and the test fails on any other difference in
 either direction, a file existing in only one tree included. **That list is the whole
