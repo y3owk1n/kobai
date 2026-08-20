@@ -68,9 +68,9 @@ export type MediaUploadOutcome =
  * **In that order, and the order is the decision.** The row carries the storage key, so it
  * cannot be written before there is one; and a row written first would be an addressable Media
  * whose bytes are not there yet, which is a worse thing to have than what this leaves behind if
- * the insert fails — an object nothing points at. Nothing collects those, because nothing on
- * this surface deletes Media at all yet, and an orphaned object is what every object store
- * deployment already tolerates. When a delete arrives, so does the sweep for these.
+ * the insert fails — an object nothing points at. Nothing collects those, because nothing in
+ * kobai deletes Media or bytes at all (ADR-0082), and an orphaned object is what every object
+ * store deployment already tolerates. When a delete arrives, so does the sweep for these.
  *
  * The dimensions are read from the bytes here rather than by the storage, because they are a
  * fact about the file and every storage would otherwise have to read them again — and one that
@@ -112,7 +112,7 @@ export async function uploadMedia(
     .returning();
   if (!row) throw new Error("inserting a Media returned no row");
 
-  return { ok: true, media: reported(row, storage) };
+  return { ok: true, media: reportedMedia(row, storage) };
 }
 
 /**
@@ -146,7 +146,7 @@ export async function listMedia(
 
   const { rows: found, nextCursor } = takePage(rows, page);
 
-  return { items: found.map((row) => reported(row, storage)), nextCursor };
+  return { items: found.map((row) => reportedMedia(row, storage)), nextCursor };
 }
 
 /** The bytes behind one key, and what to serve them as — or nothing. */
@@ -200,26 +200,35 @@ function writable(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 }
 
 /**
+ * The columns {@link reportedMedia} needs, as a `Pick` of the row rather than a third spelling
+ * of those eight: `schema.ts` names them and every query that reports a Media selects them, so a
+ * column renamed there reaches this as a compile error rather than as a field quietly missing
+ * from a response.
+ *
+ * Named and exported because a Media is now read in two places — here, and wherever one is
+ * attached to a Product or a Variant (`catalog/media.ts`).
+ */
+export type ReportableMedia = Pick<
+  MediaRow,
+  | "id"
+  | "storageKey"
+  | "contentType"
+  | "filename"
+  | "byteSize"
+  | "width"
+  | "height"
+  | "alt"
+>;
+
+/**
  * One row, as the surface reports it — the storage key traded for the address it resolves to.
  *
- * The parameter is a `Pick` of the row rather than a third spelling of those seven columns:
- * `schema.ts` names them and the query above selects them, and a column renamed there should
- * reach here as a compile error rather than as a field quietly missing from a response.
+ * **Exported, because a Media reaches the wire from more than one route.** Uploading and listing
+ * answer one, and a Product and a Variant carry the ones attached to them (#255); a second
+ * function that turned a row into a response would be a second place for the `url` to stop being
+ * asked of the storage (ADR-0078).
  */
-function reported(
-  row: Pick<
-    MediaRow,
-    | "id"
-    | "storageKey"
-    | "contentType"
-    | "filename"
-    | "byteSize"
-    | "width"
-    | "height"
-    | "alt"
-  >,
-  storage: MediaStorage,
-): Media {
+export function reportedMedia(row: ReportableMedia, storage: MediaStorage): Media {
   return {
     id: row.id,
     url: storage.urlFor(row.storageKey),

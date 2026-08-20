@@ -7,9 +7,18 @@ import {
   type FulfilmentStrategies,
   fulfilmentStrategyFor,
 } from "../fulfilment/strategy.ts";
+import type { MediaStorage } from "../media/storage.ts";
 import { changesFrom, changesNothing, type Field, openData, text } from "../patch.ts";
 import { handleField, handleTaken } from "./handle.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
+import {
+  lockMediaOf,
+  mediaThisStoreDoesNotHave,
+  parseMediaAttachments,
+  readProductMedia,
+  setProductMedia,
+  setVariantMedia,
+} from "./media.ts";
 import {
   correctProductOptions,
   lockProductOptions,
@@ -45,10 +54,12 @@ import { parseFulfilment, unknownFulfilmentStrategy } from "./write.ts";
  * corrected and so is absent from this body, and that no update is refused for a live
  * Reservation. Read it before adding a field here or a refusal to it.
  *
- * **Nothing here is refused that creation would allow**, and the two refusals it can make are
- * creation's own words: `sku-taken` and `unknown-fulfilment-strategy`. That is deliberate under
- * ADR-0060 — this route adds no `reason` to the promised surface, so a client that already
- * branches on the catalog family's set needs no new arm for it.
+ * **Almost nothing here is refused that creation would allow**: `sku-taken` and
+ * `unknown-fulfilment-strategy` are creation's own words, which is deliberate under ADR-0060 —
+ * a client that already branches on the catalog family's set needed no new arm the day this
+ * route shipped. The one word both corrections added is `media-not-found`, and it is here rather
+ * than at a create for the reason `catalog/media.ts` gives: Media is attached to a Product or a
+ * Variant that already exists, because the bytes go up at a route of their own first.
  */
 
 /** Unvalidated: it arrives as a JSON body, and everything below narrows it in one place. */
@@ -58,11 +69,12 @@ export type UpdateProductInput = {
   readonly handle?: unknown;
   readonly status?: unknown;
   readonly options?: unknown;
+  readonly media?: unknown;
   readonly metadata?: unknown;
 };
 
 /**
- * Correcting a Product refuses in three ways, and only the third is about a *rule*.
+ * Correcting a Product refuses four ways, and the last two are about the state of the Store.
  *
  * There is no `title-taken` and there is not going to be one: a title is what a Product is
  * called, not what identifies it, and two Products may perfectly well share one. The **handle**
@@ -73,12 +85,21 @@ export type UpdateProductInput = {
  * A handle is corrected rather than fixed for ever, because a Merchant who accepted a proposed
  * one and then thought better of it has nowhere else to go — and it is the remedy the backfill
  * in `0037` points at for a Product it had to number.
+ *
+ * **`media-not-found` is the fourth**, and it is the byte route's own word said about the same
+ * fact from the other end: `media` names an asset this Store has none of. It is 422 rather than
+ * 400 — the body is well formed and the Store is what refuses it — and rather than 404, which
+ * belongs to the Product this request addressed and found.
  */
 export type ProductUpdate =
   | { readonly ok: true; readonly product: ProductDetail }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | "product-not-found" | "handle-taken";
+      readonly reason:
+        | "invalid"
+        | "product-not-found"
+        | "handle-taken"
+        | "media-not-found";
       readonly detail: string;
     };
 
@@ -87,6 +108,7 @@ export type UpdateVariantInput = {
   readonly sku?: unknown;
   readonly fulfilment?: unknown;
   readonly options?: unknown;
+  readonly media?: unknown;
   readonly metadata?: unknown;
 };
 
@@ -117,8 +139,8 @@ type VariantColumns = {
 };
 
 /**
- * Correcting a Variant refuses in four ways, and every one of them is a word creation already
- * answers with.
+ * Correcting a Variant refuses six ways, and only `media-not-found` is not a word creation
+ * already answers with — because only Media is attached to a Variant that already exists.
  */
 export type VariantUpdate =
   | { readonly ok: true; readonly variant: Variant }
@@ -129,7 +151,8 @@ export type VariantUpdate =
         | "variant-not-found"
         | "sku-taken"
         | "unknown-fulfilment-strategy"
-        | "variant-options-mismatch";
+        | "variant-options-mismatch"
+        | "media-not-found";
       readonly detail: string;
     };
 
@@ -180,6 +203,7 @@ const clearableDescription: Field<string | null> = (value) =>
  */
 export async function updateProduct(
   db: Database,
+  storage: MediaStorage,
   productId: string,
   input: UpdateProductInput,
 ): Promise<ProductUpdate> {
@@ -221,13 +245,19 @@ export async function updateProduct(
     input.options === undefined ? undefined : parseOptionCorrections(input.options);
   if (options !== undefined && !options.ok) return options;
 
+  // The same, one table along: `media` is the whole list of what this Product shows, in the
+  // order it should be shown in, so attaching, reordering and detaching are all this one field.
+  const shown =
+    input.media === undefined ? undefined : parseMediaAttachments(input.media);
+  if (shown !== undefined && !shown.ok) return shown;
+
   // The judgement `updateVariant` makes and `cart/write.ts`'s two `PATCH`es made first, said
   // in one place since #185. It does a second job here — the schema strips a field this route
   // does not carry, so a body naming `variants` is this body, and the refusal is where a
   // Merchant who tried to add one is told which route adds one.
-  if (Object.keys(changes).length === 0 && options === undefined) {
+  if (Object.keys(changes).length === 0 && options === undefined && shown === undefined) {
     return changesNothing(
-      "a `title`, a `description`, a `handle`, a `status`, an `options`, a `metadata`, or any of them",
+      "a `title`, a `description`, a `handle`, a `status`, an `options`, a `media`, a `metadata`, or any of them",
       "A Variant is not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}`, and remove one with `DELETE /admin/variants/{id}`.",
     );
   }
@@ -236,22 +266,44 @@ export async function updateProduct(
 
   try {
     return await db.transaction(async (tx) => {
-      if (options !== undefined) {
-        // **Two locks, and they do two different jobs.** The advisory one serialises corrections
-        // of *this Product's* option list against each other, because the condition is about
-        // other rows and a `select` does not lock those — a row lock cannot stand in for it, and
-        // `lockProductOptions` is where that is argued at length. The row lock underneath is
-        // existence and nothing else: the options written below reference this Product, and one
-        // deleted in between would be a foreign-key violation and a 500 on a route that declares
-        // a 404. Taken in this order, before either read.
-        await lockProductOptions(tx, productId);
+      // **The advisory locks first and the row lock after them.** Each of the two is taken only
+      // where the body asked for it — the options and the Media are two lists corrected by two
+      // fields, and a Merchant renaming an option must not wait behind one reordering pictures
+      // on a different Product. The row lock underneath is taken once for either, because it
+      // answers one question for both: the rows written below reference this Product, and one
+      // deleted in between would be a foreign-key violation and a 500 on a route that declares a
+      // 404. **Both advisory keys before the row lock**, and in this order every time, so two
+      // requests naming both lists cannot each hold the key the other is waiting for.
+      if (options !== undefined) await lockProductOptions(tx, productId);
+      if (shown !== undefined) await lockMediaOf(tx, productId);
+      if (options !== undefined || shown !== undefined) {
         if (!(await lockProduct(tx, productId))) return noSuchProduct(productId);
+      }
 
+      // **Every judgement this request makes, before the first write it makes.** A refusal
+      // *returned* from inside a transaction commits it, so a `media` judged after the options
+      // had been corrected would answer 422 over a Product whose options really had been
+      // renamed — which is why `catalog/media.ts` exports the question apart from the write.
+      if (shown !== undefined) {
+        const missing = await mediaThisStoreDoesNotHave(tx, shown.value);
+        if (missing) return missing;
+      }
+
+      if (options !== undefined) {
+        // The advisory lock is what serialises corrections of *this Product's* option list
+        // against each other, because the condition is about other rows and a `select` does not
+        // lock those — a row lock cannot stand in for it, and `lockProductOptions` is where that
+        // is argued at length.
         const corrected = await correctProductOptions(tx, productId, options.value);
         // Every judgement it makes comes before every write it makes, so a refusal leaves the
         // Product exactly as it was and needs no throw to unwind anything.
         if (!corrected.ok) return corrected;
       }
+
+      // Detaching is what an entry left out of this list *is*, and what it removes is the
+      // attachment rather than the Media: the asset stays in the Store's library and may still
+      // be showing on another Product (ADR-0082).
+      if (shown !== undefined) await setProductMedia(tx, productId, shown.value);
 
       const row = await correctProductColumns(tx, productId, changes);
       if (!row) return noSuchProduct(productId);
@@ -263,8 +315,9 @@ export async function updateProduct(
         ok: true,
         product: {
           ...row,
+          media: (await readProductMedia(tx, storage, [productId])).get(productId) ?? [],
           options: await readProductOptions(tx, productId),
-          variants: await readVariants(tx, productId),
+          variants: await readVariants(tx, storage, productId),
         },
       } as const;
     });
@@ -302,12 +355,16 @@ export async function updateProduct(
  * left rather than whatever the next request leaves between two statements.
  *
  * `undefined` is "no such Product", from whichever of the two asked.
+ *
+ * It answers the Product **without its Media**, which is the one field of that shape that is
+ * rows rather than a column: the caller reads those back beside the options and the Variants,
+ * from the same transaction and in the same breath.
  */
 async function correctProductColumns(
   tx: Transaction,
   productId: string,
   changes: Partial<ProductColumns>,
-): Promise<Product | undefined> {
+): Promise<Omit<Product, "media"> | undefined> {
   const columns = {
     id: product.id,
     title: product.title,
@@ -370,6 +427,7 @@ function noSuchProduct(productId: string): ProductUpdate {
  */
 export async function updateVariant(
   db: Database,
+  storage: MediaStorage,
   variantId: string,
   input: UpdateVariantInput,
   strategies: FulfilmentStrategies,
@@ -417,12 +475,19 @@ export async function updateVariant(
     input.options === undefined ? undefined : parseOptionValues(input.options, "");
   if (values !== undefined && !values.ok) return values;
 
+  // What this Variant shows, whole and in order — the field that makes picking Red show the red
+  // one (story 10). Read the same way the Product's is, by the same function, because it is the
+  // same list of the same Store's assets attached to a different row.
+  const shown =
+    input.media === undefined ? undefined : parseMediaAttachments(input.media);
+  if (shown !== undefined && !shown.ok) return shown;
+
   // Here the no-op refusal is also the shape a body naming a field this route does not carry
   // collapses to, a Price above all, because the schema strips it before the handler sees it.
   // So the refusal says both halves: what may be changed, and where a Price is set instead.
-  if (Object.keys(changes).length === 0 && values === undefined) {
+  if (Object.keys(changes).length === 0 && values === undefined && shown === undefined) {
     return changesNothing(
-      "at least one of `sku`, `fulfilment`, `options` or `metadata`",
+      "at least one of `sku`, `fulfilment`, `options`, `media` or `metadata`",
       "A Price is not changed here: set another with `POST /admin/variants/{id}/prices`, which supersedes it, and remove the old one with `DELETE /admin/variants/{id}/prices/{priceId}`.",
     );
   }
@@ -437,7 +502,14 @@ export async function updateVariant(
       let productId: string | undefined;
       let declared: readonly ProductOption[] | undefined;
 
-      if (values !== undefined) {
+      // **The advisory lock first, then the two row locks**, which is `updateProduct`'s order
+      // and every other site's. It is taken only for a body naming `media`, because it is what
+      // makes that field's delete-and-insert one operation (`catalog/media.ts`); the row locks
+      // are taken for either list, and answer one question for both — are these two rows still
+      // there for the rows written below to reference.
+      if (shown !== undefined) await lockMediaOf(tx, variantId);
+
+      if (values !== undefined || shown !== undefined) {
         // `product_id` is read plainly and then both rows are held, in `lock.ts`'s order. No
         // route moves a Variant between Products, so the value cannot go stale; what the locks
         // answer is whether the two rows are still there at all.
@@ -451,6 +523,15 @@ export async function updateVariant(
         if (!(await lockVariant(tx, variantId))) return noSuchVariant(variantId);
 
         productId = found.productId;
+      }
+
+      if (values !== undefined) {
+        // The branch above sets it for exactly this case, and a missing one would mean skipping
+        // a refusal the route declares rather than merely reading nothing — so it is a throw and
+        // not a silent `if`.
+        if (productId === undefined) {
+          throw new Error("A Variant's options were judged against no Product.");
+        }
         declared = await readProductOptions(tx, productId);
 
         // Nothing has been written, so a refusal here leaves the Variant exactly as it was and
@@ -458,6 +539,17 @@ export async function updateVariant(
         const mismatch = variantOptionsMismatch(declared, values.value, "This Variant");
         if (mismatch) return mismatch;
       }
+
+      // **Every judgement before the first write**, which is `updateProduct`'s ordering and is
+      // what makes each of these refusals safe to *return*: a refusal returned from inside a
+      // transaction commits it.
+      if (shown !== undefined) {
+        const missing = await mediaThisStoreDoesNotHave(tx, shown.value);
+        if (missing) return missing;
+      }
+
+      // What a list left short detaches is an attachment and never the Media (ADR-0082).
+      if (shown !== undefined) await setVariantMedia(tx, variantId, shown.value);
 
       if (Object.keys(changes).length > 0) {
         const [updated] = await tx
@@ -489,7 +581,7 @@ export async function updateVariant(
       // `DELETE` landing between the two statements would find nothing to read back and answer
       // 500 on a write that succeeded — the same two-loose-statements shape #145 found on the
       // count path, arrived at from the other side.
-      const corrected = (await readVariants(tx, productId)).find(
+      const corrected = (await readVariants(tx, storage, productId)).find(
         (row) => row.id === variantId,
       );
       if (!corrected)

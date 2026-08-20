@@ -614,6 +614,9 @@ describe("GET /admin/products/:id", () => {
         // poster sold as one thing still reports the field, so a client draws no picker
         // without having to ask whether it may (#253).
         options: [],
+        // Empty for the same reason and reported for the same reason: nothing has been
+        // attached to this Variant, and a client draws whatever is here without asking (#255).
+        media: [],
         metadata: {},
         prices: [],
         inventory: null,

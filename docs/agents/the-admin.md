@@ -230,6 +230,21 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   Variant's value with it. And **Up, Down and Remove are plain `Button`s rather than
   `ActionButton`s**: they rearrange the form and call kobai nothing, so there is no permission to
   explain — the one control that writes is the submit, and that is where `unavailable` goes.
+- **A list of images is `components/media-attachments.tsx`, and there is one of it** (#255). It
+  is the Options card's shape one noun along — one form over the whole list, `useFieldArray`,
+  Up, Down and Remove beside each row, the order being the rows' own order — because kobai reads
+  `media` as what the subject's images should now *be*. It is a component on the *second* use
+  rather than the third, which is `listbox-field.tsx`'s lesson: the Product screen renders one
+  for the Product and one inside every Variant card, so a copy would be four by the time a
+  Product has two sizes. Three things about it are decisions. Its `mediaId` is under that name
+  and not `id`, for exactly the reason the Options card's `optionId` is. Its picker is a
+  `ListboxField` over `GET /admin/media` — a set kobai names, so it is read from kobai — and it
+  asks for `limit=100` and **does not page**: a pager inside a card would put a second cursor in
+  an address that already locates a Product, and the several copies on the screen would fight
+  over it, so a Store with more than a hundred images and an old one to attach is a **known gap**
+  rather than something this hides. And **the card says that Remove detaches rather than
+  deletes**, because a Merchant who thinks otherwise will not press it and one who is wrong about
+  it has lost a photograph (ADR-0082).
 - **The Media screen is the one form in this Admin that is not JSON, and it is the one that
   does not use react-hook-form** (#254). A file input's value is a `FileList` the browser owns
   and nothing may set, so `reset()` cannot clear it and the controlled value every other field

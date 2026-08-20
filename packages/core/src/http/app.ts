@@ -388,6 +388,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
     createStoreRoutes({
       db: deps.db,
       fulfilment: deps.fulfilment,
+      mediaStorage: deps.mediaStorage,
       priceWorkflow: deps.priceWorkflow,
       placeOrderWorkflow: deps.placeOrderWorkflow,
       workflows: deps.workflows,

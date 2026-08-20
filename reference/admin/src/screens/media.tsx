@@ -43,10 +43,11 @@ import { useKobaiClient } from "@/lib/session";
 /**
  * The images this Store has, and the way to add one.
  *
- * **A section of its own rather than a card on the Product screen**, because that is what this
- * slice's Media *is*: a record that exists, is addressable, and came back from wherever the
- * Project put it. Attaching one to a Product or a Variant is the next slice, and until it
- * arrives a Media belongs to the Store rather than to anything on it.
+ * **A section of its own rather than a card on the Product screen**, because a Media belongs to
+ * the Store rather than to anything showing it: it is uploaded here, attached to as many
+ * Products and Variants as a Merchant likes, and detached from all of them without going
+ * anywhere (ADR-0082). Attaching is on the Product screen, which is where a Merchant is deciding
+ * what a Product looks like; this is the library.
  *
  * **Where the bytes come from is kobai's answer and never this screen's.** Each row renders
  * `media.url` exactly as it was handed back — absolute for a Store on a CDN, root-relative for

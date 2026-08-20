@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type {
+  Media,
   Price,
   ProductOption,
   ProductStatus,
@@ -18,6 +19,7 @@ import { FormField } from "@/components/form-field";
 import { FulfilmentStrategyField } from "@/components/fulfilment-strategy-field";
 import { LinkButton } from "@/components/link-button";
 import { ListboxField } from "@/components/listbox-field";
+import { MediaAttachments } from "@/components/media-attachments";
 import { Problem } from "@/components/problem";
 import {
   OFFERED_STATUSES,
@@ -163,6 +165,8 @@ export function ProductScreen() {
       />
 
       <ProductOptions id={id} options={product.data.options} />
+
+      <ProductMedia id={id} media={product.data.media} />
 
       {product.data.variants.map((variant) => (
         <VariantCard
@@ -539,6 +543,65 @@ const OptionsForm = z.object({
 type OptionsValues = z.output<typeof OptionsForm>;
 
 /**
+ * The images this Product shows, and which of them leads.
+ *
+ * A card of its own beside Options rather than a section of the Product form, because it is the
+ * same kind of thing Options is: a **list** kobai takes whole, where the order is a Merchant's
+ * decision and the first entry is the one that leads (story 9). The list editing itself is
+ * `components/media-attachments.tsx`, which each Variant card renders too.
+ *
+ * **Removing an image here detaches it and does not delete it** — the asset stays in the Media
+ * section and may still be showing on another Product, and kobai deletes no Media and no bytes
+ * at all (ADR-0082). That sentence is in the card because it is what a Merchant needs to know
+ * before they will press Remove.
+ */
+function ProductMedia({
+  id,
+  media,
+}: {
+  readonly id: string;
+  readonly media: readonly Media[];
+}) {
+  const client = useKobaiClient();
+  const reread = useRereadProduct(id);
+  const unavailable = useCannotWrite();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h3>Images</h3>
+        </CardTitle>
+        <CardDescription>
+          What a storefront shows for this Product, in the order it should show them — the
+          first one leads. Upload images in the Media section first, then attach them
+          here. Removing one here detaches it: it stays in your Media and may still be
+          showing on something else.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <MediaAttachments
+          idPrefix="product-media"
+          subject="this Product"
+          attached={media}
+          unavailable={unavailable}
+          attach={async (attached) =>
+            orThrow(
+              await client.PATCH("/admin/products/{id}", {
+                params: { path: { id } },
+                body: { media: attached },
+              }),
+            )
+          }
+          onAttached={reread}
+          problemOf={whyNotChanged}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
  * What a Variant's option fields start out holding — one entry per option the **Product**
  * declares, filled in from whatever that Variant already answers.
  *
@@ -655,6 +718,10 @@ function VariantCard({
       </CardHeader>
       <CardContent className="grid gap-4">
         <VariantIdentity productId={productId} variant={variant} options={options} />
+
+        <Separator />
+
+        <VariantMedia productId={productId} variant={variant} />
 
         <Separator />
 
@@ -787,6 +854,7 @@ function VariantIdentity({
  * picker never offers a blank one — a Variant always points at something — and which names are
  * acceptable is kobai's answer, not this schema's.
  */
+
 const IdentityForm = z.object({
   sku: z.string().min(1, "A Variant is identified by its SKU, so it needs one."),
   strategy: z.string().min(1, "A Variant is delivered by some Fulfilment Strategy."),
@@ -805,6 +873,61 @@ const IdentityForm = z.object({
 });
 
 type IdentityValues = z.output<typeof IdentityForm>;
+
+/**
+ * The images this **Variant** shows — the picture a storefront swaps to when a Shopper picks
+ * this size or colour (story 10).
+ *
+ * A section of the Variant card rather than a card of its own, beside Prices and Stock, because
+ * it is one more thing this Variant says about itself. It is deliberately **not** part of the
+ * Variant's identity form above: attaching a picture and correcting a SKU are two errands, and
+ * one Save that always sent both would make a Merchant fixing a typo also re-send whatever the
+ * picker happened to be showing.
+ *
+ * **This list does not extend its Product's and is not extended by it.** kobai reports the two
+ * separately on purpose, so what a storefront does when a Variant has its own is the
+ * storefront's decision — which is exactly why this section says nothing about what happens
+ * when it is empty.
+ */
+function VariantMedia({
+  productId,
+  variant,
+}: {
+  readonly productId: string;
+  readonly variant: Variant;
+}) {
+  const client = useKobaiClient();
+  const reread = useRereadProduct(productId);
+  const unavailable = useCannotWrite();
+
+  return (
+    <div className="grid gap-4">
+      <div>
+        <h4 className="font-medium text-sm">Images</h4>
+        <p className="text-muted-foreground text-sm">
+          Shown when a Shopper picks this Variant. These are this Variant's own — the
+          Product's images are set on the card above, and a storefront is given both.
+        </p>
+      </div>
+      <MediaAttachments
+        idPrefix={`variant-media-${variant.id}`}
+        subject="this Variant"
+        attached={variant.media}
+        unavailable={unavailable}
+        attach={async (attached) =>
+          orThrow(
+            await client.PATCH("/admin/variants/{id}", {
+              params: { path: { id: variant.id } },
+              body: { media: attached },
+            }),
+          )
+        }
+        onAttached={reread}
+        problemOf={whyNotChanged}
+      />
+    </div>
+  );
+}
 
 /**
  * Every Price on this Variant, the way to add one, and the way to take one away.
@@ -1373,6 +1496,7 @@ function isNoSuchProduct(thrown: unknown): boolean {
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
     case "variant-options-mismatch":
+    case "media-not-found":
       // Not reachable from a read of one Product as it stands, so kobai's own prose is shown
       // rather than a sentence written here for a case nobody has seen.
       return false;
@@ -1423,9 +1547,10 @@ function whyNotDeleted(thrown: unknown, fallback: string): string {
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
     case "variant-options-mismatch":
+    case "media-not-found":
       // Not reachable from a delete, which sends no body and names no SKU, handle, currency,
-      // Strategy or option value. Reported as kobai said it rather than as a sentence written
-      // for a case nobody has seen.
+      // Strategy, option value or image. Reported as kobai said it rather than as a sentence
+      // written for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:
@@ -1472,6 +1597,14 @@ function whyNotChanged(thrown: unknown): string {
       // kobai's prose names the options, which this form knows and the message may as well not
       // repeat; what it adds is where the answer is given.
       return "This Variant must say what it is for every option this Product declares, and for no other. Its Product's options may have changed since this page was opened — reload it, then fill in the value for each.";
+
+    case "media-not-found":
+      // The one refusal here a Merchant reaches by having *two* pages open: an image was
+      // deleted from the library after this screen read it. There is no route that deletes a
+      // Media today (ADR-0082), so this is unreachable through the Admin as it stands — and it
+      // is worded rather than deferred to kobai's prose because when that route arrives this is
+      // exactly what a Merchant will meet, and the sentence is the same either way.
+      return "One of the images chosen is no longer in this Store's Media. Reload this page and pick from the Media it then shows.";
 
     case "product-not-found":
     case "variant-not-found":

@@ -20,6 +20,7 @@ import {
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
+import type { MediaStorage } from "../media/storage.ts";
 import { claimIdempotencyKey, type IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order.ts";
 import { type QuoteCartRefusal, quoteCart } from "../order/quote-cart.ts";
@@ -64,6 +65,16 @@ import {
 
 export type StoreDependencies = {
   readonly db: Database;
+  /**
+   * Where this deployment keeps its Media — what `kobai.config.ts` wired, or the
+   * local-filesystem one Core ships.
+   *
+   * The store surface holds one for the same reason the admin surface does: the address a
+   * Media reports is the storage's own answer asked at read time rather than a column
+   * (ADR-0078), and a Product carries the images it shows. It is the *same* storage the byte
+   * route serves, because two would be a Product reporting an address nothing answers.
+   */
+  readonly mediaStorage: MediaStorage;
   /**
    * The Fulfilment Strategies this deployment has (ADR-0052), for the Steps that ask a
    * Variant's Strategy what it answers.
@@ -689,20 +700,32 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   });
 
   store.openapi(listStoreProductsRoute, async (c) => {
-    const page = await listStoreProducts(deps.db, c.req.valid("query"));
+    const page = await listStoreProducts(
+      deps.db,
+      deps.mediaStorage,
+      c.req.valid("query"),
+    );
     // `undefined` rather than `null`, and `JSON.stringify` drops the key — the wire shape
     // ADR-0064 asks for: absent means there is no further page.
     return c.json({ products: page.items, nextCursor: page.nextCursor }, 200);
   });
 
   store.openapi(readStoreProductRoute, async (c) => {
-    const found = await readStoreProduct(deps.db, c.req.valid("param").idOrHandle);
+    const found = await readStoreProduct(
+      deps.db,
+      deps.mediaStorage,
+      c.req.valid("param").idOrHandle,
+    );
     if (!found) return c.json(STORE_CATALOG_NOT_FOUND.product, 404);
     return c.json(found, 200);
   });
 
   store.openapi(readStoreVariantRoute, async (c) => {
-    const found = await readStoreVariant(deps.db, c.req.valid("param").id);
+    const found = await readStoreVariant(
+      deps.db,
+      deps.mediaStorage,
+      c.req.valid("param").id,
+    );
     if (!found) return c.json(STORE_CATALOG_NOT_FOUND.variant, 404);
     return c.json(found, 200);
   });

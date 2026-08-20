@@ -586,9 +586,10 @@ export type PriceRow = typeof price.$inferSelect;
  * it — and a bag nothing on the surface can write to would be a column pretending to be an
  * escape hatch. Adding one is additive under ADR-0060 the day something needs it.
  *
- * There is no reference to a Product or a Variant either, in either direction: attaching Media
- * to something is the next slice, and it arrives as its own join table with its own ordering
- * rather than as a column here.
+ * There is no reference to a Product or a Variant on this table, in either direction, and there
+ * is not going to be: what a Product or a Variant shows is {@link productMedia} and
+ * {@link variantMedia}, two join tables with an order of their own — so one image leads on two
+ * Products and a deleted Product takes its attachments and leaves the asset here (ADR-0082).
  */
 export const media = pgTable(
   "core_media",
@@ -617,6 +618,108 @@ export const media = pgTable(
 );
 
 export type MediaRow = typeof media.$inferSelect;
+
+/**
+ * Media attached to a **Product**, in the order a Merchant put it in (#255, story 9).
+ *
+ * A join table rather than a column on either side, for the reason a Price is a row: a Product
+ * has as many images as somebody uploaded, one image may lead on two Products, and neither of
+ * those is a shape a `media_id` on `core_product` can hold.
+ *
+ * **Two tables and not one polymorphic one**, which is the decision this table and
+ * {@link variantMedia} are together. A single `core_media_attachment` carrying a `subject_type`
+ * and a nullable `product_id`/`variant_id` — or worse, one `subject_id` naming either — is the
+ * shape a foreign key cannot constrain, and a reference nothing constrains is exactly what
+ * ADR-0004 keeps this schema relational to avoid. The cost is that the two tables are the same
+ * four columns twice; what it buys is that `on delete cascade` states "a deleted Product takes
+ * its attachments with it" in the database rather than in a function somebody has to remember
+ * to call.
+ *
+ * **`position` is a column because the order is a Merchant's decision** — the first image is
+ * the one that leads, and a storefront that had to invent an order would invent a different one
+ * from the Admin. It is rewritten dense from the list every request carries, exactly as
+ * {@link productOption}'s is, and every read orders by it and breaks the tie on `id`.
+ *
+ * **The unique index is what makes one image appear once on one Product.** The same Media twice
+ * in a list is two positions for one picture and nothing could say which is meant; every write
+ * here deletes the Product's rows and inserts the list afresh, so nothing on its way in can
+ * collide with a row on its way out.
+ */
+export const productMedia = pgTable(
+  "core_product_media",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      // A deleted Product takes its attachments and **not** the Media: an image is a Store's
+      // asset rather than a Product's, and it may well be attached to another Product or be
+      // waiting to be attached again. See ADR-0082.
+      .references(() => product.id, { onDelete: "cascade" }),
+    mediaId: uuid("media_id")
+      .notNull()
+      // `restrict` and not `cascade`, and it is ADR-0082's decision rather than a default: a
+      // Media that something is showing cannot be deleted out from under it, which is
+      // ADR-0059's house rule — catalog deletion refuses rather than cascading — held by the
+      // schema instead of by a handler. Detaching first is the repair, and it is one a Merchant
+      // can carry out themselves.
+      .references(() => media.id, { onDelete: "restrict" }),
+    /** Zero-based, and rewritten from the request's own order every time the list is set. */
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("core_product_media_product_media_idx").on(
+      table.productId,
+      table.mediaId,
+    ),
+    // How every read of a Product asks for them: its images, in the order it set them.
+    index("core_product_media_product_position_idx").on(table.productId, table.position),
+  ],
+);
+
+export type ProductMediaRow = typeof productMedia.$inferSelect;
+
+/**
+ * Media attached to one **Variant**, in the order a Merchant put it in (#255, story 10).
+ *
+ * {@link productMedia}'s twin, and the whole of story 10: a Shopper who picks Red should see
+ * the red one, so the picture belongs to the Variant rather than to the Product it hangs off.
+ * It is a second table rather than a nullable `variant_id` on the first for the reason written
+ * there — a column that is sometimes a Product and sometimes a Variant is a reference no
+ * foreign key can hold.
+ *
+ * A Variant's images are its own and do not extend its Product's: a storefront shows the
+ * Variant's where it has any and the Product's otherwise, which is a decision it makes with
+ * both lists in front of it rather than one kobai takes on its behalf.
+ */
+export const variantMedia = pgTable(
+  "core_variant_media",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    variantId: uuid("variant_id")
+      .notNull()
+      // A deleted Variant takes its attachments and not the Media, exactly as its Product does.
+      .references(() => variant.id, { onDelete: "cascade" }),
+    mediaId: uuid("media_id")
+      .notNull()
+      // `restrict`, for `core_product_media`'s reason and ADR-0082's.
+      .references(() => media.id, { onDelete: "restrict" }),
+    /** Zero-based, and rewritten from the request's own order every time the list is set. */
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("core_variant_media_variant_media_idx").on(
+      table.variantId,
+      table.mediaId,
+    ),
+    index("core_variant_media_variant_position_idx").on(table.variantId, table.position),
+  ],
+);
+
+export type VariantMediaRow = typeof variantMedia.$inferSelect;
 
 /**
  * A Cart — a Shopper's **mutable, disposable, unauthoritative** selection before purchase
