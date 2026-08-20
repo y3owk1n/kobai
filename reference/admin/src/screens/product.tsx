@@ -186,6 +186,7 @@ export function ProductScreen() {
           productId={id}
           variant={variant}
           options={product.data.options}
+          status={product.data.status}
         />
       ))}
 
@@ -839,11 +840,20 @@ function VariantCard({
   productId,
   variant,
   options,
+  status,
 }: {
   readonly productId: string;
   readonly variant: Variant;
   /** The **Product's** declared options, which is what this Variant has to answer. */
   readonly options: readonly ProductOption[];
+  /**
+   * The **Product's** status, which the price preview needs and nothing else here does.
+   *
+   * Passed down rather than read again: whether a storefront can ask about this Variant at all
+   * is a fact about the Product this card belongs to, and the screen is already holding it
+   * (#276).
+   */
+  readonly status: ProductStatus;
 }) {
   const client = useKobaiClient();
   const reread = useRereadProduct(productId);
@@ -901,6 +911,7 @@ function VariantCard({
 
         <StorefrontPrice
           variantId={variant.id}
+          status={status}
           entered={newest ? { amount: newest.amount, currency: newest.currency } : null}
         />
       </CardContent>

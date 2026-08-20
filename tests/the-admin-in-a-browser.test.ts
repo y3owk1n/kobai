@@ -2284,6 +2284,11 @@ describe("the storefront price preview", () => {
    * request the page itself made, which no other seam in this repository can see. What is on
    * screen afterwards is asserted only as far as it takes to know the answer arrived rather
    * than being swallowed.
+   *
+   * **Two cases, and which surface each one used is the subject of both** (#276). A storefront
+   * cannot ask about a Product that is not published, so the Admin asks over `/store` when a
+   * storefront could and over `/admin` when none could — and that choice is a request rather
+   * than a rendering, which is why it is asserted here.
    */
   it("answers by being a storefront, over a publishable key", async () => {
     // Priced at 12.50, which this Project does not charge: `kobai.config.ts` fills Core's
@@ -2316,10 +2321,9 @@ describe("the storefront price preview", () => {
       "the Step this Project put in the slot",
     );
 
-    // The criterion itself (ADR-0020): the Admin found out what a storefront receives by
-    // *being* one — over `/store`, with a `kobai_pk_` key — rather than by asking the admin
-    // surface for a number no storefront could get. There is no such route and there must not
-    // be one.
+    // The criterion itself (ADR-0020): for a Product a storefront can see, the Admin found out
+    // what one receives by *being* one — over `/store`, with a `kobai_pk_` key — rather than by
+    // asking the admin surface for a number a storefront could have asked for itself.
     expect(asked).toEqual([
       {
         path: `/store/variants/${product.variantId}/price`,
@@ -2328,6 +2332,49 @@ describe("the storefront price preview", () => {
     ]);
 
     await auditAccessibility(page, "the Product screen showing a resolved price");
+  });
+
+  /**
+   * The other half, and the reason #276 could close the store surface without closing this
+   * screen.
+   *
+   * A draft is invisible to a storefront — including at `GET /store/variants/{id}/price`, as of
+   * that ticket — so *being* a storefront answers `variant-not-found` for the very Product a
+   * Merchant is most likely to be previewing: the one they have not put on sale yet. The Admin
+   * therefore asks over `/admin`, which runs the same `resolve-price` and answers the same body.
+   *
+   * **The assertion is that it made no store request at all**, which is the half nothing else in
+   * this repository can see: a screen that asked `/store` first and quietly fell back would look
+   * identical on screen and would be papering over real refusals on Products that *are* on sale.
+   */
+  it("asks over the admin surface for a Product no storefront may see", async () => {
+    const product = await seam.createProduct({
+      title: "A poster still being written",
+      amount: 1250,
+      status: "draft",
+    });
+    const page = await seam.signedIn(`/products/${product.id}`);
+
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      if (pathname.startsWith("/store/")) asked.push(pathname);
+    });
+
+    await page.getByRole("button", { name: "What would a storefront receive?" }).click();
+
+    await shows(
+      page.getByText("This Project changed the price."),
+      "the difference between what was entered and what a storefront would get",
+    );
+    await shows(
+      page.getByText("This Product is not published, so no storefront can ask at all."),
+      "which surface the Admin had to ask, and why",
+    );
+
+    expect(asked).toEqual([]);
+
+    await auditAccessibility(page, "the Product screen previewing a draft's price");
   });
 });
 

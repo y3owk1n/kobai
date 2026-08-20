@@ -17,6 +17,7 @@ import {
   readStoreProduct,
   readStoreVariant,
   type StoreCatalogRefusal,
+  storeVariantExists,
 } from "../catalog/store-read.ts";
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
@@ -46,6 +47,12 @@ import {
   PAGE_QUERY_INVALID,
   REFUSALS,
 } from "./openapi.ts";
+import {
+  priceStatusFor,
+  resolvedPriceBody,
+  statusMapper,
+  workflowRefusal,
+} from "./workflow-refusal.ts";
 
 /**
  * The store surface — what a storefront calls, and the second of kobai's two authenticated
@@ -246,13 +253,21 @@ const readStoreVariantRoute = createRoute({
  * the response says which Steps ran. That field is a requirement rather than a debugging
  * nicety: it is what lets a Developer who has replaced a Step *see* that theirs ran, so the
  * extension mechanism is demonstrated rather than assumed (spec story 33).
+ *
+ * **It answers for a published Product and nothing else, and the guard is here rather than in
+ * the Workflow** (#276). `resolve-price` prices a Variant; it does not decide who may see one —
+ * which is exactly why `GET /admin/variants/{id}/price` can preview a draft's price through the
+ * same declaration, and why a guard inside `load-prices` would have taken that capability away
+ * to close this hole. So the *surface* asks the store catalog's own question first, and a
+ * Variant a Shopper may not see is the same `variant-not-found` an identifier nobody issued
+ * gets. The refusal carries no `workflow`, because nothing ran.
  */
 const resolvePriceRoute = createRoute({
   method: "get",
   path: "/variants/{id}/price",
   summary: "What a Variant costs",
   description:
-    "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did.",
+    "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.",
   security: API_KEY,
   request: { params: contract.IdParam },
   responses: {
@@ -262,7 +277,7 @@ const resolvePriceRoute = createRoute({
     ),
     401: REFUSALS.noApiKey,
     404: json(
-      "A Step refused: there is no such Variant, or it carries no Price.",
+      "There is no such Variant on this surface — either none exists or its Product is not published, which are deliberately one answer and carry no `workflow`, since nothing ran — or a Step refused because it carries no Price.",
       contract.PriceRefusal,
     ),
     422: json(
@@ -740,25 +755,32 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
   });
 
   store.openapi(resolvePriceRoute, async (c) => {
+    const variantId = c.req.valid("param").id;
+
+    // Before the Workflow, because pricing a Variant a Shopper may not see is answering a
+    // question this surface has already refused twice over (#276). The same word and the same
+    // status the catalog reads use, from the module that owns what `published` means.
+    if (!(await storeVariantExists(deps.db, variantId))) {
+      return c.json(STORE_CATALOG_NOT_FOUND.variant, 404);
+    }
+
     const run = await deps.priceWorkflow.run(
-      { variantId: c.req.valid("param").id },
+      { variantId },
       // The query string is the whole of it: this route takes no body, so there is no second
       // half to merge and nothing that could arrive in both.
       contextFor(openMetadata(new URL(c.req.url))),
     );
 
     if (!run.ok)
-      return c.json(refusal(run, deps.priceWorkflow.name), statusFor(run.reason));
+      return c.json(
+        workflowRefusal(run, deps.priceWorkflow.name),
+        priceStatusFor(run.reason),
+      );
 
-    return c.json(
-      {
-        ...run.output,
-        // `steps` names each slot *and* what filled it, so a Project that replaced one sees
-        // its own Step here in place of Core's.
-        workflow: { name: deps.priceWorkflow.name, steps: run.steps },
-      },
-      200,
-    );
+    // `steps` names each slot *and* what filled it, so a Project that replaced one sees its own
+    // Step here in place of Core's. Built by the one function `GET /admin/variants/{id}/price`
+    // builds it with, so the preview and the storefront cannot answer two shapes.
+    return c.json(resolvedPriceBody(run, deps.priceWorkflow.name), 200);
   });
 
   store.openapi(createCartRoute, async (c) => {
@@ -867,7 +889,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
 
     if (!run.ok) {
       return c.json(
-        refusal(run, deps.placeOrderWorkflow.name),
+        workflowRefusal(run, deps.placeOrderWorkflow.name),
         quoteStatusFor(run.reason),
       );
     }
@@ -937,7 +959,7 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     if (!run.ok) {
       await claim.release();
       return c.json(
-        refusal(run, deps.placeOrderWorkflow.name),
+        workflowRefusal(run, deps.placeOrderWorkflow.name),
         placeOrderStatusFor(run.reason),
       );
     }
@@ -1083,6 +1105,10 @@ const HOLD_CART_STATUS = {
   "cart-expired": 409,
   "cart-placed": 409,
   "cart-empty": 422,
+  // 409 for the reason every word beside it is one: the request was fine and the state of the
+  // Store refuses it. Holding stock for a Cart that cannot be placed would claim units nothing
+  // could ever consume, and a storefront meets this here rather than after the bank (#276).
+  "variant-unavailable": 409,
   "unknown-fulfilment-strategy": 409,
   "insufficient-inventory": 409,
 } as const satisfies StatusesFor<typeof holdCartReservations>;
@@ -1106,6 +1132,7 @@ const QUOTE_REFUSAL_STATUS = {
   "cart-expired": 409,
   "cart-placed": 409,
   "cart-empty": 422,
+  "variant-unavailable": 409,
   "unknown-fulfilment-strategy": 409,
   "variant-not-found": 422,
   "price-not-set": 422,
@@ -1148,47 +1175,6 @@ function noSuchCart() {
 }
 
 /**
- * How a refusing Step of `resolve-price` becomes a status.
- *
- * Core's own reasons are mapped, and `satisfies` makes an unmapped one a build failure rather
- * than an `undefined` status. Anything else is a Step Core has never heard of — see
- * {@link statusMapper}.
- */
-const PRICE_REFUSAL_STATUS = {
-  "variant-not-found": 404,
-  "price-not-set": 404,
-} as const satisfies Record<PriceResolutionRefusal, PriceRefusalStatus>;
-
-/**
- * The two statuses a refused resolution can carry.
- *
- * Narrow on purpose: the route declares exactly these, so a third one would have to be
- * declared before it could be returned.
- */
-type PriceRefusalStatus = 404 | 422;
-
-const REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW = 422;
-
-/**
- * Turns a Workflow's map of Core's own reasons into the function a route answers with.
- *
- * One of these per Workflow, built from that Workflow's map — the *map* is what says what a
- * reason means and where `satisfies` makes forgetting one a build failure, and this is only the
- * lookup around it. The cast is what the map deliberately gives up: a `reason` arriving here is
- * a plain string, because a Step a Project or a Plugin supplied may refuse with anything, and
- * anything Core has never heard of is 422 — the request was well formed and the Workflow
- * declined it, which is the most that can honestly be said about a refusal whose meaning is not
- * Core's to know.
- */
-function statusMapper<Status extends ContentfulStatusCode>(
-  statuses: Readonly<Record<string, Status>>,
-): (reason: string) => Status | typeof REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW {
-  return (reason) => statuses[reason] ?? REFUSED_BY_A_STEP_CORE_DOES_NOT_KNOW;
-}
-
-const statusFor = statusMapper<PriceRefusalStatus>(PRICE_REFUSAL_STATUS);
-
-/**
  * How a Step refusing to place an Order becomes a status — the same shape, and the same
  * `satisfies`, as the price map above.
  *
@@ -1207,6 +1193,12 @@ const PLACE_ORDER_REFUSAL_STATUS = {
   "cart-expired": 409,
   "cart-placed": 409,
   "cart-empty": 422,
+  // 409 beside the Cart that can no longer be placed, and for the same reason: a Product a
+  // Merchant has taken off the storefront is a Store that has changed under a Shopper who was
+  // already holding one of its Variants, and retrying changes nothing until it goes back on
+  // sale or the line comes off the Cart (#276). Not a 404: the Cart is what this route
+  // addresses, and the Cart is there.
+  "variant-unavailable": 409,
   // 409 beside the Cart that can no longer be placed, and for the same reason: the request was
   // fine and the state of the Store refuses it, and retrying the same request changes nothing
   // until somebody restocks — or until a hold somebody else is holding lapses.
@@ -1256,21 +1248,3 @@ const IDEMPOTENCY_REFUSAL_STATUS = {
   "idempotency-key-reused": 409,
   "idempotency-key-in-progress": 409,
 } as const satisfies Record<IdempotencyRefusal, PlaceOrderRefusalStatus>;
-
-/**
- * A refusal, in the shape every other kobai refusal uses — plus which Step refused.
- *
- * The Steps that ran are reported on the way out as well as on the way in, so a Developer
- * debugging a refused resolution can see how far the Workflow got before it stopped.
- */
-function refusal(run: Extract<WorkflowRun<unknown>, { ok: false }>, workflow: string) {
-  return {
-    error: run.detail,
-    reason: run.reason,
-    workflow: {
-      name: workflow,
-      failed: run.failed,
-      steps: run.steps,
-    },
-  };
-}

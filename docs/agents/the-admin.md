@@ -378,6 +378,20 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   an unavailable delete opens nothing. **There is no `canDelete` prop and there must not be
   one**: whether stock is reserved is a rule living in Core that a Project may already have
   changed through a replaced Step, so the Admin attempts and renders the answer.
+- **The storefront price preview asks over `/store` when a storefront could and over `/admin`
+  when none could, and it says which** (#276). Asking by *being* a storefront — a publishable
+  key, a second client, `GET /store/variants/{id}/price` — is the whole point of that screen and
+  is unchanged for a Product that is on sale. It cannot be the answer for a **draft**, because
+  the store surface answers no draft at all, and previewing a price before putting something on
+  sale is exactly when a Merchant wants one: so an unpublished Product is asked at `GET
+  /admin/variants/{id}/price`, which runs the same `resolve-price`. **It is a branch and never a
+  fallback** — a screen that tried `/store` first and retried on a refusal would paper over real
+  refusals on Products that *are* published — and the caption under the control names the
+  surface, because "what a storefront receives" and "what one would receive if you published
+  this" are two sentences. Which of the two it did is asserted in the browser seam, on the
+  requests the page made, since nothing on screen can show it. The Permission follows the ask:
+  `api-key:write` for the storefront's (the first ask on a session with none mints the key) and
+  `catalog:read` for the Merchant's.
 - **A picker over a set kobai can name is read from kobai, never written down here.** The
   Fulfilment Strategy field reads ADR-0067's route, because `physical` and `digital` in a
   `const` is ADR-0014's closed set moved into the client. It is the same rule as

@@ -1520,6 +1520,64 @@ export interface paths {
       };
     };
   };
+  "/admin/variants/{id}/price": {
+    /**
+     * What a storefront would be charged
+     * @description Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. The response names the Steps that ran, so a replaced one is visible. Any query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description An identifier. Anything that is not one is not found. */
+          id: string;
+        };
+      };
+      responses: {
+        /** @description The resolved Price, and the Steps that produced it. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["ResolvedPrice"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description A Step refused: there is no such Variant, or it carries no Price. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["PriceRefusal"];
+          };
+        };
+        /** @description A Step this build of Core does not know refused. The request was well formed and the Workflow declined it. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["PriceRefusal"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/media": {
     /**
      * List Media
@@ -2451,7 +2509,7 @@ export interface paths {
   "/store/variants/{id}/price": {
     /**
      * What a Variant costs
-     * @description Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did.
+     * @description Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.
      */
     get: {
       parameters: {
@@ -2477,7 +2535,7 @@ export interface paths {
             "application/json": components["schemas"]["ApiKeyRefusal"];
           };
         };
-        /** @description A Step refused: there is no such Variant, or it carries no Price. */
+        /** @description There is no such Variant on this surface — either none exists or its Product is not published, which are deliberately one answer and carry no `workflow`, since nothing ran — or a Step refused because it carries no Price. */
         404: {
           content: {
             "application/json": components["schemas"]["PriceRefusal"];
@@ -3618,6 +3676,42 @@ export interface components {
       /** @description What the Store has, counted. Replaces whatever was there; it is not added to it. */
       onHand: number;
     };
+    ResolvedPrice: {
+      variant: components["schemas"]["VariantIdentity"];
+      price: {
+        /** Format: uuid */
+        id: string;
+        amount: number;
+        currency: string;
+      };
+      workflow: {
+        name: string;
+        steps: components["schemas"]["StepReport"][];
+      };
+    };
+    VariantIdentity: {
+      /** Format: uuid */
+      id: string;
+      sku: string;
+    };
+    StepReport: {
+      /** @description The slot the Workflow declares. */
+      step: string;
+      /** @description The Step that filled it. Differs when a Project replaced it. */
+      implementation: string;
+    };
+    PriceRefusal: {
+      error: string;
+      /** @description Machine-readable. Branch on this. Core's own are `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
+      reason: string;
+      /** @description How far the Workflow got. Absent when the request was turned back before it ran at all — which on the **store** surface is what a Variant whose Product is not published is refused by, since `resolve-price` prices a Variant and does not decide who may see one (#276). Branch on `reason` rather than on this. */
+      workflow?: {
+        name: string;
+        /** @description The slot that refused. */
+        failed: string;
+        steps: components["schemas"]["StepReport"][];
+      };
+    };
     UploadMediaRequest: {
       /**
        * Format: binary
@@ -3830,11 +3924,6 @@ export interface components {
         [key: string]: unknown;
       };
     };
-    VariantIdentity: {
-      /** Format: uuid */
-      id: string;
-      sku: string;
-    };
     CartRefusal: {
       /** @description What went wrong, in prose. */
       error: string;
@@ -3991,36 +4080,6 @@ export interface components {
        */
       reason: "product-not-found" | "variant-not-found";
     };
-    ResolvedPrice: {
-      variant: components["schemas"]["VariantIdentity"];
-      price: {
-        /** Format: uuid */
-        id: string;
-        amount: number;
-        currency: string;
-      };
-      workflow: {
-        name: string;
-        steps: components["schemas"]["StepReport"][];
-      };
-    };
-    StepReport: {
-      /** @description The slot the Workflow declares. */
-      step: string;
-      /** @description The Step that filled it. Differs when a Project replaced it. */
-      implementation: string;
-    };
-    PriceRefusal: {
-      error: string;
-      /** @description Machine-readable. Branch on this. Core's own are `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
-      reason: string;
-      workflow: {
-        name: string;
-        /** @description The slot that refused. */
-        failed: string;
-        steps: components["schemas"]["StepReport"][];
-      };
-    };
     CreateCartRequest: {
       /** @description Needs a secret key. A publishable one is refused (ADR-0020). */
       shopper?: ({
@@ -4091,7 +4150,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "cart-not-found" | "cart-expired" | "cart-placed" | "cart-empty" | "unknown-fulfilment-strategy" | "insufficient-inventory";
+      reason: "cart-not-found" | "cart-expired" | "cart-placed" | "cart-empty" | "variant-unavailable" | "unknown-fulfilment-strategy" | "insufficient-inventory";
     };
     Quote: {
       /** Format: uuid */
@@ -4159,7 +4218,7 @@ export interface components {
     };
     QuoteRefusal: {
       error: string;
-      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
+      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
       reason: string;
       workflow: {
         name: string;
@@ -4189,7 +4248,7 @@ export interface components {
     };
     PlaceOrderRefusal: {
       error: string;
-      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
+      /** @description Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means. */
       reason: string;
       /** @description How far the Workflow got. Absent when the request was turned back before it ran at all — which is what an idempotency key already used for a different request, or one whose first attempt is still in flight, is refused by. Branch on `reason` rather than on this. */
       workflow?: {

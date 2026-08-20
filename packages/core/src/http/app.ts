@@ -356,6 +356,8 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       fulfilment: deps.fulfilment,
       mediaStorage: deps.mediaStorage,
       sessionPolicy: deps.sessionPolicy,
+      priceWorkflow: deps.priceWorkflow,
+      holdWindowMs: deps.holdWindowMs,
       workflows: deps.workflows,
       paymentProvider: deps.paymentProvider,
       coreVersion,

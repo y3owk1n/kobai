@@ -1355,6 +1355,130 @@
           "onHand"
         ]
       },
+      "ResolvedPrice": {
+        "type": "object",
+        "properties": {
+          "variant": {
+            "$ref": "#/components/schemas/VariantIdentity"
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "amount": {
+                "type": "integer"
+              },
+              "currency": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "amount",
+              "currency"
+            ]
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StepReport"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "steps"
+            ]
+          }
+        },
+        "required": [
+          "variant",
+          "price",
+          "workflow"
+        ]
+      },
+      "VariantIdentity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sku": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sku"
+        ]
+      },
+      "StepReport": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "description": "The slot the Workflow declares."
+          },
+          "implementation": {
+            "type": "string",
+            "description": "The Step that filled it. Differs when a Project replaced it."
+          }
+        },
+        "required": [
+          "step",
+          "implementation"
+        ]
+      },
+      "PriceRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Machine-readable. Branch on this. Core's own are `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "failed": {
+                "type": "string",
+                "description": "The slot that refused."
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StepReport"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "failed",
+              "steps"
+            ],
+            "description": "How far the Workflow got. Absent when the request was turned back before it ran at all — which on the **store** surface is what a Variant whose Product is not published is refused by, since `resolve-price` prices a Variant and does not decide who may see one (#276). Branch on `reason` rather than on this."
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ]
+      },
       "UploadMediaRequest": {
         "type": "object",
         "properties": {
@@ -1938,22 +2062,6 @@
           "metadata"
         ]
       },
-      "VariantIdentity": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "sku": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "sku"
-        ]
-      },
       "CartRefusal": {
         "type": "object",
         "properties": {
@@ -2415,114 +2523,6 @@
           "reason"
         ]
       },
-      "ResolvedPrice": {
-        "type": "object",
-        "properties": {
-          "variant": {
-            "$ref": "#/components/schemas/VariantIdentity"
-          },
-          "price": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "amount": {
-                "type": "integer"
-              },
-              "currency": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "amount",
-              "currency"
-            ]
-          },
-          "workflow": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "steps": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/StepReport"
-                }
-              }
-            },
-            "required": [
-              "name",
-              "steps"
-            ]
-          }
-        },
-        "required": [
-          "variant",
-          "price",
-          "workflow"
-        ]
-      },
-      "StepReport": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string",
-            "description": "The slot the Workflow declares."
-          },
-          "implementation": {
-            "type": "string",
-            "description": "The Step that filled it. Differs when a Project replaced it."
-          }
-        },
-        "required": [
-          "step",
-          "implementation"
-        ]
-      },
-      "PriceRefusal": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "description": "Machine-readable. Branch on this. Core's own are `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
-          },
-          "workflow": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "failed": {
-                "type": "string",
-                "description": "The slot that refused."
-              },
-              "steps": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/StepReport"
-                }
-              }
-            },
-            "required": [
-              "name",
-              "failed",
-              "steps"
-            ]
-          }
-        },
-        "required": [
-          "error",
-          "reason",
-          "workflow"
-        ]
-      },
       "CreateCartRequest": {
         "type": "object",
         "properties": {
@@ -2698,6 +2698,7 @@
               "cart-expired",
               "cart-placed",
               "cart-empty",
+              "variant-unavailable",
               "unknown-fulfilment-strategy",
               "insufficient-inventory"
             ],
@@ -2899,7 +2900,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
+            "description": "Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `unknown-fulfilment-strategy`, `variant-not-found`, `price-not-set`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
           },
           "workflow": {
             "type": "object",
@@ -3006,7 +3007,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
+            "description": "Machine-readable. Branch on this. Core's own are `cart-not-found`, `cart-expired`, `cart-placed`, `cart-empty`, `variant-unavailable`, `insufficient-inventory`, `variant-not-found`, `price-not-set`, `payment-declined`, `no-payment-provider`, `unknown-fulfilment-strategy`, `idempotency-key-reused`, `idempotency-key-in-progress`; a Step this deployment supplied may refuse with anything else, which is answered 422 because Core cannot say what it means."
           },
           "workflow": {
             "type": "object",
@@ -5571,6 +5572,101 @@
         }
       }
     },
+    "/admin/variants/{id}/price": {
+      "get": {
+        "summary": "What a storefront would be charged",
+        "description": "Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. The response names the Steps that ran, so a replaced one is visible. Any query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.",
+        "security": [
+          {
+            "merchantSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "An identifier. Anything that is not one is not found."
+            },
+            "required": true,
+            "description": "An identifier. Anything that is not one is not found.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resolved Price, and the Steps that produced it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedPrice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRefusal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Merchant's Role does not hold the permission this route requires.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionDenied"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A Step refused: there is no such Variant, or it carries no Price.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A Step this build of Core does not know refused. The request was well formed and the Workflow declined it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something failed inside kobai.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Migrations have not applied, so nothing but `/health` is served yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/media": {
       "post": {
         "summary": "Upload Media",
@@ -7176,7 +7272,7 @@
     "/store/variants/{id}/price": {
       "get": {
         "summary": "What a Variant costs",
-        "description": "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did.",
+        "description": "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.",
         "security": [
           {
             "apiKey": []
@@ -7229,7 +7325,7 @@
             }
           },
           "404": {
-            "description": "A Step refused: there is no such Variant, or it carries no Price.",
+            "description": "There is no such Variant on this surface — either none exists or its Product is not published, which are deliberately one answer and carry no `workflow`, since nothing ran — or a Step refused because it carries no Price.",
             "content": {
               "application/json": {
                 "schema": {

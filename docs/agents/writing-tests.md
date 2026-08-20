@@ -169,6 +169,15 @@ inherits the draft** — `pagination.test.ts`'s seeder publishes each one for ex
 and an unpublished batch there would make every `/store/products` case assert against an empty
 list while passing for the wrong reason.
 
+**Since #276 an unpublished Product cannot be bought either, and two arrangements that were
+quietly wrong went red.** `tests/the-upgrade-gate.test.ts`'s `pricedVariant` never published and
+the release gate bought the result; `tests/support/admin-browser.ts`'s `createProduct` never
+published and the browser seam placed Orders against it. Both now publish — `createProduct` takes
+a `status` for the case whose subject is one, exactly as `seedTestCatalog` does — and the lesson
+is the one ADR-0049 keeps making in other clothes: **an arrangement nothing asserts about is
+where a hole hides**, and a green suite over a draft catalog was the whole of the evidence that
+invisible meant unbuyable.
+
 **Nothing it seeds is counted**, and there is deliberately no option that counts it. A Variant
 with no Inventory row sells freely and holds no Reservation (ADR-0018), which is what every test
 that is not about stock wants; a test that *is* about stock says so with

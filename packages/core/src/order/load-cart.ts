@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
+import { PUBLISHED } from "../catalog/status.ts";
 import type { Queryable } from "../db/client.ts";
 import { cart, cartLineItem, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -91,6 +92,7 @@ export type LoadCartRefusal =
   | "cart-expired"
   | "cart-placed"
   | "cart-empty"
+  | "variant-unavailable"
   | "unknown-fulfilment-strategy";
 
 /** The Cart as both callers read it, or the one word that says why it cannot be. */
@@ -160,6 +162,11 @@ export async function readCartToPlace(
       sku: variant.sku,
       quantity: cartLineItem.quantity,
       metadata: cartLineItem.metadata,
+      // The Product's status, for the one question this read asks about it beyond the title
+      // (#276). It is read here rather than at each claiming caller for this module's whole
+      // reason: the hold route and the placement must agree about what is in a Cart, and
+      // whether a line may still be bought is part of that.
+      status: product.status,
       fulfilmentStrategy: variant.fulfilmentStrategy,
       // The Variant's own open data, for the Strategy rather than for the snapshot — a
       // made-to-order Strategy reads its own key out of it (ADR-0013), and Core reads none.
@@ -175,7 +182,13 @@ export async function readCartToPlace(
   // Asked once per line, here, and carried from here on: the answers decide what is claimed
   // and become the Order's Fulfilment snapshot, and a placement that asked twice could get
   // two answers (ADR-0052).
-  for (const { fulfilmentStrategy, variantMetadata, ...line } of selected) {
+  for (const { fulfilmentStrategy, variantMetadata, status, ...line } of selected) {
+    // Asked before the Strategy, because it is the more fundamental answer and the one the
+    // Shopper can act on: a line nothing may sell is refused whatever it would have been
+    // fulfilled by, and telling somebody their Fulfilment Strategy is unwired about a Product
+    // that is not for sale sends them after the wrong repair.
+    if (status !== PUBLISHED) return notOnSale(line.sku);
+
     const answers = fulfilmentAnswersFor(
       strategies ?? CORE_FULFILMENT_STRATEGIES,
       fulfilmentStrategy,
@@ -260,6 +273,37 @@ function noSuchCart(cartId: string): LoadedCartResult {
   return refused(
     "cart-not-found",
     `No Cart ${JSON.stringify(cartId)} exists. A Cart is addressed by the identifier it was created with, and holding that identifier is the whole of the authority to act on it.`,
+  );
+}
+
+/**
+ * A line whose Product has left the storefront, refused rather than dropped (#276).
+ *
+ * A Shopper built this Cart while the Product was published and a Merchant has since made it a
+ * draft again or archived it. **The line is refused and the Cart is left exactly as it is**,
+ * which is the decision this refusal exists to carry:
+ *
+ * - **Not dropped.** Removing it silently would change what is being bought, in the one request
+ *   where the Shopper is committing to what they are buying — ADR-0009's snapshot argument read
+ *   forwards, and the failure a storefront finds out about from a confirmation email.
+ * - **Not tolerated.** A Product a Merchant has taken off sale is one nothing may sell, and an
+ *   Order placed for it is a promise the Store did not mean to make.
+ * - **Refused with a repair the Shopper can carry out**, which is ADR-0059's rule and what makes
+ *   refusing honest here rather than merely strict: the line comes off with
+ *   `DELETE /store/carts/{id}/line-items/{lineItemId}` and the rest of the Cart places.
+ *
+ * The cost is accepted rather than avoided: a Shopper who did nothing wrong meets a dead end at
+ * the last step. The three routes this read serves is what softens it — a storefront quoting or
+ * holding stock meets this before the Shopper is sent anywhere near a bank.
+ *
+ * **One word for draft and archived alike**, because a storefront can act on neither
+ * differently, and because the store surface deliberately publishes no status: telling a browser
+ * *which* of the two would say whether a Merchant is preparing something or has retired it.
+ */
+function notOnSale(sku: string): LoadedCartResult {
+  return refused(
+    "variant-unavailable",
+    `Variant ${JSON.stringify(sku)} is no longer on sale: its Product has been taken off the storefront since it was put in this Cart. Remove that Line Item and the rest of the Cart can still be placed.`,
   );
 }
 
