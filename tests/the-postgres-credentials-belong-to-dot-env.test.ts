@@ -1,14 +1,9 @@
 import { readFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestDatabase, testPostgresUrl } from "@kobai/core/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  checkoutPinning,
-  checkoutWithNoDotenv,
-  discardCheckouts,
-  runInitHook,
-  thisCheckout,
-} from "./support/init-hook.ts";
+import { encodeFor, postgresUrl, repoRoot } from "../scripts/env.ts";
 
 /**
  * The credentials a Developer sets, and the ones the suite dials (#63).
@@ -17,13 +12,15 @@ import {
  * from `.env`. The test harness did not: it was handed an address built from `kobai:kobai`,
  * whatever the file said, so changing the password gave a container with the new one and a
  * suite still dialling the old — an authentication failure naming neither `.env` nor the
- * harness. `devbox.json`'s `init_hook` now reads all three the way it already read the port,
- * and percent-encodes them into both addresses it exports.
+ * harness.
  *
- * The other half of #21's rule, in other words: one source decides where the container comes
- * up *and* who it lets in. The failure it prevents is the same one, and so is the reason it
- * has to be tested by running the hook — the gate runs with `KOBAI_TEST_DATABASE_URL`
- * already exported, so nothing else here can see what built it.
+ * **The rule survives its machinery.** It used to be carried by thirty lines of `awk` in
+ * `devbox.json`'s `init_hook`, which is why this file used to run that hook. Under ADR-0084
+ * `.env` is read by `process.loadEnvFile` — Node's own, following the same grammar compose
+ * does — and the address is assembled in `scripts/env.ts` from the parts, at the moment it
+ * is needed. So what is left to test here is the part that is kobai's rather than Node's:
+ * that the assembled address signs in, against a real Postgres, with credentials awkward
+ * enough to break it.
  *
  * **This is the only file in the suite that creates a Postgres *role*** (#282), and a role is
  * the one server-level object here that a later run can trip over. A database is server-level
@@ -34,18 +31,16 @@ import {
  * behind that the next attempt could not drop —
  * `role "kobai admin=1" cannot be dropped because some objects depend on it` — and the
  * symptom was not local to this file: it presented as timeouts in a dozen unrelated ones.
- * Three things below answer it, and each answers a different half; `clearAway` says which,
- * and which of them is doing the actual work.
  */
 
 /**
  * The password every case below is built around, and every character in it is deliberate.
  *
- * A simple one proves nothing: `kobai` survives a reader that stops at the first punctuation
- * mark and a URL built by pasting strings together, which is what both of these used to be.
- * This one carries a space, an `=`, a `#`, both kinds of quote, and the three characters —
- * `/`, `?`, `#` — that end the authority of a URL, so an unencoded one would send the suite
- * at another host, another path, or in with no password at all.
+ * A simple one proves nothing: `kobai` survives a URL built by pasting strings together,
+ * which is what this used to be. This one carries a space, an `=`, a `#`, both kinds of
+ * quote, and the three characters — `/`, `?`, `#` — that end the authority of a URL, so an
+ * unencoded one would send the suite at another host, another path, or in with no password
+ * at all.
  *
  * `$` is deliberately absent. docker compose interpolates variables inside a double-quoted
  * value in `.env`, so a password holding one is a hazard belonging to that file rather than
@@ -53,56 +48,39 @@ import {
  */
 const PASSWORD = `p@ss w0rd="it's #1"; 50%/?!`;
 
-/** The same password as a `.env` line writes it: double-quoted, with the inner `"` escaped. */
-const DOTENV_PASSWORD = String.raw`p@ss w0rd=\"it's #1\"; 50%/?!`;
-
 /**
- * What this checkout calls its containers, its compose project and its volume — asked of the
- * derivation in `devbox.json`'s `init_hook` rather than restated here (#21).
+ * What this checkout calls its compose project, its containers and its volume.
  *
- * It is `kobai-<the checkout path, hashed>`, and a second, independently-derived hash for the
- * names below would be the very disagreement that derivation exists to prevent.
- *
- * Run rather than read out of `process.env`, because the suite runs under `devbox run test`
- * and outside it alike and only one of those has it exported — but a pin *is* taken from the
- * environment and handed on, because the hook lets one beat its own derivation while
- * `runInitHook` deliberately passes nothing through. Without that, a pinned name would be on
- * the containers while this named something else.
+ * Compose's own default — the directory's basename — since ADR-0084 dropped the derived
+ * name. Two worktrees have different basenames and so stay separate projects; two clones
+ * both called `kobai` do not, which is the collision that ADR knowingly declines to cover.
+ * A pin still wins, because compose honours one.
  */
-async function deriveComposeProject(): Promise<string> {
-  const pinned = process.env.COMPOSE_PROJECT_NAME;
-  const { COMPOSE_PROJECT_NAME } = await runInitHook({
-    root: thisCheckout(),
-    ...(pinned === undefined ? {} : { env: { COMPOSE_PROJECT_NAME: pinned } }),
-    report: ["COMPOSE_PROJECT_NAME"],
-  });
-  return COMPOSE_PROJECT_NAME;
-}
-
-const COMPOSE_PROJECT = await deriveComposeProject();
+const COMPOSE_PROJECT = process.env.COMPOSE_PROJECT_NAME ?? basename(resolve(repoRoot));
 
 /**
  * `name`, scoped to a compose project — and the only shape anything below ever matches a role
  * on.
  *
  * The suffix is what stops an interrupted run being *contagious* (#282): a role left behind
- * carries the hash of the checkout that made it, so no other checkout sharing a Postgres —
+ * carries the name of the checkout that made it, so no other checkout sharing a Postgres —
  * and no human — has one by that name, and a leaked set is `like 'kobai admin=1 %'` away from
- * being found. It also keeps the reach of `drop owned by` in `clearTheLoginAway` down to the
- * one role this file creates for this checkout, which is a hazard the ticket names by name.
+ * being found. It also keeps the reach of `drop owned by` in `clearAway` down to the one role
+ * this file creates for this checkout, which is a hazard the ticket names by name.
  *
  * The project is an argument rather than read from above so that the refusal below can be
  * watched from a test rather than only reasoned about.
  */
 function scopedTo(project: string, name: string): string {
   const scoped = `${name} ${project}`;
-  // Postgres truncates an identifier past 63 bytes rather than refusing it, so an
-  // over-long COMPOSE_PROJECT_NAME would create a role under one name and dial it under
-  // another — an authentication failure naming neither. Say so instead.
+  // Postgres truncates an identifier past 63 bytes rather than refusing it, so an over-long
+  // project name would create a role under one name and dial it under another — an
+  // authentication failure naming neither. Say so instead. The name is a directory's
+  // basename now, so this is reachable by a deep enough worktree as well as by a pin.
   const bytes = new TextEncoder().encode(scoped).length;
   if (bytes > 63) {
     throw new Error(
-      `The Postgres login this file creates would be ${bytes} bytes (${scoped}), and Postgres silently truncates an identifier at 63. COMPOSE_PROJECT_NAME is what makes it this long; derived it is \`kobai-<8 hex>\`, so this is a pin in \`.env\` or the environment.`,
+      `The Postgres login this file creates would be ${bytes} bytes (${scoped}), and Postgres silently truncates an identifier at 63. The compose project name is what makes it this long — it is this directory's basename unless COMPOSE_PROJECT_NAME pins one. Pin a shorter one in \`.env\`.`,
     );
   }
   return scoped;
@@ -114,14 +92,10 @@ function scopedTo(project: string, name: string): string {
  * `POSTGRES_LOGIN` rather than a role: in kobai a **Role** is the named set of Permissions a
  * Merchant holds (`CONTEXT.md`), and this is a Postgres one — the same care
  * `packages/core/src/testing/database.ts` takes to say "maintenance" rather than "admin".
- *
- * Both names carry this checkout's own, and the space in front of it is one more awkward
- * character in a name that already had to survive quoting.
  */
 const POSTGRES_LOGIN = {
   user: scopedTo(COMPOSE_PROJECT, "kobai admin=1"),
   password: PASSWORD,
-  dotenvPassword: DOTENV_PASSWORD,
   database: scopedTo(COMPOSE_PROJECT, "kobai db=1"),
 } as const;
 
@@ -139,35 +113,26 @@ const LEGACY_LOGIN = {
 } as const;
 
 /**
- * The address the hook builds for a checkout whose `.env` holds that login, pointed at the
- * Postgres this suite is already running against.
+ * The address `scripts/env.ts` builds for that login, pointed at the Postgres this suite is
+ * already running against.
  *
- * The port is passed rather than derived: the container is published on the port *this*
- * checkout derived, and the fabricated checkout would derive its own from its own temporary
- * path. Only the credentials are the subject here.
+ * The port is taken from the running harness rather than derived: the container is published
+ * on the port *this* checkout uses, and only the credentials are the subject here. This is
+ * the one call under test — everything else in this file exists to give it a real server to
+ * be right or wrong against.
  */
-async function deriveTheLogin(): Promise<string> {
-  const root = await checkoutPinning(
-    [
-      `POSTGRES_USER="${POSTGRES_LOGIN.user}"`,
-      `POSTGRES_PASSWORD="${POSTGRES_LOGIN.dotenvPassword}"`,
-      `POSTGRES_DB="${POSTGRES_LOGIN.database}"`,
-      "",
-    ].join("\n"),
-  );
-
-  const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-    root,
-    env: { POSTGRES_PORT: new URL(testPostgresUrl()).port },
-    report: ["KOBAI_TEST_DATABASE_URL"],
+function addressForTheLogin(): string {
+  return postgresUrl(Number(new URL(testPostgresUrl()).port), {
+    POSTGRES_USER: POSTGRES_LOGIN.user,
+    POSTGRES_PASSWORD: POSTGRES_LOGIN.password,
+    POSTGRES_DB: POSTGRES_LOGIN.database,
   });
-  return KOBAI_TEST_DATABASE_URL;
 }
 
 /**
  * Runs `work` with the harness pointed at `url`, and puts `KOBAI_TEST_DATABASE_URL` back.
  *
- * devbox exports that variable in front of every script, so it is set under the gate and
+ * `vitest.config.ts` sets that variable for the whole run, so it is set under the gate and
  * every other file in this run is using it.
  */
 async function pointingTheHarnessAt<T>(url: string, work: () => Promise<T>): Promise<T> {
@@ -313,250 +278,85 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await discardCheckouts();
   await asSuperuser(clearTheLoginsAway);
 });
 
-describe("the credentials the test harness dials with", () => {
-  it("takes the password from `.env`, where a Developer is told to put it", async () => {
-    const root = await checkoutPinning("POSTGRES_PASSWORD=s3cret\n");
-
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root,
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-
-    expect(new URL(KOBAI_TEST_DATABASE_URL).password).toBe("s3cret");
-  });
-
-  it("carries a password a Developer might actually choose", async () => {
-    const dialled = new URL(await deriveTheLogin());
-
-    expect(decodeURIComponent(dialled.username)).toBe(POSTGRES_LOGIN.user);
-    expect(decodeURIComponent(dialled.password)).toBe(POSTGRES_LOGIN.password);
-    // `decodeURI`, not `decodeURIComponent`, because that is what `pg` reads the database
-    // name with — and it never unescapes a reserved character, so the two disagree here.
-    expect(decodeURI(dialled.pathname)).toBe(`/${POSTGRES_LOGIN.database}`);
-  });
-
-  it("reads an assignment `export` puts in front of, as compose does", async () => {
-    // Compose's grammar strips a leading `export`, so a reader that did not would leave the
-    // container holding one password and the suite dialling another — this ticket's defect
-    // on a line nobody would think to test.
-    const root = await checkoutPinning("export POSTGRES_PASSWORD=exported\n");
-
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root,
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-
-    expect(new URL(KOBAI_TEST_DATABASE_URL).password).toBe("exported");
-  });
-
-  it("interprets the escapes compose interprets inside double quotes", async () => {
-    // `docker compose config` on the same line reports a newline and a tab; this used to
-    // report `anb`. Same defect, one escape along.
-    const line = String.raw`POSTGRES_PASSWORD="a\nb\tc\\d"`;
-    const root = await checkoutPinning(`${line}\n`);
-
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root,
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-
-    expect(decodeURIComponent(new URL(KOBAI_TEST_DATABASE_URL).password)).toBe(
-      "a\nb\tc\\d",
-    );
-  });
-
+describe("the credentials the suite dials with", () => {
   it("signs the harness in with them, against a real Postgres", async () => {
-    // The assertion the ticket is actually about, and the one a URL that merely *looks*
-    // right cannot satisfy: a login with this password exists, and the harness gets in as it.
-    const derived = await deriveTheLogin();
-
-    const session = await asHarness(derived, async (database) =>
-      database.query<{ user: string }>("select current_user as user"),
+    // The whole file in one case: an address assembled from three awkward values, handed to
+    // the harness, accepted by a server. Every encoding decision below is either right here
+    // or the connection is refused.
+    const session = await asHarness(addressForTheLogin(), (database) =>
+      database.query<{ user: string; database: string }>(
+        "select current_user as user, current_database() as database",
+      ),
     );
 
     expect(session[0]?.user).toBe(POSTGRES_LOGIN.user);
   });
 
-  it("refuses the password truncated at its first punctuation mark", async () => {
-    // What the old reader did to this password, made visible. Without this the case above
-    // would pass just as well against a Postgres that never checked a password at all, and
-    // the file would be asserting that a string arrived rather than that it was accepted.
-    const truncated = new URL(await deriveTheLogin());
-    truncated.password = encodeURIComponent("p");
+  it("lets an explicit address beat the parts, for a real database or a colleague's", async () => {
+    const url = addressForTheLogin();
+    await pointingTheHarnessAt(url, async () => {
+      expect(testPostgresUrl()).toBe(url);
+    });
+  });
+});
 
-    await expect(asHarness(truncated.toString(), async () => undefined)).rejects.toThrow(
-      /Could not reach Postgres/,
+describe("encoding against the driver rather than against the RFC", () => {
+  // `pg` decodes the two halves of an address differently, and the difference is not
+  // cosmetic: `decodeURI` never unescapes a reserved character, so an over-encoded `=` in a
+  // database name arrives as a literal `%3D` and Postgres reports a database nobody named.
+  // This is the finding ADR-0046 was written around and ADR-0084 carried forward; it now
+  // costs two lines of Node rather than thirty of `awk`, and it is still expensive to
+  // rediscover.
+
+  it("round-trips a credential through decodeURIComponent, as pg reads it", () => {
+    expect(decodeURIComponent(encodeFor("credential", PASSWORD))).toBe(PASSWORD);
+  });
+
+  it("round-trips a database name through decodeURI, as pg reads it", () => {
+    expect(decodeURI(encodeFor("path", POSTGRES_LOGIN.database))).toBe(
+      POSTGRES_LOGIN.database,
     );
   });
 
-  it("lets the environment beat `.env`, as it does for the ports", async () => {
-    const root = await checkoutPinning(`POSTGRES_PASSWORD="${DOTENV_PASSWORD}"\n`);
-
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root,
-      env: { POSTGRES_PASSWORD: "from-the-environment" },
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-
-    expect(new URL(KOBAI_TEST_DATABASE_URL).password).toBe("from-the-environment");
+  it("does not over-encode a reserved character in a database name", () => {
+    // The failure this prevents, stated as the thing that must not happen: encode `=` the
+    // way a credential is encoded and `decodeURI` hands back `%3D`.
+    expect(decodeURI(encodeFor("credential", "a=b"))).not.toBe("a=b");
+    expect(decodeURI(encodeFor("path", "a=b"))).toBe("a=b");
   });
 
-  it("leaves an address someone set by hand alone", async () => {
-    // The escape hatch, and the only way to reach a Postgres these three cannot describe.
-    const root = await checkoutPinning(`POSTGRES_PASSWORD="${DOTENV_PASSWORD}"\n`);
-    const pinned = "postgres://someone:else@example.test:5432/theirs";
-
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root,
-      env: { KOBAI_TEST_DATABASE_URL: pinned },
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-
-    expect(KOBAI_TEST_DATABASE_URL).toBe(pinned);
-  });
-
-  it("gives `devbox run dev` the same credentials it gives the suite", async () => {
-    // The third address of #21's five, and the one a Developer's application connects with.
-    // Two addresses onto one database that disagreed about the password would be this
-    // ticket's failure again, one variable along.
-    const root = await checkoutPinning(
-      `POSTGRES_USER="${POSTGRES_LOGIN.user}"\nPOSTGRES_PASSWORD="${DOTENV_PASSWORD}"\n`,
+  it("still escapes what would end the authority of a URL", () => {
+    const address = new URL(
+      postgresUrl(5432, {
+        POSTGRES_USER: "u",
+        POSTGRES_PASSWORD: PASSWORD,
+        POSTGRES_DB: "d",
+      }),
     );
 
-    const { KOBAI_TEST_DATABASE_URL, DATABASE_URL } = await runInitHook({
-      root,
-      report: ["KOBAI_TEST_DATABASE_URL", "DATABASE_URL"],
-    });
-
-    expect(DATABASE_URL).toBe(KOBAI_TEST_DATABASE_URL);
-  });
-
-  it("leaves a DATABASE_URL `.env` already carries to `.env`", async () => {
-    // `node --env-file` applies that line itself and will not overwrite a variable already
-    // in the environment, so exporting one over the top would silently beat a Developer's.
-    // The question is asked through the same reader as everything else.
-    const root = await checkoutPinning(
-      "DATABASE_URL=postgres://someone:else@example.test:5432/theirs\n",
-    );
-
-    const { DATABASE_URL } = await runInitHook({ root, report: ["DATABASE_URL"] });
-
-    expect(DATABASE_URL).toBe("");
-  });
-
-  it("derives an address for a checkout that has no `.env` at all", async () => {
-    // The common case, and the one that broke while this was being built: devbox sources the
-    // hook under `set -e`, so a reader that reported "no file" as a failure took down every
-    // `devbox run …` in the repository with a bare exit status and no message.
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root: await checkoutWithNoDotenv(),
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-
-    expect(new URL(KOBAI_TEST_DATABASE_URL).port).not.toBe("");
+    expect(address.hostname).toBe("127.0.0.1");
+    expect(address.pathname).toBe("/d");
+    expect(decodeURIComponent(address.password)).toBe(PASSWORD);
   });
 });
 
 /**
- * The interruption this file used to need a human to recover from (#282).
- *
- * It comes last of the two describes that touch the login, because it takes the login apart
- * and puts it back: everything above has run by the time it starts, and the describe below
- * asks nothing of Postgres at all.
- */
-describe("a run that was killed before it could clean up", () => {
-  /**
-   * A database made under this run's login and deliberately never dropped — what an
-   * interrupted run leaves, staged. Its name is the harness's own random one, which is the
-   * point: nothing could look for it by name.
-   */
-  async function abandonADatabase(): Promise<string> {
-    return pointingTheHarnessAt(
-      await deriveTheLogin(),
-      async () => (await createTestDatabase()).name,
-    );
-  }
-
-  it("gives its Postgres login the name this checkout's containers carry", async () => {
-    // Not tidiness: a fixed name is a role every checkout sharing a Postgres competes for,
-    // and one an interrupted run leaves in every one of their way. This is the same
-    // `COMPOSE_PROJECT_NAME` `docker ps` shows, from the same hash of the same path (#21) —
-    // so a leaked role is attributable to a checkout, and a sweep can find them by prefix.
-    expect(COMPOSE_PROJECT).not.toBe("");
-    expect(POSTGRES_LOGIN.user).toBe(`kobai admin=1 ${COMPOSE_PROJECT}`);
-    expect(POSTGRES_LOGIN.database).toBe(`kobai db=1 ${COMPOSE_PROJECT}`);
-  });
-
-  // The name above is only this checkout's if the derivation was handed this checkout's path,
-  // and the hash is of the *string*: a trailing slash is a different checkout as far as
-  // `cksum` is concerned, so every name in this file would follow it while each assertion
-  // went on agreeing with itself about the wrong one. That is exactly what the first version
-  // of this did, and the leaked role sat untouched under the real name the whole time. So the
-  // path is held against the one devbox actually passes, which is the side nothing here
-  // derived — and unlike the project name, it is not something anyone pins. Skipped outside
-  // devbox, the one place there is no second side to ask.
-  it.skipIf(process.env.DEVBOX_PROJECT_ROOT === undefined)(
-    "hands the derivation the very path devbox hands it",
-    () => {
-      expect(thisCheckout()).toBe(process.env.DEVBOX_PROJECT_ROOT);
-    },
-  );
-
-  it("refuses a name Postgres would silently truncate", () => {
-    // Reachable only through a pinned COMPOSE_PROJECT_NAME — a derived one is 14 bytes — and
-    // what it prevents is a role created under one name and dialled under another, which
-    // arrives as an authentication failure naming neither.
-    expect(() => scopedTo(`kobai-${"x".repeat(60)}`, "kobai admin=1")).toThrow(/63/);
-    expect(() => scopedTo(COMPOSE_PROJECT, "kobai admin=1")).not.toThrow();
-  });
-
-  it("is repaired by the next attempt rather than by a human with psql", async () => {
-    const abandoned = await abandonADatabase();
-
-    // The refusal the ticket is named for, watched rather than described — otherwise the
-    // repair below would prove nothing, since a role nothing depends on drops cleanly and
-    // the assertions would read identically.
-    await expect(
-      asSuperuser((database) =>
-        database.query(`drop role ${identifier(POSTGRES_LOGIN.user)}`),
-      ),
-    ).rejects.toThrow(/cannot be dropped because some objects depend on it/);
-
-    // Exactly what `beforeAll` does, and the only thing the next run does differently from
-    // the one that was killed.
-    await createTheLogin();
-
-    await expect(
-      asSuperuser((database) =>
-        database.query("select datname from pg_database where datname = $1", [abandoned]),
-      ),
-    ).resolves.toEqual([]);
-    const session = await asHarness(await deriveTheLogin(), (database) =>
-      database.query<{ user: string }>("select current_user as user"),
-    );
-    expect(session[0]?.user).toBe(POSTGRES_LOGIN.user);
-  });
-});
-
-/**
- * Underneath the derived path, `compose.yaml` and the harness each still carry a literal for
- * a bare `docker compose` outside devbox — `${POSTGRES_USER:-kobai}` and the fallback URL.
+ * Underneath everything above, `compose.yaml` and the harness each still carry a literal for
+ * a checkout that sets nothing — `${POSTGRES_USER:-kobai}` and the fallback URL.
  *
  * `tests/the-fallback-postgres-port.test.ts` holds the two *ports* to being one number and
  * deliberately left these alone, on the grounds that two agreeing credential literals would
  * have fixed nothing while the credentials reached the harness on neither path. Now that they
- * reach it on the derived one, the pair is exactly the port's shape — one value written
- * twice, kept in step by whoever remembers — so it gets the port's guardrail.
+ * reach it on the same path, the pair is exactly the port's shape — one value written twice,
+ * kept in step by whoever remembers — so it gets the port's guardrail.
  *
- * The harness side is asked of the harness rather than read out of its source: that file
- * already pins the value against the literal written in it, and a second reader here would
- * be a second thing to keep true.
+ * There were three copies while devbox derived a third; there are two now, which is one
+ * fewer thing to keep true.
  */
-describe("compose, devbox and the test harness agree on the fallback credentials", () => {
+describe("compose and the test harness agree on the fallback credentials", () => {
   const COMPOSE = "compose.yaml";
   const HARNESS = "packages/core/src/testing/database.ts";
 
@@ -571,7 +371,7 @@ describe("compose, devbox and the test harness agree on the fallback credentials
   function composeDefault(contents: string, variable: string): string {
     if (new RegExp(String.raw`\$\{${variable}\}`).test(contents)) {
       throw new Error(
-        `${COMPOSE} names \${${variable}} with no \`:-<value>\` default, so a bare \`docker compose\` outside devbox starts the container with an empty one.`,
+        `${COMPOSE} names \${${variable}} with no \`:-<value>\` default, so a bare \`docker compose\` starts the container with an empty one.`,
       );
     }
 
@@ -584,7 +384,7 @@ describe("compose, devbox and the test harness agree on the fallback credentials
     const [only] = [...defaults];
     if (defaults.size !== 1 || only === undefined) {
       throw new Error(
-        `${COMPOSE} falls back to ${defaults.size} different values for ${variable} (${[...defaults].join(", ")}), so what the container starts with outside devbox could not be read. Expected exactly one.`,
+        `${COMPOSE} falls back to ${defaults.size} different values for ${variable} (${[...defaults].join(", ")}), so what the container starts with could not be read. Expected exactly one.`,
       );
     }
     return only;
@@ -592,10 +392,10 @@ describe("compose, devbox and the test harness agree on the fallback credentials
 
   /**
    * What the harness dials with no `KOBAI_TEST_DATABASE_URL` set. The variable is taken away
-   * for the length of the call and put back: devbox exports it in front of every script, so a
-   * test about the fallback has to remove it to see one.
+   * for the length of the call and put back: `vitest.config.ts` sets it for the whole run, so
+   * a test about the fallback has to remove it to see one.
    */
-  function dialsWithoutDevbox(): URL {
+  function dialsWithNothingSet(): URL {
     const previous = process.env.KOBAI_TEST_DATABASE_URL;
     delete process.env.KOBAI_TEST_DATABASE_URL;
     try {
@@ -615,36 +415,32 @@ describe("compose, devbox and the test harness agree on the fallback credentials
     };
   }
 
-  it("starts the container with the credentials the harness dials, and devbox with both", async () => {
+  it("starts the container with the credentials the harness falls back to", async () => {
     const contents = await readFile(
       fileURLToPath(new URL("../compose.yaml", import.meta.url)),
       "utf8",
     );
 
-    // All three copies, in one assertion, so none of them can be changed in company with
-    // one other and left agreeing. devbox's own is reached by running the hook against a
-    // checkout with nothing set at all — the only way its `:-kobai` defaults are visible.
     const compose = {
       user: composeDefault(contents, "POSTGRES_USER"),
       password: composeDefault(contents, "POSTGRES_PASSWORD"),
       database: composeDefault(contents, "POSTGRES_DB"),
     };
-    const harness = credentialsOf(dialsWithoutDevbox());
-    const { KOBAI_TEST_DATABASE_URL } = await runInitHook({
-      root: await checkoutWithNoDotenv(),
-      report: ["KOBAI_TEST_DATABASE_URL"],
-    });
-    const devbox = credentialsOf(new URL(KOBAI_TEST_DATABASE_URL));
+    const harness = credentialsOf(dialsWithNothingSet());
 
     const disagreement = [
-      "These three are one set of credentials, and they have come apart.",
+      "These two are one set of credentials, and they have come apart.",
       `  the container starts with — ${COMPOSE}: ${JSON.stringify(compose)}`,
-      `  devbox derives — devbox.json init_hook: ${JSON.stringify(devbox)}`,
       `  the suite falls back to — ${HARNESS}: ${JSON.stringify(harness)}`,
-      "Change all three, or none. With a `.env` present they all come from it, so nothing else here would have told you.",
+      "Change both, or neither. With a `.env` present they both come from it, so nothing else here would have told you.",
     ].join("\n");
 
     expect(harness, disagreement).toEqual(compose);
-    expect(devbox, disagreement).toEqual(compose);
+  });
+
+  it("assembles the same credentials from the parts, so `.env` and the fallback agree", () => {
+    const assembled = credentialsOf(new URL(postgresUrl(5432, {})));
+
+    expect(assembled).toEqual(credentialsOf(dialsWithNothingSet()));
   });
 });

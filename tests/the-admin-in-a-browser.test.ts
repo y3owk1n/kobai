@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { crc32, deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,6 @@ import {
   tabTo,
   watchForWrites,
 } from "./support/admin-browser.ts";
-import { readDevbox } from "./support/init-hook.ts";
 
 /**
  * The Admin, in a real browser, against a really-booted reference Project (#175, ADR-0063).
@@ -287,29 +287,28 @@ describe("the browser the gate downloads", () => {
   /**
    * The gate installs the browser this seam launches, and it is one decision in two files.
    *
-   * `devbox run browsers`, `devbox run test` and `devbox run ci` all have to reach for the
+   * `pnpm run browsers`, `pnpm run test` and `pnpm run ci` all have to reach for the
    * same thing, or a Developer's local run and CI drive different browsers — the same
-   * invisible difference `devbox run lint` and the gate's lint step are held together against
+   * invisible difference `pnpm run lint` and the gate's lint step are held together against
    * (ADR-0039). And the flag and the channel are two halves of one choice: `--only-shell`
    * downloads the headless shell alone, and a launch that did not name the channel would ask
    * for the full Chromium that was deliberately not downloaded.
    */
   it("is asked for identically by every command that runs the suite", async () => {
-    const scripts = (await readDevbox()).shell?.scripts ?? {};
-    // The fresh-checkout guard says what has to be true before pnpm can run at all and is not
-    // part of what playwright is asked to do, exactly as it is stripped off `lint` before the
-    // gate's lint step is compared against it. `ci` carries no guard, because it installs.
-    const invocation = scripts[BROWSERS_SCRIPT]?.replace(
-      /^sh scripts\/require-install\.sh \S+ && /,
-      "",
-    );
+    const manifest = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { scripts?: Record<string, string> };
+    const scripts = manifest.scripts ?? {};
 
     expect(
-      invocation,
-      `\`devbox run ${BROWSERS_SCRIPT}\` decides which Chromium exists, and the seam launches ${JSON.stringify(HEADLESS_SHELL)} — which is what \`--only-shell\` downloads and the only thing it downloads. Change one and change the other.`,
-    ).toBe("pnpm exec playwright install --only-shell chromium");
-    expect(scripts.ci).toContain(invocation);
-    expect(scripts.test).toContain(invocation);
+      scripts[BROWSERS_SCRIPT],
+      `\`pnpm run ${BROWSERS_SCRIPT}\` decides which Chromium exists, and the seam launches ${JSON.stringify(HEADLESS_SHELL)} — which is what \`--only-shell\` downloads and the only thing it downloads. Change one and change the other.`,
+    ).toBe("playwright install --only-shell chromium");
+
+    // Reached rather than repeated: `test` runs this script and `ci` runs `test`, so the
+    // three cannot drift the way three copies of an invocation could.
+    expect(scripts.test).toContain(`pnpm run ${BROWSERS_SCRIPT}`);
+    expect(scripts.ci).toContain("pnpm run test");
   });
 });
 

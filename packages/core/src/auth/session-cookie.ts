@@ -19,7 +19,7 @@ import { parse, serialize } from "hono/utils/cookie";
  * The cookie's name, and no `__Host-`/`__Secure-` prefix on it.
  *
  * Both prefixes make `Secure` mandatory, which would mean the cookie could not be set at all
- * over the plain HTTP a Developer runs `devbox run up` on — and `__Host-` additionally forces
+ * over the plain HTTP a Developer runs `pnpm run up` on — and `__Host-` additionally forces
  * `Path=/`, which is the opposite of the scoping described below. A prefix buys a guarantee
  * against a *sibling origin* overwriting the cookie; local development working at all is
  * worth more, and ADR-0032 records the trade rather than leaving it to be discovered.
@@ -92,7 +92,7 @@ export function presentedSessionToken(
  * would drop a live session's cookie.
  *
  * **`Secure` follows the scheme the request arrived over**, so a deployment behind TLS gets
- * it and `devbox run up` over plain HTTP still works, with nothing to configure in either.
+ * it and `pnpm run up` over plain HTTP still works, with nothing to configure in either.
  */
 export function sessionCookie(token: string, scheme: Scheme): string {
   return serialize(SESSION_COOKIE, token, attributes(scheme));

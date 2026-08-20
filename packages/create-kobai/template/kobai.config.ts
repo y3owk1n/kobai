@@ -86,7 +86,7 @@ export default defineKobaiConfig({
    * that neither Core nor any Plugin has heard of. It is the same kind of object, applied by
    * the same runner, into its own tracking table — a Project owns tables on exactly the terms
    * a Plugin does. What a Project may additionally do, and a Plugin may not, is add columns to
-   * those tables whenever it likes: `devbox run db:generate` and nothing else. Core's tables
+   * those tables whenever it likes: `pnpm run db:generate` and nothing else. Core's tables
    * stay closed to both (ADR-0004).
    */
   migrationSets: [

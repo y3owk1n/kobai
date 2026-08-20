@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { syncTemplate } from "../src/template.ts";
 
 /**
- * `devbox run template:generate` — rewrites `template/` from the reference Project.
+ * `pnpm run template:generate` — rewrites `template/` from the reference Project.
  *
  * The reference Project is the source of truth and this is the one command that carries a
  * change in it through to what `create-kobai` generates. Forgetting to run it is not a

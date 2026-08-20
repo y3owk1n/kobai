@@ -81,7 +81,7 @@ export function createAdminAssets(options: AdminAssetsOptions = {}): AdminAssets
         return refuse(
           503,
           "admin-not-built",
-          "The Admin has not been built. Run `devbox run build` (or `devbox run dev`, which builds), or `devbox run admin:dev` to serve it from Vite with a reload loop while editing it.",
+          "The Admin has not been built. Run `pnpm run build` (or `pnpm run dev`, which builds), or `pnpm run admin:dev` to serve it from Vite with a reload loop while editing it.",
         );
       }
 

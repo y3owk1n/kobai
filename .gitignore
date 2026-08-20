@@ -17,7 +17,7 @@ dist/
 
 # Agent worktrees. A harness that runs work on a branch puts a whole second checkout
 # here — `biome.json` and all — and Biome refuses at a nested root configuration, so
-# `devbox run lint` fails in the checkout that has one, naming a directory you are not
+# `pnpm run lint` fails in the checkout that has one, naming a directory you are not
 # in. Ignoring it is the whole fix, because every other ignore file follows this one
 # (ADR-0068). `.claude/skills` is tracked and stays tracked: git does not ignore a file
 # it already has.
@@ -25,7 +25,7 @@ dist/
 
 # Where the `MediaStorage` kobai ships writes a Merchant's uploads, when nothing points it
 # somewhere else. It is runtime data rather than anything a checkout generates — but a
-# `devbox run up` or a `devbox run dev` in this repository does produce it, so `git status`
+# `pnpm run up` or a `pnpm run dev` in this repository does produce it, so `git status`
 # should not report an image somebody uploaded to their own machine as an untracked file.
 kobai-media/
 

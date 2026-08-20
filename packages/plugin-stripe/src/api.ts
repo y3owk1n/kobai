@@ -4,7 +4,7 @@
  * **There is no Stripe SDK here on purpose.** Three REST calls is not enough to earn a
  * dependency that brings its own HTTP client, its own Node expectations and its own release
  * cadence into every Project that takes card payments — and, decisively, it is what makes
- * `devbox run ci` hermetic. The network is one option a caller may replace, so a test stubs
+ * `pnpm run ci` hermetic. The network is one option a caller may replace, so a test stubs
  * *all* of it with a `fetch` of its own and nothing in the gate needs a secret, a sandbox
  * account or a route to the internet (ADR-0070).
  *

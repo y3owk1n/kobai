@@ -26,7 +26,7 @@ let database: TestDatabase | undefined;
 beforeAll(() => {
   if (!existsSync(entrypoint)) {
     throw new Error(
-      `${entrypoint} does not exist. This test runs the shipped artifact rather than the source, so it needs a build first: \`devbox run build\` (or \`devbox run ci\`, which builds).`,
+      `${entrypoint} does not exist. This test runs the shipped artifact rather than the source, so it needs a build first: \`pnpm run build\` (or \`pnpm run ci\`, which builds).`,
     );
   }
 });

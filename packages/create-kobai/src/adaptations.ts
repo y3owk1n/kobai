@@ -56,7 +56,7 @@ export const STANDALONE_FILES: readonly { file: string; why: string }[] = [
  *
  * `apply` takes the reference Project's bytes and returns the template's. It is the only
  * direction that exists: the reference Project is the source, the template is generated from
- * it by `devbox run template:generate`, and the test regenerates and compares — the same
+ * it by `pnpm run template:generate`, and the test regenerates and compares — the same
  * shape `openapi.json` and `@kobai/client`'s `schema.ts` already use in this repository.
  */
 export type Adaptation = {

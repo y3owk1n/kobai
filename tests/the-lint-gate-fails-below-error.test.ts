@@ -94,7 +94,7 @@ type BiomeConfig = {
   overrides?: { linter?: unknown }[];
 };
 
-type DevboxConfig = { shell?: { scripts?: Record<string, string> } };
+type Manifest = { scripts?: Record<string, string> };
 
 let biomeConfig: BiomeConfig;
 let scripts: Record<string, string>;
@@ -104,28 +104,26 @@ beforeAll(async () => {
     await readFile(join(repoRoot, "biome.json"), "utf8"),
     "biome.json",
   ) as BiomeConfig;
-  const devbox = parseJsonFile(
-    await readFile(join(repoRoot, "devbox.json"), "utf8"),
-    "devbox.json",
-  ) as DevboxConfig;
-  scripts = devbox.shell?.scripts ?? {};
+  const manifest = parseJsonFile(
+    await readFile(join(repoRoot, "package.json"), "utf8"),
+    "package.json",
+  ) as Manifest;
+  scripts = manifest.scripts ?? {};
 });
 
 /**
- * The `lint` script with its fresh-checkout guard taken off the front (#133).
+ * The `lint` script, whole — there is nothing in front of it to strip any more.
  *
- * `sh scripts/require-install.sh lint &&` says what has to be true before biome can run at
- * all; it is not part of what biome is asked to do, and `ci` does not carry it because `ci`
- * opens with the install itself. So the identity below is between the two *biome
- * invocations*, and it stays exact — the pattern is anchored and names the guard, so
- * anything else in front of `pnpm exec` fails the assertion rather than being stripped out
- * of it. `tests/a-fresh-checkout-is-told-what-to-run.test.ts` owns the guard itself.
+ * It used to open with `sh scripts/require-install.sh lint &&`, which said what had to be
+ * true before biome could run at all and had to be taken off before the two invocations
+ * could be compared. Under ADR-0083 a missing `node_modules` fails the way it does in every
+ * other JavaScript repository, so the guard, its three copies and the stripping are all
+ * gone.
  */
-const lintCommand = () =>
-  (scripts.lint ?? "").replace(/^sh scripts\/require-install\.sh \S+ && /, "");
+const lintCommand = () => scripts.lint ?? "";
 
 /**
- * The flags the gate lints with, read out of `devbox.json` rather than hard-coded *here*.
+ * The flags the gate lints with, read out of `package.json` rather than hard-coded *here*.
  *
  * The two fixture tests below would otherwise prove something about a command nobody runs,
  * which is the shape of the bug this file exists to catch: taking the flags from the script
@@ -134,10 +132,10 @@ const lintCommand = () =>
  */
 function lintFlags(): string[] {
   const script = lintCommand();
-  const match = /^pnpm exec biome ci \.(?<flags>.*)$/.exec(script ?? "");
+  const match = /^biome ci \.(?<flags>.*)$/.exec(script ?? "");
   if (!match?.groups) {
     throw new Error(
-      `devbox.json's "lint" script is ${JSON.stringify(script)}, which this test cannot read. It expects \`pnpm exec biome ci .\` followed by flags, because it reruns those same flags against a fixture. Update this test alongside the script.`,
+      `package.json's "lint" script is ${JSON.stringify(script)}, which this test cannot read. It expects \`biome ci .\` followed by flags, because it reruns those same flags against a fixture. Update this test alongside the script.`,
     );
   }
   return (match.groups.flags ?? "").split(" ").filter(Boolean);
@@ -202,13 +200,18 @@ describe("the lint gate", () => {
    * The local command and the gate are the same command.
    *
    * A gate stricter than the command a Developer is told to run reproduces #45 at a new
-   * seam: `devbox run lint` passes, the pull request goes red, and the difference is
-   * invisible in both places. `devbox run format` is where leniency belongs — it rewrites
+   * seam: `pnpm run lint` passes, the pull request goes red, and the difference is
+   * invisible in both places. `pnpm run format` is where leniency belongs — it rewrites
    * rather than reports.
+   *
+   * The gate **reaches this script** rather than repeating its flags, which is stronger
+   * than the string comparison this used to be: a delegated command cannot drift from the
+   * one it delegates to. What is still worth pinning exactly is the invocation itself, so
+   * that dropping `--error-on-warnings` is a decision somebody has to make here.
    */
   it("lints identically locally and in the gate", () => {
-    expect(lintCommand()).toBe("pnpm exec biome ci . --error-on-warnings");
-    expect(scripts.ci).toContain(lintCommand());
+    expect(lintCommand()).toBe("biome ci . --error-on-warnings");
+    expect(scripts.ci).toContain("pnpm run lint");
   });
 
   /**

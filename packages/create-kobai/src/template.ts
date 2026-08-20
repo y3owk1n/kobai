@@ -9,7 +9,7 @@ import { isBinary, projectFiles, toPlatformPath } from "./tree.ts";
  *
  * **The reference Project is the source and the template is the artifact**, which is the
  * only arrangement that makes ADR-0029 true. The maintainers edit the Project they actually
- * boot, run and test; `devbox run template:generate` carries those edits into what a
+ * boot, run and test; `pnpm run template:generate` carries those edits into what a
  * Developer receives; and `tests/create-kobai-matches-the-reference-project.test.ts` fails
  * the build when the two have drifted. That is the same shape `packages/core/openapi.json`
  * and `packages/client/src/schema.ts` already have in this repository — generated, checked

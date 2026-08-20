@@ -29,10 +29,11 @@ RUN --mount=type=secret,id=npmrc,target=/app/.npmrc pnpm install
 # Builds the Admin's bundle and this Project's TypeScript. One command, because the Admin is
 # a workspace package of this Project with its own `build` script (ADR-0033).
 #
-# `--include-workspace-root` is what makes it build *both*. This Project is the root of its
-# own workspace and `pnpm -r` skips the root, so without the flag the Admin builds, the
-# command succeeds, and the image ends up with no `dist/src/server.js` in it at all.
-RUN pnpm -r --include-workspace-root build
+# One command, and it is this Project's own `build` script rather than a second definition of
+# what building it means. That script names both halves — the Admin and this Project's own
+# TypeScript — because `pnpm -r` skips the workspace root, so anything that only walked the
+# workspace would build the Admin, report success, and leave `dist/src/server.js` absent.
+RUN pnpm run build
 
 # devDependencies built the thing; they have no business shipping in it. The whole frontend
 # toolchain is a devDependency of the `admin` package for exactly this reason — what the

@@ -4,7 +4,7 @@ import openapiTS from "openapi-typescript";
 /**
  * Writes `src/schema.ts` from Core's generated description.
  *
- * Run it with `devbox run openapi:generate`, which regenerates the description first and then
+ * Run it with `pnpm run openapi:generate`, which regenerates the description first and then
  * this. Nothing here reads a route: the *only* input is `openapi.json`, which is what makes
  * this client the same artefact a Developer in another language would produce from the same
  * file (ADR-0006). If it could reach the routes it would be a second, luckier client than

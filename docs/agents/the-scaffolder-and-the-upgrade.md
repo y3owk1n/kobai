@@ -6,7 +6,7 @@ Part of [`AGENTS.md`](../../AGENTS.md), which is the source of truth and says wh
 ## The scaffolder, and the two trees it keeps in step
 
 **`reference/` is the source; `packages/create-kobai/template/` is generated from it.** Edit
-the Project the maintainers actually boot, then run `devbox run template:generate`. The gate
+the Project the maintainers actually boot, then run `pnpm run template:generate`. The gate
 fails until you do — `tests/create-kobai-matches-the-reference-project.test.ts` regenerates
 the template and byte-compares it with what is checked in, exactly as `openapi.test.ts` does
 for the description. **Never hand-edit anything under `template/`**; the next regeneration
@@ -18,7 +18,7 @@ own `SKIPPED_DIRECTORIES`, which makes it a **third** ignore mechanism beside `.
 `.dockerignore` — and like a `.dockerignore` it cannot delegate to the first (ADR-0068). What
 that produces is a failure with a peculiarly bad signature: a run of the reference Project
 writes into a gitignored directory, `.gitignore` keeps it out of `git status` so the tree looks
-clean, `devbox run template:generate` sweeps it into the checked-in template anyway, and the
+clean, `pnpm run template:generate` sweeps it into the checked-in template anyway, and the
 drift check above goes red naming a file nobody committed. **No fast check can see it** — that
 is #254, and it cost a full CI round trip.
 `tests/the-template-walk-is-held-to-what-git-ignores.test.ts` is what connects the two: every

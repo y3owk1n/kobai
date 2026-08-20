@@ -130,7 +130,7 @@ so an overwrite that takes the note away is a red build rather than a quiet loss
 
 ### The rest are suppression comments
 
-`devbox run ci` fails on any Biome finding at any severity (ADR-0039) and upstream shadcn is not
+`pnpm run ci` fails on any Biome finding at any severity (ADR-0039) and upstream shadcn is not
 written against this repository's lint configuration. Each one sits at the line it suppresses.
 
 | File | Rule suppressed | Why it is upstream's call and not ours |
@@ -155,7 +155,7 @@ it writes into `dependencies` over to `devDependencies` — `vite build` inlines
 so nothing here is needed by the process at runtime. It is not repeated here, because two
 copies of a command are two answers to one question the day one of them is edited.
 
-Two things this file can add. Run `devbox run format` afterwards: what the CLI writes is not
+Two things this file can add. Run `pnpm run format` afterwards: what the CLI writes is not
 formatted the way this repository formats, and the gate fails on the difference.
 
 And **answer `no` when it offers to overwrite a component that is already here.** It rewrites

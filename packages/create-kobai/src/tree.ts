@@ -24,8 +24,8 @@ import { join, posix, sep } from "node:path";
  * `.gitignore`** (ADR-0068). It reads no ignore file, so a directory `.gitignore` already names
  * is still walked here — which is how `kobai-media` arrived. The shipped `MediaStorage` writes
  * a Merchant's uploads under the **process's** working directory (ADR-0078), and the reference
- * Project is run from its own root by `devbox run dev` and by the browser seam that boots it in
- * the gate. So one upload put a PNG in `reference/kobai-media/`, `devbox run template:generate`
+ * Project is run from its own root by `pnpm run dev` and by the browser seam that boots it in
+ * the gate. So one upload put a PNG in `reference/kobai-media/`, `pnpm run template:generate`
  * swept it into `packages/create-kobai/template/`, and the checked-in template a Developer
  * receives carried an image from somebody's test run. `.gitignore` could not have caught that:
  * it keeps the file out of `git status`, and this walk never asks it (#254).

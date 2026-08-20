@@ -5,7 +5,7 @@ import { createKobai } from "../src/kobai.ts";
 /**
  * Writes `packages/core/openapi.json` from the application itself.
  *
- * Run it with `devbox run openapi:generate`, which regenerates the description and then the
+ * Run it with `pnpm run openapi:generate`, which regenerates the description and then the
  * client that is generated from it, in that order.
  *
  * There is no database here, and there does not need to be one: `createKobai` builds its

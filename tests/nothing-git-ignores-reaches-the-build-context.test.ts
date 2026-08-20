@@ -16,7 +16,7 @@ import {
  * `.gitignore` matches a pattern with no slash in it **at any depth**; a `.dockerignore`
  * pattern is anchored at the build context's root unless it opens with `**\/`. So the two
  * files say the same words and mean different things, and the difference is invisible until
- * something generates a file below the root — which `cd reference && devbox run build` does,
+ * something generates a file below the root — which `cd reference && pnpm run build` does,
  * every time (ADR-0068).
  *
  * Both `.dockerignore`s carried `.devbox`, `.env` and `.env.*` root-anchored, directly beside
@@ -44,9 +44,7 @@ const repoRoot = fileURLToPath(new URL("../", import.meta.url));
  * A build context, and the ignore file that says what a checkout of it generates.
  *
  * Three, because a fix applied to one reaches the third only through
- * `devbox run template:generate` — and the third is the one a Developer actually receives.
- * `tests/a-fresh-checkout-is-told-what-to-run.test.ts` runs all three copies of the install
- * guard for the same reason.
+ * `pnpm run template:generate` — and the third is the one a Developer actually receives.
  */
 const CONTEXTS: readonly { dockerignore: string; gitignore: string; why: string }[] = [
   {

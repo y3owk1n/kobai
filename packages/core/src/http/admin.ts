@@ -2863,7 +2863,7 @@ const PRICE_STATUS = {
  * Which scheme this request arrived over, which is all the cookie needs to know.
  *
  * Read from the request rather than from configuration, so the same build sets a `Secure`
- * cookie behind TLS and a working one over the plain HTTP `devbox run up` serves.
+ * cookie behind TLS and a working one over the plain HTTP `pnpm run up` serves.
  */
 function scheme(c: Context<AdminEnv>): Scheme {
   return schemeOf(c.req.url, c.req.header("x-forwarded-proto"));

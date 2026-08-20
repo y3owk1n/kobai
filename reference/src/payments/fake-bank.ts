@@ -23,7 +23,7 @@ import {
  * **Neither can be staged against a real provider.** Stripe's sandbox will not abandon on
  * command and will not wait fifteen minutes on request, so a gate built on it would test the
  * happy path and describe the other two in prose. That is why this exists, why it lives in the
- * Project rather than in a Plugin, and why `devbox run ci` never calls Stripe.
+ * Project rather than in a Plugin, and why `pnpm run ci` never calls Stripe.
  *
  * **It keeps books, and asking them is the point.** {@link FakeBank.payment} says what this bank
  * is holding for a reference and what it has given back, because "the refund callback ran" and

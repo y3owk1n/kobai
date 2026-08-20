@@ -22,7 +22,7 @@ import { sectionOf } from "./support/records.ts";
  * `SKIPPED_DIRECTORIES` list by hand — and the failure that makes it worth a gate has a
  * peculiarly bad signature. A test boots the reference Project and uploads Media;
  * `filesystemMediaStorage` writes a real file under `reference/kobai-media/`; `.gitignore`
- * names that directory, so `git status` reports a clean tree; `devbox run template:generate`
+ * names that directory, so `git status` reports a clean tree; `pnpm run template:generate`
  * sweeps the file into the checked-in template anyway; and
  * `tests/create-kobai-matches-the-reference-project.test.ts` goes red naming a PNG nobody
  * committed. **No fast check can see it** — it only appears once something has actually run
@@ -345,7 +345,7 @@ describe("the walk that generates the template", () => {
   it("finds no exempted directory inside the Project the template is generated from", async () => {
     // The falsifier every exemption shares, and what turns each from a note into a guard. Each
     // one rests on the directory not being produced inside a Project; a file under one in
-    // `reference/` says otherwise, and it says so *before* `devbox run template:generate` puts
+    // `reference/` says otherwise, and it says so *before* `pnpm run template:generate` puts
     // it in front of every Developer.
     //
     // Asked of `projectFiles` itself rather than of a directory listing, because an empty

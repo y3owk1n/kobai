@@ -1,6 +1,6 @@
 # Migrations
 
-Everything a migration has to survive: the trigger a new Core table needs, and the shape that gets a required column or a unique constraint onto a table that already holds rows. **Read this before running `devbox run db:generate`, and before editing any `schema.ts`.**
+Everything a migration has to survive: the trigger a new Core table needs, and the shape that gets a required column or a unique constraint onto a table that already holds rows. **Read this before running `pnpm run db:generate`, and before editing any `schema.ts`.**
 
 Part of [`AGENTS.md`](../../AGENTS.md), which is the source of truth and says when to read this.
 ## `updated_at` is a trigger, and a new Core table needs one
@@ -67,7 +67,7 @@ that Project gets no service rather than a bad column.
 The shape is **three migrations, and only the middle one is written by hand** (ADR-0038).
 `packages/plugin-price-log/migrations/0001`–`0003` is the worked example:
 
-1. **Generated** — write the field *without* `.notNull()` and `devbox run db:generate`. A
+1. **Generated** — write the field *without* `.notNull()` and `pnpm run db:generate`. A
    nullable column is safe to add at any size.
 2. **Hand-written**, via `drizzle-kit generate --custom`: the backfill, an `UPDATE` giving
    every existing row a value.

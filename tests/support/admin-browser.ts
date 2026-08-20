@@ -90,7 +90,7 @@ export { ADMIN_PATH };
  *
  * The browser is Chromium's **headless shell** rather than the full browser — this seam is
  * headless by definition, and the shell is a third of the download and starts in a fraction of
- * the time. `devbox run browsers` installs it, and `devbox run ci` runs that itself.
+ * the time. `pnpm run browsers` installs it, and `pnpm run ci` runs that itself.
  */
 
 const repoRoot = new URL("../../", import.meta.url);
@@ -109,10 +109,10 @@ export type Viewport = { readonly width: number; readonly height: number };
  */
 export const A_NARROW_WINDOW: Viewport = { width: 390, height: 844 };
 
-/** The devbox script that downloads the browser, and what a refusal here tells a reader to run. */
+/** The script that downloads the browser, and what a refusal here tells a reader to run. */
 export const BROWSERS_SCRIPT = "browsers";
 
-const BROWSERS = `devbox run ${BROWSERS_SCRIPT}`;
+const BROWSERS = `pnpm run ${BROWSERS_SCRIPT}`;
 
 /**
  * The channel {@link BROWSERS} installs.
@@ -277,13 +277,13 @@ export type AdminSeam = {
  *
  * The Project is the **built** reference Project — `node dist/src/server.js`, the artifact its
  * own Dockerfile runs — against a throwaway database it migrates itself, on a port the OS
- * hands out rather than one anybody chose. So this needs `devbox run build` to have happened,
+ * hands out rather than one anybody chose. So this needs `pnpm run build` to have happened,
  * which the gate does before vitest and a bare `vitest` does not; that is checked here rather
  * than discovered as a missing file three frames down.
  *
  * **The Project's port is the OS's, not this checkout's derived `PORT`**, and that is
  * `free-port.ts`'s argument rather than a departure from it: the derived one is what
- * `devbox run up` publishes on, so binding it here would make `devbox run ci` and a Developer
+ * `pnpm run up` publishes on, so binding it here would make `pnpm run ci` and a Developer
  * serving the same checkout fight over one socket — and nothing this seam starts outlives its
  * run, so there is nothing to find again at a stable address. The *database* is on the derived
  * port, through `createTestDatabase`, exactly like every other test.
@@ -578,7 +578,7 @@ export async function defaultPageLimit(path: string): Promise<number> {
 
   if (typeof limit !== "number") {
     throw new Error(
-      `\`GET ${path}\` declares no numeric \`limit\` default in packages/core/openapi.json, so a browser case cannot say how big a page of it is. Regenerate with \`devbox run openapi:generate\`, or check the route still pages.`,
+      `\`GET ${path}\` declares no numeric \`limit\` default in packages/core/openapi.json, so a browser case cannot say how big a page of it is. Regenerate with \`pnpm run openapi:generate\`, or check the route still pages.`,
     );
   }
   return limit;
@@ -937,7 +937,7 @@ async function launchBrowser(): Promise<Browser> {
     return await chromium.launch({ headless: true, channel: HEADLESS_SHELL });
   } catch (cause) {
     throw new Error(
-      `The Admin's browser seam could not start Chromium. Run \`${BROWSERS}\` to download it — \`devbox run ci\` and \`devbox run test\` both do that themselves.`,
+      `The Admin's browser seam could not start Chromium. Run \`${BROWSERS}\` to download it — \`pnpm run ci\` and \`pnpm run test\` both do that themselves.`,
       { cause },
     );
   }
@@ -946,7 +946,7 @@ async function launchBrowser(): Promise<Browser> {
 /**
  * The two build outputs this seam serves, checked before anything is booted.
  *
- * `devbox run ci` builds before it runs vitest, so this is only ever reached by a bare
+ * `pnpm run ci` builds before it runs vitest, so this is only ever reached by a bare
  * `vitest` — the same failure `tests/the-cli-and-the-migrator-agree.test.ts` answers, and the
  * same answer: name the command rather than the missing file.
  */
@@ -958,7 +958,7 @@ function requireBuiltProject(): void {
 
   if (missing.length > 0) {
     throw new Error(
-      `The Admin's browser seam serves the built Project and the built Admin, and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not there. Run \`devbox run build\` first; \`devbox run ci\` and \`devbox run test\` both do.`,
+      `The Admin's browser seam serves the built Project and the built Admin, and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not there. Run \`pnpm run build\` first; \`pnpm run ci\` and \`pnpm run test\` both do.`,
     );
   }
 }

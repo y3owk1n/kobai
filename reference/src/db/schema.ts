@@ -12,7 +12,7 @@ import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
  *
  * That freedom needs somewhere to be exercised or it is only a claim, which is what this
  * table is for. Adding a column to it is two steps and no coordination with anybody:
- * write the column here, then `devbox run db:generate`. Nothing in Core moves, no Plugin
+ * write the column here, then `pnpm run db:generate`. Nothing in Core moves, no Plugin
  * is consulted, and the migration lands in this Project's own set, tracked in this
  * Project's own table.
  *

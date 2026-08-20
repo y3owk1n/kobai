@@ -289,7 +289,7 @@ async function codemodSetInstalledIn(directory: string): Promise<LoadedCodemodSe
  * locally, red in GitHub Actions.
  *
  * The flag is scoped to this one call and to nothing else. A Project's own `pnpm install`,
- * its Dockerfile's production install and this repository's `devbox run ci` all still
+ * its Dockerfile's production install and this repository's `pnpm run ci` all still
  * resolve from the lockfile and still fail when it has drifted, which is what they are for:
  * a lockfile is stale there by accident, and here on purpose.
  */

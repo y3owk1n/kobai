@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
+import { loadDotenv, postgresUrl, repoRoot } from "./scripts/env.ts";
+import { portsFor } from "./scripts/ports.ts";
 
 /**
  * One entry of Vite's `resolve.alias` array.
@@ -55,6 +57,21 @@ export default defineConfig({
       STRIPE_SECRET_KEY: "",
       STRIPE_WEBHOOK_SECRET: "",
       STRIPE_PAYMENT_PAGE_URL: "",
+      /**
+       * Where the suite's throwaway databases are created, assembled here rather than
+       * exported into the shell.
+       *
+       * This is the whole of ADR-0046's rule in one expression: `compose.yaml` brings the
+       * container up from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` and
+       * `POSTGRES_PORT`, and the address below is built from those same four. Change the
+       * password in `.env` and both move together — they used to not, and the only symptom
+       * was an authentication failure naming neither file (#63).
+       *
+       * An explicit `KOBAI_TEST_DATABASE_URL` still wins, and so does an explicit
+       * `POSTGRES_PORT`: `loadDotenv` cannot overwrite a variable already in the
+       * environment, which is the precedence this repository has always had.
+       */
+      KOBAI_TEST_DATABASE_URL: testDatabaseUrl(),
     },
     // Every test creates a database of its own and runs migrations into it. That is slower
     // than a fake and worth it — see `createTestKobai`.
@@ -147,4 +164,21 @@ type TsconfigShape = { compilerOptions?: { paths?: Record<string, string[]> } };
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The maintenance database the harness dials, from `.env` and the checkout's own ports.
+ *
+ * A worktree has its ports written into `.env` by `scripts/ensure-env.ts`; every other
+ * checkout takes `portsFor`'s fallback, which is the same 55432 `compose.yaml` falls back
+ * to. `tests/the-fallback-postgres-port.test.ts` holds those copies to one number.
+ */
+function testDatabaseUrl(): string {
+  loadDotenv(repoRoot);
+
+  const existing = process.env.KOBAI_TEST_DATABASE_URL;
+  if (existing !== undefined && existing !== "") return existing;
+
+  const port = Number(process.env.POSTGRES_PORT ?? portsFor(repoRoot).postgresPort);
+  return postgresUrl(port);
 }

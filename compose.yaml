@@ -1,4 +1,4 @@
-# The reference Project, as a Developer runs it: `devbox run up` (or `docker compose up`).
+# The reference Project, as a Developer runs it: `pnpm run up` (or `docker compose up`).
 #
 # Two services and nothing else — Postgres and the application. A first run must not be an
 # infrastructure exercise, so there is no cache, no proxy, and no separate migration job:
@@ -6,7 +6,7 @@
 #
 # The `db` service is also what the test suite runs against. Tests need a real Postgres
 # because, under ADR-0004/0011/0030, the schema and its migrations *are* part of the
-# product — a fake would skip the thing most likely to break. `devbox run db` brings up
+# product — a fake would skip the thing most likely to break. `pnpm run db` brings up
 # just this service.
 services:
   db:
@@ -16,13 +16,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobai}
       POSTGRES_DB: ${POSTGRES_DB:-kobai}
     ports:
-      # Deliberately not 5432 — a Developer's own Postgres should not have to move. And
-      # deliberately not a fixed port either: devbox derives POSTGRES_PORT from the
-      # checkout's path, and the address the test harness dials from the same value, so
-      # two checkouts can run the gate at once and cannot disagree about where the
-      # database is. See AGENTS.md § Development. The literal below is what a bare
-      # `docker compose` outside devbox falls back to, and the test harness falls back to
-      # the same one.
+      # Deliberately not 5432 — a Developer's own Postgres should not have to move. The
+      # literal below is what an ordinary checkout publishes on, and the test harness falls
+      # back to the same one; `tests/the-fallback-postgres-port.test.ts` holds the copies to
+      # one number. A git worktree overrides it from its own `.env`, which this file reads
+      # like any other value, so the container and the suite cannot disagree about where the
+      # database is. See AGENTS.md § The ports belong to the checkout.
       - "${POSTGRES_PORT:-55432}:5432"
     volumes:
       - kobai-db:/var/lib/postgresql/data
@@ -56,7 +55,7 @@ services:
     # A list rather than a map, and that is load-bearing for the last two entries. Compose
     # forwards no variable a service does not name, and the two forms differ in what they do
     # when one is unset: `KOBAI_…: ${KOBAI_…}` sets it to an empty string (and warns, on every
-    # `docker compose` this file is parsed by, `devbox run db` included), while a bare name
+    # `docker compose` this file is parsed by, `pnpm run db` included), while a bare name
     # sets it *not at all*. The second is what Core is owed — "nobody configured a Merchant"
     # is an answer it reports (`not-configured`), not a blank one it has to interpret. Both
     # forms read `.env` as well as the shell, which is where `.env.example` sends a Developer.
@@ -83,11 +82,10 @@ services:
       - STRIPE_WEBHOOK_SECRET
       - STRIPE_PAYMENT_PAGE_URL
     ports:
-      # Derived, for the same reason the database's port above is: devbox hashes the
-      # checkout's path into a port in 53000-53999, so two checkouts can run
-      # `devbox run up` at once with nothing passed by hand, and `devbox run up` prints the
-      # URL it lands on. See AGENTS.md § Development. The literal below is what a bare
-      # `docker compose` outside devbox falls back to.
+      # 3000 unless `.env` says otherwise, which is how a git worktree gets a port of its
+      # own: `scripts/ensure-env.ts` writes one in 53000-53999 into that worktree's `.env`,
+      # this file reads it, and `pnpm run up` prints the URL it lands on. See AGENTS.md
+      # § The ports belong to the checkout.
       - "${PORT:-3000}:3000"
     depends_on:
       db:

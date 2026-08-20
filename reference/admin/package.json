@@ -13,10 +13,8 @@
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "vite",
-    "// db:push": "There is deliberately no db:push script here either. This package opens no database and owns no tables — it is a browser bundle — but the rule is the repository's rather than a per-package judgement, because `drizzle-kit push` diffs a schema against the LIVE database and so reports success while silently dropping the tables of every package whose schema it was not given, leaving their tracking rows behind so the migration runner cannot repair it. See docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
+    "dev": "vite"
   },
-  "// devDependencies": "Everything, including React and Base UI. This package ships a browser bundle: `vite build` inlines every one of these into `dist`, so nothing here is required by the process at runtime and every one of them is honestly a dev dependency. (None of them reaches the runtime image, and that is asserted rather than assumed: kobai's gate builds this Project's image from its Dockerfile, reads this list, and asks the image whether it installed any of them — `tests/a-project-boots-from-its-own-compose-file.test.ts`. What earns that answer is where the Dockerfile prunes, which is the build stage, deleting node_modules before a second `--prod` install. `pnpm install --prod` over an existing node_modules rewrites the symlink farm and leaves every devDependency's bytes in `node_modules/.pnpm` exactly where they were — it relinks, it does not prune — so the same command in the runtime stage shipped React, Vite, Tailwind and drizzle-kit to production and made no difference to the size. That was true when this note was first written and #12 fixed it.) The shadcn CLI writes new component dependencies into `dependencies`; move them here when it does — which is also what keeps them inside that assertion, since it reads this list and not that one. `shadcn` itself is on this list because it is a build input and not only a CLI: `src/index.css` does `@import \"shadcn/tailwind.css\"`, so removing it as unused would break the build.",
   "devDependencies": {
     "@base-ui/react": "^1.7.0",
     "@fontsource-variable/geist": "^5.3.0",

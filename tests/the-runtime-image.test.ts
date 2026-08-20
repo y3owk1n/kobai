@@ -17,7 +17,7 @@ import {
 } from "./support/migration-sets.ts";
 
 /**
- * The image `devbox run up` builds, inspected as an image rather than read as a Dockerfile.
+ * The image `pnpm run up` builds, inspected as an image rather than read as a Dockerfile.
  *
  * The distinction is the whole reason this file exists. `pnpm install --prod` sat in the
  * runtime stage of both Dockerfiles, looking exactly like the thing that drops

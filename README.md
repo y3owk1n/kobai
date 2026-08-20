@@ -12,11 +12,13 @@ without forking.
 
 ```sh
 npm create kobai@latest my-store
-cd my-store && devbox run up
+cd my-store && docker compose up --build
 ```
 
 That generates a git repository you own outright, commits it, and brings up Postgres and the
-application. kobai is an ordinary versioned dependency in its `package.json`, so upgrading is
+application on http://localhost:3000. **Node and Docker are the whole of what it needs** — a
+Project ships no devbox and no toolchain of its own (ADR-0083), and every command it has is a
+`package.json` script. kobai is an ordinary versioned dependency in its `package.json`, so upgrading is
 a version bump rather than a merge — see
 [ADR-0001](./docs/adr/0001-customisation-lives-in-a-project-not-a-fork.md). Everything you
 customise is declared in one file, `kobai.config.ts`.
@@ -28,29 +30,36 @@ two drift.
 
 ## Running this repository
 
-You need [devbox](https://www.jetify.com/devbox) and Docker. Nothing else — devbox brings
-its own Node.
+You need **Node 22 and Docker**. `.node-version` holds the pin, so fnm, nvm, nodenv, asdf
+and mise all read it; `corepack enable` then activates the pnpm this repository pins.
 
 ```sh
-devbox run up     # Postgres and the application, and nothing else
+corepack enable
+pnpm install
+pnpm run up     # Postgres and the application, on http://localhost:3000
 ```
 
-That prints the URL it is serving on, because the port belongs to the checkout rather than to
-kobai — it is derived from this directory's path, in the range 53000-53999, so a second clone
-or a git worktree can serve at the same time without either being told about the other. Take
-the address from what it printed:
+`/health` answers, and the Admin is at `/admin-ui` — from the same process and the same
+origin.
 
 ```sh
-curl localhost:53154/health
-open http://localhost:53154/admin-ui/   # the Admin, from the same process and the same origin
+curl localhost:3000/health
+open http://localhost:3000/admin-ui/
 ```
 
-Set `PORT` in the environment or in `.env` to pin one instead. The database's port works the
-same way, in 55000-55999.
+**In a git worktree the ports are different, and `pnpm run up` prints the one it is on.** A
+harness that runs work on a branch puts a whole second checkout in a worktree, and a
+gitignored `.env` does not travel into it, so every one of them would otherwise collide on
+the same port. A worktree is given a `.env` of its own the first time you run anything —
+copied from `.env.example`, with a port derived from its path, and never written over. Set
+`PORT` or `POSTGRES_PORT` there to pin your own.
+
+If you would rather not install Node globally, `devbox.json` provides Node and corepack and
+nothing else. It is one maintainer's convenience: no command here runs through it.
 
 Migrations apply at boot, so a fresh database becomes a working Store with no separate step.
 If they fail, the application exits rather than serving traffic against a half-migrated
-schema — `/health` says which it is. `devbox run ci` is the gate: lint, typecheck, build and
+schema — `/health` says which it is. `pnpm run ci` is the gate: lint, typecheck, build and
 the test suite.
 
 **The Admin needs a Merchant, and the first one is seeded at boot** from

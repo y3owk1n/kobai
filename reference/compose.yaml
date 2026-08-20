@@ -1,4 +1,4 @@
-# This Project, as a Developer runs it: `devbox run up` (or `docker compose up`).
+# This Project, as a Developer runs it: `pnpm run up` (or `docker compose up`).
 #
 # Two services and nothing else — Postgres and the application. A first run must not be an
 # infrastructure exercise, so there is no cache, no proxy and no separate migration job:
