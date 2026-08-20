@@ -1,0 +1,1 @@
+CREATE INDEX "core_price_created_at_id_idx" ON "core_price" USING btree ("created_at","id");

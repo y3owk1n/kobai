@@ -472,8 +472,9 @@ function DefaultRegion({
   // is the shape that module was extracted to stop: whichever of this card and the Price editor
   // mounted first decided what the other read, and a change to either would have left the other
   // stale with nothing pointing at it. The two limits happened to agree at a hundred, which is
-  // exactly why it could sit here unnoticed; `OFFERED_MARKETS` is now the one that decides, and
-  // its own doc carries the not-paging gap this card's constant used to state separately.
+  // exactly why it could sit here unnoticed; that module is now the one that decides, and since
+  // #310 it follows kobai's cursor to the end rather than stopping at the first page — so this
+  // card offers every Region the Store has rather than the first hundred of them.
   const regions = useOfferedRegions();
 
   const form = useForm<{ defaultRegion: string }>({

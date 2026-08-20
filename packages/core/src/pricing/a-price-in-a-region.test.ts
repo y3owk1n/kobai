@@ -334,9 +334,13 @@ describe("deleting the Region a Price applies to", () => {
   it("takes that Price with it and leaves every other one alone", async () => {
     // **The one place `core_price` departs from ADR-0059's refuse-rather-than-cascade**, and
     // the argument is the test ADR-0059 actually applies: the repair a refusal would demand —
-    // find and delete the Prices for this Region — is not a control a Merchant has, because
-    // nothing lists Prices by Region. `set null` is the worse third answer, since a Price
-    // entered for one market would silently become the fallback for every market.
+    // find and delete the Prices for this Region — is the very deletion this performs, one row
+    // at a time and with no route that does it in bulk. #292 argued it on nothing listing those
+    // rows; `GET /admin/prices?region=` lists them since #310, which is why the argument was
+    // restated rather than left standing — see `catalog/the-prices-entered-for-a-market.test.ts`, where
+    // reading them before the deletion is what this case's other half asserts. `set null` is
+    // still the worse third answer, since a Price entered for one market would silently become
+    // the fallback for every market.
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai, { prices: [] });
     const midwest = await createRegion(kobai, catalog, "The Midwest", "USD");

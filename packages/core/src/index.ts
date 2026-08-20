@@ -27,6 +27,7 @@ export type {
  */
 export type { SessionOptions } from "./auth/session.ts";
 export type {
+  ListedPrice,
   Price,
   Product,
   ProductDetail,

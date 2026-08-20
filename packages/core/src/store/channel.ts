@@ -15,6 +15,7 @@ import {
   changesFrom,
   changesNothing,
   mustBeText,
+  type NotUsable,
   notUsable,
   openData,
   text,
@@ -45,9 +46,10 @@ import {
  * a credential that has lost something. Refusing while keys named it would be worse than
  * useless: revocation is a column rather than a delete, so a revoked key keeps its row forever
  * and a Channel any key had ever named could never be removed at all. **A Price constrained to
- * it goes with it** (#292) rather than being refused or silently widened, and `db/schema.ts`
- * carries that argument at the column: nothing lists Prices by Channel, so a refusal would name
- * rows a Merchant could only find by opening every Variant.
+ * it goes with it** (#292, re-argued in #310) rather than being refused or silently widened, and
+ * `db/schema.ts` carries that argument at the column. The one thing to know at this end:
+ * `GET /admin/prices?channel=` is where a Merchant reads what the deletion will cost, **before**
+ * making it.
  */
 
 /** The one word a Channel operation is refused with, past the request's own two. */
@@ -274,4 +276,24 @@ export async function unknownChannel(
   id: string,
 ): Promise<{ ok: false; reason: typeof CHANNEL_NOT_FOUND; detail: string } | undefined> {
   return (await readChannel(db, id)) === undefined ? noSuchChannel(id) : undefined;
+}
+
+/**
+ * The refusal for a `?channel=` naming no Channel — or `undefined` where it names one (#310).
+ *
+ * {@link unknownChannel} one surface along, and the pair is worth reading together: a
+ * `channelId` on a body is refused **422** with the Channel's own word, and a query parameter
+ * this endpoint cannot use is refused **400 `invalid`**, because it does not fit the endpoint
+ * rather than naming something the Store lacks the state for. `store/region.ts`'s
+ * `unusableRegion` carries the argument in full; this is the same one about the other noun.
+ */
+export async function unusableChannel(
+  db: Queryable,
+  channelId: string,
+): Promise<NotUsable | undefined> {
+  return (await readChannel(db, channelId)) === undefined
+    ? notUsable(
+        `\`channel\` names ${JSON.stringify(channelId)}, which is not a Channel this Store has. Send the \`id\` of one — \`GET /admin/channels\` lists them — or leave the parameter out for every Price this Store holds.`,
+      )
+    : undefined;
 }

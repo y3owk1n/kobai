@@ -13,6 +13,7 @@ import { channel, price, product, region, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import type { Media } from "../media/media.ts";
 import type { MediaStorage } from "../media/storage.ts";
+import type { VariantIdentity } from "../pricing/resolve-price.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
 import type { ChannelIdentity } from "../store/channel.ts";
 import type { RegionIdentity } from "../store/region.ts";
@@ -61,6 +62,23 @@ export type Price = {
   /** The Channel this Price applies to, or `null` for **every** Channel. */
   readonly channel: ChannelIdentity | null;
   readonly metadata: Record<string, unknown>;
+};
+
+/**
+ * One Price as the **Prices list** reports it — the row, and the Variant it prices (#310).
+ *
+ * Declared apart from {@link Price} rather than adding a field to it (ADR-0060): a field added
+ * to `Price` is promised at every route that answers one, and a Price nested under the Variant
+ * it belongs to has no use for a copy of that Variant.
+ *
+ * **The pair of identifiers is the point rather than a courtesy.** `DELETE
+ * /admin/variants/{id}/prices/{priceId}` takes both, so a row of this list is a Price a
+ * Merchant can act on — which is exactly the test ADR-0059 applies to a refusal, and the reason
+ * `core_price`'s cascade had to be re-argued once this list existed.
+ */
+export type ListedPrice = Price & {
+  /** The Variant this Price prices — the identifier that addresses it, and the SKU a Merchant reads. */
+  readonly variant: VariantIdentity;
 };
 
 /** How this Variant is delivered — the Strategy it points at, by name (ADR-0014). */
@@ -436,4 +454,97 @@ export async function readVariants(
     prices: byVariant.get(row.id) ?? [],
     inventory: stock.get(row.id) ?? null,
   }));
+}
+
+/**
+ * What the Prices list was asked for: a page, and the two constraints it may be narrowed by.
+ *
+ * One argument rather than three, exactly as {@link ProductPageRequest} is one —
+ * `contract.PricePageQuery` produces this shape, so the route hands over what it was given.
+ *
+ * **Both are identifiers and both are checked before the page is read.** Whether a Region or a
+ * Channel exists is a fact about the Store rather than about the schema, so `unusableRegion` and
+ * `unusableChannel` are what refuse one this Store has not got and the route asks them. What
+ * arrives here is a Region, a Channel, or nothing.
+ */
+export type PricePageRequest = PageRequest & {
+  readonly region?: string;
+  readonly channel?: string;
+};
+
+/**
+ * A page of Prices, newest first — every Price this Store holds, whichever Variant carries it
+ * (#310).
+ *
+ * **The question this answers is *which Prices name this Region*, and deliberately not *which
+ * Prices would apply there*.** The second is `resolve-price`'s answer — the currency rule, then
+ * best match, in a Workflow a Project may have replaced (ADR-0017) — and a `where` clause
+ * claiming to give it would be a second implementation of pricing in the one place a
+ * replacement cannot reach, which is the same argument that keeps `load-prices` unfiltered.
+ * So a Price carrying no Region applies in every Region and is answered by the **unfiltered**
+ * list rather than by every value of the parameter.
+ *
+ * **Each row names the Variant it prices**, which is what makes this a list a Merchant can act
+ * on rather than a page of amounts: `DELETE /admin/variants/{id}/prices/{priceId}` takes both
+ * identifiers, and until this list there was nowhere to read the pair but the Product the Price
+ * hangs under (ADR-0059, and the argument at `core_price.region_id`).
+ *
+ * **The two filters compose**, because they are two `undefined`-droppable predicates in one
+ * `and` rather than two branches — a Merchant asking what a marketplace charges in Malaysia is
+ * answered by neither narrowing alone.
+ */
+export async function listPrices(
+  db: Database,
+  page: PricePageRequest,
+): Promise<Page<ListedPrice>> {
+  const rows = await db
+    .select({
+      id: price.id,
+      amount: price.amount,
+      currency: price.currency,
+      metadata: price.metadata,
+      // `inner`, because a Price without a Variant is a row the schema cannot hold — where the
+      // two below are `left` for the opposite reason: an unconstrained Price is the ordinary
+      // Price, and an inner join would drop every one of them.
+      variant: { id: variant.id, sku: variant.sku },
+      region: { id: region.id, name: region.name, currency: region.currency },
+      channel: { id: channel.id, name: channel.name },
+      cursorAt: cursorAt(price.createdAt),
+    })
+    .from(price)
+    .innerJoin(variant, eq(variant.id, price.variantId))
+    .leftJoin(region, eq(region.id, price.regionId))
+    .leftJoin(channel, eq(channel.id, price.channelId))
+    .where(
+      and(
+        rowsAfter(page, price.createdAt, price.id),
+        // `undefined` where nothing was asked, which `and` drops: absent means unfiltered, and
+        // that is the convention rather than this list's own choice.
+        page.region === undefined ? undefined : eq(price.regionId, page.region),
+        page.channel === undefined ? undefined : eq(price.channelId, page.channel),
+      ),
+    )
+    // `id` breaks the tie, so two Prices written in the same instant — which is what a form
+    // superseding one does — come back in one stable order rather than in whichever order
+    // Postgres happened to read them.
+    .orderBy(desc(price.createdAt), desc(price.id))
+    .limit(pageSize(page));
+
+  const { rows: found, nextCursor } = takePage(rows, page);
+
+  // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
+  // response by being forgotten about.
+  return {
+    items: found.map((row) => ({
+      id: row.id,
+      amount: row.amount,
+      currency: row.currency,
+      // `db/join.ts` is the reading of a left join, and why it is not `row.region ?? null`.
+      region: joined<RegionIdentity>(row.region),
+      channel: joined<ChannelIdentity>(row.channel),
+      metadata: row.metadata,
+      variant: { id: row.variant.id, sku: row.variant.sku },
+    })),
+    nextCursor,
+  };
 }

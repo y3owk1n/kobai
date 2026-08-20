@@ -67,6 +67,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
  */
 export type PagedList =
   | "products"
+  | "prices"
   | "orders"
   | "api-keys"
   | "roles"

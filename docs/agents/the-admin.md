@@ -494,7 +494,24 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   (#311), so whichever of the two mounted first decided what the other read. The two limits
   happened to agree at a hundred, which is exactly why nothing pointed at it. **A screen that
   wants a set this module owns calls the hook**, and a `useQuery` in a screen whose key another
-  file also spells is the shape to go looking for. Three things about the Price editor are decisions rather
+  file also spells is the shape to go looking for.
+  **That module follows kobai's cursor to the end since #310, and it is the one of these hooks
+  that does.** A limit of a hundred with no paging is a picker that offers a *prefix* of the
+  answer — indistinguishable from a complete one, which is why the gap survived two tickets that
+  touched the file — so a deployment past a hundred Regions had markets it could not price for
+  and could not make its default. It reads page after page until `nextCursor` is absent, which
+  is the only end-of-list signal there is (ADR-0064), under a **bounded** loop for the reason
+  every cursor walk in this repository is bounded: a cursor that never advanced would spin
+  rather than fail, and a tab that never settles is worse than a short list. Reaching that bound
+  is a finding about the control — **a Store with thousands of markets wants a screen with a
+  search box rather than a longer listbox** — not a limit to raise.
+  **`lib/collections.ts` and `components/media-attachments.tsx` still stop at a hundred**, and
+  that stays a known gap rather than an oversight: this ticket's criterion was the market
+  pickers, and the same fix is available to both the day one is asked for.
+  `tests/the-admin-in-a-browser.test.ts` is where the paging is held, in the file's **last**
+  case — it arranges a hundred and one of each, which is an arrangement no case after it should
+  inherit — and it was watched failing against a read that stopped at one page.
+  Three things about the Price editor are decisions rather
   than implementation. **The currency follows the chosen Region as a suggestion and never as a
   rule**: a Price denominated in something that Region does not select is a row kobai accepts
   and `select-price` can never pick, so the field *starts* on the right answer rather than the

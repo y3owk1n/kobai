@@ -60,7 +60,7 @@ import {
   type ProductDeletion,
   type VariantDeletion,
 } from "../catalog/delete.ts";
-import { listProducts, readProduct } from "../catalog/read.ts";
+import { listPrices, listProducts, readProduct } from "../catalog/read.ts";
 import {
   type ProductUpdate,
   updateProduct,
@@ -103,6 +103,7 @@ import {
   deleteChannel,
   listChannels,
   readChannel,
+  unusableChannel,
   updateChannel,
 } from "../store/channel.ts";
 import { readStore } from "../store/read.ts";
@@ -114,6 +115,7 @@ import {
   type RegionDeletion,
   type RegionUpdate,
   readRegion,
+  unusableRegion,
   updateRegion,
 } from "../store/region.ts";
 import { type StoreUpdate, updateStore } from "../store/write.ts";
@@ -1065,6 +1067,54 @@ const updateVariantRoute = createRoute({
 });
 
 /**
+ * Every Price this Store holds — the list a Merchant opening a market reads (#310).
+ *
+ * **The question it answers is the one no other route could.** `GET /admin/products/{id}`
+ * answers *this Product's* Prices, one Product at a time; nothing answered *this Region's*, and
+ * a Merchant who had set a Price for Malaysia could find it again only by opening every Variant
+ * until they met it. So this is a list over `core_price`, narrowed by the two things a Price may
+ * be constrained to, paged on ADR-0064's cursor like every other list over a table.
+ *
+ * Four things about it are decisions rather than implementation:
+ *
+ * - **`?region=` narrows to the Prices that *name* a Region, not to the ones that would apply
+ *   there.** The second question is `resolve-price`'s — the currency rule first, then best
+ *   match — and it lives in a Workflow a Project may have replaced (ADR-0017), so answering it
+ *   in a `where` clause would put a second implementation of pricing where no replacement could
+ *   reach it. `GET /store/variants/{id}/price?region=` is still what says what a Shopper there
+ *   is charged, and a Price constrained to nothing is answered by the **unfiltered** list.
+ * - **It is not a second way to ask what an existing route answers**, which is why there is no
+ *   `?variant=`: a Variant's Prices are on the Product read, in full and unpaged, and a filter
+ *   here would be the same question with a second shape that could disagree.
+ * - **`catalog:read`, and no Permission of its own.** A Price is catalog data — setting one is
+ *   `catalog:write` on the Variant — so a Merchant who may read the catalog may read what it
+ *   costs, which is the argument `GET /admin/collections` already makes about grouping it. It
+ *   also means every deployment that upgrades gets this route working rather than a Permission
+ *   nobody holds. Which gate a route sits behind is promised (ADR-0060), so that is taken here
+ *   rather than undone later.
+ * - **It is what makes `core_price`'s cascade arguable.** #292 justified deleting a Region's
+ *   Prices on there being no route that lists them; this is that route, and the cascade is kept
+ *   on a restated argument — see `db/schema.ts` at `core_price.region_id`, and ADR-0059.
+ */
+const listPricesRoute = createRoute({
+  method: "get",
+  path: "/prices",
+  summary: "List Prices",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — every Price this Store holds, whichever Variant carries it, each naming that Variant. **\`region\` and \`channel\` narrow to the Prices *entered for* one**, which is what a Merchant opening a market asks and what a deletion of that Region or Channel would take with it; they compose, and omitting both answers the whole list, including every Price that applies to all of them. What a Shopper is actually charged is best match rather than a row read — \`GET /store/variants/{id}/price\` is that question. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered; \`nextCursor\` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064).`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { query: contract.PricePageQuery },
+  responses: {
+    200: json("A page of Prices.", contract.PriceList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Adds a Price to a Variant — an insert, never an update.
  *
  * The Variant is what the route addresses because the Variant is what is sellable. Calling
@@ -1635,7 +1685,7 @@ const deleteRegionRoute = createRoute({
   path: "/regions/{id}",
   summary: "Delete a Region",
   description:
-    "Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again.",
+    "Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again. **Every Price entered for this Region goes with it**, because a Price naming a Region that no longer exists could never apply again; `GET /admin/prices?region=` is where to read them before deleting. Prices that name no Region are untouched and go on applying everywhere.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
   request: { params: contract.IdParam },
@@ -1772,7 +1822,7 @@ const deleteChannelRoute = createRoute({
   path: "/channels/{id}",
   summary: "Delete a Channel",
   description:
-    "**Deletes the Channel and none of the API keys minted against it.** Each of those keys becomes unconstrained — in no particular Channel, which is what every key is until one is minted against one — so this is refused for nothing but there being no such Channel.",
+    "**Deletes the Channel and none of the API keys minted against it.** Each of those keys becomes unconstrained — in no particular Channel, which is what every key is until one is minted against one — so this is refused for nothing but there being no such Channel. **Every Price entered for this Channel goes with it**, because a Price naming a Channel that no longer exists could never apply again; `GET /admin/prices?channel=` is where to read them before deleting.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
   request: { params: contract.IdParam },
@@ -2229,6 +2279,33 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     const deleted = await deleteProduct(deps.db, c.req.valid("param").id);
     if (!deleted.ok) return refused(c, deleted, PRODUCT_DELETION_STATUS);
     return c.body(null, 204);
+  });
+
+  // **Registered here rather than beside the other price routes, and the position is the
+  // decision.** The description carries operations in the order they are registered, and the
+  // Playground groups *runs of neighbours* sharing a path prefix (`lib/description.ts`) — so a
+  // `/admin/prices` sitting between two `/admin/variants/{id}` operations splits that family
+  // into two groups of the same name. Keeping each prefix contiguous is what a reader of the
+  // description gets out of it; the route's own declaration stays with the Prices it is about.
+  guarded.openapi(listPricesRoute, async (c) => {
+    const query = c.req.valid("query");
+
+    // **Before the page, so an unknown Region cannot arrive as a 200 with an empty list** — the
+    // filtering convention's second promise, at a filter whose values a schema cannot hold:
+    // whether a Region or a Channel exists is a fact about the Store. Both are asked, so a
+    // request naming two things this Store has not got is refused for the first of them rather
+    // than answered.
+    if (query.region !== undefined) {
+      const missing = await unusableRegion(deps.db, query.region);
+      if (missing) return refused(c, missing, PAGE_FILTER_STATUS);
+    }
+    if (query.channel !== undefined) {
+      const missing = await unusableChannel(deps.db, query.channel);
+      if (missing) return refused(c, missing, PAGE_FILTER_STATUS);
+    }
+
+    const page = await listPrices(deps.db, query);
+    return c.json({ prices: page.items, nextCursor: page.nextCursor }, 200);
   });
 
   guarded.openapi(deleteVariantRoute, async (c) => {

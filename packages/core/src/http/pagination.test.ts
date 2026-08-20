@@ -72,6 +72,11 @@ const LISTS = [
   { path: "/admin/collections", key: "collections", credential: "session" },
   { path: "/admin/regions", key: "regions", credential: "session" },
   { path: "/admin/channels", key: "channels", credential: "session" },
+  // **Appended rather than inserted**, like the two above it: two cases below reach for
+  // `LISTS[0]` and `LISTS[1]` by position — the Product list and the Order list, which are the
+  // two whose *contents* those cases are about — so a list spliced in above them would move
+  // what they read while going on agreeing with itself.
+  { path: "/admin/prices", key: "prices", credential: "session" },
   { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
 
@@ -723,6 +728,29 @@ async function seedThree(
       });
       expect(uploaded.status, "uploading Media").toBe(201);
       seeded.push(((await uploaded.json()) as { id: string }).id);
+    }
+    return seeded;
+  }
+
+  // Three Prices on one Variant, which is the only way there is to make one: a Price is
+  // inserted and never updated, so three calls leave three rows (ADR-0008). Its catalog is
+  // seeded with **no** Price and takes a title and a SKU of its own, for the Carts branch's
+  // reason — the cursor sweep seeds every list into one deployment, and a default catalog here
+  // would collide on `POSTER-A2` and add a fourth row this branch never counted.
+  if (list.key === "prices") {
+    const catalog = await seedTestCatalog(kobai, {
+      merchant,
+      title: "A priced poster",
+      variants: [{ sku: "PRICED-POSTER", prices: [] }],
+    });
+    for (const amount of [1250, 1300, 1400]) {
+      const priced = await kobai.request(`/admin/variants/${catalog.variantId}/prices`, {
+        method: "POST",
+        headers: { ...merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      expect(priced.status, `pricing at ${amount}`).toBe(201);
+      seeded.push(((await priced.json()) as { id: string }).id);
     }
     return seeded;
   }
