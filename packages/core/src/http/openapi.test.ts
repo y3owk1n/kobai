@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSION_POLICY } from "../auth/session.ts";
 import { CORE_FULFILMENT_STRATEGIES } from "../fulfilment/strategy.ts";
-import { filesystemMediaStorage } from "../media/storage.ts";
+import { filesystemMediaStorage, resolveMediaPolicy } from "../media/storage.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
 import { placeOrderWorkflow } from "../order/place-order.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
@@ -52,6 +52,11 @@ function describeCore() {
     // either: which `MediaStorage` a deployment wired decides what a `url` says and never which
     // routes exist. Nothing below dispatches a request, so nothing is written anywhere.
     mediaStorage: filesystemMediaStorage(),
+    // Core's own ceiling and accepted set, because `packages/core/openapi.json` is the
+    // description of stock kobai — and this one *does* reach the document, in the upload
+    // route's prose, exactly as the session policy reaches `Session`'s. What a *configured*
+    // pair does to it is asserted through the running application, in `media/media.test.ts`.
+    mediaPolicy: resolveMediaPolicy(),
     // The default, because `packages/core/openapi.json` is the description of stock kobai.
     // What a *configured* window does to it is asserted through the running application, in
     // `auth/auth.test.ts`.

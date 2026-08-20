@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   type ApiKeyCreation,
@@ -82,8 +82,13 @@ import {
   type FulfilmentStrategies,
   fulfilmentStrategyNames,
 } from "../fulfilment/strategy.ts";
-import { listMedia, type MediaUploadOutcome, uploadMedia } from "../media/media.ts";
-import type { MediaStorage } from "../media/storage.ts";
+import {
+  listMedia,
+  type MediaUploadOutcome,
+  refuseDeclaredSize,
+  uploadMedia,
+} from "../media/media.ts";
+import type { MediaPolicy, MediaStorage } from "../media/storage.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import type { NotUsable } from "../patch.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
@@ -150,6 +155,8 @@ export type AdminDependencies = {
    * modules reaching for two storages would be two answers about where one Store's images are.
    */
   readonly mediaStorage: MediaStorage;
+  /** The ceiling and the accepted content types this deployment declared (#278). */
+  readonly mediaPolicy: MediaPolicy;
   /**
    * How long this deployment's sessions live (ADR-0050). The gate below enforces it, and the
    * two routes that answer with a `Session` describe it — which is why those two are declared
@@ -1229,32 +1236,89 @@ const previewPriceRoute = createRoute({
  * Where the bytes go is `media/storage.ts`'s decision and the deployment's configuration, and
  * this route has no opinion about either — it hands them to whatever `kobai.config.ts` wired
  * and reports back the address that storage gave.
+ *
+ * ## What it refuses, and where each refusal is made (#278)
+ *
+ * **A route built per instance, for `sessionSchema`'s reason**: the ceiling and the accepted
+ * set are the *deployment's* (`media.maxBytes`, `media.accept`), so this description carries
+ * this deployment's own numbers — which is what `GET /admin/openapi.json` then serves to a
+ * Developer asking what their Store takes. The route's *shape* does not move with them; only
+ * the sentences do, exactly as `Session`'s description carries its idle window.
+ *
+ * **The size is judged twice and the content type once, and the ordering is the decision.**
+ * Both are settled before `MediaStorage.put`, because that interface has no `remove`
+ * (ADR-0078): an upload refused after the write leaves bytes no route in kobai can delete.
+ *
+ * - `refuseDeclaredSize` runs as **middleware, ahead of the body validator**, on the
+ *   `Content-Length` the request declared. It is the only check that can prevent what the
+ *   ceiling is for — by the time a handler runs, `multipart/form-data` has been parsed and the
+ *   whole part is on the heap — and it is deliberately generous, so it can never turn back
+ *   something the honest check would take.
+ * - `uploadMedia` then judges the bytes it actually has, and the content type the part
+ *   declared. This is the half that decides.
+ *
+ * That middleware is deliberately **not** a gate in `GATE_REFUSALS`' sense, and the distinction
+ * is worth keeping: a gate answers a refusal *no handler makes*, which is why a route declaring
+ * one is making a claim about its chain. This one answers the identical status, word and body
+ * the handler answers a moment later, from the same function in `media/media.ts` — so nothing
+ * here is promised that only a middleware can produce, and the route would still refuse
+ * `media-too-large` if the middleware were deleted.
  */
-const uploadMediaRoute = createRoute({
-  method: "post",
-  path: "/media",
-  summary: "Upload Media",
-  description:
-    "A Merchant-supplied catalog asset — a product image and the like (ADR-0015) — sent as `multipart/form-data`. kobai stores exactly what it is given: it does not resize, convert or generate thumbnails, so a Store that wants derivatives puts a CDN in front of its `MediaStorage`. The width and height on the answer are read out of the file's own header, and are `null` for a format kobai cannot read one from. Where the bytes end up is the deployment's — the storage it wired in `kobai.config.ts`, or the local-filesystem one kobai ships — and the `url` on the answer is that storage's own, so it may be absolute or root-relative.",
-  security: MERCHANT_SESSION,
-  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
-  request: {
-    body: {
-      required: true,
-      content: { "multipart/form-data": { schema: contract.UploadMediaRequest } },
+function uploadMediaRoute(policy: MediaPolicy) {
+  return createRoute({
+    method: "post",
+    path: "/media",
+    summary: "Upload Media",
+    description: `A Merchant-supplied catalog asset — a product image and the like (ADR-0015) — sent as \`multipart/form-data\`. kobai stores exactly what it is given: it does not resize, convert or generate thumbnails, so a Store that wants derivatives puts a CDN in front of its \`MediaStorage\`. The width and height on the answer are read out of the file's own header, and are \`null\` for a format kobai cannot read one from. Where the bytes end up is the deployment's — the storage it wired in \`kobai.config.ts\`, or the local-filesystem one kobai ships — and the \`url\` on the answer is that storage's own, so it may be absolute or root-relative.\n\n**This deployment takes files up to ${policy.maxBytes} bytes, of these content types: \`${policy.accept.join("`, `")}\`.** Both are the Project's own (\`media.maxBytes\` and \`media.accept\` in \`kobai.config.ts\`) with kobai's defaults behind them, so another Store's numbers are another Store's; a file over the ceiling is refused \`media-too-large\` and one declaring anything else is refused \`content-type-not-accepted\`, both at 422 and both before a byte is stored. The type judged is the one the file part declares, not one read out of the bytes.`,
+    security: MERCHANT_SESSION,
+    // The permission first, so a Merchant whose Role cannot write the catalog is told that
+    // rather than being told how big this Store's uploads may be.
+    middleware: [
+      requirePermission(PERMISSIONS.catalogWrite),
+      refuseUploadsDeclaringTooMuch(policy),
+    ] as const,
+    request: {
+      body: {
+        required: true,
+        content: { "multipart/form-data": { schema: contract.UploadMediaRequest } },
+      },
     },
-  },
-  responses: {
-    201: json("The Media, and where it is served from.", contract.Media),
-    // `REFUSALS.invalid` and not a family's schema: nothing about Media is refused by the state
-    // of the Store, so `invalid` and `malformed-body` are the whole of this route's 400.
-    400: REFUSALS.invalid,
-    401: REFUSALS.noSession,
-    403: REFUSALS.forbidden,
-    500: REFUSALS.serverError,
-    503: REFUSALS.unavailable,
-  },
-});
+    responses: {
+      201: json("The Media, and where it is served from.", contract.Media),
+      400: json(
+        "The request does not fit this endpoint's schema — a body that is not the multipart form this route takes, or a file part with no bytes in it. The other two reasons this schema carries are answered at 422.",
+        contract.MediaUploadRefusal,
+      ),
+      401: REFUSALS.noSession,
+      403: REFUSALS.forbidden,
+      422: json(
+        "Well formed, and still refused by what this deployment will take: the file is over `media.maxBytes` (`media-too-large`), or its declared content type is not in `media.accept` (`content-type-not-accepted`). Both name the limit they were judged against.",
+        contract.MediaUploadRefusal,
+      ),
+      500: REFUSALS.serverError,
+      503: REFUSALS.unavailable,
+    },
+  });
+}
+
+/**
+ * The declared-size half of the ceiling, as the middleware that answers it.
+ *
+ * It reads a header and nothing else — no body is touched — which is the whole of its value:
+ * the validator behind it is what puts a file on the heap, so this is the last point at which
+ * an oversized request costs nothing. `media/media.ts` holds the judgement and the words; this
+ * holds only the fact that they are said here.
+ *
+ * **It answers through `refused` and the same `MEDIA_STATUS` map the handler uses**, which is
+ * what makes "the middleware says what the handler would have said" a property of there being
+ * one expression rather than of two of them agreeing.
+ */
+function refuseUploadsDeclaringTooMuch(policy: MediaPolicy): MiddlewareHandler<AdminEnv> {
+  return async (c, next) => {
+    const refusal = refuseDeclaredSize(c.req.header("content-length"), policy);
+    return refusal ? refused(c, refusal, MEDIA_STATUS) : next();
+  };
+}
 
 const listMediaRoute = createRoute({
   method: "get",
@@ -1922,9 +1986,9 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(resolvedPriceBody(run, deps.priceWorkflow.name), 200);
   });
 
-  guarded.openapi(uploadMediaRoute, async (c) => {
+  guarded.openapi(uploadMediaRoute(deps.mediaPolicy), async (c) => {
     const form = c.req.valid("form");
-    const uploaded = await uploadMedia(deps.db, deps.mediaStorage, {
+    const uploaded = await uploadMedia(deps.db, deps.mediaStorage, deps.mediaPolicy, {
       filename: form.file.name,
       contentType: form.file.type,
       bytes: new Uint8Array(await form.file.arrayBuffer()),
@@ -2148,16 +2212,33 @@ const VARIANT_CREATION_STATUS = {
 >;
 
 /**
- * Only one way to get an upload wrong that the schema cannot already see, and it is the
- * request's fault: a file part with no bytes in it.
+ * Three ways to get an upload wrong, at two statuses, and the split is the usual one.
  *
- * There is no 404 and no 409 here. Nothing about Media is refused by the state of the Store —
- * an asset conflicts with nothing, takes no name anybody else could hold, and is addressed by
+ * **400 is the request's own fault** — a file part with no bytes in it, which no schema can see
+ * is empty. **422 is well formed and still refused**, by what this deployment declared it will
+ * take: `unknown-fulfilment-strategy`'s distinction, reached at a different key of the same
+ * config file. A 20 MB PNG is a perfectly good request that this Store has said it does not
+ * want, and telling a client it was malformed would send them looking at their own code.
+ *
+ * 413 and 415 were the obvious alternatives and are deliberately not used. This surface answers
+ * refusals from a small vocabulary of statuses and a client branches on the `reason` inside
+ * them (ADR-0060); two statuses that appear on one route out of forty would buy an exhaustive
+ * client two more arms and say nothing the word does not. A 413 from kobai would also be
+ * indistinguishable, at the status, from the one a reverse proxy in front of it answers with
+ * its own HTML body.
+ *
+ * There is still no 404 and no 409. Nothing about Media is refused by the *state* of the Store
+ * — an asset conflicts with nothing, takes no name anybody else could hold, and is addressed by
  * nothing on the way in.
  */
 const MEDIA_STATUS = {
   invalid: 400,
-} as const satisfies Record<Exclude<MediaUploadOutcome, { ok: true }>["reason"], 400>;
+  "media-too-large": 422,
+  "content-type-not-accepted": 422,
+} as const satisfies Record<
+  Exclude<MediaUploadOutcome, { ok: true }>["reason"],
+  400 | 422
+>;
 
 /** Only one way to get a key wrong, and it is the request's fault. */
 const API_KEY_STATUS = {

@@ -7,7 +7,7 @@ import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { readMediaBytes } from "../media/media.ts";
-import { MEDIA_PATH, type MediaStorage } from "../media/storage.ts";
+import { MEDIA_PATH, type MediaPolicy, type MediaStorage } from "../media/storage.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
 import type { PlaceOrderWorkflow } from "../order/place-order.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
@@ -39,6 +39,16 @@ export type HttpDependencies = {
    * have to be asking the same storage, or a Media would report an address nothing serves.
    */
   readonly mediaStorage: MediaStorage;
+  /**
+   * What this deployment will take as an upload — the ceiling and the accepted content types
+   * `kobai.config.ts` declared, or Core's defaults (#278).
+   *
+   * Beside the storage rather than inside it, because it is a decision about the *route* and
+   * not about where bytes go: a substituted storage does not get to widen what a Merchant may
+   * upload, and one wired for a Store with a small disk still gets the ceiling that Store's
+   * config asked for.
+   */
+  readonly mediaPolicy: MediaPolicy;
   readonly migrations: MigrationStateHolder;
   readonly logger: Logger;
   /**
@@ -355,6 +365,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       db: deps.db,
       fulfilment: deps.fulfilment,
       mediaStorage: deps.mediaStorage,
+      mediaPolicy: deps.mediaPolicy,
       sessionPolicy: deps.sessionPolicy,
       priceWorkflow: deps.priceWorkflow,
       holdWindowMs: deps.holdWindowMs,

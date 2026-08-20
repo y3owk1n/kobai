@@ -547,11 +547,52 @@ behind `catalog:write` because Media *is* catalog data, with `GET /admin/media` 
   alternative and is worse: a storefront would be laying out against a claim. Resizing,
   converting and thumbnails stay out of scope — a Project that wants derivatives puts a CDN in
   front.
-- **There is one refusal and it is not a family.** `MediaNotFound` carries a single literal, on
-  `ApiKeyNotFound`'s shape; uploading refuses `invalid` through `InvalidRequest`, because nothing
-  about Media is refused by the state of the Store — an asset conflicts with nothing and takes no
-  name anybody else could hold. **Attaching one added that literal's word to `CatalogRefusal`**
-  and no family beside it (#255) — one fact gets one word, whichever end it is asked from.
+- **The byte route's refusal is not a family and the upload's now is.** `MediaNotFound` carries a
+  single literal, on `ApiKeyNotFound`'s shape, and **attaching** one added that literal's word to
+  `CatalogRefusal` and no family beside it (#255) — one fact gets one word, whichever end it is
+  asked from. **Uploading** refused `invalid` alone through `InvalidRequest` until #278 gave it a
+  second and third word, at which point it became `MediaUploadRefusal`: `refused` answers with
+  one body type across every status a route names, so a 400 and a 422 on one route have to be
+  one schema. Nothing about Media is still refused by the *state* of the Store — an asset
+  conflicts with nothing and takes no name anybody else could hold.
+
+**An upload has a ceiling and a list of content types it will take, and both are the Project's**
+(#278). `media: { maxBytes, accept }` sit beside `media: { storage }` in `kobai.config.ts` —
+ADR-0050's shape, with Core defaulting to ten mebibytes and the five raster image types — and a
+value Core will not enforce stops the boot rather than being clamped, exactly as
+`session.idleWindowMs` and `reservations.holdWindowMs` do. Five things about it are decisions
+rather than implementation:
+
+- **The size is judged twice and the ordering is the point.** Reading the declared
+  `Content-Length` is cheap and lies; measuring the bytes is honest and means having buffered
+  them, which is the cost the ceiling exists to bound — and neither half resolves the other. So
+  `refuseDeclaredSize` runs as **route middleware, ahead of the body validator**, because the
+  multipart parser is where the memory goes and nothing behind it can prevent a spike; and
+  `uploadMedia` then measures what it really has, which is the half that decides. The cheap one
+  allows a fixed envelope slack on top of `maxBytes` and **must never refuse something the
+  honest one would take** — a multipart body is bigger than the file inside it, so an exact
+  comparison there would turn back a file of precisely the ceiling. What neither can do is
+  bound a client that lies or sends no length at all: that needs a streaming multipart parser,
+  and until there is one those bytes are buffered before they are refused.
+- **That middleware is deliberately not a gate.** `GATE_REFUSALS` exists for a refusal *no
+  handler makes*, which is what makes a route declaring one a claim about its chain. This one
+  answers the same status, word and body the handler answers a moment later, from the same
+  function — so nothing is promised that only a middleware produces, and deleting it changes
+  when the refusal is made and not whether.
+- **Both refusals are made before `MediaStorage.put`, and that is ADR-0078 read forwards.** The
+  interface has no `remove`, so a refusal arriving after the write leaves bytes no route in
+  kobai can delete. Every check that can be asked of what is already in memory is asked there.
+- **Two words rather than one** — `media-too-large` and `content-type-not-accepted`, both at
+  **422**, on `unknown-fulfilment-strategy`'s distinction: well formed, and refused by what this
+  deployment declared. They are two because they are two repairs (export it smaller; export it
+  as something else), and 413 and 415 were rejected — this surface answers from a small
+  vocabulary of statuses and a client branches on the `reason`, and a 413 is also what the
+  reverse proxy in front of kobai answers with its own HTML body.
+- **The route is built per instance, for `sessionSchema`'s reason**, so its description carries
+  *this deployment's* ceiling and list; and **`image/svg+xml` is not in Core's default**, because
+  an SVG may carry script and `GET /media/{key}` is open and same-origin. Widening later is
+  additive and narrowing later would be a break (ADR-0060), which points the same way the
+  security argument does.
 
 **Media is attached to a Product and to a Variant, and attaching is a list rather than a route**
 (#255, ADR-0082). `media` on `PATCH /admin/products/{id}` and on `PATCH /admin/variants/{id}` is

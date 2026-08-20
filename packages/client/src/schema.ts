@@ -1634,6 +1634,8 @@ export interface paths {
     /**
      * Upload Media
      * @description A Merchant-supplied catalog asset — a product image and the like (ADR-0015) — sent as `multipart/form-data`. kobai stores exactly what it is given: it does not resize, convert or generate thumbnails, so a Store that wants derivatives puts a CDN in front of its `MediaStorage`. The width and height on the answer are read out of the file's own header, and are `null` for a format kobai cannot read one from. Where the bytes end up is the deployment's — the storage it wired in `kobai.config.ts`, or the local-filesystem one kobai ships — and the `url` on the answer is that storage's own, so it may be absolute or root-relative.
+     *
+     * **This deployment takes files up to 10485760 bytes, of these content types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/avif`.** Both are the Project's own (`media.maxBytes` and `media.accept` in `kobai.config.ts`) with kobai's defaults behind them, so another Store's numbers are another Store's; a file over the ceiling is refused `media-too-large` and one declaring anything else is refused `content-type-not-accepted`, both at 422 and both before a byte is stored. The type judged is the one the file part declares, not one read out of the bytes.
      */
     post: {
       requestBody: {
@@ -1648,10 +1650,10 @@ export interface paths {
             "application/json": components["schemas"]["Media"];
           };
         };
-        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        /** @description The request does not fit this endpoint's schema — a body that is not the multipart form this route takes, or a file part with no bytes in it. The other two reasons this schema carries are answered at 422. */
         400: {
           content: {
-            "application/json": components["schemas"]["InvalidRequest"];
+            "application/json": components["schemas"]["MediaUploadRefusal"];
           };
         };
         /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
@@ -1664,6 +1666,12 @@ export interface paths {
         403: {
           content: {
             "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Well formed, and still refused by what this deployment will take: the file is over `media.maxBytes` (`media-too-large`), or its declared content type is not in `media.accept` (`content-type-not-accepted`). Both name the limit they were judged against. */
+        422: {
+          content: {
+            "application/json": components["schemas"]["MediaUploadRefusal"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -3713,6 +3721,15 @@ export interface components {
         failed: string;
         steps: components["schemas"]["StepReport"][];
       };
+    };
+    MediaUploadRefusal: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "invalid" | "malformed-body" | "media-too-large" | "content-type-not-accepted";
     };
     UploadMediaRequest: {
       /**

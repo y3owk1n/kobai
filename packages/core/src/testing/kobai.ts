@@ -107,8 +107,18 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
       // The storage this instance's uploads land in, unless the test named one — which is what
       // a test whose subject is substitution does, and what one about the shipped storage does
       // to point it at a directory it can then look inside.
-      media: options?.media ?? {
-        storage: filesystemMediaStorage({ directory: mediaDirectory }),
+      //
+      // **The subject is merged and never replaced**, which stopped being a nicety the day it
+      // grew a second key (#278): a test that says `media: { maxBytes: 4096 }` is saying
+      // nothing whatever about where bytes go, and replacing the whole subject handed it
+      // `filesystemMediaStorage()`'s default — `kobai-media/` under the *process's* working
+      // directory, which for a test run is this repository. That is #254's finding arriving
+      // through a new door, and `.gitignore` is why `git status` would never have shown it.
+      media: {
+        ...options?.media,
+        storage:
+          options?.media?.storage ??
+          filesystemMediaStorage({ directory: mediaDirectory }),
       },
       logger: options?.logger ?? silentLogger,
     });

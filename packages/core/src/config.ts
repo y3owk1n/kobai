@@ -130,12 +130,23 @@ export type KobaiProjectConfig = {
    * uploads (ADR-0015).
    *
    * ```ts
-   * media: { storage: myBucket }
+   * media: { storage: myBucket, maxBytes: 50 * 1024 * 1024, accept: ["image/png"] }
    * ```
    *
-   * **A subject, not a scalar**, for `session`'s and `payments`' reason: the next thing a
-   * deployment needs to say about its Media — a size ceiling, an accepted set of content types
-   * — goes beside the storage rather than forcing this shape after the fact.
+   * **A subject, not a scalar**, for `session`'s and `payments`' reason — and this is the key
+   * where that paid off in as many words. It shipped holding a storage alone, saying that the
+   * next thing a deployment needed to say about its Media would go beside it; a size ceiling
+   * and an accepted set of content types are what arrived (#278), and they cost one key each
+   * rather than a shape every Project would have had to rewrite.
+   *
+   * **All three are the Project's, with Core's defaults behind them**, which is ADR-0050's
+   * shape. The reason the two new ones are not Core's alone is on `MediaOptions` in
+   * `media/storage.ts`: what ceiling is right depends on where the bytes go, and what a Store's
+   * catalog assets *are* is the Store's business — a Project selling datasheets accepts PDFs
+   * and has not misconfigured anything. Core's own are ten mebibytes and the five raster image
+   * types; `image/svg+xml` is deliberately not among them, and that absence is argued where the
+   * key is. A value Core will not serve stops the boot, with a message naming the key, and
+   * nothing is clamped.
    *
    * **Unlike `payments`, saying nothing here is a fully working Store**, and the reason Core may
    * ship a default at all is recorded on `MediaStorage` in `media/storage.ts`: ADR-0051 closed #72 with two

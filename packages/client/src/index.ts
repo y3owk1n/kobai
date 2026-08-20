@@ -315,6 +315,17 @@ export type ApiKeyNotFound = components["schemas"]["ApiKeyNotFound"];
  * bytes rather than kobai's all answer this, and a client can act on none of the distinctions.
  */
 export type MediaNotFound = components["schemas"]["MediaNotFound"];
+/**
+ * Every way uploading Media can be refused — and two of its words are about the deployment
+ * rather than about kobai.
+ *
+ * `media-too-large` and `content-type-not-accepted` are judged against `media.maxBytes` and
+ * `media.accept` in the Store's own `kobai.config.ts`, so what one Store refuses another takes.
+ * A client branching on either should show the `error` beside its own message rather than
+ * naming a limit it cannot know: the refusal carries the numbers it was judged against, and
+ * `GET /admin/openapi.json` carries them too.
+ */
+export type MediaUploadRefusal = components["schemas"]["MediaUploadRefusal"];
 export type SessionRefusal = components["schemas"]["SessionRefusal"];
 export type ApiKeyRefusal = components["schemas"]["ApiKeyRefusal"];
 export type PermissionDenied = components["schemas"]["PermissionDenied"];

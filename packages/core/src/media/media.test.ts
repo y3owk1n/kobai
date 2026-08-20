@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../auth/permissions.ts";
 import type { KobaiProjectConfig } from "../config.ts";
@@ -12,6 +13,8 @@ import {
   type TestSession,
 } from "../testing/index.ts";
 import {
+  DEFAULT_MEDIA_ACCEPT,
+  DEFAULT_MEDIA_DIRECTORY,
   filesystemMediaStorage,
   type MediaStorage,
   type MediaUpload,
@@ -158,7 +161,13 @@ describe("uploading Media", () => {
   });
 
   it("says nothing about the size of a format it cannot measure", async () => {
-    kobai = await createTestKobai();
+    // An SVG, so this deployment is one that takes them: Core's default `accept` does not, for
+    // the reason on `MediaOptions.accept` — an SVG is a document that may carry script and
+    // `GET /media/{key}` is open and same-origin. A Store that wants them says so, which is
+    // this line, and that is the whole of what it costs.
+    kobai = await createTestKobai({
+      media: { accept: ["image/png", "image/svg+xml"] },
+    });
     const merchant = await signInTestMerchant(kobai);
 
     const response = await upload(kobai, merchant, {
@@ -232,6 +241,264 @@ describe("uploading Media", () => {
     await expect(listed.json()).resolves.toMatchObject({ reason: "session-missing" });
   });
 });
+
+describe("what an upload has to be", () => {
+  it("refuses a file over the deployment's ceiling, and stores nothing", async () => {
+    const bucket = recordingStorage();
+    kobai = await createTestKobai({
+      media: { storage: bucket.storage, maxBytes: 64 },
+    });
+    const merchant = await signInTestMerchant(kobai);
+
+    const response = await upload(kobai, merchant, { bytes: new Uint8Array(65) });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "media-too-large",
+    });
+    // The half that matters, and the reason this refusal is made before `put` rather than
+    // after it: `MediaStorage` has no `remove` (ADR-0078), so bytes written by a request that
+    // is then turned back are bytes no route can ever delete.
+    expect([...bucket.objects.keys()]).toEqual([]);
+  });
+
+  it("refuses a content type this Store does not take, and stores nothing", async () => {
+    const bucket = recordingStorage();
+    kobai = await createTestKobai({ media: { storage: bucket.storage } });
+    const merchant = await signInTestMerchant(kobai);
+
+    // The accident this exists for: a Merchant meant to attach a photograph and attached the
+    // archive sitting next to it. Nothing about the request is malformed, which is why it is
+    // 422 and not 400 — and the refusal names what this Store does take.
+    const response = await upload(kobai, merchant, {
+      name: "catalog.zip",
+      type: "application/zip",
+    });
+
+    expect(response.status).toBe(422);
+    const refusal = (await response.json()) as { reason: string; error: string };
+    expect(refusal.reason).toBe("content-type-not-accepted");
+    expect(refusal.error).toContain("image/png");
+    expect([...bucket.objects.keys()]).toEqual([]);
+  });
+
+  it("takes what the Project said it takes, and nothing it did not", async () => {
+    kobai = await createTestKobai({ media: { accept: ["application/pdf"] } });
+    const merchant = await signInTestMerchant(kobai);
+
+    // Naming the key **replaces** Core's list rather than adding to it, which is what wiring a
+    // Fulfilment Strategy over one of Core's already means — so this Store takes datasheets
+    // and no longer takes the PNG every other case here uploads.
+    const datasheet = await upload(kobai, merchant, {
+      name: "spec.pdf",
+      type: "application/pdf",
+    });
+    const png = await upload(kobai, merchant);
+
+    expect(datasheet.status).toBe(201);
+    await expect(datasheet.json()).resolves.toMatchObject({
+      contentType: "application/pdf",
+    });
+    expect(png.status).toBe(422);
+    await expect(png.json()).resolves.toMatchObject({
+      reason: "content-type-not-accepted",
+    });
+  });
+
+  it("refuses a request that declares too much before it reads a byte of it", async () => {
+    const bucket = recordingStorage();
+    kobai = await createTestKobai({
+      media: { storage: bucket.storage, maxBytes: 1024 },
+    });
+    const merchant = await signInTestMerchant(kobai);
+
+    // **A body that could not be parsed at all**, under a `Content-Length` claiming far more
+    // than the ceiling. That pairing is what makes this case able to see where the refusal is
+    // made: a request whose body the validator reached is answered `400 invalid` for having no
+    // file part in it, so a `422 media-too-large` can only have been decided before the parse.
+    // Watching whether the stream was read cannot do the same job — a `Request` constructed
+    // in-process pumps its own body whatever the application does with it.
+    const response = await kobai.request(
+      new Request("http://kobai.test/admin/media", {
+        method: "POST",
+        headers: {
+          ...merchant.headers,
+          "content-type": "multipart/form-data; boundary=kobai",
+          // What a browser sends before it starts uploading. It is a claim, and this check is
+          // the cheap half precisely because it believes one — the honest half is below.
+          "content-length": String(64 * 1024 * 1024),
+        },
+        body: "not a multipart body at all",
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "media-too-large",
+    });
+    // The whole point: the multipart parser is what puts a file on the heap, so a ceiling
+    // enforced behind it bounds what is stored and nothing about what is held.
+    expect([...bucket.objects.keys()]).toEqual([]);
+  });
+
+  it("still measures what a request will not declare", async () => {
+    const bucket = recordingStorage();
+    kobai = await createTestKobai({
+      media: { storage: bucket.storage, maxBytes: 64 },
+    });
+    const merchant = await signInTestMerchant(kobai);
+
+    // A chunked upload declares no length at all, so the cheap check has nothing to read and
+    // says nothing. This is the case that proves which half of the pair actually decides: the
+    // bytes are measured after the parse, and refused before the storage is written.
+    const form = new FormData();
+    form.set(
+      "file",
+      new File([new Uint8Array(500)], "poster.png", { type: "image/png" }),
+    );
+    // One `Response`, read twice: it invents the boundary, so a second one would name a
+    // boundary the bytes of the first do not carry and nothing would parse.
+    const encoded = new Response(form);
+    const contentType = encoded.headers.get("content-type") ?? "";
+    const streamed = await encoded.arrayBuffer();
+    const response = await kobai.request(
+      new Request("http://kobai.test/admin/media", {
+        method: "POST",
+        headers: { ...merchant.headers, "content-type": contentType },
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(streamed));
+            controller.close();
+          },
+        }),
+        duplex: "half",
+      } as RequestInit),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "media-too-large",
+    });
+    expect([...bucket.objects.keys()]).toEqual([]);
+  });
+
+  it("asks whether the Merchant may upload before it asks how big this is", async () => {
+    kobai = await createTestKobai({ media: { maxBytes: 64 } });
+    const owner = await signInTestMerchant(kobai);
+    const reader = await onARole(kobai, owner, "reader", [PERMISSIONS.catalogRead]);
+
+    const response = await upload(kobai, reader, { bytes: new Uint8Array(65) });
+
+    // Both refusals are true of this request, and the Merchant can act on only one of them.
+    // Answering the ceiling first would also tell somebody who may not upload at all how big
+    // this Store's uploads may be, which is a fact about the deployment they were not given.
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "permission-denied",
+    });
+  });
+
+  it("takes a file of exactly the ceiling, envelope and all", async () => {
+    kobai = await createTestKobai({ media: { maxBytes: 4096 } });
+    const merchant = await signInTestMerchant(kobai);
+
+    // A multipart body is bigger than the file inside it — boundaries, part headers, the `alt`
+    // field — so a declared-size check compared exactly against the ceiling would refuse this
+    // for bytes that are not the file's. The allowance is what keeps the cheap check from ever
+    // turning back something the honest one would take.
+    const bytes = new Uint8Array(4096);
+    bytes.set(pngBytes());
+    const response = await upload(kobai, merchant, { bytes, alt: "A poster" });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({ byteSize: 4096 });
+  });
+
+  it("reads the declared type the way a browser writes it", async () => {
+    kobai = await createTestKobai();
+    const merchant = await signInTestMerchant(kobai);
+
+    // Case and parameters are the part header's business, not a Merchant's: both sides of the
+    // comparison are normalised, so a difference in either is not a refusal.
+    const response = await upload(kobai, merchant, { type: "IMAGE/PNG; charset=binary" });
+
+    expect(response.status).toBe(201);
+    // And what the *row* holds is still the header as it arrived — `File` lowercases the type
+    // it is given and kobai keeps the parameters — because the record says what the upload
+    // declared and only the comparison normalises. The bytes come back as this, with `nosniff`.
+    await expect(response.json()).resolves.toMatchObject({
+      contentType: "image/png; charset=binary",
+    });
+  });
+});
+
+/**
+ * **A `media` key Core cannot serve stops the boot**, which is `session.idleWindowMs`'s
+ * judgement and `reservations.holdWindowMs`'s (ADR-0050, ADR-0075) reached at a third key of the
+ * same file.
+ *
+ * The seam is `createTestKobai`, which is `createKobai` with a database in front of it, so these
+ * assert what a Project's `server.ts` does on the way up. **Nothing is clamped**: a deployment
+ * whose ceiling is quietly something other than what its config file says is worse than one that
+ * refuses to start, and a Developer who wrote the number is the person reading the message.
+ *
+ * There is deliberately **no upper bound** on `maxBytes`, which is why the last case exists: a
+ * suite that only ever asked for modest numbers would pass just as happily against a ceiling
+ * somebody added later, and what a large one costs is this deployment's own memory and its own
+ * storage bill.
+ */
+describe("a media policy Core will not enforce", () => {
+  it("refuses a ceiling of zero, which is a route that takes nothing", async () => {
+    await expect(createTestKobai({ media: { maxBytes: 0 } })).rejects.toThrow(
+      /`media\.maxBytes`.*at least 1/s,
+    );
+  });
+
+  it("refuses a ceiling that is not a whole number of bytes", async () => {
+    // `Number(process.env.KOBAI_MEDIA_MAX_BYTES)` with the variable unset is `NaN`, and it
+    // typechecks as a `number` the whole way in.
+    await expect(
+      createTestKobai({ media: { maxBytes: Number("nonsense") } }),
+    ).rejects.toThrow(/`media\.maxBytes`.*whole number of bytes.*NaN/s);
+  });
+
+  it("refuses an empty accepted set, which is the same route by another route", async () => {
+    await expect(createTestKobai({ media: { accept: [] } })).rejects.toThrow(
+      /`media\.accept`.*empty/s,
+    );
+  });
+
+  it("refuses an accepted set naming something that is not a content type", async () => {
+    await expect(
+      createTestKobai({ media: { accept: ["image/png", "  "] } }),
+    ).rejects.toThrow(/`media\.accept`.*" {2}"/s);
+  });
+
+  it("takes a ceiling far above anything Core would have chosen, and says so", async () => {
+    // Two gigabytes, which is a Store on an object store making a trade Core has no standing
+    // to refuse — the bound is that deployment's memory and its own bill.
+    const maxBytes = 2 * 1024 ** 3;
+    await using booted = await createTestKobai({
+      media: { maxBytes, accept: ["image/avif"] },
+    });
+
+    // And the *description* this instance serves carries both, which is `Session`'s idle
+    // window one route along: what a Store takes is a fact about the deployment, so a
+    // Developer reading `GET /admin/openapi.json` reads their own numbers rather than kobai's.
+    expect(uploadDescription(booted)).toContain(`up to ${maxBytes} bytes`);
+    expect(uploadDescription(booted)).toContain("`image/avif`");
+    expect(uploadDescription(booted)).not.toContain("image/png");
+  });
+});
+
+/** What this instance's own OpenAPI description says `POST /admin/media` takes. */
+function uploadDescription(harness: TestKobai): string {
+  const description = harness.openapi().paths?.["/admin/media"]?.post?.description;
+  if (typeof description !== "string") {
+    throw new Error("The description carries no POST /admin/media to read.");
+  }
+  return description;
+}
 
 describe("where the bytes come from", () => {
   it("serves what was uploaded, at the address the Media reported", async () => {
@@ -386,6 +653,51 @@ describe("the storage kobai ships", () => {
       // is whatever an operating system said, and building a path out of one is how `../..`
       // reaches a write.
       expect(only).toMatch(/^[0-9a-f-]{36}\.png$/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("is still what a test gets when the test configured something else about Media", async () => {
+    // `media` is a subject with three keys, so a test naming one of the other two is saying
+    // nothing about where bytes go — and a harness that replaced the whole subject would hand
+    // it the shipped storage's *default* directory, which is `kobai-media/` under the process's
+    // working directory and so inside this checkout. That is #254's finding arriving through a
+    // new door: `.gitignore` keeps such a directory out of `git status`, and
+    // `packages/create-kobai/src/tree.ts` reads no ignore file, so the first thing to notice
+    // would have been a PNG in the template every Developer receives.
+    kobai = await createTestKobai({ media: { maxBytes: 4096 } });
+    const merchant = await signInTestMerchant(kobai);
+
+    expect((await upload(kobai, merchant)).status).toBe(201);
+    expect(
+      existsSync(resolve(DEFAULT_MEDIA_DIRECTORY)),
+      `the suite wrote uploads into ${resolve(DEFAULT_MEDIA_DIRECTORY)}`,
+    ).toBe(false);
+  });
+
+  it("names a file for every content type Core accepts by default", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kobai-media-case-"));
+    try {
+      const storage = filesystemMediaStorage({ directory });
+
+      // The tie between the two lists in `storage.ts`, asserted rather than asserted *about*:
+      // `DEFAULT_MEDIA_ACCEPT` is a policy and `EXTENSIONS` is a convenience, and a doc comment
+      // saying they agree is exactly the kind of claim that stops being true when one of them
+      // gains an entry. What this holds is the property a Developer notices — a file they can
+      // open by double-clicking it — and nothing about the byte route, which reads the content
+      // type off the row and never off the name.
+      for (const contentType of DEFAULT_MEDIA_ACCEPT) {
+        const stored = await storage.put({
+          filename: "poster",
+          contentType,
+          bytes: pngBytes(),
+        });
+        expect(
+          stored.key,
+          `the shipped storage named no file for ${contentType}`,
+        ).toMatch(/\.[a-z0-9]+$/);
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

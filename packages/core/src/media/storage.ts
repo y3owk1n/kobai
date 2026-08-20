@@ -155,10 +155,11 @@ export type StoredMedia = {
 /**
  * What a Project says about Media in `kobai.config.ts` — a subject, not a scalar (ADR-0050).
  *
- * Nested so that the next thing a deployment needs to say about its Media — a size ceiling, an
- * accepted set of content types — goes beside the storage rather than forcing this shape after
- * the fact, which is the same reason `payments` is a key holding a provider instead of a
- * top-level `paymentProvider`.
+ * Nested so that the next thing a deployment needs to say about its Media goes beside the
+ * storage rather than forcing this shape after the fact, which is the same reason `payments` is
+ * a key holding a provider instead of a top-level `paymentProvider`. **Two of those next things
+ * have since arrived** — a size ceiling and an accepted set of content types (#278) — and they
+ * cost one key each rather than a reorganisation, which is the whole of what the nesting bought.
  */
 export type MediaOptions = {
   /**
@@ -167,7 +168,177 @@ export type MediaOptions = {
    * Payment Provider there is a default that can honestly be shipped.
    */
   readonly storage?: MediaStorage;
+  /**
+   * The largest file `POST /admin/media` will take, in bytes. Ten mebibytes if this key is
+   * absent ({@link DEFAULT_MEDIA_MAX_BYTES}).
+   *
+   * ```ts
+   * media: { storage: myBucket, maxBytes: 200 * 1024 * 1024 }
+   * ```
+   *
+   * **It is a Project's, with Core's default**, which is ADR-0050's shape and is taken here for
+   * a reason that is specific to Media: the number that is right depends on where the bytes go.
+   * A Store fronting an object store may want two orders of magnitude more than one writing to
+   * a container's local disk, and Core wiring in a single number would be wrong for at least
+   * one of them. What Core can honestly do is ship a figure that works for the thing this route
+   * exists for — a photograph off a Merchant's phone — and let a deployment that knows better
+   * say so.
+   *
+   * **Core keeps a floor of one byte and deliberately no ceiling**, which is
+   * `reservations.holdWindowMs`'s asymmetry rather than `session.idleWindowMs`'s: what a large
+   * value costs is this deployment's own memory and its own storage bill, and how much of
+   * either it is willing to spend is exactly the fact Core has just admitted it cannot know. A
+   * value Core will not serve stops the boot, with a message naming this key
+   * ({@link resolveMediaPolicy}); nothing is clamped, because a deployment whose ceiling is
+   * quietly something other than what its config file says is worse than one that refuses to
+   * start.
+   *
+   * **The whole file is held in memory while it is stored** ({@link MediaUpload}), so this is a
+   * bound on a request's heap as much as on a Merchant's asset — several concurrent uploads
+   * cost several times it.
+   */
+  readonly maxBytes?: number;
+  /**
+   * The content types `POST /admin/media` will take, exactly — no wildcards, no `image/*`.
+   * Absent is {@link DEFAULT_MEDIA_ACCEPT}, the five raster image types kobai can serve.
+   *
+   * ```ts
+   * media: { accept: ["image/png", "image/jpeg", "image/svg+xml", "application/pdf"] }
+   * ```
+   *
+   * **A Project's, with Core's default**, exactly as {@link MediaOptions.maxBytes} is: a Store
+   * whose catalog assets are PDF datasheets is not a Store that has misconfigured anything, and
+   * Core closing the set for everybody would foreclose it. Naming this key **replaces** the
+   * default rather than adding to it, which is what `fulfilment.strategies` already means by
+   * naming one of Core's — so a deployment that wants the five plus one writes all six, in the
+   * one file that then shows what this Store accepts.
+   *
+   * **What is compared is what the part declared**, lowercased and with any parameters
+   * (`; charset=…`) dropped. It is a header a browser wrote from a file extension, so it is a
+   * claim rather than a fact: it catches the Merchant who attached the wrong file, which is
+   * what this key is for, and it is not a defence against a Merchant who is lying — that one
+   * already holds `catalog:write`. The bytes are served back as the type the row holds, with
+   * `nosniff`, so a lie is served as the thing it claimed to be rather than as whatever a
+   * browser would like it to be.
+   *
+   * **`image/svg+xml` is deliberately not in Core's default**, and it is the one absence worth
+   * arguing. An SVG is a document that may carry script, `GET /media/{key}` is open and served
+   * from the Store's own origin (ADR-0078), and `nosniff` does not help when the declared type
+   * is the one the browser will execute — so a default that accepted them would make an upload
+   * a Merchant already has the Permission to make into script on the storefront's origin. A
+   * Store that wants SVG logos says so in the line above, which is additive; taking them out of
+   * a default that had shipped them would have been a break (ADR-0060).
+   */
+  readonly accept?: readonly string[];
 };
+
+/**
+ * What an upload must be for this deployment to take it — the two numbers-and-words half of
+ * `media`, resolved once at boot and handed to the route.
+ *
+ * A resolved policy rather than the options themselves, for `SessionPolicy`'s reason: every
+ * caller then reads a value that is definitely there, and the one place that decides what
+ * absent means is {@link resolveMediaPolicy}.
+ */
+export type MediaPolicy = {
+  readonly maxBytes: number;
+  /** Lowercased, and with no parameters — what {@link resolveMediaPolicy} normalised. */
+  readonly accept: readonly string[];
+};
+
+/**
+ * Ten mebibytes: comfortably more than a photograph off a phone, and small enough that a
+ * handful of concurrent uploads is not a heap this process notices.
+ *
+ * It is the number every deployment that says nothing gets, so it is promised in the way a
+ * default is — a Project under it may raise it in one line, and a Project that never thought
+ * about it is not the one paying for a request that buffers a gigabyte.
+ */
+export const DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The content types a deployment that says nothing takes: the raster image formats a storefront
+ * renders in an `<img>` and {@link filesystemMediaStorage} knows a file extension for.
+ *
+ * `image/svg+xml` is the one kobai can serve and does **not** accept by default; the reason is
+ * on {@link MediaOptions.accept}, and a Project that wants it names it there.
+ */
+export const DEFAULT_MEDIA_ACCEPT: readonly string[] = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+];
+
+/**
+ * Turns what a Project wrote into what the upload route enforces, or **stops the boot**.
+ *
+ * Called by `createKobai` before anything is opened, exactly as `resolveHoldWindowMs` and
+ * `resolveSessionPolicy` are, and for their reason: this is a value in a file a Developer has
+ * just written, wrong on every boot until it is fixed, so a process that never serves is a
+ * better answer than one enforcing something nobody chose. The message names the key, what it
+ * was given and what was wrong with it.
+ */
+export function resolveMediaPolicy(options?: MediaOptions): MediaPolicy {
+  return { maxBytes: resolveMaxBytes(options), accept: resolveAccept(options) };
+}
+
+function resolveMaxBytes(options?: MediaOptions): number {
+  /** Where a Developer has to go to fix it, spelled the way they wrote it. */
+  const SETTING = "`media.maxBytes` in kobai.config.ts";
+
+  const maxBytes = options?.maxBytes;
+  if (maxBytes === undefined) return DEFAULT_MEDIA_MAX_BYTES;
+
+  if (!Number.isSafeInteger(maxBytes)) {
+    throw new Error(`${SETTING} must be a whole number of bytes, and is ${maxBytes}.`);
+  }
+  if (maxBytes < 1) {
+    throw new Error(
+      `${SETTING} must be at least 1, and is ${maxBytes}. A ceiling of zero is a route that refuses every upload there is, which is a Store that cannot show anything rather than a Store with a small limit — turn uploading off by not granting \`catalog:write\`.`,
+    );
+  }
+
+  // No upper bound, deliberately: what a large one costs is this deployment's own memory and
+  // its own storage, and that is the trade it is entitled to make (ADR-0075's asymmetry).
+  return maxBytes;
+}
+
+function resolveAccept(options?: MediaOptions): readonly string[] {
+  const SETTING = "`media.accept` in kobai.config.ts";
+
+  const accept = options?.accept;
+  if (accept === undefined) return DEFAULT_MEDIA_ACCEPT;
+
+  if (accept.length === 0) {
+    throw new Error(
+      `${SETTING} is empty, which is a route that refuses every upload there is. Name the content types this Store takes, or leave the key out for kobai's own — ${DEFAULT_MEDIA_ACCEPT.join(", ")}.`,
+    );
+  }
+
+  const normalised = accept.map((type) => normaliseContentType(type));
+  const blank = normalised.indexOf("");
+  if (blank !== -1) {
+    throw new Error(
+      `${SETTING} names ${JSON.stringify(accept[blank])}, which is not a content type.`,
+    );
+  }
+
+  return normalised;
+}
+
+/**
+ * A content type as it is compared: lowercased, with any parameters dropped.
+ *
+ * Both ends go through this — what a Project wrote and what the part declared — because a
+ * comparison that normalised one side only is one that answers differently depending on which
+ * side the difference is on. `image/PNG` and `image/png; charset=binary` are the same type as
+ * `image/png` and a Merchant who sent either meant it.
+ */
+export function normaliseContentType(contentType: string): string {
+  return (contentType.split(";")[0] ?? "").trim().toLowerCase();
+}
 
 /**
  * Where kobai's own open byte route is mounted, and so what the shipped storage's URLs begin
