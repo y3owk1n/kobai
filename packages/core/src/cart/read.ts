@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, getTableName, not, type SQL, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import type { Queryable } from "../db/client.ts";
+import { joined } from "../db/join.ts";
 import {
   cursorAt,
   type Page,
@@ -9,8 +10,9 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { cart, cartLineItem, order, variant } from "../db/schema.ts";
+import { cart, cartLineItem, order, region, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import type { RegionIdentity } from "../store/region.ts";
 
 /**
  * Reading a Cart.
@@ -124,6 +126,27 @@ export type CartSummary = {
    */
   readonly id: string;
   readonly shopper: CartShopper | null;
+  /**
+   * The one currency this Cart is denominated in, and what every line of it is priced in
+   * (#293, ADR-0074).
+   *
+   * **Stamped when the Region was set rather than read through it**, which is why it is a field
+   * of its own beside {@link CartSummary.region} rather than something a reader derives: a
+   * Merchant may move a Region onto another currency, and a Cart that read its currency through
+   * one would be repriced by that under a Shopper who is already paying. So the two can differ,
+   * and where they do it is this that decides what the Cart costs.
+   */
+  readonly currency: string;
+  /**
+   * Where this Cart is being bought — the Region its lines are priced in, or `null` for a Cart
+   * started before kobai recorded one.
+   *
+   * `null` is priced for the Store's default Region, which is exactly what every Cart was
+   * priced for before this column existed. It is `RegionIdentity` rather than the whole
+   * `Region` for `market.ts`'s reason: `metadata` is the Merchant's and the Project's, and a
+   * bag travelling to a storefront on every Cart read is a field nobody asked for.
+   */
+  readonly region: RegionIdentity | null;
   readonly metadata: Record<string, unknown>;
   readonly expiresAt: string;
   /**
@@ -211,6 +234,8 @@ export async function listCarts(
       id: cart.id,
       shopperEmail: cart.shopperEmail,
       shopperExternalId: cart.shopperExternalId,
+      currency: cart.currency,
+      region: { id: region.id, name: region.name, currency: region.currency },
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
@@ -220,6 +245,9 @@ export async function listCarts(
       cursorAt: cursorAt(cart.createdAt),
     })
     .from(cart)
+    // `left`, because a Cart started before Regions existed names none — an inner join would
+    // drop exactly those rows out of the Merchant's list rather than reporting them.
+    .leftJoin(region, eq(region.id, cart.regionId))
     .where(and(rowsAfter(page, cart.createdAt, cart.id), inState(page.state)))
     // `id` breaks the tie, so two Carts started in the same instant come back in one stable
     // order rather than in whichever order Postgres happened to read them — and so that a
@@ -233,6 +261,8 @@ export async function listCarts(
     items: rows.map((row) => ({
       id: row.id,
       shopper: shopperOf(row),
+      currency: row.currency,
+      region: joined<RegionIdentity>(row.region),
       metadata: row.metadata,
       expiresAt: row.expiresAt.toISOString(),
       expired: row.expired,
@@ -266,6 +296,8 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
       id: cart.id,
       shopperEmail: cart.shopperEmail,
       shopperExternalId: cart.shopperExternalId,
+      currency: cart.currency,
+      region: { id: region.id, name: region.name, currency: region.currency },
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
@@ -274,6 +306,8 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
       updatedAt: cart.updatedAt,
     })
     .from(cart)
+    // `left`, for the list's reason: a Cart that names no Region still reads.
+    .leftJoin(region, eq(region.id, cart.regionId))
     .where(eq(cart.id, id))
     .limit(1);
   if (!row) return undefined;
@@ -296,6 +330,10 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
   return {
     id: row.id,
     shopper: shopperOf(row),
+    currency: row.currency,
+    // `joined` rather than `row.region ?? null`, because Drizzle answers an unjoined nested
+    // selection as an object of nulls rather than as `null` — see `db/join.ts`.
+    region: joined<RegionIdentity>(row.region),
     lineItems: lines.map((line) => ({
       id: line.id,
       variant: { id: line.variantId, sku: line.sku },

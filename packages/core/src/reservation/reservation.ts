@@ -251,9 +251,7 @@ export async function holdReservations(
   try {
     return await db.transaction(async (tx: Transaction): Promise<HoldResult> => {
       // Before the read, and for the length of the transaction: see CART_HOLD_LOCK_NAMESPACE.
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(${CART_HOLD_LOCK_NAMESPACE}, hashtext(${cartId}))`,
-      );
+      await lockCartHold(tx, cartId);
 
       const claims: ReservationClaim[] = [];
       // In series rather than in parallel: two providers claiming at once inside one
@@ -336,17 +334,57 @@ export async function holdReservations(
  */
 const CART_HOLD_LOCK_NAMESPACE = 411_305_003;
 
+/**
+ * Takes that lock, for the length of the transaction.
+ *
+ * **Exported because a second question is decided by whether a Cart is holding one** (#293): a
+ * Cart may not switch Region while a live Reservation is denominated against it, and that
+ * condition is about **other rows** in exactly the way claim-or-adopt's is — a `select` over
+ * `core_reservation` locks nothing, so a hold arriving between the guard's read and its commit
+ * would land on a Cart that has just moved market. Both callers therefore take **this** key, for
+ * the reason `auth/administrators.ts` gives about its own: two correct guards on two keys
+ * serialise nothing against each other.
+ *
+ * It is a function rather than the constant so that the two-argument form and the `hashtext` are
+ * written once — a second caller spelling the key itself is how the two keys stop being one.
+ */
+export function lockCartHold(tx: Transaction, cartId: string): Promise<unknown> {
+  return tx.execute(
+    sql`select pg_advisory_xact_lock(${CART_HOLD_LOCK_NAMESPACE}, hashtext(${cartId}))`,
+  );
+}
+
 /** One row of the hold a Cart is carrying, as this module reads it back. */
 type LiveReservation = HeldReservation & { readonly expiresAt: Date };
 
 /**
- * What this Cart is holding right now — held, unconsumed, unreleased, and not yet lapsed.
+ * The Reservations a Cart is holding **right now** — held, unconsumed, unreleased, and not yet
+ * lapsed.
  *
  * **A lapsed hold is not a live one**, even though the sweeper has not reached it yet: adopting
  * a Reservation whose window has passed would hand a Shopper a hold the next sweep is about to
  * take away, which is the one failure `expires_at` exists to prevent. It is re-held instead,
  * which gives the units back and takes them again in the same transaction.
+ *
+ * **Exported as the expression rather than as an answer**, for `cartHasExpired`'s reason
+ * (`cart/read.ts`): since #293 a second caller asks it — a Cart may not switch Region while
+ * something is denominated against it — and a second spelling of *is this Cart holding stock*
+ * would be a second answer to the question adoption is decided by.
  */
+export function liveHoldOfCart(cartId: string): SQL {
+  // `and` over clauses that are all defined is always an `SQL`; Drizzle types it as possibly
+  // `undefined` because it accepts `undefined` members, and the cast is what says so here.
+  return and(
+    eq(reservation.cartId, cartId),
+    isNull(reservation.consumedAt),
+    isNull(reservation.releasedAt),
+    // Postgres's clock rather than this process's, exactly as the sweeper compares it: a
+    // hold this process thinks is live and the sweeper thinks is lapsed is the disagreement
+    // that oversells.
+    gt(reservation.expiresAt, sql`now()`),
+  ) as SQL;
+}
+
 async function liveHoldOn(
   tx: Transaction,
   cartId: string,
@@ -360,17 +398,7 @@ async function liveHoldOn(
       expiresAt: reservation.expiresAt,
     })
     .from(reservation)
-    .where(
-      and(
-        eq(reservation.cartId, cartId),
-        isNull(reservation.consumedAt),
-        isNull(reservation.releasedAt),
-        // Postgres's clock rather than this process's, exactly as the sweeper compares it: a
-        // hold this process thinks is live and the sweeper thinks is lapsed is the disagreement
-        // that oversells.
-        gt(reservation.expiresAt, sql`now()`),
-      ),
-    );
+    .where(liveHoldOfCart(cartId));
 }
 
 /** The hold, as everything downstream of it carries a Reservation. */

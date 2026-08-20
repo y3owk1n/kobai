@@ -1,0 +1,2 @@
+ALTER TABLE "core_cart" ALTER COLUMN "currency" SET NOT NULL;--> statement-breakpoint
+ALTER TABLE "core_cart" ADD CONSTRAINT "core_cart_currency_is_iso4217" CHECK (char_length("core_cart"."currency") = 3);

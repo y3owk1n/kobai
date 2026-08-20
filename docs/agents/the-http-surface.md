@@ -928,6 +928,45 @@ that surface are decisions rather than implementation:
   refusal would name rows only findable by opening every Variant. The column's own comment in
   `db/schema.ts` carries it, along with why `set null` is the worse third answer.
 
+**A Cart is denominated, and it switches Region in place** (#293, ADR-0074's amendment). A Cart
+carries `currency` and a `region`, both on the wire; `regionId` is on `POST /store/carts` and on
+`PATCH /store/carts/{id}`; and `place-order` prices in the Cart's Region through the Channel its
+key was minted into. Six things about it are decisions rather than implementation:
+
+- **The currency is stamped when the Region is set and never read through it.** That is
+  ADR-0074's duplication and it survived the amendment: a Merchant may move a Region onto another
+  currency, and a Cart that read its currency through one would be repriced mid-checkout. The
+  Region says *where* and `core_cart.currency` says *what in*, and `pricing/market.ts`'s
+  `marketOfCart` is the one place the two are put back together — the Region's `id` and `name`,
+  the **Cart's** currency.
+- **Switching keeps the Cart**, its identifier and every Line Item, which is affordable only
+  because a Cart's lines hold no price snapshot (ADR-0009). It is a field on the correction that
+  already exists rather than a route: a Cart is one record and this changes two of its columns.
+- **Two facts refuse it and they are two words.** A live Reservation is **409
+  `cart-is-denominated`**, read through `liveHoldOfCart` — the same expression claim-or-adopt
+  decides by, so *is this Cart holding stock* has one answer; a Payment is the **409
+  `cart-placed`** the route already answers, because Core writes `core_payment` in the
+  transaction that writes the Order. **Do not add a third word for the Payment**: it would be two
+  spellings of one fact. The hold guard takes `lockCartHold` — `holdReservations`' **own**
+  advisory key — before it reads, because the condition is about *other rows* and the Cart row
+  this transaction is holding says nothing about `core_reservation`. That is ADR-0018's other
+  answer and `the-last-administrator`'s rule about two guards needing one key.
+- **A switch that leaves a line unpriceable is refused naming those lines**, at **422
+  `variant-not-priced-in-region`** — beside `variant-not-priced`, which is what an *add* meets,
+  because the repairs differ. It is asked of the deployment's own `resolve-price`, threaded into
+  `cart/write.ts` as a `priceable` callback rather than imported, for the reason every Workflow on
+  this surface is handed in: a Project that replaced `select-price` would otherwise be refused a
+  market it prices perfectly well.
+- **A `regionId` naming no Region is 422 `region-not-found`, not 400 `invalid`.** That is the line
+  this surface already draws between a *query parameter* it cannot use (`?region=`, `?collection=`
+  — 400) and a *body* naming a record the Store has not got (`collections` — 422, the record's own
+  word). One fact gets one word whichever end asks it (ADR-0060).
+- **The Channel reaches the checkout path off the key** (ADR-0020). `PlaceOrderRequest` and
+  `LoadedCart` carry it, `POST /store/carts/{id}/reservations` threads it although it prices
+  nothing — one reading of a Cart, one shape — and there is no `channelId` on any body. That is
+  #292's second half: until this, `place-order` read the Store's default Region and passed
+  `channel: null`, so a Store with a constrained Price quoted one number and charged another.
+
 **A Role is a row a Merchant can make, and one Permission administers every change to one**
 (ADR-0066, ADR-0076). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are
 #173's six, and `PATCH /admin/merchants/{id}` is #202's seventh.

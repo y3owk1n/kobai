@@ -2628,6 +2628,18 @@ export const CartSummary = z
     shopper: CartShopper.nullable().meta({
       description: "`null` for a guest, which is the ordinary path.",
     }),
+    currency: z.string().meta({
+      description:
+        "ISO 4217 — the one currency this Cart is denominated in, and what every line of it is priced in. **Stamped when the Cart's Region was set rather than read through it** (ADR-0074), so a Merchant who moves a Region onto another currency does not reprice a Cart that already exists: where this and `region.currency` differ, this is the one that decides. It moves only when `PATCH /store/carts/{id}` moves the Cart to another Region.",
+    }),
+    // **A union rather than `RegionIdentity.nullable()`**, for `Store.defaultRegion`'s reason:
+    // `.nullable()` at a *reference* site is applied to the registered component, so
+    // `RegionIdentity` would be published as `object | null` and every other place that names
+    // one — a Price, a resolved price — would promise a `null` no handler produces.
+    region: z.union([RegionIdentity, z.null()]).meta({
+      description:
+        "Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region.",
+    }),
     metadata: Metadata,
     expiresAt: z.iso.datetime().meta({
       description:
@@ -2705,16 +2717,24 @@ export const CreateCartRequest = z
     shopper: AttachShopper.nullable().optional().meta({
       description: "Needs a secret key. A publishable one is refused (ADR-0020).",
     }),
+    regionId: z.uuid().optional().meta({
+      description:
+        "The `id` of the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at. **Left out is the Store's default Region**, so a storefront selling into one market never mentions a Region at all. One this Store has not got is refused with `region-not-found`. There is no `null`: a Cart is always bought somewhere.",
+    }),
     metadata: Metadata.optional(),
   })
   .openapi("CreateCartRequest");
 
-/** Name what should change; naming neither is refused rather than treated as a no-op. */
+/** Name what should change; naming none of them is refused rather than treated as a no-op. */
 export const UpdateCartRequest = z
   .object({
     shopper: AttachShopper.nullable().optional().meta({
       description:
         "Needs a secret key. `null` detaches the Shopper; absent leaves whoever is on the Cart alone.",
+    }),
+    regionId: z.uuid().optional().meta({
+      description:
+        "Move this Cart to another Region — **the same Cart, the same `id` and every Line Item on it**, re-denominated in the new Region's currency and re-priced there on the next read, because a Cart's lines carry no price snapshot (ADR-0009). Naming the Region it is already in changes nothing and is not refused, so a storefront may send the whole state it is holding. Refused with `cart-is-denominated` while this Cart is holding stock — a hold is claimed in the currency the Cart was in, and kobai serves no way to give one back by hand — and with `variant-not-priced-in-region`, naming them, where a line would have no Price in the new Region.",
     }),
     metadata: Metadata.optional(),
   })
@@ -2766,6 +2786,12 @@ const CART_REASONS = {
   "line-item-not-found": "line-item-not-found",
   "variant-not-found": "variant-not-found",
   "variant-not-priced": "variant-not-priced",
+  // The three a Region brought (#293). `region-not-found` is the admin surface's own word for
+  // the same fact, because one fact gets one word whichever end asks it; the other two are this
+  // surface's alone, and `cart/write.ts` is where each is argued.
+  "region-not-found": "region-not-found",
+  "cart-is-denominated": "cart-is-denominated",
+  "variant-not-priced-in-region": "variant-not-priced-in-region",
 } as const satisfies { [R in CartRefusalReason | RequestReason]: R };
 
 export const CartRefusal = z

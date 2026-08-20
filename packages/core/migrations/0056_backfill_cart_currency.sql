@@ -1,0 +1,31 @@
+-- Every Cart that was already started is denominated in the Store's default currency, because
+-- until `0055` there was nothing else it could have been (#293, ADR-0074, ADR-0038).
+--
+-- This is the middle step of the three a required column takes onto a populated table: `0055`
+-- added `currency` nullable, this writes the value the rows already there were always in, and
+-- `0057` makes it `NOT NULL`. `core_cart` is the most populated table in a live Store —
+-- a row per storefront session — so shipping `ADD COLUMN … NOT NULL` in one statement would
+-- have refused every deployment with traffic, at boot, with no service (ADR-0030).
+--
+-- **The value is the fact that was never recorded rather than a guess at one**, which is the
+-- test `core_product.status`'s backfill had to pass a ticket earlier. A Cart carried no currency
+-- until this version and every Price it could be priced from carried the Store's default, so
+-- `core_store.default_currency` is what those Carts *were* denominated in — not a plausible
+-- default chosen for them. It is `SELECT`ed rather than written as `USD` for
+-- `0052_seed_store_currency.sql`'s reason: Core seeds a placeholder and a Project's own set may
+-- have moved it years ago.
+--
+-- **`region_id` is deliberately not backfilled and cannot be.** The Store's default Region is
+-- seeded at **boot** rather than by a migration (`src/store/seed.ts`), because which currency a
+-- deployment prices in is not settled until every migration set has applied — so at this instant
+-- there may be no Region in the database to name. `null` is what those Carts have and what they
+-- mean: started before kobai recorded where a Cart is bought. They are priced for the Store's
+-- default Region, in the currency this statement stamps, which is exactly what they were priced
+-- for before either column existed.
+--
+-- Hand-written because drizzle-kit diffs schemas and this is a data change: it will neither
+-- write this nor notice it is missing (ADR-0038). Guarded on `IS NULL` so that it can only ever
+-- fill a Cart nothing has denominated.
+UPDATE "core_cart"
+SET "currency" = (SELECT "default_currency" FROM "core_store" WHERE "singleton" = true)
+WHERE "currency" IS NULL;

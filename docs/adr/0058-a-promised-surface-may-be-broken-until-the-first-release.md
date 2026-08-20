@@ -265,6 +265,35 @@ freely the licence is being spent.
   it, ignore it, refuse in it — is a question only that Project can answer, so a machine writing
   `region: input.region` would turn the build green while leaving the decision untaken. That is
   #117's second argument arriving intact one Workflow along.
+- **#293 — `place-order` grew a market: `PlaceOrderRequest` gained a `channel`, and `LoadedCart`
+  gained one beside `CartToPlace`'s `currency` and `regionId`.** Extension Point 2, and the
+  second break taken under this licence on purpose. #292 constrained a Price by Region and
+  Channel and left `price-lines` reading the Store's default Region and passing `channel: null`
+  outright — so a Store with either kind of constrained Price quoted one number on its product
+  page and charged another at checkout, and a marketplace key got storefront prices at the till.
+  Closing it means the placement is asked *where* and *through what*, exactly as the price route
+  is. The argument is on `PlaceOrderRequest` and `CartToPlace.currency` in
+  `packages/core/src/order/`; ADR-0074's amendment is what it spends.
+
+  **The notice sits where the compiler looks, which is the lesson #292 wrote down one Workflow
+  along.** Growing `PlaceOrderRequest` alone would break nobody — TypeScript checks a Step's
+  `run` parameter **contravariantly**, so a replaced `load-cart` declared
+  `(input: PlaceOrderRequest) => LoadedCart` goes on compiling when the input gains a field, and
+  would have gone on placing every Order as though every Shopper were in one market. So the
+  growth is on the **output** too: `LoadedCart` is what a replaced `load-cart` *builds*, and its
+  three new properties are `TS2739` at the Project's own build. A replaced `price-lines` takes
+  the wider `LoadedCart` and is untouched, which is right — it is handed more than it read
+  before, and what it does with the market is the decision only that Project can take.
+
+  What did **not** break: an inserted `before`/`after` Step that passes the value through; every
+  Step downstream, which carries `cart` rather than rebuilding it; and every HTTP client, since
+  `Cart` gained `currency` and `region` and lost nothing — additive in the direction ADR-0060
+  permits in a minor. The refusals grew by three words, which is the sharp edge that table names:
+  a client with an exhaustive `switch` over `CartRefusal` gains three arms to write.
+
+  **No codemod**, on this record's own rule and on both of its grounds: the compiler names the
+  file and the property, and what a Project's own `load-cart` should say about the market is a
+  question only that Project can answer.
 - **#276 — `PriceRefusal.workflow` made optional.** The promised HTTP surface, and ADR-0060's
   "making a present field optional is a break" exactly: a client narrowing `error.workflow.failed`
   off a refused price stops compiling and has to ask whether the field is there. The argument is

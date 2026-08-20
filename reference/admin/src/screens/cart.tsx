@@ -152,6 +152,24 @@ export function CartScreen() {
                 guest is the ordinary path. */}
             <span>{held.shopper?.email ?? "guest"}</span>
           </div>
+          {/* What this Cart is denominated in, and where its lines are priced (#293,
+              ADR-0074). Two rows rather than one, because they are two facts that can differ:
+              the currency is stamped on the Cart when its Region is set, so a Region a Merchant
+              has since moved onto another currency does not reprice a Cart in flight — and a
+              Merchant looking at held stock is entitled to see which of the two they are
+              reading. */}
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Currency</span>
+            <span>{held.currency}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Region</span>
+            <span>
+              {held.region === null
+                ? "the Store's default"
+                : `${held.region.name} (${held.region.currency})`}
+            </span>
+          </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Started</span>
             <span>{new Date(held.createdAt).toLocaleString()}</span>
@@ -256,6 +274,9 @@ function isNoSuchCart(thrown: unknown): boolean {
     case "line-item-not-found":
     case "variant-not-found":
     case "variant-not-priced":
+    case "region-not-found":
+    case "cart-is-denominated":
+    case "variant-not-priced-in-region":
       // Every one of these is a refusal a **write** meets, and this Admin makes none: the Cart
       // surface it can reach is read-only (ADR-0071). If one ever arrives here it is a fact
       // about kobai rather than about the address, so it is reported as itself.

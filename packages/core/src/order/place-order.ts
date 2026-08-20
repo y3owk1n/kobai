@@ -5,6 +5,7 @@ import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts"
 import { keyOf, writeFulfilments } from "../fulfilment/fulfilment.ts";
 import type { AppliedFulfilment } from "../fulfilment/strategy.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
+import { marketOfCart } from "../pricing/market.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import type { ReservationRefusal } from "../reservation/provider.ts";
 import {
@@ -14,7 +15,7 @@ import {
   holdReservations as holdReservationsFor,
   releaseReservations,
 } from "../reservation/reservation.ts";
-import { readDefaultRegion } from "../store/read.ts";
+import type { ChannelIdentity } from "../store/channel.ts";
 import { runWorkflow } from "../workflow/run.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
 import { defineWorkflow } from "../workflow/workflow.ts";
@@ -76,9 +77,20 @@ import { type Order, readOrder } from "./read.ts";
  * leave the Order taxed on a figure nobody was charged.
  */
 
-/** What a storefront sends: the Cart to place, and nothing else to orchestrate. */
+/**
+ * What a storefront sends: the Cart to place — and the Channel it is being placed through,
+ * which the storefront does not send at all.
+ *
+ * **The Channel comes off the API key and never off the body** (ADR-0020, #293). It is here
+ * because `price-lines` prices in the market this purchase is being made in, and a placement
+ * that could not see the Channel priced against **none** — so a Store with a
+ * Channel-constrained Price quoted one number on its product page and charged another at
+ * checkout, which is the hole #292 left open and this closes. `null` is the unconstrained
+ * Channel, which is every key that names none.
+ */
 export type PlaceOrderRequest = {
   readonly cartId: string;
+  readonly channel: ChannelIdentity | null;
 };
 
 /**
@@ -280,7 +292,12 @@ export type PaidOrder = ReservedLines & {
 export const loadCart = defineStep(
   "load-cart",
   async (input: PlaceOrderRequest, context): Promise<LoadedCart> => {
-    const read = await readCartToPlace(context.db, input.cartId, context.fulfilment);
+    const read = await readCartToPlace(
+      context.db,
+      input.cartId,
+      context.fulfilment,
+      input.channel,
+    );
     // A refusal becomes this Step's, with the same word and the same prose the hold route
     // answers with: one reading of a Cart, and one account of why it cannot be claimed against.
     if (!read.ok) throw new StepFailure(read.reason, read.detail);
@@ -305,20 +322,21 @@ export const loadCart = defineStep(
  * In series rather than in parallel. A Cart has few lines, and the first refusal a Shopper is
  * told about should be the first line that has one rather than whichever query lost a race.
  *
- * **It prices for the Store's default Region and the unconstrained Channel, and that is a
- * boundary rather than a decision** (#292, #293). `resolve-price` takes a market since #292, and
- * a Cart does not carry one yet — its Region and its currency are the next ticket's, which is
- * where this reads the Cart's instead. Until then the default Region is the honest stand-in: it
- * selects the Store's default currency, which is what every Price written before Regions existed
- * is denominated in, so a single-market deployment is priced exactly as it was.
+ * **It prices in the Cart's own market, which is the Cart's Region and the key's Channel**
+ * (#293, ADR-0074). The Region is `core_cart.region_id` — the Store's default for a Cart that
+ * names none, which is every Cart on a single-market Store and every Cart started before the
+ * column existed — and the currency is `core_cart.currency`, **stamped** rather than read
+ * through the Region, so a Merchant moving a Region onto another currency does not reprice a
+ * Cart mid-checkout. The Channel is the one the presented API key was minted into, carried on
+ * {@link LoadedCart} since #293.
  *
- * **What that costs a multi-market Store is worth stating exactly, because it is narrower than
- * it sounds.** ADR-0077's property holds: `POST /store/carts/{id}/quote` slices *this*
- * declaration, so the quote and the charge still agree by construction. What can disagree is
- * `GET /store/variants/{id}/price`, which prices for the Region a storefront named and the
- * Channel its key is in — so a Store that has set a Region- or Channel-constrained Price shows
- * one number on a product page and quotes the unconstrained one at checkout. **Do not rely on
- * either constraint in a live checkout until a Cart carries its Region.**
+ * **Both halves of that are what #292 left open, and closing them is why the quote and the
+ * charge now agree for a Store with constrained Prices.** ADR-0077's property was already true
+ * — `POST /store/carts/{id}/quote` slices *this* declaration — but both sides of it priced for
+ * the Store's default Region against no Channel at all, so a Store that had set a Region- or
+ * Channel-constrained Price showed one number on its product page and charged another at
+ * checkout. `GET /store/variants/{id}/price?region=` and this Step now ask the same question of
+ * the same declaration.
  */
 export const priceLines = defineStep(
   "price-lines",
@@ -328,17 +346,17 @@ export const priceLines = defineStep(
     // Once for the placement rather than once per line: every line of one Cart is priced in one
     // market, and a Region that changed between two lines would be a Cart charged in two
     // currencies — which `oneCurrency` is downstream to catch and this is upstream to prevent.
-    const region = await readDefaultRegion(context.db);
-    if (!region) {
+    const market = await marketOfCart(context.db, input.cart, input.channel);
+    if (!market) {
       throw new Error(
-        "This deployment has no default Region, so a Cart cannot be priced. A Region is seeded at boot from the Store's default currency (`store/seed.ts`); a database migrated but never booted against has none.",
+        "This deployment has no default Region, so a Cart that names none cannot be priced. A Region is seeded at boot from the Store's default currency (`store/seed.ts`); a database migrated but never booted against has none.",
       );
     }
 
     for (const line of input.lines) {
       const run = await runWorkflow(
         priceResolutionWorkflow,
-        { variantId: line.variantId, region, channel: null },
+        { variantId: line.variantId, ...market },
         context,
       );
       // A refusal is a value the invoking Step decides about, and passing it on is the

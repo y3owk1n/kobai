@@ -1,12 +1,16 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { ApiKeyKind } from "../auth/api-key.ts";
 import { lockVariant } from "../catalog/lock.ts";
 import { storeVariantExists } from "../catalog/store-read.ts";
 import type { Database, Queryable, Transaction } from "../db/client.ts";
-import { cart, cartLineItem, price } from "../db/schema.ts";
+import { cart, cartLineItem, price, reservation, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { changesFrom, changesNothing, openData } from "../patch.ts";
+import type { PriceMarket } from "../pricing/resolve-price.ts";
+import { liveHoldOfCart, lockCartHold } from "../reservation/reservation.ts";
+import { readDefaultCurrency, readDefaultRegion } from "../store/read.ts";
+import { REGION_NOT_FOUND, type Region, readRegion } from "../store/region.ts";
 import { type Cart, cartHasBeenPlaced, cartHasExpired, readCart } from "./read.ts";
 
 /**
@@ -23,6 +27,14 @@ import { type Cart, cartHasBeenPlaced, cartHasExpired, readCart } from "./read.t
  * - **A Shopper reference may be attached only over a secret key** (ADR-0020). A publishable
  *   key is shipped to a browser, so anything it asserted about who the Shopper is would be
  *   asserted by the Shopper.
+ * - **A Cart is denominated when it is created and switches Region in place** (#293,
+ *   ADR-0074's amendment). Its currency is **stamped** from the Region it is in rather than
+ *   read through one, so a Merchant moving a Region onto another currency does not reprice a
+ *   Cart that already exists; and `PATCH /store/carts/{id}` moves a Cart to another Region
+ *   keeping its identifier and every line on it, because a Cart's Line Items carry no price
+ *   snapshot (ADR-0009) and so cost nothing to re-price. Two things refuse that switch and
+ *   both are below: something already denominated against the Cart, and a line the new Region
+ *   could not price.
  * - **An expired Cart refuses every change.** It still reads, so a storefront can say what
  *   happened; and its rows survive, because ADR-0028 makes abandoned cart a Plugin and a
  *   Plugin cannot recover what Core has deleted.
@@ -69,7 +81,63 @@ export type CartRefusal =
   | "cart-placed"
   | "line-item-not-found"
   | "variant-not-found"
-  | "variant-not-priced";
+  | "variant-not-priced"
+  | typeof REGION_NOT_FOUND
+  | typeof CART_IS_DENOMINATED
+  | typeof VARIANT_NOT_PRICED_IN_REGION;
+
+/**
+ * The word a Region switch is refused with while something is already denominated against this
+ * Cart (#293, ADR-0074's amendment).
+ *
+ * **One word, and its prose names which of the two is holding it** — a live Reservation, or the
+ * Payment behind a placement. ADR-0070 has stock held and a bank redirect in flight against a
+ * Cart totalled in the old currency, and moving that Cart underneath them is how a Shopper pays
+ * the right number in the wrong one: `place-order`'s `oneCurrency` guard would catch the
+ * mismatch only after the money had moved.
+ *
+ * **It refuses rather than releasing the hold.** Releasing one by hand is what kobai has decided
+ * never to offer — it takes stock from a Shopper who may already have paid — and the sweeper
+ * already releases on expiry, so the repair is to wait the hold out or to start a new Cart.
+ * Refusing is also the direction ADR-0060 permits to be relaxed later; allowing is not one that
+ * can be tightened.
+ *
+ * **A Cart whose Payment exists is a Cart that has been placed**, and that is refused one door
+ * earlier: Core writes `core_payment` inside the transaction that writes the Order (ADR-0009),
+ * so `cart-placed` is the word for that half of the guard and it already refuses every change to
+ * such a Cart. Two facts, two words, each naming which one is holding the Cart — which is what
+ * the amendment asks for, said in the vocabulary this surface already has.
+ *
+ * **What that leaves open is a named limit rather than an oversight, and it is worth reading
+ * before relying on this guard.** The payment ADR-0070 has in flight is a *PaymentIntent the
+ * **Project** created*, before any Order exists — kobai holds no row for it and cannot, since
+ * the storefront starts it at a route of the deployment's own. So what this guard actually sees
+ * is the **hold** that flow takes first, which covers every Cart holding something scarce and
+ * covers **nothing** in a Cart whose lines claim no stock at all: a Cart of digital Variants
+ * with a bank redirect in flight can still be moved. Two things bound it and neither is this
+ * module's: `@kobai/plugin-stripe`'s `charge` compares the intent's amount **and currency**
+ * against what Core is about to charge and declines a mismatch *before* confirming anything, so
+ * the money does not move; and a Project that starts payments knows it has, and is the only
+ * party that could refuse a switch on that ground. Closing it inside Core would mean Core
+ * recording a payment it did not start, which is the pending Order ADR-0070 rejected.
+ */
+export const CART_IS_DENOMINATED = "cart-is-denominated";
+
+/**
+ * The word a Region switch is refused with when a line would have no Price in the new Region.
+ *
+ * Named apart from `variant-not-priced` — the word an *add* is refused with — because the two
+ * are different repairs: there, a Variant carries no Price at all and a Merchant prices it;
+ * here, it carries Prices and none of them applies in the Region being switched to, so the
+ * repair is to price it there or to choose another Region. It names every line that would be
+ * left unpriceable rather than the first, because a storefront can only act on the whole list.
+ *
+ * **Refused rather than allowed**, which is the case #293 asked to be decided out loud: a Cart
+ * moved into a Region it cannot be priced in is one whose quote and whose placement both refuse,
+ * and a Shopper would meet that at the last step rather than at the moment they chose the
+ * market.
+ */
+export const VARIANT_NOT_PRICED_IN_REGION = "variant-not-priced-in-region";
 
 /** A refusal, narrowed to the reasons the operation that made it can produce. */
 export type CartRefused<Reason extends CartRefusal> = {
@@ -92,6 +160,29 @@ type NotChangeable = "cart-not-found" | "cart-expired" | "cart-placed";
 export type CartInput = {
   readonly shopper?: unknown;
   readonly metadata?: unknown;
+  /** The Region this Cart is in — absent means the Store's default at a create, and *leave it* at a correction. */
+  readonly regionId?: unknown;
+};
+
+/**
+ * What a Region switch has to ask of the rest of the deployment before it can be allowed.
+ *
+ * Passed in rather than reached for, exactly as the store surface threads its Workflow
+ * declarations: a module that imported `resolve-price` would ask **Core's** pricing rule whether
+ * a line can be priced in the new Region, and a Project that replaced `select-price` would then
+ * be refused a switch its own deployment could have priced (ADR-0017, ADR-0054).
+ */
+export type CartMarketDependencies = {
+  /** The Channel this request's key was minted into — half the market a line is judged in (ADR-0020). */
+  readonly channel: PriceMarket["channel"];
+  /**
+   * Whether this deployment's own `resolve-price` can price this Variant in this market.
+   *
+   * A boolean rather than the price: what a switch needs to know is whether the Cart would
+   * still be quotable, and the amount is a question `POST /store/carts/{id}/quote` answers a
+   * moment later with the Steps that produced it.
+   */
+  readonly priceable: (variantId: string, market: PriceMarket) => Promise<boolean>;
 };
 
 export type AddLineItemInput = {
@@ -109,19 +200,27 @@ export type UpdateLineItemInput = {
 const DEFAULT_QUANTITY = 1;
 
 /**
- * Creates a Cart.
+ * Creates a Cart, denominated in the currency of the Region it is in.
  *
  * It has no Shopper of any kind unless the caller asserts one, because Core assumes an
  * authenticated Shopper nowhere (ADR-0020) — a guest is not the exception, it is the path.
+ *
+ * **A Cart that names no Region takes the Store's default**, so a storefront selling into one
+ * market never mentions a Region at all and is answered exactly as it was before Regions
+ * existed (#293). Naming one is how a storefront that has already asked a Shopper where they
+ * are starts the Cart there rather than starting it in the wrong currency and switching.
  */
 export async function createCart(
   db: Database,
   input: CartInput,
   /** Which credential this request arrived on; a Shopper may be asserted only over `secret`. */
   keyKind: ApiKeyKind,
-): Promise<CartResult<"invalid" | "secret-key-required">> {
+): Promise<CartResult<"invalid" | "secret-key-required" | typeof REGION_NOT_FOUND>> {
   const parsed = parseCartInput(input, keyKind);
   if (!parsed.ok) return parsed;
+
+  const denominated = await denominate(db, parsed.value.regionId);
+  if (!denominated.ok) return denominated;
 
   const [created] = await db
     .insert(cart)
@@ -131,6 +230,9 @@ export async function createCart(
       expiresAt: sql`now() + ${CART_LIFETIME}::interval`,
       shopperEmail: parsed.value.shopper?.email ?? null,
       shopperExternalId: parsed.value.shopper?.externalId ?? null,
+      // Stamped, never read through the Region afterwards — see `db/schema.ts`.
+      currency: denominated.currency,
+      regionId: denominated.regionId,
       metadata: parsed.value.metadata ?? {},
     })
     .returning({ id: cart.id });
@@ -139,18 +241,102 @@ export async function createCart(
   return read(db, created.id);
 }
 
+/** Where a new Cart is bought and what it is denominated in, once the body has been read. */
+type Denomination =
+  | { readonly ok: true; readonly regionId: string | null; readonly currency: string }
+  | CartRefused<"invalid" | typeof REGION_NOT_FOUND>;
+
 /**
- * Attaches — or detaches — a Shopper, and rewrites the Cart's own open data.
+ * The Region a new Cart is in and the currency stamped from it.
+ *
+ * Three answers, and the third is the one worth knowing about: a Region the caller named, the
+ * Store's default where they named none, and — where this deployment has no default Region at
+ * all — **no Region and the Store's own default currency**. That last is a database that has
+ * been migrated and never booted against (`store/seed.ts` seeds the Region at boot), and it is
+ * answered rather than refused for the same reason a Cart written before the column existed
+ * reads back: such a Cart is priced for the Store's default Region the moment there is one, in
+ * the currency every Price it could be priced from already carries.
+ */
+async function denominate(
+  db: Queryable,
+  regionId: string | undefined,
+): Promise<Denomination> {
+  if (regionId !== undefined) {
+    const named = await namedRegion(db, regionId);
+    if (!named.ok) return named;
+    return { ok: true, regionId: named.region.id, currency: named.region.currency };
+  }
+
+  const fallback = await readDefaultRegion(db);
+  if (fallback) {
+    return { ok: true, regionId: fallback.id, currency: fallback.currency };
+  }
+
+  const currency = await readDefaultCurrency(db);
+  if (currency === undefined) {
+    // A database holding no Store at all: migrated, and never seeded. Nothing here can invent
+    // a currency for a Cart, and answering one denominated in nothing is not available — the
+    // column is `not null` precisely so that no Cart is ever in that state.
+    throw new Error(
+      "This database holds no Store, so a Cart cannot be denominated. It is migrated but unseeded — `0001_seed_store.sql` is what creates that row.",
+    );
+  }
+  return { ok: true, regionId: null, currency };
+}
+
+/**
+ * The Region a body named, or the refusal — the two lines both writes would otherwise each
+ * spell for themselves.
+ *
+ * The `isUuid` check is in front of the read for the reason every other one on this surface is:
+ * a malformed identifier raises inside Postgres, and an unhandled raise is a 500 reporting a
+ * broken server for a request about something that does not exist.
+ */
+async function namedRegion(
+  db: Queryable,
+  regionId: string,
+): Promise<
+  { readonly ok: true; readonly region: Region } | CartRefused<typeof REGION_NOT_FOUND>
+> {
+  if (!isUuid(regionId)) return noSuchRegion(regionId);
+  const named = await readRegion(db, regionId);
+  return named === undefined ? noSuchRegion(regionId) : { ok: true, region: named };
+}
+
+/**
+ * Attaches — or detaches — a Shopper, rewrites the Cart's own open data, and **moves a Cart to
+ * another Region, in place**.
  *
  * The route a storefront calls when a guest signs in half way through: the Cart is already
  * built, and what changes is who it is for. `shopper: null` puts it back to a guest's.
+ *
+ * **A Region switch keeps the Cart and every line on it** (#293, ADR-0074's amendment). A
+ * Shopper who moves from USD to MYR is answered rather than changed under: a Cart's Line Items
+ * carry no price snapshot (ADR-0009's deliberate asymmetry with an Order), so they are
+ * re-priced on every read already and the switch costs nothing but the two columns. The
+ * alternative the record used to carry — a new Cart — put the burden of not losing a Shopper's
+ * basket on every storefront that integrates.
+ *
+ * Two things refuse it, and each is written where it is made below: something already
+ * denominated against this Cart ({@link CART_IS_DENOMINATED}), and a line the new Region could
+ * not price ({@link VARIANT_NOT_PRICED_IN_REGION}).
  */
 export async function updateCart(
   db: Database,
   cartId: string,
   input: CartInput,
   keyKind: ApiKeyKind,
-): Promise<CartResult<"invalid" | "secret-key-required" | NotChangeable>> {
+  market: CartMarketDependencies,
+): Promise<
+  CartResult<
+    | "invalid"
+    | "secret-key-required"
+    | typeof REGION_NOT_FOUND
+    | typeof CART_IS_DENOMINATED
+    | typeof VARIANT_NOT_PRICED_IN_REGION
+    | NotChangeable
+  >
+> {
   // Asked of the **keys the body carried** rather than of a narrowed set of changes, which is
   // the one `PATCH` on this surface that does it that way round and is deliberate (#185). A
   // Cart's fields do not narrow into columns one for one: `shopper` is three-valued and fills
@@ -159,14 +345,22 @@ export async function updateCart(
   // indistinguishable to a caller — a body naming nothing is refused either way, and a body
   // naming something unusable reaches its own refusal either way — so what would be bought by
   // forcing the shape is a reading of `shopper` that two routes no longer agree on.
-  if (input.shopper === undefined && input.metadata === undefined) {
-    return changesNothing("a `shopper`, a `metadata`, or both");
+  if (
+    input.shopper === undefined &&
+    input.metadata === undefined &&
+    input.regionId === undefined
+  ) {
+    return changesNothing("a `shopper`, a `metadata`, a `regionId`, or several of them");
   }
 
   const parsed = parseCartInput(input, keyKind);
   if (!parsed.ok) return parsed;
 
-  return mutate<never>(db, cartId, async (tx) => {
+  return mutate<
+    | typeof REGION_NOT_FOUND
+    | typeof CART_IS_DENOMINATED
+    | typeof VARIANT_NOT_PRICED_IN_REGION
+  >(db, cartId, async (tx) => {
     // Only what the caller named, so a request about `metadata` alone does not quietly blank
     // the Shopper off the Cart — which is what makes `shopper` three-valued above.
     const changes: Partial<typeof cart.$inferInsert> = {};
@@ -176,9 +370,162 @@ export async function updateCart(
     }
     if (parsed.value.metadata !== undefined) changes.metadata = parsed.value.metadata;
 
+    if (parsed.value.regionId !== undefined) {
+      // Inside the transaction that holds this Cart's row `for update`, so a line added while
+      // the switch is being judged is either already in the check below or waiting behind it —
+      // the alternative is a Cart moved into a Region that cannot price something somebody put
+      // in it a millisecond earlier.
+      const switched = await switchRegion(tx, cartId, parsed.value.regionId, market);
+      if (!switched.ok) return switched;
+
+      changes.regionId = switched.regionId;
+      // The stamp is taken here and nowhere else: from this moment the Cart's own column is
+      // what denominates it, and the Region's currency moving does not reach it.
+      changes.currency = switched.currency;
+    }
+
     await tx.update(cart).set(changes).where(eq(cart.id, cartId));
     return undefined;
   });
+}
+
+/** The two columns a switch writes, or the one word saying why it was refused. */
+type SwitchedRegion =
+  | { readonly ok: true; readonly regionId: string; readonly currency: string }
+  | CartRefused<
+      | typeof REGION_NOT_FOUND
+      | typeof CART_IS_DENOMINATED
+      | typeof VARIANT_NOT_PRICED_IN_REGION
+    >;
+
+/**
+ * Whether this Cart may move to that Region, and what it would then be denominated in.
+ *
+ * Three questions in this order, and the order is the decision:
+ *
+ * 1. **Is there such a Region.** The most fundamental answer, and the one a storefront
+ *    interpolating the wrong variable needs first — being told its Cart is holding stock would
+ *    send it after the wrong repair.
+ * 2. **Is anything denominated against this Cart already.** Asked before the lines, because it
+ *    is about the Cart as a whole: a Cart holding stock is refused whether or not its lines
+ *    could be priced in the new Region, and pricing them first would spend a Workflow run per
+ *    line to reach the same answer.
+ * 3. **Could every line still be priced there.** Asked last and asked of *this deployment's*
+ *    `resolve-price`, never of `core_price` — a Project that replaced `select-price` prices by
+ *    its own rule, and a query here would refuse a switch that deployment could have priced
+ *    (ADR-0017). It is the same declaration the quote and the placement run, so a switch this
+ *    allows is a Cart those two can still answer.
+ *
+ * **Switching to the Region the Cart is already in is not a switch**, and is allowed rather than
+ * refused: a storefront submitting the whole state it is holding sends the Region it last read,
+ * and refusing that would make an idempotent request fail once a Shopper is holding stock.
+ * `PATCH /admin/store` takes the `defaultCurrency` it already has on the same argument.
+ */
+async function switchRegion(
+  tx: Transaction,
+  cartId: string,
+  regionId: string,
+  market: CartMarketDependencies,
+): Promise<SwitchedRegion> {
+  const asked = await namedRegion(tx, regionId);
+  if (!asked.ok) return asked;
+  const named = asked.region;
+
+  const [current] = await tx
+    .select({ regionId: cart.regionId, currency: cart.currency })
+    .from(cart)
+    .where(eq(cart.id, cartId))
+    .limit(1);
+  // Unreachable: `mutate` found and locked this row a statement ago.
+  if (!current) throw new Error("A locked Cart could not be read back.");
+  if (current.regionId === named.id) {
+    return { ok: true, regionId: named.id, currency: current.currency };
+  }
+
+  const denominated = await denominatedAgainst(tx, cartId);
+  if (denominated) return denominated;
+
+  const lines = await tx
+    .select({ variantId: cartLineItem.variantId, sku: variant.sku })
+    .from(cartLineItem)
+    .innerJoin(variant, eq(variant.id, cartLineItem.variantId))
+    // The Cart's own order, so a refusal names the lines in the order a storefront is
+    // rendering them in rather than in whatever order Postgres read them.
+    .orderBy(asc(cartLineItem.createdAt), asc(cartLineItem.id))
+    .where(eq(cartLineItem.cartId, cartId));
+
+  const unpriceable: string[] = [];
+  for (const line of lines) {
+    // In series rather than in parallel, exactly as `price-lines` runs: a Cart has few lines,
+    // and a Step of somebody else's is not something to fan out inside a transaction that is
+    // holding this Cart's row.
+    const priced = await market.priceable(line.variantId, {
+      // The Region's own currency and not the Cart's: this is the market the Cart is being
+      // moved *to*, so what is being asked is whether the lines can be priced there.
+      region: { id: named.id, name: named.name, currency: named.currency },
+      channel: market.channel,
+    });
+    if (!priced) unpriceable.push(line.sku);
+  }
+
+  if (unpriceable.length > 0) {
+    return {
+      ok: false,
+      reason: VARIANT_NOT_PRICED_IN_REGION,
+      detail: `${unpriceable.map((sku) => JSON.stringify(sku)).join(", ")} ${unpriceable.length === 1 ? "has" : "have"} no Price that applies in ${JSON.stringify(named.name)}, which prices in ${named.currency}, so this Cart was left where it was. kobai converts nothing: a Variant is sellable in a Region once a Price denominated in that Region's currency has been set on it. Remove those lines, or price them there, and ask again.`,
+    };
+  }
+
+  return { ok: true, regionId: named.id, currency: named.currency };
+}
+
+/**
+ * What is already denominated against this Cart, or `undefined` where nothing is.
+ *
+ * **A live Reservation is the reachable half of the guard and the Payment is the other**, and
+ * the Payment is refused a door earlier — see {@link CART_IS_DENOMINATED}. The hold is read
+ * through `liveHoldOfCart`, which is the same expression claim-or-adopt decides by, so *is this
+ * Cart holding stock* has one answer rather than two that can disagree (ADR-0070).
+ *
+ * **The lock is taken before the read, and it is the hold's own key** (ADR-0018). The Cart row
+ * this transaction is holding `for update` says nothing about `core_reservation`, and a `select`
+ * over other rows locks none of them — so without this a hold arriving between the read and the
+ * commit would land on a Cart that has just changed market, which is precisely the state the
+ * guard exists to make impossible. `lockCartHold` is `holdReservations`' own key rather than a
+ * second one, on `auth/administrators.ts`'s argument: two correct guards on two keys serialise
+ * nothing against each other.
+ *
+ * **There is deliberately no concurrent test beside it, and that is a departure worth arguing.**
+ * Every other lock in Core has one — `the-cart-that-held-twice`, `the-last-administrator`,
+ * `the-last-unit` — because each guards a state a sequential run cannot reach and an assertion
+ * *can* see: stock claimed twice, a Store with no administrator. This one has no such state. A
+ * hold and a switch dispatched together have two legitimate outcomes — the switch wins and the
+ * hold is then taken in the new market, or the hold wins and the switch is refused — and the
+ * interleaving this lock prevents produces a database **identical** to the first of them: a Cart
+ * in the new Region with a live hold on it, because nothing on a Reservation records which
+ * currency it was claimed under. So a concurrent test here could only assert what is true either
+ * way, which is the trap ADR-0049 names and what writing-tests.md means by a green run proving
+ * less than you would think. The lock is kept on ADR-0018's rule rather than on evidence, and
+ * this paragraph is the evidence's replacement.
+ */
+async function denominatedAgainst(
+  tx: Transaction,
+  cartId: string,
+): Promise<CartRefused<typeof CART_IS_DENOMINATED> | undefined> {
+  await lockCartHold(tx, cartId);
+
+  const [holding] = await tx
+    .select({ expiresAt: reservation.expiresAt })
+    .from(reservation)
+    .where(liveHoldOfCart(cartId))
+    .limit(1);
+  if (!holding) return undefined;
+
+  return {
+    ok: false,
+    reason: CART_IS_DENOMINATED,
+    detail: `This Cart is holding stock that was claimed in the currency it is in, so it cannot be moved to another Region. The hold lapses at ${holding.expiresAt.toISOString()} and kobai serves no way to give one back by hand — it would take stock from a Shopper who may already have paid — so either wait for it, or start a new Cart in the Region you want.`,
+  };
 }
 
 /**
@@ -400,6 +747,14 @@ async function read(db: Queryable, cartId: string): Promise<{ ok: true; cart: Ca
 type ParsedCartInput = {
   readonly shopper?: AssertedShopper | null;
   readonly metadata?: Record<string, unknown>;
+  /**
+   * The Region named, if one was — **two-valued**, unlike `shopper`.
+   *
+   * There is no `null` for it: a Cart is always bought somewhere, so *no Region* is not a state
+   * a caller may ask for. Absent means the Store's default at a create and *leave it* at a
+   * correction, which is ADR-0062's rule and the same absence `description` refuses a `null` on.
+   */
+  readonly regionId?: string;
 };
 
 /** Named apart from `read.ts`'s `CartShopper`: this is what a caller sent, not what is stored. */
@@ -423,8 +778,11 @@ type ParsedCart =
  * key to reach for.
  */
 function parseCartInput(input: CartInput, keyKind: ApiKeyKind): ParsedCart {
-  const value: { shopper?: AssertedShopper | null; metadata?: Record<string, unknown> } =
-    {};
+  const value: {
+    shopper?: AssertedShopper | null;
+    metadata?: Record<string, unknown>;
+    regionId?: string;
+  } = {};
 
   if (input.shopper === null) {
     value.shopper = null;
@@ -470,6 +828,16 @@ function parseCartInput(input: CartInput, keyKind: ApiKeyKind): ParsedCart {
     value.metadata = metadata;
   }
 
+  if (input.regionId !== undefined) {
+    const regionId = trimmed(input.regionId);
+    if (regionId === undefined) {
+      return invalid(
+        "`regionId` must name a Region this Store has — `GET /admin/regions` lists them. Leave it out to start this Cart in the Store's default Region, or to leave the Region of one that already exists alone; there is no `null`, because a Cart is always bought somewhere.",
+      );
+    }
+    value.regionId = regionId;
+  }
+
   return { ok: true, value };
 }
 
@@ -502,6 +870,24 @@ function noSuchLineItem(lineItemId: string): CartRefused<"line-item-not-found"> 
     ok: false,
     reason: "line-item-not-found",
     detail: `This Cart carries no Line Item ${JSON.stringify(lineItemId)}.`,
+  };
+}
+
+/**
+ * A `regionId` naming no Region this Store has.
+ *
+ * **422 and `region-not-found`, which is the word the admin surface already answers** — one
+ * fact gets one word whichever end asks it (ADR-0060), exactly as `collection-not-found` is
+ * 404 from the Collection routes and 422 from a `collections` list naming one. It is
+ * deliberately *not* the `400 invalid` a `?region=` gets on the price routes: that is a query
+ * parameter the endpoint could not use, and this is a body naming a record the Store has not
+ * got, which is the line this surface already draws for `?collection=` and `collections`.
+ */
+function noSuchRegion(regionId: string): CartRefused<typeof REGION_NOT_FOUND> {
+  return {
+    ok: false,
+    reason: REGION_NOT_FOUND,
+    detail: `No Region ${JSON.stringify(regionId)} exists. \`regionId\` names the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at — and \`GET /admin/regions\` lists the ones this Store has.`,
   };
 }
 

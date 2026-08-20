@@ -184,6 +184,10 @@ export function Carts() {
               <TableRow>
                 <TableHead>Cart</TableHead>
                 <TableHead>Shopper</TableHead>
+                {/* One column for the two facts, because they are one answer to *what is this
+                    Cart worth and where* — the currency it is denominated in, and the Region
+                    its lines are priced in (#293, ADR-0074). */}
+                <TableHead>Market</TableHead>
                 <TableHead>State</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Deadline</TableHead>
@@ -203,6 +207,17 @@ export function Carts() {
                     <code className="break-all">{cart.id}</code>
                   </TableCell>
                   <TableCell>{cart.shopper?.email ?? "guest"}</TableCell>
+                  <TableCell>
+                    {/* The currency is the Cart's own, stamped when its Region was set — so it
+                        is what this Cart is worth even where the Region has since been moved
+                        onto another currency. The Region under it is where the lines are
+                        priced; a Cart started before kobai recorded one says so rather than
+                        showing an empty cell. */}
+                    <div className="font-medium">{cart.currency}</div>
+                    <div className="text-muted-foreground text-xs">
+                      {cart.region?.name ?? "the Store's default Region"}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <CartStateBadge cart={cart} />
                   </TableCell>

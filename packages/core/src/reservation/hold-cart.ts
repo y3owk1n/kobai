@@ -5,6 +5,7 @@ import {
   readCartToPlace,
   reservableLinesOf,
 } from "../order/load-cart.ts";
+import type { ChannelIdentity } from "../store/channel.ts";
 import type { ReservationClaim, ReservationRefusal } from "./provider.ts";
 import { holdReservations } from "./reservation.ts";
 
@@ -76,8 +77,19 @@ export async function holdCartReservations(
   cartId: string,
   strategies: FulfilmentStrategies | undefined,
   holdWindowMs: number,
+  /**
+   * The Channel the presented key is in, threaded because {@link readCartToPlace} carries one
+   * (#293, ADR-0020).
+   *
+   * Nothing here reads it — a hold claims stock and prices nothing — and it is passed anyway
+   * for this module's whole reason: the hold and the placement that adopts it read a Cart
+   * through one function, so a second shape of that reading would be a second answer to what is
+   * in a Cart. A parameter the hold route left out is exactly how `place-order` came to price
+   * against no Channel at all.
+   */
+  channel: ChannelIdentity | null,
 ): Promise<CartHoldResult> {
-  const read = await readCartToPlace(db, cartId, strategies);
+  const read = await readCartToPlace(db, cartId, strategies, channel);
   if (!read.ok) return read;
 
   const held = await holdReservations(

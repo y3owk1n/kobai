@@ -439,7 +439,9 @@ describe("a Payment taken against a Capture that fails", () => {
 
     const run = await runWorkflow(
       placeOrderWorkflow,
-      { cartId: cart.id },
+      // The unconstrained Channel, which is what a key naming none is in — this test is about
+      // what a failed compensation reports and not about which market anything is priced in.
+      { cartId: cart.id, channel: null },
       {
         db: kobai.db,
         metadata: {},

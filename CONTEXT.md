@@ -217,8 +217,12 @@ A Shopper's mutable, disposable, unauthoritative selection before purchase. Expe
 change and to be thrown away. A Cart becomes **exactly one** Order, and is **spent** once it
 has: it still reads, and it refuses every change and every further placement, the way an
 expired one does. Enforced in DDL rather than by a check, so two simultaneous placements
-cannot both succeed. It carries **one currency**, fixed when it is created: switching Region
-means a new Cart, because repricing one in flight changes what somebody already agreed to.
+cannot both succeed. It carries **one currency** and the **Region** it is bought in: the
+currency is *stamped* from that Region rather than read through it, so a Region moved onto
+another currency does not reprice a Cart that already exists. **Switching Region keeps the
+Cart** — the same identifier and every Line Item, re-priced on the next read, because a Cart's
+lines hold no price snapshot — until a live Reservation or a Payment is denominated against it,
+after which it is refused (ADR-0074).
 _Avoid_: basket, bag, session, checkout, order (never)
 
 **Order**:
