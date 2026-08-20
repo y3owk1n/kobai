@@ -810,7 +810,7 @@ describe("the sections, in three groups", () => {
   /** What each group holds, in the order the sidebar draws them — `lib/sections.ts`'s order. */
   const COMMERCE = ["Products", "Media", "Collections", "Orders", "Carts"];
   const SETTINGS = ["Merchants", "Roles", "Store"];
-  const DEVELOPER = ["API keys"];
+  const DEVELOPER = ["API keys", "Deployment"];
 
   it("draws Commerce, Settings and Developer, and every section inside one of them", async () => {
     const page = await seam.signedIn("/products");
@@ -852,7 +852,10 @@ describe("the sections, in three groups", () => {
     // would have given it.
     await expect.poll(() => where(page)).toBe("/developer/api-keys");
     await expect.poll(() => sectionGroups(page)).toEqual(["Developer"]);
-    await expect.poll(() => sectionsInGroup(page, "Developer")).toEqual(DEVELOPER);
+    // The one entry rather than {@link DEVELOPER}, and the difference is the subject: the group
+    // holds Deployment too since #267, and this Role does not hold `deployment:read`. A group
+    // narrowed to what a Role can read is what makes it an affordance rather than a menu.
+    await expect.poll(() => sectionsInGroup(page, "Developer")).toEqual(["API keys"]);
     await auditAccessibility(page, "the Admin on a Role that may read only the API keys");
   });
 
@@ -997,6 +1000,7 @@ describe("the command palette", () => {
         "Roles",
         "Store",
         "API keys",
+        "Deployment",
       ]);
     // **Flat, and one heading over the lot** (#266, ADR-0079). The sidebar draws three groups
     // and the palette draws none of them: what a palette is good at is answering a typed word
@@ -1592,6 +1596,202 @@ describe("paging through the API keys", () => {
     // The gap this closes: without a pager the keys on this page could never be revoked, and
     // the Admin mints one for itself per browser session that has none.
     expect(beyond.filter((name) => first.includes(name))).toEqual([]);
+  });
+});
+
+/**
+ * The Deployment screen (#267, ADR-0080), which is three reads rendered as one answer.
+ *
+ * Every fact on it is asserted against kobai in `packages/core/src/http/deployment.test.ts`,
+ * `catalog.test.ts` and the health tests — which is where a fact belongs. What is left, and
+ * what only a browser can be asked, is the **composition**: that three separate reads land on
+ * one screen, that a `replaced` and an `inserted` Step are told apart from a `stock` one by
+ * looking rather than by reading a JSON field, and that one read being refused leaves the
+ * other two answering rather than emptying the screen.
+ *
+ * The deployment under it is the reference Project's own, which is why this is worth asserting
+ * here at all: it replaces `select-price`, inserts `record-price-resolution` after it, replaces
+ * `apply-adjustments` with a Plugin's Step, and leaves every other position alone — so all
+ * three origins are on screen at once, from a `kobai.config.ts` a Developer actually wrote.
+ */
+describe("the Deployment screen", () => {
+  type DeploymentBody = {
+    readonly version: string;
+    readonly payments: { readonly configured: boolean };
+  };
+  type HealthBody = {
+    readonly migrations: {
+      readonly status: string;
+      readonly sets?: readonly { readonly name: string; readonly applied: number }[];
+    };
+  };
+
+  /** The Strategies the screen lists, in the order kobai answered them. */
+  function strategies(page: Page): Promise<string[]> {
+    return page
+      .getByRole("list", { name: "Strategies wired here" })
+      .getByRole("listitem")
+      .allInnerTexts();
+  }
+
+  it("composes the release, the payment answer, the Strategies and the migration sets", async () => {
+    // Asked of kobai rather than written down, and asked over the API rather than read off the
+    // screen: an expectation taken from the side under test agrees with itself (ADR-0049).
+    const deployment = await seam.api<DeploymentBody>("GET", "/admin/deployment");
+    const health = await seam.api<HealthBody>("GET", "/health");
+    const sets = health.migrations.sets ?? [];
+    expect(sets.length, "This deployment reported no migration sets.").toBeGreaterThan(0);
+
+    const page = await seam.signedIn("/developer/deployment");
+
+    await shows(
+      page.getByText(deployment.version, { exact: true }),
+      "the release of Core this deployment runs",
+    );
+    // The reference Project wires one whatever its environment holds — `bank` when Stripe's
+    // settings are there, its own `manual` provider when they are not — so this is the
+    // affirmative half. The other half is the case below it.
+    await shows(page.getByText("Configured"), "the Payment Provider answer");
+
+    await expect
+      .poll(() => strategies(page))
+      .toEqual(["digital", "made-to-order", "physical"]);
+
+    for (const set of sets) {
+      await shows(
+        page.getByRole("row", { name: new RegExp(`${set.name}\\s+${set.applied}$`) }),
+        `the ${set.name} migration set, with the number of migrations it applied`,
+      );
+    }
+
+    await auditAccessibility(page, "the Deployment screen");
+  });
+
+  it("distinguishes a replaced Step and an inserted one from the stock positions", async () => {
+    const page = await seam.signedIn("/developer/deployment");
+
+    // The one question ADR-0080 says is always worth asking about a kobai deployment, and the
+    // one nothing else in this repository renders. The words are on the row rather than in a
+    // colour, because a badge nobody can read is not a distinction.
+    await shows(
+      page.getByRole("row", {
+        name: /select-price\s+everything-costs-one-cent\s+Replaced/,
+      }),
+      "the replaced Step, named as replaced beside the slot it fills",
+    );
+    await shows(
+      page.getByRole("row", {
+        name: /record-price-resolution\s+record-price-resolution\s+Inserted/,
+      }),
+      "the inserted Step, which slot-and-name equality would have called stock",
+    );
+    await shows(
+      page.getByRole("row", { name: /load-prices\s+load-prices\s+Stock/ }),
+      "a position nothing has touched, said to be stock rather than left blank",
+    );
+    // Both Workflows, so the screen is not one Workflow's worth of the answer.
+    await shows(
+      page.getByText("resolve-price", { exact: true }),
+      "the resolve-price Workflow",
+    );
+    await shows(
+      page.getByText("place-order", { exact: true }),
+      "the place-order Workflow",
+    );
+  });
+
+  it("says a Payment Provider is not wired, rather than leaving the answer off", async () => {
+    const page = await seam.signedIn("/developer/deployment");
+
+    // **A deployment with no provider is a boot-time decision no request can make**, and the
+    // reference Project always wires one (ADR-0053) — so the only honest way to see the
+    // negative is to answer this one read with it. kobai's own answer is fetched and the one
+    // field changed, so everything else on the screen is still this deployment's.
+    await page.route(
+      (url) => url.pathname === "/admin/deployment",
+      async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as DeploymentBody;
+        await route.fulfill({
+          response,
+          json: { ...body, payments: { configured: false } },
+        });
+      },
+    );
+    await page.reload();
+
+    // A screen that rendered the affirmative and nothing else would leave a Developer reading
+    // an empty space as "still loading" — which is exactly the question they came to answer
+    // before debugging a Cart (story 7).
+    await shows(page.getByText("None wired"), "the deployment that takes no money");
+    await hides(page.getByText("Configured"), "the affirmative answer");
+    await auditAccessibility(page, "the Deployment screen with no Payment Provider");
+  });
+
+  it("renders the reads that are in flight rather than a blank screen", async () => {
+    const page = await seam.signedIn("/developer/deployment");
+    await shows(page.getByText("Fulfilment Strategies"), "the Deployment screen");
+
+    // Held long enough for the state between "asking" and "answered" to be a thing a test can
+    // see at all, exactly as the Products skeleton case does it.
+    await page.route(
+      (url) => url.pathname === "/admin/deployment",
+      async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await route.continue();
+      },
+    );
+    await page.reload();
+
+    const skeleton = page.getByRole("status", { name: "Reading the deployment" });
+    await shows(skeleton, "the deployment skeleton");
+    // Audited while it is up: a skeleton is a screen a Merchant looks at, and this is the only
+    // place it exists.
+    await auditAccessibility(page, "the Deployment screen while it is loading");
+    await hides(skeleton, "the deployment skeleton");
+    await shows(page.getByText("Core"), "the deployment, once it arrived");
+  });
+
+  it("renders a refused read where it was attempted, with the others still answered", async () => {
+    // `deployment:read` and nothing else, which is the grant ADR-0080 describes: the whole
+    // shape of the API and nothing in it. `GET /admin/fulfilment-strategies` is behind
+    // `catalog:read` (ADR-0067), so composing three reads means this Role is refused one of
+    // them — and the screen has to say which.
+    const narrow = await seam.merchantOnARole(["deployment:read"]);
+    const page = await seam.signedInAs(narrow, "/");
+
+    // The front door is the head of the narrowed list, and for this Role that is this screen.
+    await expect.poll(() => where(page)).toBe("/developer/deployment");
+
+    await shows(
+      page.getByText("The Fulfilment Strategies could not be read."),
+      "the refusal, in the card the read was attempted for",
+    );
+    // Nothing predicted it — the read was made and kobai's 403 is what came back — and the two
+    // reads that worked are still on screen beside it.
+    await shows(page.getByText("Core"), "the deployment, which this Role may read");
+    await shows(
+      page.getByText("Migration sets"),
+      "the migration sets, which need no Role",
+    );
+    await auditAccessibility(page, "the Deployment screen with one read refused");
+  });
+
+  it("renders a refusal in place of the deployment it could not read", async () => {
+    const narrow = await seam.merchantOnARole(["catalog:read"]);
+    // The section is hidden from this Role, which is an affordance and never a boundary
+    // (ADR-0063) — the address still resolves, and what it must not do is render an empty
+    // frame that looks like a screen still loading.
+    const page = await seam.signedInAs(narrow, "/developer/deployment");
+
+    await shows(
+      page.getByText("This deployment could not be read."),
+      "the refusal, where the deployment would have been",
+    );
+    await expect
+      .poll(() => strategies(page))
+      .toEqual(["digital", "made-to-order", "physical"]);
+    await auditAccessibility(page, "the Deployment screen refused the deployment read");
   });
 });
 
