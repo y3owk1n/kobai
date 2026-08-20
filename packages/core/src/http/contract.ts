@@ -28,6 +28,7 @@ import {
   MAX_PAGE_LIMIT,
   type PagedList,
 } from "../db/page.ts";
+import type { MediaUploadOutcome } from "../media/media.ts";
 import type { IdempotencyRefusal } from "../order/idempotency.ts";
 import type { PlaceOrderRefusal as PlaceOrderReason } from "../order/place-order.ts";
 import type { QuoteCartRefusal as QuoteCartReason } from "../order/quote-cart.ts";
@@ -1080,13 +1081,49 @@ export const UploadMediaRequest = z
   .openapi("UploadMediaRequest");
 
 /**
+ * Every way an upload can be refused, as a closed set (#278).
+ *
+ * **It became a family the day the route grew a second word.** Until then uploading refused
+ * `invalid` alone and declared {@link InvalidRequest}, which is what a route with nothing else
+ * to turn back at 400 declares; a ceiling and an accepted set are refusals the *deployment*
+ * makes about a well-formed request, so they arrive at 422 — and `refused` answers with one
+ * body type across every status a route names, so the 400 and the 422 have to be the same
+ * schema. That is `CatalogRefusal`'s construction, arrived at from the same direction.
+ *
+ * The keys are checked against `uploadMedia`'s own union, so a rename in `media/media.ts` turns
+ * this red naming the word rather than quietly regenerating a description that says something
+ * else.
+ */
+const MEDIA_UPLOAD_REASONS = {
+  ...REQUEST_REASONS,
+  // Two words rather than one, because they are two repairs: a Merchant answers the first by
+  // exporting the image smaller and the second by exporting it as something else. What decides
+  // both is the Project's `media` key in `kobai.config.ts`, so neither is a fact about kobai
+  // that a client could have known in advance — which is why each refusal's prose names the
+  // ceiling and the accepted set it was judged against.
+  "media-too-large": "media-too-large",
+  "content-type-not-accepted": "content-type-not-accepted",
+} as const satisfies {
+  [R in Refused<MediaUploadOutcome> | RequestReason]: R;
+};
+
+export const MediaUploadRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(MEDIA_UPLOAD_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("MediaUploadRefusal");
+
+/**
  * The one refusal the byte route makes, and its own schema for {@link ApiKeyNotFound}'s reason:
  * a single literal, bound to the handler that writes it by the schema it is typechecked
  * against.
  *
- * It is not a family — nothing else on this surface refuses about Media. Uploading refuses
- * `invalid` through {@link InvalidRequest}, which is what a request that could not be used
- * already says everywhere else, and reading the list refuses only a page query.
+ * It is not a family — reading the list refuses only a page query, and uploading has a family
+ * of its own ({@link MediaUploadRefusal}) whose words are about what an upload may be rather
+ * than about which asset was asked for.
  */
 export const MediaNotFound = z
   .object({

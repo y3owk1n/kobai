@@ -214,9 +214,12 @@ anything else about the same thing
   and no ceiling at all**, because nothing renews a hold, so its window already is the bound
   — the asymmetry with `session` is
   [ADR-0075](./adr/0075-the-hold-window-is-a-projects-and-core-keeps-no-ceiling.md).
-- `media` — where a Merchant's uploaded images live, as `{ storage }`. Section 3 again, and the
-  one key in this list you can leave out and still have everything work: unlike a Payment
-  Provider, Core ships a storage. The third key the example above does not use.
+- `media` — where a Merchant's uploaded images live and what an upload is allowed to be, as
+  `{ storage, maxBytes, accept }`. Section 3 again, and the one key in this list you can leave
+  out and still have everything work: unlike a Payment Provider, Core ships a storage. The third
+  key the example above does not use. **`maxBytes` and `accept` are your ceiling and your list**,
+  ten mebibytes and the five raster image types if you say nothing — see section 3, where the
+  reason neither is Core's alone is argued.
 
 **Installing a Plugin does nothing.** `@kobai/plugin-price-log` above is an ordinary npm
 dependency, and adding it to `package.json` creates no table and runs no code. The two lines
@@ -605,6 +608,32 @@ inherit:
   catalog data* by definition (ADR-0015 puts a Shopper's uploaded artwork in your own table
   instead), so that is bytes you were going to publish. If it is not, wire a storage that signs
   its own URLs.
+
+**What an upload may be is yours too, and it is the same key.** `media.maxBytes` is the largest
+file `POST /admin/media` will take and `media.accept` is the exact list of content types it will
+take — **ten mebibytes and `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/avif` if
+you say nothing.** Both are the deployment's for the reason the storage is: the ceiling that is
+right depends on where the bytes go, and what your catalog assets *are* is your business rather
+than kobai's — a Store publishing PDF datasheets writes `accept: ["application/pdf"]` and has
+misconfigured nothing. Naming `accept` **replaces** that list rather than adding to it, so a
+Store that wants the five and one more writes all six.
+
+```ts
+export default defineKobaiConfig({
+  media: { storage: bucket, maxBytes: 200 * 1024 * 1024, accept: ["image/png", "image/jpeg"] },
+});
+```
+
+Three things to know before you set either. **`image/svg+xml` is not in the default** although
+kobai can serve one: an SVG is a document that may carry script and `GET /media/{key}` is open
+and on your Store's own origin, so accepting them by default would turn an upload into script
+running where your storefront runs. Add it if your logos need it, deliberately. **The type
+judged is the one the file part declares** — a header a browser wrote from a file extension —
+so this catches the Merchant who attached the wrong file and is not a defence against one who
+is lying; the bytes are served back as the type the record holds, with `nosniff`. And **a value
+kobai will not enforce stops the boot** rather than being quietly clamped, with a message naming
+the key: that is `session.idleWindowMs`'s judgement and `reservations.holdWindowMs`'s, at a
+third key of the same file.
 
 **Core ships `filesystemMediaStorage`, and a deployment that says nothing runs on it** — files
 under `kobai-media/`, served by kobai. That is the one place Core ships an implementation of an

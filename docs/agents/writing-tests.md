@@ -113,7 +113,19 @@ await using kobai = await createTestKobai({ media: { storage: mine } });     // 
 await using here = await createTestKobai({                                   // the shipped one,
   media: { storage: filesystemMediaStorage({ directory }) },                 // somewhere you
 });                                                                          // can look inside
+await using small = await createTestKobai({ media: { maxBytes: 4096 } });    // still throwaway
 ```
+
+**The `media` subject is merged rather than replaced, and the last line is why** (#278). That
+key now carries a ceiling and an accepted set beside the storage, and a test naming one of those
+is saying nothing whatever about where bytes go — so the harness fills in the throwaway
+directory underneath it. Replacing the whole subject handed such a test
+`filesystemMediaStorage()`'s **default**, which is `kobai-media/` under the process's working
+directory and therefore inside this checkout: #254's finding arriving through a new door, with
+`.gitignore` keeping it out of `git status` the whole time.
+`media/media.test.ts` holds the harness to it, by uploading through a harness configured that
+way and asserting that directory does not exist — and it was watched failing against the
+version that replaced.
 
 **Ask the storage what it is holding**, exactly as a test about payment asks the provider: a
 substitute that records what it was handed and is then asserted against — these bytes, this
@@ -560,10 +572,11 @@ await using kobai = await createTestKobai({
 
 That is the same `kobai.config.ts` shape a Developer writes, so a test of the override
 mechanism is a test of the thing they actually do. **Every key of that file the harness
-accepts works the same way**, `session: { idleWindowMs }` (ADR-0050) and
-`reservations: { holdWindowMs }` (ADR-0075) included — and a value Core will not serve rejects
-the `createTestKobai` promise rather than booting, because `createKobai` refuses it. Those two
-are the keys that can do that, and a test whose subject is one asserts on the rejection. Time is passed by winding the row back rather than by waiting; the
+accepts works the same way**, `session: { idleWindowMs }` (ADR-0050),
+`reservations: { holdWindowMs }` (ADR-0075) and `media: { maxBytes, accept }` (#278) included —
+and a value Core will not serve rejects the `createTestKobai` promise rather than booting,
+because `createKobai` refuses it. Those are the keys that can do that, and a test whose subject
+is one asserts on the rejection. Time is passed by winding the row back rather than by waiting; the
 helpers at the foot of `auth.test.ts` are the only honest way to test a window measured in
 minutes.
 

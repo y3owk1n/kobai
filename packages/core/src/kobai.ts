@@ -14,7 +14,7 @@ import {
 import { resolveFulfilmentStrategies } from "./fulfilment/strategy.ts";
 import { createHttpApp, describeHttpApp } from "./http/app.ts";
 import type { OpenApiDocument } from "./http/openapi.ts";
-import { filesystemMediaStorage } from "./media/storage.ts";
+import { filesystemMediaStorage, resolveMediaPolicy } from "./media/storage.ts";
 import { coreMigrationSet } from "./migrations/core-set.ts";
 import { type MigrationOutcome, runMigrations } from "./migrations/run.ts";
 import type { MigrationSet } from "./migrations/set.ts";
@@ -156,6 +156,10 @@ export function createKobai(options: KobaiOptions): Kobai {
   // And beside it, for the same reason: a hold window a placement could overrun is a
   // deployment that takes money and then cannot write the Order (ADR-0075).
   const holdWindowMs = resolveHoldWindowMs(options.reservations);
+  // And beside those two, for their reason: a ceiling or an accepted set this deployment
+  // cannot serve is a value in a file a Developer has just written, so it stops the boot rather
+  // than being clamped into something nobody chose (#278).
+  const mediaPolicy = resolveMediaPolicy(options.media);
   const logger = options.logger ?? consoleLogger;
   const database = createDatabaseHandle(options.databaseUrl);
   const migrations = createMigrationStateHolder();
@@ -211,6 +215,7 @@ export function createKobai(options: KobaiOptions): Kobai {
     // deployment refuses to place an Order and nothing else.
     paymentProvider: options.payments?.provider,
     mediaStorage,
+    mediaPolicy,
     migrations,
     logger,
     priceWorkflow,
