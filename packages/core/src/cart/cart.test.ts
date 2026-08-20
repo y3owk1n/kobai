@@ -43,6 +43,9 @@ describe("building a Cart", () => {
       // storefront makes (#293, ADR-0074).
       currency: "USD",
       region: { id: expect.any(String), name: "USD", currency: "USD" },
+      // Nowhere to deliver it, which is where a Cart starts: nothing makes an Address
+      // mandatory, and a storefront asks for one when it is ready to (#319).
+      address: null,
       lineItems: [],
       metadata: {},
       expiresAt: expect.any(String),

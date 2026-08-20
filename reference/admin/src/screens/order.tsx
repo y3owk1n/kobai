@@ -1,3 +1,4 @@
+import type { OrderAddress } from "@kobai/client";
 import { useQuery } from "@tanstack/react-query";
 import { ReceiptTextIcon } from "lucide-react";
 import { Fragment } from "react";
@@ -184,6 +185,45 @@ export function OrderScreen() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Where it goes</CardTitle>
+          <CardDescription>
+            The delivery address as it was given at Capture. Correcting it since has not
+            reached this, and neither has deleting the Region it named.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-2 text-sm">
+          {placed.address === null ? (
+            <p className="text-muted-foreground">
+              No address was given for this Order, so kobai holds no destination for it at
+              all.
+            </p>
+          ) : (
+            <>
+              {/* An address, laid out as an address rather than as a table of fields: the
+                  lines are in the order the Shopper wrote them, because no two countries
+                  agree on what the parts are (ADR-0072). One text node with the breaks in
+                  it rather than an element per line — the same address twice over is a
+                  thing a Shopper may genuinely write, and there is no identifier here to
+                  key the second copy by. */}
+              <address className="whitespace-pre-line not-italic">
+                {addressLines(placed.address)}
+              </address>
+              {placed.address.region === null ? null : (
+                <div className="flex justify-between">
+                  {/* The name taken at Capture. It is deliberately not a link: the Region
+                      may have been deleted since, and this record says where the parcel
+                      went rather than what the Store's geographies are now. */}
+                  <span className="text-muted-foreground">Region</span>
+                  <span>{placed.address.region.name}</span>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Payment</CardTitle>
           <CardDescription>
             What kobai was told about the money. The reference is the provider's own
@@ -229,9 +269,23 @@ export function OrderScreen() {
 }
 
 /**
+ * The destination as one block of text, in the order it should be read.
+ *
+ * The postal code and the country go last because that is where kobai puts them and not because
+ * it is where any particular country does — the lines above are the Shopper's own and are never
+ * rearranged. `country` is the code as kobai holds it (ADR-0072): naming it would mean a table of
+ * countries in this tree, which is the closed set kobai deliberately does not hold either.
+ */
+function addressLines(address: OrderAddress): string {
+  return [...address.lines, address.postalCode, address.country]
+    .filter((line) => line !== null)
+    .join("\n");
+}
+
+/**
  * The Order, before it is there.
  *
- * Three blocks, because three cards are coming. Announced as a status so that a Merchant
+ * Four blocks, because four cards are coming. Announced as a status so that a Merchant
  * whose screen is being read to them is told the page is working rather than left in silence.
  */
 function OrderLoading() {
@@ -240,6 +294,7 @@ function OrderLoading() {
       <Skeleton className="h-7 w-40" />
       <Skeleton className="h-48 w-full" />
       <Skeleton className="h-40 w-full" />
+      <Skeleton className="h-32 w-full" />
     </div>
   );
 }

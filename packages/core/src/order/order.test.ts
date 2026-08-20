@@ -83,6 +83,10 @@ describe("a Cart becomes an Order", () => {
           lineItemIds: [expect.any(String)],
         },
       ],
+      // Nowhere: this Cart carried no Address, which is an ordinary Cart — nothing about an
+      // Address is mandatory, and where one was given it is a snapshot rather than a reference
+      // (#319, `order/an-order-remembers-where-it-went.test.ts`).
+      address: null,
       metadata: {},
       // The money, recorded against the Order — for the total, and by whatever this deployment
       // was wired to take it with. A placed Order is a paid Order (ADR-0053).

@@ -1,8 +1,14 @@
 import { asc, eq } from "drizzle-orm";
+import {
+  addressColumns,
+  addressRegion,
+  addressToSnapshot,
+  type OrderAddress,
+} from "../address/address.ts";
 import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
 import { PUBLISHED } from "../catalog/status.ts";
 import type { Queryable } from "../db/client.ts";
-import { cart, cartLineItem, product, variant } from "../db/schema.ts";
+import { address, cart, cartLineItem, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import {
   type AppliedFulfilment,
@@ -53,6 +59,19 @@ export type CartToPlace = {
    * exactly what such a Cart was already priced for.
    */
   readonly regionId: string | null;
+  /**
+   * Where this Cart is to be delivered, **read here so Capture can copy it** (#319, ADR-0072).
+   *
+   * Already reduced to what the snapshot needs — the Region's name rather than a reference —
+   * because `capture-order` writes a copy and a copy assembled from a join taken later would be
+   * a copy of whatever the Store said by then. `null` is a Cart nobody has addressed, which is
+   * an ordinary Cart: nothing here makes an Address mandatory.
+   *
+   * Read by *this* module rather than by the Step that writes it, for this file's whole reason:
+   * the hold route and the placement read one Cart through one query, so what is in a Cart has
+   * one answer.
+   */
+  readonly address: OrderAddress | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -165,6 +184,10 @@ export async function readCartToPlace(
       shopperExternalId: cart.shopperExternalId,
       currency: cart.currency,
       regionId: cart.regionId,
+      // Read here rather than by `capture-order`, so the hold route and the placement see one
+      // Cart — and through `address/address.ts`'s own selection, so the Cart a storefront reads
+      // and the Cart a placement copies cannot describe two different destinations.
+      ...addressColumns,
       metadata: cart.metadata,
       // The same expression the Cart's own routes judge expiry with, imported rather than
       // rewritten: a second spelling of it would be a second answer to whether a Cart is
@@ -173,6 +196,9 @@ export async function readCartToPlace(
       placed: cartHasBeenPlaced,
     })
     .from(cart)
+    // `left` twice over: most Carts carry no Address, and an Address may name no Region.
+    .leftJoin(address, eq(address.id, cart.addressId))
+    .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
     .where(eq(cart.id, cartId))
     .limit(1);
   if (!found) return noSuchCart(cartId);
@@ -253,6 +279,7 @@ export async function readCartToPlace(
             : { email: found.shopperEmail, externalId: found.shopperExternalId },
         currency: found.currency,
         regionId: found.regionId,
+        address: addressToSnapshot(found),
         metadata: found.metadata,
       },
       channel,

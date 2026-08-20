@@ -414,6 +414,20 @@
       "when": 1787242461356,
       "tag": "0058_natural_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1787248058531,
+      "tag": "0059_jazzy_swarm",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1787248072451,
+      "tag": "0060_address_updated_at_triggers",
+      "breakpoints": true
     }
   ]
 }

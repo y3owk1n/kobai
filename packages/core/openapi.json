@@ -2206,6 +2206,17 @@
                 },
                 "description": "How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed."
               },
+              "address": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OrderAddress"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Where this Order went, **as at Capture** — a snapshot, so correcting the Address on the Cart, replacing it, taking it off or deleting the Region it named changes none of it (ADR-0009). `null` for an Order placed from a Cart that carried no Address, and for every Order placed before Addresses existed."
+              },
               "metadata": {
                 "type": "object",
                 "additionalProperties": {},
@@ -2216,6 +2227,7 @@
               "lineItems",
               "adjustments",
               "fulfilments",
+              "address",
               "metadata"
             ]
           }
@@ -2378,6 +2390,59 @@
           "lineItemIds"
         ]
       },
+      "OrderAddress": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string",
+            "description": "ISO 3166-1 alpha-2, as at Capture."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The address as it should be read, as at Capture."
+          },
+          "postalCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid",
+                "description": "For navigation only. `null` once that Region has been deleted — `name` beside it is what a person reads."
+              },
+              "name": {
+                "type": "string",
+                "description": "What that Region was called at Capture. Renaming it does not reach this."
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "description": "The Region the Address named, or `null` where it named none. **A copy rather than a `RegionIdentity`**, which is why it carries two fields where the live one carries three: a snapshot joins nothing, so every field here would have to be *copied*, and a copied currency on a destination is a second currency on an Order that nothing was ever charged in. `Cart.address.region` is a reference to a Region that still exists, so it names one the way every other reference on this surface does."
+          }
+        },
+        "required": [
+          "country",
+          "lines",
+          "postalCode",
+          "region"
+        ]
+      },
       "OrderRefusal": {
         "type": "object",
         "properties": {
@@ -2448,6 +2513,17 @@
             ],
             "description": "Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region."
           },
+          "address": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads, quotes and places."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -2480,12 +2556,53 @@
           "shopper",
           "currency",
           "region",
+          "address",
           "metadata",
           "expiresAt",
           "expired",
           "placed",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "Address": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string",
+            "description": "ISO 3166-1 alpha-2 — `MY`, `SG`, `GB`. Upper-cased on the way in. kobai holds no table of countries and refuses no code it has never heard of; what it will not take is a country that is not a code, because shipping and tax are both worked out from one."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The address as it should be read, in that order — at least one. Write the lines the way the destination country writes them; kobai models no `city` and no `state`, because no two countries agree on those."
+          },
+          "postalCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` where none was given, which is an ordinary Address: several countries have no postal code at all, so kobai requires none and validates the format of none."
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegionIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which of the Store's Regions this Address falls in. `null` for an Address that named none — and for one whose Region has since been deleted, which clears the reference and leaves the destination whole."
+          }
+        },
+        "required": [
+          "country",
+          "lines",
+          "postalCode",
+          "region"
         ]
       },
       "CartState": {
@@ -3082,6 +3199,38 @@
             "format": "uuid",
             "description": "The `id` of the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at. **Left out is the Store's default Region**, so a storefront selling into one market never mentions a Region at all. One this Store has not got is refused with `region-not-found`. There is no `null`: a Cart is always bought somewhere."
           },
+          "address": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "country": {
+                "type": "string"
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "postalCode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "regionId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "country",
+              "lines"
+            ],
+            "description": "Where what is in this Cart is to be delivered. Optional here and at the correction alike — nothing makes an Address mandatory, and a Cart with none reads, quotes and places. kobai checks the **shape and nothing beyond it** (ADR-0072): an `address.regionId` this Store has not got is refused with `region-not-found`, and a postal code no postal authority would recognise is not refused at all."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -3117,6 +3266,38 @@
             "type": "string",
             "format": "uuid",
             "description": "Move this Cart to another Region — **the same Cart, the same `id` and every Line Item on it**, re-denominated in the new Region's currency and re-priced there on the next read, because a Cart's lines carry no price snapshot (ADR-0009). Naming the Region it is already in changes nothing and is not refused, so a storefront may send the whole state it is holding. Refused with `cart-is-denominated` while this Cart is holding stock — a hold is claimed in the currency the Cart was in, and kobai serves no way to give one back by hand — and with `variant-not-priced-in-region`, naming them, where a line would have no Price in the new Region."
+          },
+          "address": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "country": {
+                "type": "string"
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "postalCode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "regionId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "country",
+              "lines"
+            ],
+            "description": "Where what is in this Cart is to be delivered. **The whole Address, replacing whatever is on the Cart** — there is no merge, so a postal code left out of a correction is a postal code taken off. `null` removes the Address altogether; absent leaves it alone. kobai checks the shape and nothing beyond it (ADR-0072)."
           },
           "metadata": {
             "type": "object",

@@ -250,7 +250,7 @@ describe("the Regions a Store sells into", () => {
 });
 
 describe("a Region is not a scoping key", () => {
-  it("is referenced by the Store's own fallback and a Price's constraint, and by nothing else", async () => {
+  it("is referenced by the Store, a Price, a Cart and two Addresses, and by nothing else", async () => {
     await using kobai = await createTestKobai();
     const schema = inspectSchema(kobai.database);
     const table = await regionTable(schema);
@@ -272,12 +272,35 @@ describe("a Region is not a scoping key", () => {
     // market, the same kind of fact `core_price.region_id` is one table along — where a scoping
     // key would be one every row had to carry to be visible at all.
     //
-    // A `region_id` appearing on an **Order** or on a catalog table is what this still names,
-    // and the day one does that is another decision to take here.
+    // **`core_address.region_id` and `core_order_address.region_id` are the fourth and fifth,
+    // and the second of them is a `region_id` on something belonging to an Order** — which is
+    // exactly what the paragraph this replaced said would be another decision to take here
+    // (#319). It is taken, and it is not a scope either. `core_address.region_id` says which of
+    // this Store's geographies one Address falls in: nullable, `null` for an Address that names
+    // none, and an Address that names none still reads, still quotes and still places.
+    // `core_order_address.region_id` is **navigation on a snapshot** — the shape
+    // `core_order_line_item.variant_id` already has — and `region_name` beside it is what a
+    // person reads, so deleting the Region leaves the Order saying where the parcel went. A
+    // scoping key would be one every row had to carry to be visible at all, and neither is:
+    // nothing narrows a list of Orders or of Addresses by Region, and no request is answered a
+    // different set of anything because of one.
+    //
+    // A `region_id` appearing on `core_order` itself, or on a catalog table, is what this still
+    // names, and the day one does that is another decision to take here.
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
+      {
+        constraint: "core_address_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_address" },
+        to: table,
+      },
       {
         constraint: "core_cart_region_id_core_region_id_fk",
         from: { schema: table.schema, name: "core_cart" },
+        to: table,
+      },
+      {
+        constraint: "core_order_address_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_order_address" },
         to: table,
       },
       {
@@ -311,8 +334,18 @@ describe("a Region is not a scoping key", () => {
 
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
       {
+        constraint: "core_address_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_address" },
+        to: table,
+      },
+      {
         constraint: "core_cart_region_id_core_region_id_fk",
         from: { schema: table.schema, name: "core_cart" },
+        to: table,
+      },
+      {
+        constraint: "core_order_address_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_order_address" },
         to: table,
       },
       {

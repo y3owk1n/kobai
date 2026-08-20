@@ -28,8 +28,89 @@ async function temporaryDirectory(): Promise<string> {
   return directory;
 }
 
+/**
+ * How hard the teardown tries before it calls a workspace stuck.
+ *
+ * Node backs off linearly — 50ms, then 100, then 150 — so a directory that keeps refilling
+ * is retried for a little under three seconds before it is given up on: far longer than a
+ * background repack of a hundred-odd objects, and well inside the 30-second hook budget
+ * `vitest.config.ts` sets, so a directory nothing will ever release still fails inside the
+ * run rather than hanging it.
+ */
+const REMOVAL_RETRIES = 10;
+const REMOVAL_RETRY_DELAY_MS = 50;
+
+/**
+ * Removes one workspace, or explains which one it could not remove.
+ *
+ * `force` is not what its name suggests: it suppresses a path that **does not exist** and
+ * retries nothing, so the first `ENOTEMPTY` propagates. `maxRetries` is the option for the
+ * transient family — `ENOTEMPTY`, `EBUSY`, `EPERM`, `EMFILE`, `ENFILE` — and this is the
+ * case it exists for, because the workspace is a git repository that something else may
+ * still be writing into (#313).
+ *
+ * **That something is not a subprocess this file forgot to wait for.** `scaffold()` awaits
+ * all three of its git invocations and every test awaits `scaffold()`; there is no handle
+ * here that goes unheld. What outlives the wait is git's own doing: `git commit` ends by
+ * spawning `git maintenance run --auto --detach`, which is *detached* by design, and it
+ * inspects — and, when it decides the repository wants it, repacks — `.git/objects` after
+ * the command that started it has already exited. A directory read as empty a moment ago
+ * therefore has an entry in it before the `rmdir` lands, which is the `ENOTEMPTY` on
+ * `/tmp/kobai-scaffold-…/corner-shop/.git/objects` that failed #312's run in teardown with
+ * all thirteen of this file's tests already green. Waiting for that process is not
+ * something a caller of `git` is offered, so retrying the removal is the whole of the
+ * answer.
+ *
+ * **The retry was watched repairing the race rather than reasoned about.** A subprocess
+ * writing into an `objects/` directory while `rm` sweeps it fails at `maxRetries: 0` with
+ * the same `ENOTEMPTY: directory not empty, rmdir '…/objects'` #312 died on — and does it
+ * only sometimes, which is the nondeterminism — and goes through at the values above,
+ * after about a second and a half of retrying. What could *not* be reproduced on demand is
+ * git's own maintenance losing that race, because nothing here can make a detached process
+ * be scheduled inside the window; the sizing is the part that is measured.
+ *
+ * A workspace that survives every retry is not a flake and is not swallowed: it fails the
+ * suite. It throws rather than returning, so the caller can report every stuck workspace at
+ * once, and the message names the workspace — `rm` names only the entry it tripped on, a
+ * path several levels inside a random temporary directory — while `cause` keeps `rm`'s own
+ * error, errno and syscall for whoever has to go and look.
+ */
+async function removeWorkspace(path: string): Promise<void> {
+  try {
+    await rm(path, {
+      recursive: true,
+      force: true,
+      maxRetries: REMOVAL_RETRIES,
+      retryDelay: REMOVAL_RETRY_DELAY_MS,
+    });
+  } catch (cause) {
+    throw new Error(
+      `${path} — ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+  }
+}
+
 afterAll(async () => {
-  await Promise.all(workspaces.map((path) => rm(path, { recursive: true, force: true })));
+  // `allSettled` rather than `all`: one workspace that will not go must not take the
+  // removal of the others with it, nor hide which of them were also stuck. `all` rejects on
+  // the first failure, which is how one racy directory came to fail the whole file.
+  const outcomes = await Promise.allSettled(workspaces.map(removeWorkspace));
+
+  const stuck = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason as Error] : [],
+  );
+
+  if (stuck.length > 0) {
+    // An `AggregateError` because that is what it is: every workspace that would not go is
+    // in it, each still carrying `rm`'s own error — errno, syscall and the entry it tripped
+    // on — rather than flattened into a string on the way past. The message says the same
+    // thing for a reporter that prints only that.
+    throw new AggregateError(
+      stuck,
+      `${stuck.length} scaffolded workspace${stuck.length === 1 ? " is" : "s are"} still on disk:\n${stuck.map((error) => error.message).join("\n")}`,
+    );
+  }
 });
 
 describe("scaffolding a Project", () => {
