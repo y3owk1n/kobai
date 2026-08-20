@@ -135,7 +135,12 @@ function Admin() {
         <Route path="orders/:id" element={<OrderScreen />} />
         <Route path="carts" element={<Carts />} />
         <Route path="carts/:id" element={<CartScreen />} />
-        <Route path="api-keys" element={<ApiKeys />} />
+        {/* Under `developer/` since #266, and **nothing answers `api-keys` any more**: the
+            address is what a Merchant sends a colleague and what a refresh lands on, so it is
+            where the grouping is true if it is true anywhere, and a redirect from the old one
+            would be permanent furniture in vendored source `kobai-upgrade` can never reach.
+            kobai is not published, so there is no bookmark to preserve (ADR-0079). */}
+        <Route path="developer/api-keys" element={<ApiKeys />} />
         <Route path="merchants" element={<Merchants />} />
         <Route path="roles" element={<Roles />} />
         <Route path="roles/:id" element={<RoleScreen />} />

@@ -1,6 +1,6 @@
 import type { Session } from "@kobai/client";
 import { LogOutIcon } from "lucide-react";
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useId, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router";
 import { CommandPalette } from "@/components/command-palette";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -30,7 +30,12 @@ import {
 } from "@/components/ui/sidebar";
 import { CrumbProvider } from "@/lib/crumb";
 import { PortalContainerProvider } from "@/lib/portal";
-import { type Section, sectionOf, useSections } from "@/lib/sections";
+import {
+  type Section,
+  type SectionGroup,
+  sectionOf,
+  useGroupedSections,
+} from "@/lib/sections";
 import { useKobai, useSessionOnNavigation } from "@/lib/session";
 
 /**
@@ -48,13 +53,15 @@ import { useKobai, useSessionOnNavigation } from "@/lib/session";
  * command palette beside the sidebar. Two affordances over one list is the whole reason it
  * moved: a copy in each is how they come to disagree about what this Admin has — and since #178
  * it is one *narrowing* of that list, so what the sidebar draws and what the palette offers are
- * the same answer to "what may this Role read".
+ * the same answer to "what may this Role read". Since #266 the sidebar draws that answer in
+ * **groups**, which is a view of the same narrowing and not a second one, and the palette draws
+ * it flat: a palette that nests is a menu (ADR-0079).
  */
 export function AppLayout({ session }: { readonly session: Session }) {
   const { signOut } = useKobai();
   const pathname = useLocation().pathname;
   const here = sectionOf(pathname);
-  const sections = useSections();
+  const groups = useGroupedSections();
   // The half of ADR-0063 the query cannot do for itself: a Role edited under a live session
   // otherwise leaves the frame offering sections this Merchant lost, until the window is
   // focused again. This is the frame catching up, and never a check being re-run.
@@ -89,29 +96,19 @@ export function AppLayout({ session }: { readonly session: Session }) {
             </div>
           </SidebarHeader>
           <SidebarContent>
-            {/* Nothing at all when this Role can read none of them, rather than a "Store"
-              heading over an empty list: a group naming a category with nothing in it reads
-              as a list that failed to load. What that Merchant is told instead is a screen,
-              in `app.tsx`. */}
-            <SidebarGroup hidden={sections.length === 0}>
-              <SidebarGroupLabel>Store</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {sections.map((section) => (
-                    <SidebarMenuItem key={section.path}>
-                      <SidebarMenuButton
-                        isActive={here === section}
-                        tooltip={section.label}
-                        render={<Link to={section.path} />}
-                      >
-                        <section.Icon />
-                        <span>{section.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+            {/* Nothing at all when this Role can read none of them, rather than a heading over
+              an empty list: a group naming a category with nothing in it reads as a list that
+              failed to load. `useGroupedSections` drops an empty group for that reason, so a
+              Role that can read nothing draws no group whatever — and what that Merchant is
+              told instead is a screen, in `app.tsx`. */}
+            {groups.map(({ group, sections }) => (
+              <SidebarSectionGroup
+                key={group}
+                group={group}
+                sections={sections}
+                here={here}
+              />
+            ))}
           </SidebarContent>
           <SidebarFooter>
             <SidebarMenu>
@@ -170,6 +167,55 @@ export function AppLayout({ session }: { readonly session: Session }) {
         </SidebarInset>
       </SidebarProvider>
     </PortalContainerProvider>
+  );
+}
+
+/**
+ * One of the sidebar's groups: its heading, and the sections this Role may read inside it.
+ *
+ * A component rather than the map's body, because the group and its heading have to be tied
+ * together by an `id` — and an `id` is unique to the *document*, so it comes from `useId` and
+ * not from the group's name. Which groups there are and what is in them is
+ * `lib/sections.ts`'s; what this file decides is how one is drawn (ADR-0063).
+ *
+ * **`role="group"`, named by the heading a Merchant can see.** The whole sidebar is one
+ * `complementary` landmark, so without this a reader moving through it meets eight links and
+ * three unattached bits of text, and the grouping is visual and nothing else. It is passed to
+ * the vendored `SidebarGroup` rather than baked into it, like the landmark on `Sidebar` above:
+ * what a deployment's sidebar *is* belongs to the application composing it (ADR-0063).
+ */
+function SidebarSectionGroup({
+  group,
+  sections,
+  here,
+}: {
+  readonly group: SectionGroup;
+  readonly sections: readonly Section[];
+  /** Which section the address is in, so the entry it belongs to stays lit. */
+  readonly here: Section | undefined;
+}) {
+  const heading = useId();
+
+  return (
+    <SidebarGroup role="group" aria-labelledby={heading}>
+      <SidebarGroupLabel id={heading}>{group}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {sections.map((section) => (
+            <SidebarMenuItem key={section.path}>
+              <SidebarMenuButton
+                isActive={here === section}
+                tooltip={section.label}
+                render={<Link to={section.path} />}
+              >
+                <section.Icon />
+                <span>{section.label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
   );
 }
 
