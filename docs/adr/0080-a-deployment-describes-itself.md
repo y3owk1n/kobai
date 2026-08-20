@@ -154,10 +154,14 @@ splits on exactly that argument.
 
 - **Both routes are promised surface** under ADR-0060, including which gate they sit behind.
   Loosening `deployment:read` later is a break, not a tweak.
-- **Core has to know its own version at runtime**, which nothing in `packages/core/src` currently
-  does. That is a small mechanism and a new obligation on the build.
-- **`Kobai.openapi()`'s docblock changes** in the same commit as the route, and its reasoning moves
-  here.
+- **The version is `coreVersion()`, which already exists.** `http/app.ts` reads it from Core's own
+  manifest to fill the description's `info.version`, on ADR-0060's reasoning that the surface's
+  version *is* the package's. This route is a second reader of that one fact rather than a second
+  copy of it — which is the same argument, one route along.
+- **Two written statements that the description is not served change** in the same commit as the
+  route: `Kobai.openapi()`'s docblock, and the paragraph of the same name in
+  `docs/agents/the-http-surface.md`. Both carry the anonymity argument, and both are amended
+  rather than deleted — the surface is still not served *anonymously*.
 - **`@kobai/client` gains a path and a type** by regeneration, like every other route.
 - **A Merchant holding only `deployment:read` can read the whole shape of the API and nothing in
   it.** That is the intended grant, and it is what makes the Playground safe to *show* to a Role
