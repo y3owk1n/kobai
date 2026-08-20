@@ -38,6 +38,11 @@ describe("building a Cart", () => {
       id: cart.id,
       // No Shopper: Core never assumes one, and a guest is the ordinary path (ADR-0020).
       shopper: null,
+      // Denominated at the moment it was started, from the Store's default Region, because
+      // this request named no Region at all — which is every request a single-market
+      // storefront makes (#293, ADR-0074).
+      currency: "USD",
+      region: { id: expect.any(String), name: "USD", currency: "USD" },
       lineItems: [],
       metadata: {},
       expiresAt: expect.any(String),
@@ -47,6 +52,56 @@ describe("building a Cart", () => {
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
+  });
+
+  it("starts one in the Region the storefront named, denominated in its currency", async () => {
+    // A storefront that has already asked a Shopper where they are starts the Cart there,
+    // rather than starting it in the wrong currency and switching (#293).
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const enabled = await kobai.request("/admin/store", {
+      method: "PATCH",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ currencies: [{ code: "USD" }, { code: "MYR" }] }),
+    });
+    expect(enabled.status).toBe(200);
+    const created = await kobai.request("/admin/regions", {
+      method: "POST",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Malaysia", currency: "MYR" }),
+    });
+    const malaysia = ((await created.json()) as { id: string }).id;
+
+    const cart = await kobai.request("/store/carts", {
+      method: "POST",
+      headers: { ...catalog.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ regionId: malaysia }),
+    });
+
+    expect(cart.status).toBe(201);
+    // The currency is stamped from the Region rather than read through it from here on — see
+    // `a-cart-switches-region.test.ts`, where a Region moved onto another currency leaves this
+    // Cart exactly where it was.
+    await expect(cart.json()).resolves.toMatchObject({
+      currency: "MYR",
+      region: { id: malaysia, name: "Malaysia", currency: "MYR" },
+    });
+  });
+
+  it("refuses a Region this Store has not got, and starts no Cart", async () => {
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+
+    const response = await kobai.request("/store/carts", {
+      method: "POST",
+      headers: { ...catalog.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ regionId: "2f1b8a5e-0000-4000-8000-000000000000" }),
+    });
+
+    // 422 and the admin surface's own word: the body is well formed, and what refuses it is the
+    // state of the Store (ADR-0060 — one fact, one word, whichever end asks).
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({ reason: "region-not-found" });
   });
 
   it("takes a publishable key, which is what a browser holds", async () => {

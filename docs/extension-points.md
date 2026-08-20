@@ -282,13 +282,23 @@ it declares seven slots, in this order:
 
 | Slot | What it does | Compensation |
 | --- | --- | --- |
-| `load-cart` | Reads the Cart, its Line Items, and what each one's Fulfilment Strategy answers | — |
-| `price-lines` | Invokes `resolve-price` for each line | — |
+| `load-cart` | Reads the Cart, its Line Items, what each one's Fulfilment Strategy answers, and the market it is being bought in | — |
+| `price-lines` | Invokes `resolve-price` for each line, in that market | — |
 | `apply-adjustments` | Attaches discounts and surcharges as their own lines — **Core attaches none** | — |
 | `calculate-tax` | Works out the tax per line, and on each Adjustment the Order itself carries. Core's returns zero; tax is its own spec | — |
 | `hold-reservations` | Claims everything scarce, atomically | Release |
 | `take-payment` | Asks your Payment Provider for what the Order comes to | Refund |
 | `capture-order` | Consumes those Reservations and writes the immutable Order, in one transaction | none — the point of no return |
+
+**A placement happens *somewhere*, and `load-cart` is where that is decided** (#293). The Cart
+carries the Region it is bought in and the currency it was stamped with when that Region was set;
+the Channel comes off the API key the request presented, exactly as it does on the price route.
+So `LoadedCart` hands your Steps a `channel` beside `cart.currency` and `cart.regionId`, and
+`price-lines` prices every line in that one market — which is what makes the number a storefront
+was quoted and the number it is charged the same number for a Store with Region- or
+Channel-constrained Prices. **A Cart's currency is stamped rather than read through its Region**,
+so a Region moved onto another currency does not reprice a Cart already in flight; if you replace
+`load-cart`, that shape is yours to produce and your compiler will say so.
 
 Read that order as the argument it is. `capture-order` declares no compensation
 because there is nothing it could honestly do —

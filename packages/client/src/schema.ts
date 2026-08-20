@@ -3145,7 +3145,7 @@ export interface paths {
   "/store/carts": {
     /**
      * Start a Cart
-     * @description Works for a guest, because Core assumes an authenticated Shopper nowhere (ADR-0020). The `id` in the answer is the whole of the authority to act on this Cart — treat it as a credential. A Shopper may be attached here, but only over a secret key.
+     * @description Works for a guest, because Core assumes an authenticated Shopper nowhere (ADR-0020). The `id` in the answer is the whole of the authority to act on this Cart — treat it as a credential. A Shopper may be attached here, but only over a secret key. The Cart is denominated when it is started: `regionId` says where it is being bought and the answer's `currency` is stamped from that Region, so a storefront that names no Region gets the Store's default and never mentions one.
      */
     post: {
       requestBody?: {
@@ -3178,6 +3178,12 @@ export interface paths {
         };
         /** @description This request asserts who the Shopper is, which needs a secret key (ADR-0020). Detaching one — `"shopper": null` — asserts nothing and does not. */
         403: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: this Store has no such Region. */
+        422: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
           };
@@ -3247,8 +3253,8 @@ export interface paths {
       };
     };
     /**
-     * Attach a Shopper, or change a Cart's own data
-     * @description What a storefront calls when a guest signs in half way through. `shopper` needs a secret key; `null` makes the Cart a guest's again.
+     * Attach a Shopper, move a Cart to another Region, or change its own data
+     * @description What a storefront calls when a guest signs in half way through, and when a Shopper changes where they are buying. `shopper` needs a secret key; `null` makes the Cart a guest's again. `regionId` moves the Cart **in place** — the same Cart, the same `id`, every Line Item still on it, re-denominated in the new Region's currency and re-priced there on the next read. It is refused while the Cart is holding stock (`cart-is-denominated`) or once it has been placed (`cart-placed`), because a hold and a Payment are both denominated in the currency the Cart was in; and refused, naming the lines, where one of them would have no Price in the new Region.
      */
     patch: {
       parameters: {
@@ -3297,8 +3303,14 @@ export interface paths {
             "application/json": components["schemas"]["CartRefusal"];
           };
         };
-        /** @description This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way. */
+        /** @description This Cart can no longer be changed: it has expired, or it has already been placed — it still reads either way. Or it is holding stock claimed in the currency it is in, which is refused only for a change of Region: the hold lapses by itself, and nothing gives one back by hand. */
         409: {
+          content: {
+            "application/json": components["schemas"]["CartRefusal"];
+          };
+        };
+        /** @description Well formed, and still refused: this Store has no such Region, or a line of this Cart would have no Price in it — the refusal names them, and the Cart is left where it was. */
+        422: {
           content: {
             "application/json": components["schemas"]["CartRefusal"];
           };
@@ -4609,6 +4621,10 @@ export interface components {
        */
       id: string;
       shopper: components["schemas"]["CartShopper"];
+      /** @description ISO 4217 — the one currency this Cart is denominated in, and what every line of it is priced in. **Stamped when the Cart's Region was set rather than read through it** (ADR-0074), so a Merchant who moves a Region onto another currency does not reprice a Cart that already exists: where this and `region.currency` differ, this is the one that decides. It moves only when `PATCH /store/carts/{id}` moves the Cart to another Region. */
+      currency: string;
+      /** @description Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region. */
+      region: components["schemas"]["RegionIdentity"] | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -4652,7 +4668,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced";
+      reason: "invalid" | "malformed-body" | "secret-key-required" | "cart-not-found" | "cart-expired" | "cart-placed" | "line-item-not-found" | "variant-not-found" | "variant-not-priced" | "region-not-found" | "cart-is-denominated" | "variant-not-priced-in-region";
     };
     IssuedApiKey: {
       /** Format: uuid */
@@ -4831,6 +4847,11 @@ export interface components {
         email: string;
         externalId?: string | null;
       }) | null;
+      /**
+       * Format: uuid
+       * @description The `id` of the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at. **Left out is the Store's default Region**, so a storefront selling into one market never mentions a Region at all. One this Store has not got is refused with `region-not-found`. There is no `null`: a Cart is always bought somewhere.
+       */
+      regionId?: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -4842,6 +4863,11 @@ export interface components {
         email: string;
         externalId?: string | null;
       }) | null;
+      /**
+       * Format: uuid
+       * @description Move this Cart to another Region — **the same Cart, the same `id` and every Line Item on it**, re-denominated in the new Region's currency and re-priced there on the next read, because a Cart's lines carry no price snapshot (ADR-0009). Naming the Region it is already in changes nothing and is not refused, so a storefront may send the whole state it is holding. Refused with `cart-is-denominated` while this Cart is holding stock — a hold is claimed in the currency the Cart was in, and kobai serves no way to give one back by hand — and with `variant-not-priced-in-region`, naming them, where a line would have no Price in the new Region.
+       */
+      regionId?: string;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;

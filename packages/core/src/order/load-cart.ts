@@ -11,6 +11,7 @@ import {
   fulfilmentAnswersFor,
 } from "../fulfilment/strategy.ts";
 import type { ReservableLine } from "../reservation/provider.ts";
+import type { ChannelIdentity } from "../store/channel.ts";
 import type { OrderShopper } from "./read.ts";
 
 /**
@@ -29,10 +30,29 @@ import type { OrderShopper } from "./read.ts";
  * rather than this repository keeping two queries in step.
  */
 
-/** The Cart's own fields that become the Order's, copied rather than referenced. */
+/** The Cart's own fields the placement carries, copied rather than referenced. */
 export type CartToPlace = {
   readonly id: string;
   readonly shopper: OrderShopper | null;
+  /**
+   * The one currency this Cart is denominated in, and the one every line of it is priced in
+   * (#293, ADR-0074).
+   *
+   * **Stamped on the Cart rather than read through its Region**, so a Merchant who moves a
+   * Region onto another currency does not reprice a Cart that is already in flight — see
+   * `core_cart.currency`. `price-lines` is what spends it, and `oneCurrency` is still
+   * downstream of that: this is what the lines *should* come back in, and that is the check
+   * that they did.
+   */
+  readonly currency: string;
+  /**
+   * Where this Cart is being bought, or `null` for one started before kobai recorded a Region.
+   *
+   * The identifier rather than the Region, because what a Step needs it for is the market
+   * `price-lines` builds — `marketOfCart` is where `null` becomes the Store's default, which is
+   * exactly what such a Cart was already priced for.
+   */
+  readonly regionId: string | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -68,6 +88,18 @@ export type CartLineToPlace = {
 /** What `load-cart` produces and `price-lines` prices. */
 export type LoadedCart = {
   readonly cart: CartToPlace;
+  /**
+   * The Channel this purchase is being made through — the credential's, never the Cart's
+   * (#293, ADR-0020).
+   *
+   * `core_api_key.channel_id` decides it, so a storefront threads nothing and cannot claim to
+   * be in a Channel it was not issued a credential for; `null` is the unconstrained Channel,
+   * which is every key that names none. It travels here because `price-lines` needs it and
+   * because #292 left it out: the placement priced against **no** Channel while the product
+   * page priced against the key's, so a Store with a Channel-constrained Price quoted one
+   * number and charged another.
+   */
+  readonly channel: ChannelIdentity | null;
   /**
    * In the order they were added to the Cart — a total order, so two runs over one Cart price
    * the same lines in the same sequence.
@@ -119,6 +151,8 @@ export async function readCartToPlace(
   db: Queryable,
   cartId: string,
   strategies: FulfilmentStrategies | undefined,
+  /** The Channel the presented key is in, carried onto the result for `price-lines` (#293). */
+  channel: ChannelIdentity | null,
 ): Promise<LoadedCartResult> {
   // Checked before Postgres sees it: a malformed uuid raises, and an unhandled raise is a
   // 500 that reports a broken server for a request about something that does not exist.
@@ -129,6 +163,8 @@ export async function readCartToPlace(
       id: cart.id,
       shopperEmail: cart.shopperEmail,
       shopperExternalId: cart.shopperExternalId,
+      currency: cart.currency,
+      regionId: cart.regionId,
       metadata: cart.metadata,
       // The same expression the Cart's own routes judge expiry with, imported rather than
       // rewritten: a second spelling of it would be a second answer to whether a Cart is
@@ -215,8 +251,11 @@ export async function readCartToPlace(
           found.shopperEmail === null
             ? null
             : { email: found.shopperEmail, externalId: found.shopperExternalId },
+        currency: found.currency,
+        regionId: found.regionId,
         metadata: found.metadata,
       },
+      channel,
       lines,
     },
   };

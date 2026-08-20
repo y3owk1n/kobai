@@ -241,6 +241,9 @@ const CART_REASONS: Record<CartRefusal["reason"], true> = {
   "line-item-not-found": true,
   "variant-not-found": true,
   "variant-not-priced": true,
+  "region-not-found": true,
+  "cart-is-denominated": true,
+  "variant-not-priced-in-region": true,
 };
 
 /** Which Cart refusal this was, for a screen with something better to say than the prose. */

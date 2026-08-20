@@ -48,6 +48,10 @@ describe("a Merchant sees the Carts the Store is holding", () => {
           // nothing else, so a list that withheld it would answer no question a Merchant has.
           id: cart.id,
           shopper: null,
+          // On the list as well as on the Cart, because *what currency is this in* is a
+          // question a Merchant scanning held Carts has (#293).
+          currency: "USD",
+          region: { id: expect.any(String), name: "USD", currency: "USD" },
           metadata: {},
           expiresAt: expect.any(String),
           expired: false,
@@ -171,6 +175,10 @@ describe("a Merchant opens one Cart", () => {
     await expect(response.json()).resolves.toEqual({
       id: cart.id,
       shopper: null,
+      // What it is denominated in and where it is being bought — a read on a screen that is
+      // read-only, and the answer to *what currency is that hold in* (#293).
+      currency: "USD",
+      region: { id: expect.any(String), name: "USD", currency: "USD" },
       lineItems: [
         {
           id: cart.lineItem("POSTER-A2").id,

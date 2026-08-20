@@ -351,8 +351,32 @@ const CART_REFUSALS = {
     "This Cart can no longer be changed: it has expired, or it has already been placed. It still reads either way.",
     contract.CartRefusal,
   ),
+  /**
+   * The correction's 409, which says one thing more than {@link CART_REFUSALS.notChangeable}.
+   *
+   * A Cart holding stock is **not** frozen — its lines may still be added to and taken off — so
+   * the third sentence is about the one change that is refused rather than about the Cart being
+   * unchangeable (ADR-0074's amendment, ADR-0070). One entry because one status carries one
+   * description, and this route can answer all three.
+   */
+  notChangeableOrDenominated: json(
+    "This Cart can no longer be changed: it has expired, or it has already been placed — it still reads either way. Or it is holding stock claimed in the currency it is in, which is refused only for a change of Region: the hold lapses by itself, and nothing gives one back by hand.",
+    contract.CartRefusal,
+  ),
   notSellable: json(
     "Well formed, and still refused: that Variant carries no Price.",
+    contract.CartRefusal,
+  ),
+  /**
+   * The 422 a Region brought, on **both** Cart writes that take one, and it is two facts in one
+   * entry for the reason `noCartOrVariant` is: each route can answer either.
+   */
+  noSuchRegion: json(
+    "Well formed, and still refused: this Store has no such Region.",
+    contract.CartRefusal,
+  ),
+  notSellableThere: json(
+    "Well formed, and still refused: this Store has no such Region, or a line of this Cart would have no Price in it — the refusal names them, and the Cart is left where it was.",
     contract.CartRefusal,
   ),
 } as const;
@@ -364,7 +388,7 @@ const createCartRoute = createRoute({
   path: "/carts",
   summary: "Start a Cart",
   description:
-    "Works for a guest, because Core assumes an authenticated Shopper nowhere (ADR-0020). The `id` in the answer is the whole of the authority to act on this Cart — treat it as a credential. A Shopper may be attached here, but only over a secret key.",
+    "Works for a guest, because Core assumes an authenticated Shopper nowhere (ADR-0020). The `id` in the answer is the whole of the authority to act on this Cart — treat it as a credential. A Shopper may be attached here, but only over a secret key. The Cart is denominated when it is started: `regionId` says where it is being bought and the answer's `currency` is stamped from that Region, so a storefront that names no Region gets the Store's default and never mentions one.",
   security: API_KEY,
   request: {
     body: {
@@ -377,6 +401,7 @@ const createCartRoute = createRoute({
     400: CART_REFUSALS.invalid,
     401: REFUSALS.noApiKey,
     403: CART_REFUSALS.needsSecretKey,
+    422: CART_REFUSALS.noSuchRegion,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -399,12 +424,29 @@ const readCartRoute = createRoute({
   },
 });
 
+/**
+ * Attaching a Shopper, changing a Cart's own data — and **moving a Cart to another Region**
+ * (#293, ADR-0074's amendment).
+ *
+ * The switch is a field on the correction that already exists rather than a route of its own,
+ * and it is the same Cart afterwards: same `id`, same Line Items, re-denominated and re-priced.
+ * That is affordable precisely because a Cart's lines carry no price snapshot (ADR-0009), so
+ * there is nothing on the Cart to migrate — where an Order, whose lines *are* a snapshot, could
+ * never be moved at all.
+ *
+ * **It is refused once something is denominated against the Cart, and the refusal says which.**
+ * A live Reservation is `409 cart-is-denominated`; a Payment is the `409 cart-placed` this route
+ * already answers, because Core writes a Payment in the same transaction as the Order. Both
+ * exist for ADR-0070's case: stock held and a bank redirect in flight against a Cart totalled in
+ * the old currency, where `place-order`'s `oneCurrency` guard would catch the mismatch only
+ * after the money had moved.
+ */
 const updateCartRoute = createRoute({
   method: "patch",
   path: "/carts/{id}",
-  summary: "Attach a Shopper, or change a Cart's own data",
+  summary: "Attach a Shopper, move a Cart to another Region, or change its own data",
   description:
-    "What a storefront calls when a guest signs in half way through. `shopper` needs a secret key; `null` makes the Cart a guest's again.",
+    "What a storefront calls when a guest signs in half way through, and when a Shopper changes where they are buying. `shopper` needs a secret key; `null` makes the Cart a guest's again. `regionId` moves the Cart **in place** — the same Cart, the same `id`, every Line Item still on it, re-denominated in the new Region's currency and re-priced there on the next read. It is refused while the Cart is holding stock (`cart-is-denominated`) or once it has been placed (`cart-placed`), because a hold and a Payment are both denominated in the currency the Cart was in; and refused, naming the lines, where one of them would have no Price in the new Region.",
   security: API_KEY,
   request: {
     params: contract.IdParam,
@@ -419,7 +461,8 @@ const updateCartRoute = createRoute({
     401: REFUSALS.noApiKey,
     403: CART_REFUSALS.needsSecretKey,
     404: CART_REFUSALS.noCart,
-    409: CART_REFUSALS.notChangeable,
+    409: CART_REFUSALS.notChangeableOrDenominated,
+    422: CART_REFUSALS.notSellableThere,
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -833,6 +876,28 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
       c.req.valid("param").id,
       c.req.valid("json"),
       c.get("apiKey").kind,
+      {
+        // Off the key, exactly as a price is (ADR-0020): whether a line can be priced in the
+        // Region a Shopper is moving to depends on the Channel as well, and a storefront
+        // neither threads one nor could claim one it was not issued a credential for.
+        channel: c.get("apiKey").channel,
+        priceable: async (variantId, market) => {
+          // **The deployment's own declaration**, handed in like every other Workflow on this
+          // surface (ADR-0017, ADR-0054): a Project that replaced `select-price` decides what
+          // it can price, and asking `core_price` here would refuse a switch that deployment
+          // would have priced perfectly well. It is a `run` and not a query for the same
+          // reason `GET /store/variants/{id}/price` is one.
+          const run = await deps.priceWorkflow.run(
+            { variantId, ...market },
+            // The query string is the whole of the open context here: this route takes a body
+            // and Core reads every key of it, so there is no second half and nothing that
+            // could arrive in both. A deployment whose pricing reads `?tier=` sees the same
+            // context it would see on the price route.
+            contextFor(openMetadata(new URL(c.req.url))),
+          );
+          return run.ok;
+        },
+      },
     );
     if (!updated.ok) return refusedCart(c, updated, UPDATE_CART_STATUS);
     return c.json(updated.cart, 200);
@@ -876,6 +941,9 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
       // that reached for Core's default would hold for fifteen minutes whatever the Project
       // configured, and that failure is silent (ADR-0075).
       deps.holdWindowMs,
+      // The key's Channel, which nothing on this path prices with — it travels so that the hold
+      // and the placement that adopts it read a Cart through one shape (#293).
+      c.get("apiKey").channel,
     );
     if (!held.ok) {
       return c.json(
@@ -908,7 +976,9 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     // replaced a pricing Step, which is the bug this route exists to close (ADR-0077).
     const run = await quoteCart(
       deps.placeOrderWorkflow,
-      { cartId: c.req.valid("param").id },
+      // The Channel off the presented key, exactly as the placement takes it: a quote priced in
+      // a different market from the charge is the disagreement ADR-0077 exists to remove.
+      { cartId: c.req.valid("param").id, channel: c.get("apiKey").channel },
       contextFor(open.metadata),
     );
 
@@ -971,7 +1041,8 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
     let run: WorkflowRun<Order>;
     try {
       run = await deps.placeOrderWorkflow.run(
-        { cartId: body.cartId },
+        // The Channel is the key's and never the body's (ADR-0020) — see `PlaceOrderRequest`.
+        { cartId: body.cartId, channel: c.get("apiKey").channel },
         contextFor(open.metadata),
       );
     } catch (bug) {
@@ -1071,6 +1142,10 @@ type StatusesFor<Operation extends (...args: never[]) => Promise<unknown>> = Rec
 const CREATE_CART_STATUS = {
   invalid: 400,
   "secret-key-required": 403,
+  // 422 on `unknown-fulfilment-strategy`'s distinction: the body is well formed, and what
+  // refuses it is the state of the Store. It is the word the admin surface answers for the same
+  // fact, so a client meets one spelling of *this Store has no such Region* wherever it asks.
+  "region-not-found": 422,
 } as const satisfies StatusesFor<typeof createCart>;
 
 const READ_CART_STATUS = { "cart-not-found": 404 } as const;
@@ -1095,6 +1170,14 @@ const UPDATE_CART_STATUS = {
   ...NOT_CHANGEABLE_STATUS,
   invalid: 400,
   "secret-key-required": 403,
+  "region-not-found": 422,
+  // 409 beside the Cart that can no longer be changed, and for the same reason: the request was
+  // fine and the state of the Store refuses it. Retrying changes nothing until the hold lapses,
+  // which it does by itself (ADR-0070, ADR-0075).
+  "cart-is-denominated": 409,
+  // 422 beside `variant-not-priced`, which is the word an *add* meets: well formed, and refused
+  // by what this Store has priced.
+  "variant-not-priced-in-region": 422,
 } as const satisfies StatusesFor<typeof updateCart>;
 
 /** 422 for a Variant with no Price: well formed, and still refused. */

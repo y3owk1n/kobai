@@ -74,3 +74,53 @@ export async function marketAsked(
     },
   };
 }
+
+/**
+ * The two columns of a Cart that decide the market it is priced in (#293).
+ *
+ * The row rather than the whole Cart, because this is asked on the placement path where what is
+ * in hand is a query's result — and because naming the two columns is what makes the rule below
+ * legible at the call site.
+ */
+export type CartMarket = {
+  /** `null` for a Cart started before kobai recorded where a Cart is bought. */
+  readonly regionId: string | null;
+  readonly currency: string;
+};
+
+/**
+ * The market a **Cart** is priced in: its own Region, or the Store's default where it names
+ * none — and always its own stamped currency (#293, ADR-0074).
+ *
+ * **The currency is the Cart's and never the Region's, and that is the whole point of this
+ * function.** `core_cart.currency` is a copy taken when the Region was set, so a Merchant who
+ * moves a Region onto another currency (`PATCH /admin/regions/{id}`) does not reprice a Cart
+ * that already exists — which would otherwise happen silently, in the middle of a checkout,
+ * possibly while the Shopper is at their bank paying the old figure. The Region says *where*
+ * and the Cart says *what in*, and this is the one place the two are put back together.
+ *
+ * **A Cart naming no Region falls back to the Store's default**, exactly as
+ * {@link marketAsked} does for a request that names none: it is the honest answer for a Cart
+ * started before the column existed, and it is what such a Cart was already being priced for.
+ *
+ * `undefined` is a deployment that cannot price this Cart at all — no Region of its own and no
+ * default to fall back to, which is a database migrated but never booted against
+ * (`store/seed.ts`). The caller says what that means on its own path.
+ */
+export async function marketOfCart(
+  db: Queryable,
+  asked: CartMarket,
+  channel: ChannelIdentity | null,
+): Promise<PriceMarket | undefined> {
+  const region =
+    asked.regionId === null
+      ? await readDefaultRegion(db)
+      : await readRegion(db, asked.regionId);
+  if (!region) return undefined;
+
+  return {
+    // `name` and `id` are the Region's own and the currency is the Cart's — see above.
+    region: { id: region.id, name: region.name, currency: asked.currency },
+    channel,
+  };
+}

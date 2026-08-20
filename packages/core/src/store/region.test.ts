@@ -264,9 +264,22 @@ describe("a Region is not a scoping key", () => {
     // Price applies everywhere, and every Price that names none still does — where a scoping
     // key would be one every row had to carry to be visible at all.
     //
-    // A `region_id` appearing on a Cart, an Order or a catalog table is what this would name,
-    // and the day one does that is a decision to take rather than a build to fix quietly.
+    // **`core_cart.region_id` is the third, and it is the decision this sweep asked to be
+    // taken out loud rather than a build fixed quietly** (#293). It is not a scope either, and
+    // the test is the same one: nothing narrows a list of Carts by Region, no request is
+    // answered a different set of Carts because of it, and a Cart that names none still reads
+    // and still places. What it decides is what *that Cart* is priced in — one row's own
+    // market, the same kind of fact `core_price.region_id` is one table along — where a scoping
+    // key would be one every row had to carry to be visible at all.
+    //
+    // A `region_id` appearing on an **Order** or on a catalog table is what this still names,
+    // and the day one does that is another decision to take here.
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
+      {
+        constraint: "core_cart_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_cart" },
+        to: table,
+      },
       {
         constraint: "core_price_region_id_core_region_id_fk",
         from: { schema: table.schema, name: "core_price" },
@@ -297,6 +310,11 @@ describe("a Region is not a scoping key", () => {
     `);
 
     await expect(schema.foreignKeysTargeting(table)).resolves.toEqual([
+      {
+        constraint: "core_cart_region_id_core_region_id_fk",
+        from: { schema: table.schema, name: "core_cart" },
+        to: table,
+      },
       {
         constraint: "core_price_region_id_core_region_id_fk",
         from: { schema: table.schema, name: "core_price" },

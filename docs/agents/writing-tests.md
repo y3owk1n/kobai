@@ -345,6 +345,13 @@ session for anything the test then does on the admin surface. **Passing `catalog
 test that has already signed in gets a Cart at all**, since a deployment has only ever one
 first Merchant.
 
+**The Cart it seeds is in the Store's default Region and denominated in its currency** (#293),
+which is where a Cart with no Region named goes — the state every single-market storefront is in.
+It takes no `regionId`, on `seedTestCatalog`'s line about constrained Prices: a test about
+*which* market a Cart is in names the Region it means, in the open, through `POST /store/carts`
+or `PATCH /store/carts/{id}`, the way `cart/a-cart-switches-region.test.ts` does. A helper that
+could arrange a Cart in a second Region would be hiding the thing such a test is about.
+
 Two things this helper deliberately does not do. It never expires a Cart: a lifetime is
 measured in days, so time is passed by winding `expires_at` back on the row, the way the
 session tests do it — see the foot of `packages/core/src/cart/cart.test.ts`. And it is not

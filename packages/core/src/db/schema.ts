@@ -1082,6 +1082,63 @@ export const cart = pgTable(
      * row rather than the absence of one.
      */
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /**
+     * The one currency this Cart is denominated in — **stamped, never read through the Region**
+     * (#293, ADR-0074).
+     *
+     * It is a copy of the currency the Cart's Region selected at the moment that Region was
+     * set, and it is what every line of this Cart is priced in. That duplication is the
+     * decision: a Merchant may move a Region onto another currency
+     * (`PATCH /admin/regions/{id}`), and a Cart whose currency was *read through* its Region
+     * would be repriced by that — silently, in a different currency, possibly while a Shopper
+     * is at their bank paying the old figure. So the Region says **where** this Cart is being
+     * bought and this column says **what in**, and neither is derivable from the other once
+     * time has passed.
+     *
+     * **Not a foreign key onto {@link storeCurrency}, unlike a Region's.** A Region *selects*
+     * from the enabled set and is refused a code that is not in it; a Cart holds a stamp taken
+     * when it was created, and a Store that disabled a currency afterwards must not be refused
+     * at the constraint for a Cart somebody is still holding — `currency-in-use` names the
+     * Regions and is a refusal a Merchant can act on, where a foreign key here would be a 500
+     * naming a Shopper's Cart. `core_order.currency` is the same kind of stamp for the same
+     * reason.
+     */
+    currency: text("currency").notNull(),
+    /**
+     * Where this Cart is being bought — the Region its lines are priced in (#293, ADR-0074).
+     *
+     * A Cart created without one takes the Store's default, so a single-market storefront
+     * never mentions a Region; `PATCH /store/carts/{id}` moves one, in place, keeping the Cart
+     * and every line on it.
+     *
+     * **Nullable, and that is a fact rather than a shortcut** (ADR-0038). The Store's default
+     * Region is seeded at **boot** rather than by a migration (`store/seed.ts`), so at the
+     * instant this column arrives there may be no Region in the database at all — there is no
+     * value a backfill could write, and `null` says truthfully that this Cart was started
+     * before kobai recorded one. A Cart with none is priced for the Store's default Region, in
+     * its own `currency`, which is exactly what every such Cart was priced for before this
+     * column existed.
+     *
+     * **`set null` rather than `restrict` or `cascade`.** Deleting a Region refuses only while
+     * the Store falls back to it — ADR-0059's test is whether the repair is a control the
+     * Merchant has, and no Merchant can empty a Shopper's Cart, so `restrict` would make a
+     * Region undeletable for as long as somebody was holding one. `cascade` would delete the
+     * Cart, which is somebody's basket. So a Region that goes takes no Cart with it and leaves
+     * none unreadable: the row survives, `GET` still answers, and the Cart falls back to the
+     * Store's default Region.
+     *
+     * **What that costs is worth stating exactly.** A Cart stamped in the Store's default
+     * currency falls back exactly as one started before Regions did. A Cart stamped in
+     * *another* currency does not: `core_price.region_id` cascades, so the Prices constrained
+     * to the deleted Region went with it, and the default Region prices in something else —
+     * kobai converts nothing, so that Cart quotes and places `price-not-set` until it is moved.
+     * **The repair is the switch itself**, and it is available: a deleted Region denominates
+     * nothing against the Cart, so moving it to a Region that prices in a currency it has
+     * Prices in re-stamps it. That is ADR-0059's rule met rather than dodged — a refusal with a
+     * control behind it — and it is the same trade `variant-unavailable` makes on a line whose
+     * Product left the storefront.
+     */
+    regionId: uuid("region_id").references(() => region.id, { onDelete: "set null" }),
     /** The Shopper reference's key. Null for a guest, which is the ordinary case (ADR-0020). */
     shopperEmail: text("shopper_email"),
     /** The Shopper's identity in whatever system the storefront actually authenticates against. */
@@ -1101,6 +1158,11 @@ export const cart = pgTable(
     // were paged then. Carts belong in that company rather than with Roles and Merchants: this
     // one grows without bound and takes an insert from every storefront session.
     index("core_cart_created_at_id_idx").on(table.createdAt, table.id),
+    // `core_price.currency`'s check, said again about the same kind of value: what makes a code
+    // a *real* ISO 4217 code is not a fact this table can hold, and the length is. It arrives in
+    // the third step of the widening, onto rows the backfill has already made satisfy it
+    // (ADR-0038).
+    check("core_cart_currency_is_iso4217", sql`char_length(${table.currency}) = 3`),
   ],
 );
 
