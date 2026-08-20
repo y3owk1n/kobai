@@ -84,12 +84,18 @@ export type Section = {
  * beside the ones sharing its group rather than at the end, which is exactly the choice #254 did
  * not have when it added Media to a flat list of seven.
  *
- * **One consequence is worth being plain about** (#266). The front door lands on the head of
- * this list once it is narrowed, so a Role that could read *only* something in `Settings` or
- * `Developer` lands somewhere else than it did: API keys is last now rather than fifth, and
- * `Store` heads `Settings`. Every Role kobai seeds holds `catalog:read` and so still lands on
- * Products, which is the clause ADR-0079 argues; the alternative was a palette whose rows read
- * in an order matching nothing on screen.
+ * **Within a group the order is the one the entries already had**, and `Settings` is where that
+ * is a decision rather than a coincidence (#266). The front door lands on the head of this list
+ * once it is narrowed, so every entry that moves past another moves some Role's landing — and
+ * `Merchants`, `Roles`, `Store` is the order those three were in before this ticket, which is
+ * why a Role holding `merchant:read` and `store:read` still arrives at Merchants. Heading the
+ * group with `Store` would have moved it for nothing grouping requires.
+ *
+ * **What could not be preserved is said plainly**: a Role whose head *was* API keys lands
+ * somewhere else, because that screen is last now rather than fifth and moving it into
+ * `Developer` is the whole of this ticket. Every Role kobai seeds holds `catalog:read` and so
+ * still lands on Products, which is the clause ADR-0079 argues; the alternative was a palette
+ * whose rows read in an order matching nothing on screen.
  */
 export const SECTIONS = [
   {
@@ -132,6 +138,20 @@ export const SECTIONS = [
     group: "Commerce",
   },
   {
+    path: "/merchants",
+    label: "Merchants",
+    Icon: UsersIcon,
+    permission: PERMISSIONS.merchantRead,
+    group: "Settings",
+  },
+  {
+    path: "/roles",
+    label: "Roles",
+    Icon: ShieldCheckIcon,
+    permission: PERMISSIONS.merchantRead,
+    group: "Settings",
+  },
+  {
     /**
      * **Not `/store`, and that is a constraint of this repository rather than a preference.**
      *
@@ -151,20 +171,6 @@ export const SECTIONS = [
     label: "Store",
     Icon: StoreIcon,
     permission: PERMISSIONS.storeRead,
-    group: "Settings",
-  },
-  {
-    path: "/merchants",
-    label: "Merchants",
-    Icon: UsersIcon,
-    permission: PERMISSIONS.merchantRead,
-    group: "Settings",
-  },
-  {
-    path: "/roles",
-    label: "Roles",
-    Icon: ShieldCheckIcon,
-    permission: PERMISSIONS.merchantRead,
     group: "Settings",
   },
   {

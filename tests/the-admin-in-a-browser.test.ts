@@ -793,7 +793,10 @@ describe("the frame on a narrow screen", () => {
  * These are frame promises nothing else in this repository can ask. **Which groups a Role is
  * offered** is the narrowing of `lib/sections.ts` seen from outside — a Role whose sections all
  * sit in one group must meet that group alone rather than two empty headings, and a heading
- * over nothing reads as a list that failed to load. And **no redirect was left behind**: kobai
+ * over nothing reads as a list that failed to load. **Where the order inside a group sends the
+ * front door** is the other one, and it is why `Settings` reads Merchants, Roles, Store: the
+ * front door is the head of the narrowed list, so the order those three were already in is the
+ * order that leaves an existing Role where it was. And **no redirect was left behind**: kobai
  * is not published, so the address API keys used to have is one no screen answers, and the
  * not-found screen is the honest answer to it.
  *
@@ -806,7 +809,7 @@ describe("the frame on a narrow screen", () => {
 describe("the sections, in three groups", () => {
   /** What each group holds, in the order the sidebar draws them — `lib/sections.ts`'s order. */
   const COMMERCE = ["Products", "Media", "Orders", "Carts"];
-  const SETTINGS = ["Store", "Merchants", "Roles"];
+  const SETTINGS = ["Merchants", "Roles", "Store"];
   const DEVELOPER = ["API keys"];
 
   it("draws Commerce, Settings and Developer, and every section inside one of them", async () => {
@@ -851,6 +854,29 @@ describe("the sections, in three groups", () => {
     await expect.poll(() => sectionGroups(page)).toEqual(["Developer"]);
     await expect.poll(() => sectionsInGroup(page, "Developer")).toEqual(DEVELOPER);
     await auditAccessibility(page, "the Admin on a Role that may read only the API keys");
+  });
+
+  it("lands a Role that reads the Store and the roster on Merchants, as it did before", async () => {
+    // **The order inside `Settings` is what decides this**, and nothing else does: the front
+    // door is the head of the narrowed list, so `Merchants` ahead of `Store` is what keeps this
+    // Role arriving where the flat list of eight put it. It is the case the order was chosen
+    // for, so it is asserted here rather than argued in a comment in `lib/sections.ts`.
+    //
+    // What could not be preserved is a Role whose head *was* API keys — one holding
+    // `api-key:read` alongside any of these three now lands on Merchants instead, because that
+    // screen is last rather than fifth and moving it into `Developer` is the whole of #266.
+    const narrow = await seam.merchantOnARole(["store:read", "merchant:read"]);
+    const page = await seam.signedInAs(narrow, "/");
+
+    await expect.poll(() => where(page)).toBe("/merchants");
+    // `Settings` alone, in the sidebar's order: `merchant:read` opens the Roles screen as well
+    // as the roster (ADR-0066), so this Role reads the whole group and no other.
+    await expect.poll(() => sectionGroups(page)).toEqual(["Settings"]);
+    await expect.poll(() => sectionsInGroup(page, "Settings")).toEqual(SETTINGS);
+    await auditAccessibility(
+      page,
+      "the front door on a Role that may read only the Settings",
+    );
   });
 });
 
@@ -966,9 +992,9 @@ describe("the command palette", () => {
         "Media",
         "Orders",
         "Carts",
-        "Store",
         "Merchants",
         "Roles",
+        "Store",
         "API keys",
       ]);
     // **Flat, and one heading over the lot** (#266, ADR-0079). The sidebar draws three groups

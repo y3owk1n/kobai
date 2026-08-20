@@ -295,7 +295,12 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   narrowing, and it **drops a group that holds nothing**, because a heading over an empty list
   reads as a list that failed to load. **The palette stays flat**: a palette that nests is a
   menu, and what it is good at is answering a typed word with a destination — so it and the
-  front door read the flat list, one row per section and one head. **An address moved with its
+  front door read the flat list, one row per section and one head. **The order inside a group is
+  load-bearing, and reordering one is a decision about the front door**: it lands on the head of
+  the narrowed list, so a section moved past another moves the landing of every Role that reads
+  the second and not the first. Settings therefore reads Merchants, Roles, Store — the order
+  those three already had — and API keys moving into Developer is the one landing this ticket
+  could not preserve. **An address moved with its
   screen and no redirect was left behind**: API keys is at `/developer/api-keys`, `/api-keys`
   is an address no screen answers, and a redirect would be permanent furniture in vendored
   source `kobai-upgrade` can never reach. `sectionOf` is why an address a hyphen away from
