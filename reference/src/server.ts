@@ -194,6 +194,20 @@ if (seeded.status !== "seeded" && seeded.status !== "already-present") {
 }
 
 /**
+ * The default Region, beside the first Merchant and for the same reason it is here rather than
+ * in a migration: it is derived from what this Store prices in, and what this Store prices in is
+ * not settled until every migration set has applied — including this Project's own, which is
+ * where `migrations/0001_the_store_prices_in_myr.sql` says ringgit.
+ *
+ * **It is told nothing**, which is the difference from the line above: the first Merchant is a
+ * credential this deployment supplies, and this is a Region named from a row Core already holds.
+ * So there is no variable to set and nothing to report to an operator — a failure here is a
+ * deployment whose storefront must name a Region on every price request, which is a working
+ * deployment, and Core has already logged what happened.
+ */
+await kobai.seedDefaultRegion();
+
+/**
  * The background sweep, once the tables it reads exist.
  *
  * kobai's only piece of periodic work: lapsed Reservation holds released, expired idempotency

@@ -70,6 +70,8 @@ const LISTS = [
   { path: "/admin/carts", key: "carts", credential: "session" },
   { path: "/admin/media", key: "media", credential: "session" },
   { path: "/admin/collections", key: "collections", credential: "session" },
+  { path: "/admin/regions", key: "regions", credential: "session" },
+  { path: "/admin/channels", key: "channels", credential: "session" },
   { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
 
@@ -697,6 +699,26 @@ async function seedThree(
         body: JSON.stringify({ title: `Collection ${index}` }),
       });
       expect(created.status, `creating Collection ${index}`).toBe(201);
+      seeded.push(((await created.json()) as { id: string }).id);
+    }
+    return seeded;
+  }
+
+  // Three Regions and three Channels, which is the whole of arranging either list: both are a
+  // name — a Region carrying the currency this Store already prices in — and neither name is
+  // unique, so neither needs a mark of its own.
+  if (list.key === "regions" || list.key === "channels") {
+    for (let index = 0; index < 3; index += 1) {
+      const created = await kobai.request(`${list.path}`, {
+        method: "POST",
+        headers: { ...merchant.headers, "content-type": "application/json" },
+        body: JSON.stringify(
+          list.key === "regions"
+            ? { name: `Region ${index}`, currency: "USD" }
+            : { name: `Channel ${index}` },
+        ),
+      });
+      expect(created.status, `creating ${list.key} ${index}`).toBe(201);
       seeded.push(((await created.json()) as { id: string }).id);
     }
     return seeded;

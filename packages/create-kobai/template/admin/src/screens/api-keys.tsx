@@ -12,6 +12,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
 import { FormField } from "@/components/form-field";
+import { ListboxField } from "@/components/listbox-field";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -44,7 +45,12 @@ import {
 } from "@/components/ui/table";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { clearPreviewKey, readPreviewKey, writePreviewKey } from "@/lib/preview-key";
-import { apiKeyNotFoundReasonOf, orThrow, problemOf } from "@/lib/refusal";
+import {
+  apiKeyNotFoundReasonOf,
+  mintApiKeyReasonOf,
+  orThrow,
+  problemOf,
+} from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
 /**
@@ -63,6 +69,18 @@ import { useKobaiClient } from "@/lib/session";
  * more is a screen on which the older half of a deployment's credentials cannot be revoked.
  */
 const API_KEYS = "api-keys";
+
+/**
+ * What the mint form's Channel picker calls *no Channel at all* (#291).
+ *
+ * A sentinel rather than `""`, because `""` is what a `ListboxField` means by "nothing chosen"
+ * and this is a choice: a key in no particular Channel is what every key is until a Merchant
+ * decides otherwise, and it is the right answer for a Store with one route to market.
+ */
+const NO_CHANNEL = "none";
+
+/** Its own cache key, deliberately not the Channels screen's — see `lib/store.ts`. */
+const OFFERED_CHANNELS = "offered-channels";
 
 export function ApiKeys() {
   const client = useKobaiClient();
@@ -283,6 +301,15 @@ function ApiKeysLoading() {
  */
 const MintKeyForm = z.object({
   name: z.string().min(1, "A key is told from another by its name, so it needs one."),
+  /**
+   * Which Channel every request presenting this key is in, or `""` for none (#291).
+   *
+   * **`""` is a real answer here and not an unfilled field**, which is why there is no `min(1)`
+   * beside the name's: a key in no particular Channel is what every key is until a Merchant
+   * decides otherwise, and it is the right answer for a Store that sells through one route to
+   * market. The submit turns it into an absent `channelId` rather than sending an empty string.
+   */
+  channelId: z.string(),
 });
 
 type MintKeyValues = z.infer<typeof MintKeyForm>;
@@ -310,13 +337,31 @@ function MintKey({
 
   const form = useForm<MintKeyValues>({
     resolver: zodResolver(MintKeyForm),
-    defaultValues: { name: "" },
+    defaultValues: { name: "", channelId: NO_CHANNEL },
+  });
+
+  // The Channels a key may be bound to, read from kobai rather than written down — the same rule
+  // the Fulfilment Strategy picker follows. It does not page, which is the known gap
+  // `lib/collections.ts` names: a Store with more than a hundred Channels has some this control
+  // cannot offer, and the Channels section is where all of them are.
+  const channels = useQuery({
+    queryKey: [OFFERED_CHANNELS],
+    queryFn: async () =>
+      orThrow(await client.GET("/admin/channels", { params: { query: { limit: 100 } } })),
   });
 
   const mint = useMutation({
-    mutationFn: async ({ name }: MintKeyValues) =>
+    mutationFn: async ({ name, channelId }: MintKeyValues) =>
       orThrow(
-        await client.POST("/admin/api-keys", { body: { name, kind: "publishable" } }),
+        await client.POST("/admin/api-keys", {
+          body: {
+            name,
+            kind: "publishable",
+            // Absent rather than empty: kobai reads a missing `channelId` as *in no particular
+            // Channel*, and an empty string is a body it would refuse.
+            ...(channelId === NO_CHANNEL ? {} : { channelId }),
+          },
+        }),
       ),
     onSuccess: (key) => {
       onMinted(key);
@@ -341,11 +386,7 @@ function MintKey({
         <CardContent className="grid gap-4">
           <Problem
             title="The key was not minted."
-            problem={
-              mint.isError
-                ? problemOf(mint.error, "kobai turned the request back.")
-                : null
-            }
+            problem={mint.isError ? whyNotMinted(mint.error) : null}
           />
           <FormField
             id="mint-key-name"
@@ -353,6 +394,23 @@ function MintKey({
             placeholder="the shop's browser"
             error={form.formState.errors.name}
             {...form.register("name")}
+          />
+          <ListboxField
+            control={form.control}
+            name="channelId"
+            id="mint-key-channel"
+            label="Channel"
+            options={[
+              // **In no particular Channel is an option rather than an empty picker**, because
+              // it is the answer most keys want and a Merchant should be able to choose it on
+              // purpose. It heads the list for the same reason.
+              { value: NO_CHANNEL, label: "In no particular Channel" },
+              ...(channels.data?.channels ?? []).map((channel) => ({
+                value: channel.id,
+                label: channel.name,
+              })),
+            ]}
+            description="Which route to market every request presenting this key is in. It is decided here and cannot be changed afterwards — a key in the wrong Channel is replaced by minting another and revoking this one."
           />
         </CardContent>
         <CardFooter className="mt-4 gap-2">
@@ -369,6 +427,37 @@ function MintKey({
       </form>
     </Card>
   );
+}
+
+/**
+ * Why a key was not **minted**, in words a Merchant can act on (#291).
+ *
+ * Exhaustive over `MintApiKeyRefusal`, which is its own family and not the store gate's: this is
+ * a Merchant being turned back at `POST /admin/api-keys`, where `ApiKeyRefusal` is a storefront
+ * presenting a credential kobai will not take.
+ */
+function whyNotMinted(thrown: unknown): string {
+  const fallback = "kobai turned the request back.";
+  const reason = mintApiKeyReasonOf(thrown);
+
+  switch (reason) {
+    case "channel-not-found":
+      return "That Channel is no longer there — somebody else deleted it, or this page has been open a while. Choose another, or mint the key in no particular Channel.";
+
+    case "invalid":
+    case "malformed-body":
+      // kobai's own prose names the field, which is more than this screen knows.
+      return problemOf(thrown, fallback);
+
+    case undefined:
+      // A 500, which carries no `reason` on purpose, or the network being gone.
+      return fallback;
+
+    default: {
+      const unreached: never = reason;
+      return unreached;
+    }
+  }
 }
 
 /**

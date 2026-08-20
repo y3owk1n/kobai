@@ -131,6 +131,15 @@ describe("the reference Project's configuration", () => {
     await expect(response.json()).resolves.toEqual({
       name: "kobai",
       defaultCurrency: "MYR",
+      // **Ringgit and nothing else**, which is `migrations/0002_the_store_enables_myr.sql`'s
+      // whole subject: Core's set enables whatever the Store held when it ran, and on a fresh
+      // database that is Core's own `USD` placeholder, because Core's set applies in front of
+      // this Project's. Without that second migration this Store would enable a currency it
+      // does not sell in and not the one it does.
+      currencies: [{ code: "MYR" }],
+      // Seeded at boot by `kobai.seedDefaultRegion()`, which `src/server.ts` calls and this
+      // harness does not — so a test kobai has none until it asks (#291).
+      defaultRegion: null,
       metadata: {},
     });
   });

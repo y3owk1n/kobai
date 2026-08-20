@@ -69,6 +69,8 @@ const CORRECTIONS = [
   "/admin/products/{id}",
   "/admin/variants/{id}",
   "/admin/collections/{id}",
+  "/admin/regions/{id}",
+  "/admin/channels/{id}",
   "/admin/roles/{id}",
   "/admin/merchants/{id}",
   "/store/carts/{id}",
@@ -131,6 +133,24 @@ async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]>
   expect(grouped.status, "the arrangement could not create a Collection").toBe(201);
   const collection = (await grouped.json()) as { readonly id: string };
 
+  // Nor a Region or a Channel, for the same reason. The Region prices in the currency the Store
+  // was seeded with, which is the one this deployment has enabled.
+  const sold = await kobai.request("/admin/regions", {
+    method: "POST",
+    headers: { ...merchant, "content-type": "application/json" },
+    body: JSON.stringify({ name: "United States", currency: "USD" }),
+  });
+  expect(sold.status, "the arrangement could not create a Region").toBe(201);
+  const region = (await sold.json()) as { readonly id: string };
+
+  const through = await kobai.request("/admin/channels", {
+    method: "POST",
+    headers: { ...merchant, "content-type": "application/json" },
+    body: JSON.stringify({ name: "Marketplace" }),
+  });
+  expect(through.status, "the arrangement could not create a Channel").toBe(201);
+  const channel = (await through.json()) as { readonly id: string };
+
   return [
     { described: "/admin/store", path: "/admin/store", headers: merchant },
     {
@@ -146,6 +166,16 @@ async function everyCorrection(kobai: TestKobai): Promise<readonly Correction[]>
     {
       described: "/admin/collections/{id}",
       path: `/admin/collections/${collection.id}`,
+      headers: merchant,
+    },
+    {
+      described: "/admin/regions/{id}",
+      path: `/admin/regions/${region.id}`,
+      headers: merchant,
+    },
+    {
+      described: "/admin/channels/{id}",
+      path: `/admin/channels/${channel.id}`,
       headers: merchant,
     },
     {

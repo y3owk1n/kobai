@@ -21,6 +21,8 @@ import { ThemeProvider } from "@/lib/theme";
 import { ApiKeys } from "@/screens/api-keys";
 import { CartScreen } from "@/screens/cart";
 import { Carts } from "@/screens/carts";
+import { ChannelScreen } from "@/screens/channel";
+import { Channels } from "@/screens/channels";
 import { CollectionScreen } from "@/screens/collection";
 import { Collections } from "@/screens/collections";
 import { DeploymentScreen } from "@/screens/deployment";
@@ -31,6 +33,8 @@ import { Orders } from "@/screens/orders";
 import { Playground } from "@/screens/playground";
 import { ProductScreen } from "@/screens/product";
 import { Products } from "@/screens/products";
+import { RegionScreen } from "@/screens/region";
+import { Regions } from "@/screens/regions";
 import { RoleScreen } from "@/screens/role";
 import { Roles } from "@/screens/roles";
 import { SignIn } from "@/screens/sign-in";
@@ -167,6 +171,10 @@ function Admin() {
             reasoning, and the check caught this very comment when it named the address
             outright. */}
         <Route path="settings" element={<StoreScreen />} />
+        <Route path="regions" element={<Regions />} />
+        <Route path="regions/:id" element={<RegionScreen />} />
+        <Route path="channels" element={<Channels />} />
+        <Route path="channels/:id" element={<ChannelScreen />} />
         <Route path="*" element={<NoSuchScreen />} />
       </Route>
     </Routes>

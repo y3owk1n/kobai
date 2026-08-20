@@ -810,7 +810,10 @@ describe("the frame on a narrow screen", () => {
 describe("the sections, in three groups", () => {
   /** What each group holds, in the order the sidebar draws them — `lib/sections.ts`'s order. */
   const COMMERCE = ["Products", "Media", "Collections", "Orders", "Carts"];
-  const SETTINGS = ["Merchants", "Roles", "Store"];
+  // Regions and Channels are **appended** to Settings rather than inserted, which is what leaves
+  // the front door where it was: it lands on the head of the narrowed list, so a section put
+  // ahead of another moves where every Role holding both arrives (#291, #266).
+  const SETTINGS = ["Merchants", "Roles", "Store", "Regions", "Channels"];
   const DEVELOPER = ["API keys", "Deployment", "Playground"];
 
   it("draws Commerce, Settings and Developer, and every section inside one of them", async () => {
@@ -1000,6 +1003,10 @@ describe("the command palette", () => {
         "Merchants",
         "Roles",
         "Store",
+        // #291's two, and they are here rather than beside Store's neighbours for the reason
+        // the sidebar's order gives: appending moves no Role's landing.
+        "Regions",
+        "Channels",
         "API keys",
         "Deployment",
         "Playground",

@@ -3,11 +3,14 @@ import type {
   ApiKeyRefusal,
   CartRefusal,
   CatalogRefusal,
+  ChannelRefusal,
   CollectionRefusal,
   InvalidCredentials,
   InvalidRequest,
   MerchantRefusal,
+  MintApiKeyRefusal,
   OrderRefusal,
+  RegionRefusal,
   RoleRefusal,
   StoreRefusal,
 } from "@kobai/client";
@@ -302,10 +305,69 @@ const STORE_REASONS: Record<StoreRefusal["reason"], true> = {
   invalid: true,
   "malformed-body": true,
   "default-currency-is-fixed": true,
+  // The three #291 added, and two of them the Store screen really can meet: a Merchant editing
+  // the enabled currencies can leave out the one this Store prices in, or take away one a
+  // Region selects. `region-not-found` arrives when the Region the default picker was offering
+  // has been deleted since it was filled.
+  "default-currency-must-be-enabled": true,
+  "currency-in-use": true,
+  "region-not-found": true,
 };
 
 /** Which refusal changing the Store met. */
 export const storeReasonOf = narrowing(STORE_REASONS);
+
+/**
+ * Every `reason` a Region operation can be refused with (#291, ADR-0074).
+ *
+ * `currency-not-enabled` is the one worth reading twice, and it is deliberately **not**
+ * `unsupported-currency` — the word a *Price* naming a currency this Store does not price in is
+ * refused with. The two look alike and the repairs are opposite: there, send the Store's
+ * currency; here, enable the one you meant on the Store screen, or select one that already is.
+ */
+const REGION_REASONS: Record<RegionRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "region-not-found": true,
+  "currency-not-enabled": true,
+  "region-in-use": true,
+};
+
+/** Which Region refusal this was, for a screen with something better to say than the prose. */
+export const regionReasonOf = narrowing(REGION_REASONS);
+
+/**
+ * Every `reason` a Channel operation can be refused with (#291, ADR-0005).
+ *
+ * As small as a Collection's, and for the same kind of reason: a Channel's name is not unique,
+ * so nothing conflicts, and deleting one is refused for nothing — the API keys minted against it
+ * become unconstrained rather than losing anything.
+ */
+const CHANNEL_REASONS: Record<ChannelRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "channel-not-found": true,
+};
+
+/** Which Channel refusal this was, for a screen with something better to say than the prose. */
+export const channelReasonOf = narrowing(CHANNEL_REASONS);
+
+/**
+ * Every `reason` **minting** an API key can be refused with (#291).
+ *
+ * Its own family beside {@link API_KEY_NOT_FOUND_REASONS} and {@link API_KEY_REJECTED}, which is
+ * three sets about API keys and no two of them about the same thing: this is a Merchant's mint
+ * turned back, that one is a Merchant addressing a key that is not there, and the third is the
+ * store gate rejecting a credential a storefront presented.
+ */
+const MINT_API_KEY_REASONS: Record<MintApiKeyRefusal["reason"], true> = {
+  invalid: true,
+  "malformed-body": true,
+  "channel-not-found": true,
+};
+
+/** Which refusal minting an API key met. */
+export const mintApiKeyReasonOf = narrowing(MINT_API_KEY_REASONS);
 
 /**
  * The one way revoking an API key can be turned back.

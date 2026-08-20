@@ -15,6 +15,13 @@
       "when": 1787155918910,
       "tag": "0001_the_store_prices_in_myr",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787215727608,
+      "tag": "0002_the_store_enables_myr",
+      "breakpoints": true
     }
   ]
 }

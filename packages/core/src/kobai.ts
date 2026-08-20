@@ -22,6 +22,7 @@ import { createMigrationStateHolder, type MigrationState } from "./migrations/st
 import { placeOrderWorkflow } from "./order/place-order.ts";
 import { priceResolutionWorkflow } from "./pricing/resolve-price.ts";
 import { resolveHoldWindowMs } from "./reservation/reservation.ts";
+import { type DefaultRegionSeed, seedDefaultRegion } from "./store/seed.ts";
 import {
   type SweeperOptions,
   type SweepOutcome,
@@ -119,6 +120,22 @@ export type Kobai = {
    * the failed migration that must exit, while taking `/health` down with it.
    */
   seedInitialMerchant(): Promise<InitialMerchantSeed>;
+  /**
+   * Creates this deployment's default **Region** from the currency its Store prices in, if it
+   * has none yet. Call it once per boot, after {@link Kobai.migrate} (#291, ADR-0074).
+   *
+   * Safe on every boot, and safe against two processes booting at once: a deployment that
+   * already has a default Region is left exactly as it was found. It reports rather than
+   * throws, and does not stop a boot, for {@link Kobai.seedInitialMerchant}'s reason.
+   *
+   * **It takes nothing, unlike the Merchant beside it**, and that is the difference worth
+   * knowing: the first Merchant is a credential a deployment supplies, while this is derived
+   * from a row Core seeded — so there is nothing to configure, nothing to rotate, and no way to
+   * configure it wrongly. What it costs a Project is the same one line, and a Project that never
+   * calls it has a Store with no default Region: every storefront then has to name a Region when
+   * it asks for a price, which is a working deployment rather than a broken one.
+   */
+  seedDefaultRegion(): Promise<DefaultRegionSeed>;
   /**
    * Starts the background sweep: lapsed Reservation holds released, expired idempotency keys
    * deleted. Call it once per boot, after {@link Kobai.migrate}, and {@link Kobai.close} stops
@@ -294,6 +311,30 @@ export function createKobai(options: KobaiOptions): Kobai {
           break;
         default:
           logger.error("initial merchant not created", { reason: seed.detail });
+      }
+
+      return seed;
+    },
+
+    async seedDefaultRegion() {
+      const seed = await seedDefaultRegion(database.db);
+
+      // Nothing here is a secret, unlike the Merchant's above: a Region is a name and a currency
+      // this deployment already publishes. So the created one is named in full, which is what
+      // tells an operator which Region a storefront that sends no `?region=` is being answered
+      // for.
+      switch (seed.status) {
+        case "seeded":
+          logger.info("default region seeded", {
+            name: seed.region.name,
+            currency: seed.region.currency,
+          });
+          break;
+        case "already-present":
+          logger.info("default region already present", { created: false });
+          break;
+        default:
+          logger.error("no default region", { reason: seed.detail });
       }
 
       return seed;

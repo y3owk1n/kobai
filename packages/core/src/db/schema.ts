@@ -47,8 +47,40 @@ export const store = pgTable(
   {
     singleton: boolean("singleton").primaryKey().default(true),
     name: text("name").notNull(),
-    /** ISO 4217, e.g. `USD`. The Store's default — Regions carry their own, later. */
+    /**
+     * ISO 4217, e.g. `USD`. The Store's default, and what an **unconstrained** Price is
+     * denominated in (ADR-0074).
+     *
+     * It does not move: `PATCH /admin/store` refuses any other code (ADR-0065), and since
+     * #291 that refusal stands on the narrower base ADR-0074 left it — a Price may name any
+     * currency {@link storeCurrency} holds, so moving this reinterprets the unconstrained
+     * ones rather than all of them. It is also always **in** the enabled set: the migration
+     * that created that table put it there, and disabling it is refused.
+     */
     defaultCurrency: text("default_currency").notNull(),
+    /**
+     * Which Region a request that names none is answered for — the fallback
+     * `GET /store/variants/{id}/price?region=` falls back to (ADR-0074).
+     *
+     * **Nullable, and seeded at boot rather than by a migration** (`store/seed.ts`,
+     * ADR-0041). A Region selects one of the Store's enabled currencies, and which currency
+     * this Store prices in is not settled until *every* migration set has applied — a
+     * Project's own set may write `core_store` and the reference one does exactly that. So a
+     * migration seeding this would name whatever Core's placeholder happened to be, and
+     * `null` is the honest value for the instant between the schema existing and the first
+     * boot after it.
+     *
+     * **This is the Store pointing at a Region and never a Region pointing at the Store.**
+     * ADR-0005's rule is about what is *referenced*: a `store_id` on another table is a
+     * scoping key and this is a column on the singleton, so `store.test.ts`'s sweep is
+     * untouched by it.
+     */
+    defaultRegionId: uuid("default_region_id").references(() => region.id, {
+      // A Region the Store falls back to must not vanish under it, and the repair is a
+      // control the Merchant already has: point the Store at another Region, then delete
+      // this one (ADR-0059).
+      onDelete: "restrict",
+    }),
     /**
      * ADR-0004's cheap escape hatch: unindexed and untyped by design, for the case where
      * someone just needs to stash a field. A Plugin that needs an index or a type needs its
@@ -68,6 +100,127 @@ export const store = pgTable(
 );
 
 export type StoreRow = typeof store.$inferSelect;
+
+/**
+ * The currencies this Store may price in — the **vocabulary**, one row per code (ADR-0074).
+ *
+ * **Rows rather than a `jsonb` array on the Store**, which is the decision rather than a
+ * preference: enabling a currency is the sort of thing that grows a setting — a rounding rule,
+ * a display format, a Payment Provider of its own — and a setting arriving beside a blob is a
+ * migration across every deployment's Store row, where beside a row it is a column.
+ *
+ * **The code is the key.** A currency is enabled once or not at all, so there is no identifier
+ * to hold and no second row a unique index would have to refuse; everything that references one
+ * references the code, which is also what a Price carries. The `char_length` check is
+ * `core_store.default_currency`'s, said again about the same kind of value — what makes a code
+ * a *real* ISO 4217 code is not a fact this table can hold, and a closed list of them in DDL
+ * would be a table of the world that goes stale.
+ *
+ * **The Store's default is in here and cannot be taken out.** The migration that created this
+ * table enabled it, and `PATCH /admin/store` refuses a set that leaves it out — because the
+ * default is what an *unconstrained* Price is denominated in, which is the narrower base
+ * ADR-0074 left ADR-0065's refusal standing on.
+ *
+ * There is no reference to the Store, in either direction. One deployment is one Store
+ * (ADR-0005), so an enabled currency belongs to the deployment exactly as a Role does.
+ */
+export const storeCurrency = pgTable(
+  "core_store_currency",
+  {
+    /** ISO 4217, upper case — `USD`, `MYR`. Written upper-cased, so the key means what it says. */
+    code: text("code").primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // `core_store_currency_code_…` and not `core_store_currency_is_iso4217`, which is already
+    // `core_store.default_currency`'s check: Postgres scopes a constraint name to its table, but
+    // kobai matches a violation **by name** (`db/errors.ts`), so two constraints sharing one
+    // would be indistinguishable to any handler that ever asked about either.
+    check("core_store_currency_code_is_iso4217", sql`char_length(${table.code}) = 3`),
+  ],
+);
+
+export type StoreCurrencyRow = typeof storeCurrency.$inferSelect;
+
+/**
+ * A **Region** — a geography this Store sells into, and the thing a Price is asked for by
+ * (ADR-0005, ADR-0074).
+ *
+ * **It selects a currency rather than declaring one.** The Store enumerates what may be priced
+ * in; a Region names one of those, and the foreign key onto {@link storeCurrency} is that
+ * sentence in the database rather than in a function somebody has to remember to call.
+ * Region-only ownership was rejected in ADR-0074 because it makes a currency unusable until
+ * somebody defines a geography, which is wrong for a single-country Store that wants two
+ * currencies.
+ *
+ * **A name, a currency, and nothing else yet.** Tax treatment is spec 7 and shipping methods
+ * are spec 5, and both hang off this row when they arrive; `metadata` is ADR-0004's escape
+ * hatch, here for the reason every principal entity carries one. What it is emphatically
+ * **not** is a tenant: ADR-0005 says a Region is variation *within* one Store, so nothing
+ * scopes by one and `store.test.ts`'s question is asked of this table too — `region.test.ts`
+ * names what references it, so the day one becomes a scoping key the build goes red rather
+ * than the retrofit going unnoticed.
+ */
+export const region = pgTable(
+  "core_region",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** What the Merchant calls it — `Malaysia`, `Eurozone`. Not unique; two are two Regions. */
+    name: text("name").notNull(),
+    /**
+     * The code this Region prices in, which must be one the Store has enabled.
+     *
+     * The reference is `restrict` rather than `cascade`: disabling a currency a Region selects
+     * is refused, naming the Regions, because the alternatives are deleting somebody's Region
+     * or leaving one denominated in a currency the Store does not price in (ADR-0059).
+     */
+    currency: text("currency")
+      .notNull()
+      .references(() => storeCurrency.code, { onDelete: "restrict" }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // What `GET /admin/regions` pages along — see `core_api_key`'s for why both columns.
+    index("core_region_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
+
+export type RegionRow = typeof region.$inferSelect;
+
+/**
+ * A **Channel** — a route to market this Store sells through (ADR-0005).
+ *
+ * A name and nothing else, deliberately. ADR-0005 says a Channel is a sales channel and
+ * **not** a tenant boundary — the mistake Vendure's overloaded `Channel` is the known example
+ * of — so this table carries no scope, no ownership and no reference to anything. What varies
+ * per Channel is a *Price*, through a constraint column on `core_price`, which is spec 4's
+ * next slice.
+ *
+ * **Which Channel a request is in is decided by the API key** and never threaded through a
+ * request (ADR-0020): `core_api_key.channel_id` is the binding, so a storefront cannot claim to
+ * be in a Channel it was not issued a credential for. That is the one foreign key onto this
+ * table, and `channel.test.ts` asserts it is the only one.
+ */
+export const channel = pgTable(
+  "core_channel",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** What the Merchant calls it — `Web`, `Marketplace`. Not unique; two are two Channels. */
+    name: text("name").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // What `GET /admin/channels` pages along — see `core_api_key`'s for why both columns.
+    index("core_channel_created_at_id_idx").on(table.createdAt, table.id),
+  ],
+);
+
+export type ChannelRow = typeof channel.$inferSelect;
 
 /**
  * A named Role, carrying a **permission set** (ADR-0027).
@@ -230,6 +383,24 @@ export const apiKey = pgTable(
      * incident should not be answered by an absence.
      */
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /**
+     * Which Channel a request presenting this key is in, or `null` for unconstrained
+     * (ADR-0005, ADR-0020).
+     *
+     * **Nullable, and `null` is the ordinary value.** Every key that exists today was minted
+     * before Channels did, and every key minted without one still is: unconstrained means
+     * *this credential is in no particular Channel*, which is the whole of what a deployment
+     * that has defined none can say. So this column needs none of ADR-0038's dance — a
+     * nullable column and a foreign key on one can refuse no row that is already there.
+     *
+     * **`set null` rather than `restrict`.** Revocation is a column rather than a delete, so a
+     * revoked key keeps its row forever — a `restrict` here would make a Channel any key had
+     * ever named permanently undeletable, which is a refusal with no repair a Merchant could
+     * carry out. Deleting a Channel therefore returns its keys to exactly the state every key
+     * was in before the Channel existed, which is a widening a Merchant asked for by deleting
+     * the route to market.
+     */
+    channelId: uuid("channel_id").references(() => channel.id, { onDelete: "set null" }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

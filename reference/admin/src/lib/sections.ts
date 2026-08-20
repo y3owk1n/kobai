@@ -1,9 +1,11 @@
 import {
+  GlobeIcon,
   ImageIcon,
   KeyRoundIcon,
   LayersIcon,
   PackageIcon,
   ReceiptTextIcon,
+  RouteIcon,
   ServerCogIcon,
   ShieldCheckIcon,
   ShoppingCartIcon,
@@ -195,6 +197,43 @@ export const SECTIONS = [
     path: "/settings",
     label: "Store",
     Icon: StoreIcon,
+    permission: PERMISSIONS.storeRead,
+    group: "Settings",
+  },
+  {
+    /**
+     * **The geographies this Store sells into** (#291, ADR-0005, ADR-0074) — each one a name and
+     * the currency it prices in, and the one a storefront that names none is answered for.
+     *
+     * `store:read` opens it, which is the same Permission the Store screen is behind and the
+     * same grant: a Region is the Store's own configuration rather than a fourth kind of record,
+     * so there is no `region:` family and the section sits beside the Store's.
+     *
+     * **After Store rather than before it**, and that is a decision about the front door rather
+     * than about reading order: the Admin lands on the head of the narrowed list, so a section
+     * put ahead of another moves where every Role holding both arrives. Appending leaves every
+     * existing landing exactly where #266 left it, including the Role that holds only
+     * `store:read`.
+     */
+    path: "/regions",
+    label: "Regions",
+    Icon: GlobeIcon,
+    permission: PERMISSIONS.storeRead,
+    group: "Settings",
+  },
+  {
+    /**
+     * **The routes to market this Store sells through** (#291, ADR-0005) — a storefront, a
+     * marketplace listing. Beside Regions for the same reason, and appended for the same one.
+     *
+     * A Channel is **not** a tenant, and nothing in this Admin should ever read as though it
+     * were: there is no switcher, nothing is scoped by one, and which Channel a request is in is
+     * decided by the API key it presents. That is what the Developer section's API keys screen
+     * offers when a key is minted.
+     */
+    path: "/channels",
+    label: "Channels",
+    Icon: RouteIcon,
     permission: PERMISSIONS.storeRead,
     group: "Settings",
   },

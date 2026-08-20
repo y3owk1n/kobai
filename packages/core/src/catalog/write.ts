@@ -10,7 +10,7 @@ import {
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { text } from "../patch.ts";
-import { readStore } from "../store/read.ts";
+import { readDefaultCurrency } from "../store/read.ts";
 import {
   type CollectionMissing,
   collectionsThisStoreDoesNotHave,
@@ -516,8 +516,11 @@ export async function setPrice(
 
   if (!isUuid(variantId)) return notThatVariant(variantId);
 
-  const store = await readStore(db);
-  if (!store) {
+  // The one column this write needs, rather than the whole Store: `readStore` is a join onto
+  // the default Region and a second query for the enabled set, and neither is anything a Price
+  // depends on. `store/read.ts` argues the split where the narrow reader is declared.
+  const defaultCurrency = await readDefaultCurrency(db);
+  if (defaultCurrency === undefined) {
     throw new Error(
       "No Store exists, so there is no default currency to price against. The database is migrated but unseeded.",
     );
@@ -535,12 +538,12 @@ export async function setPrice(
     // touches, and it takes no other lock at all.
     if (!(await lockVariant(tx, variantId))) return notThatVariant(variantId);
 
-    const currency = asked ?? store.defaultCurrency;
-    if (currency !== store.defaultCurrency) {
+    const currency = asked ?? defaultCurrency;
+    if (currency !== defaultCurrency) {
       return {
         ok: false,
         reason: "unsupported-currency",
-        detail: `This Store prices in ${store.defaultCurrency}. A Price in another currency belongs to a Region, and Regions are not in this Store yet.`,
+        detail: `This Store prices in ${defaultCurrency}. A Price in another currency belongs to a Region, and a Price does not carry one yet.`,
       } as const;
     }
 

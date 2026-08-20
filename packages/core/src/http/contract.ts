@@ -1,5 +1,9 @@
 import { z } from "@hono/zod-openapi";
-import { API_KEY_KINDS, type ApiKeyRejection } from "../auth/api-key.ts";
+import {
+  API_KEY_KINDS,
+  type ApiKeyCreation,
+  type ApiKeyRejection,
+} from "../auth/api-key.ts";
 import type { MerchantCreation, MerchantUpdate } from "../auth/merchant.ts";
 import type { RoleCreation, RoleDeletion, RoleUpdate } from "../auth/role.ts";
 import type { SessionPolicy, SessionRejection } from "../auth/session.ts";
@@ -35,6 +39,12 @@ import type { QuoteCartRefusal as QuoteCartReason } from "../order/quote-cart.ts
 import type { PriceResolutionRefusal } from "../pricing/resolve-price.ts";
 import type { HoldCartRefusal } from "../reservation/hold-cart.ts";
 import type { InventoryUpdate } from "../reservation/inventory.ts";
+import type {
+  ChannelCreation,
+  ChannelDeletion,
+  ChannelUpdate,
+} from "../store/channel.ts";
+import type { RegionCreation, RegionDeletion, RegionUpdate } from "../store/region.ts";
 import type { StoreUpdate } from "../store/write.ts";
 import { STEP_ORIGINS } from "../workflow/workflow.ts";
 
@@ -853,6 +863,10 @@ const ApiKeyIdentity = z.object({
   id: z.uuid(),
   name: z.string(),
   kind: ApiKeyKind,
+  channelId: z.uuid().nullable().meta({
+    description:
+      "Which Channel a request presenting this key is in, or `null` for a key that is in no particular one — which is what every key minted without one is. It is decided here and never again: a storefront does not thread a Channel through its requests and cannot claim to be in one it was not issued a credential for (ADR-0020).",
+  }),
   createdAt: z.iso.datetime(),
 });
 
@@ -894,8 +908,39 @@ export const CreateApiKeyRequest = z
       description: "How a Merchant tells one key from another when revoking.",
     }),
     kind: ApiKeyKind,
+    channelId: z.uuid().optional().meta({
+      description:
+        "The Channel every request presenting this key is in, as `GET /admin/channels` lists them. **Left out is unconstrained** — a key in no particular Channel, which is what every key minted before Channels existed is — and it is the right answer for a deployment that sells through one route to market. A Channel this Store has not got is refused at 422 with `channel-not-found`. It cannot be changed afterwards: mint another key and revoke this one.",
+    }),
   })
   .openapi("CreateApiKeyRequest");
+
+/**
+ * Every way minting a key can be refused, as a closed set (#291).
+ *
+ * A family where minting used to answer {@link InvalidRequest}'s two, because there is now one
+ * way to get it wrong that is a fact about the **Store** rather than about the body: a
+ * `channelId` naming a Channel this Store has not got. That is 422 on `collection-not-found`'s
+ * distinction, and it is the same word `GET /admin/channels/{id}` answers 404 with.
+ *
+ * It is deliberately not {@link ApiKeyNotFound}'s and not {@link ApiKeyRefusal}'s. The first is
+ * a Merchant addressing a key that does not exist and the second is the *gate* rejecting a
+ * credential a storefront presented; sharing either would tell a client that two very different
+ * failures are one condition.
+ */
+const MINT_API_KEY_REASONS = {
+  ...REQUEST_REASONS,
+  "channel-not-found": "channel-not-found",
+} as const satisfies { [R in Refused<ApiKeyCreation> | RequestReason]: R };
+
+export const MintApiKeyRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(MINT_API_KEY_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("MintApiKeyRefusal");
 
 /**
  * Revoking a key that is not there — a set of one, and a literal for that reason.
@@ -922,11 +967,218 @@ export const ApiKeyNotFound = z
 
 // ---- The Store ------------------------------------------------------------------------
 
+/**
+ * One currency this Store may price in (#291, ADR-0074).
+ *
+ * **An object rather than a bare code**, for {@link MediaAttachment}'s reason: enabling a
+ * currency is the sort of thing that grows a setting — a rounding rule, a display format — and
+ * one then arrives as a field beside this, where a list of strings could only grow by changing
+ * the type of every element (ADR-0060). It is why the enabled set is rows rather than a `jsonb`
+ * array on the Store.
+ */
+export const EnabledCurrency = z
+  .object({
+    code: z.string().meta({ description: "ISO 4217, upper case — `USD`, `MYR`." }),
+  })
+  .openapi("EnabledCurrency");
+
+/**
+ * A **Region** — a geography this Store sells into (#291, ADR-0005, ADR-0074).
+ *
+ * Three fields, and what is absent is what the next two specs bring: tax treatment is spec 7 and
+ * shipping methods are spec 5, and both hang off this row when they arrive. It **selects** a
+ * currency rather than declaring one — the Store enumerates what may be priced in, a Region
+ * names one of those — and ADR-0074 is where that division is argued.
+ *
+ * **A Region is not a tenant, and this is the spec most likely to be read as an invitation.**
+ * ADR-0005 is explicit: variation *within* one Store. Nothing is scoped by a Region and nothing
+ * will be.
+ */
+export const Region = z
+  .object({
+    id: z.uuid(),
+    name: z.string().meta({
+      description:
+        "What the Merchant calls it — `Malaysia`, `Eurozone`. **Not unique**: a Region is addressed by its identifier everywhere, so two carrying one name are two geographies rather than a collision.",
+    }),
+    currency: z.string().meta({
+      description:
+        "The ISO 4217 code this Region prices in, which is always one of the currencies `GET /admin/store` reports. kobai converts nothing, ever: a Variant with no Price in this currency has no price here.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("Region");
+
+/** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
+export const RegionList = z
+  .object({ regions: z.array(Region).readonly(), nextCursor: NextCursor })
+  .openapi("RegionList");
+
+/** ADR-0064's two parameters and nothing else: this list narrows by nothing. */
+export const RegionPageQuery = pageQuery("regions");
+
+export const CreateRegionRequest = z
+  .object({
+    name: z.string().meta({ description: "Required, and not empty." }),
+    currency: z.string().meta({
+      description:
+        "Required. An ISO 4217 code this Store has **enabled**, read case-insensitively — `GET /admin/store` lists them and `PATCH /admin/store` enables another. One this Store has not enabled is refused at 422 with `currency-not-enabled`.",
+    }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("CreateRegionRequest");
+
+/**
+ * Name what should change; naming nothing is refused rather than treated as a no-op (ADR-0062).
+ *
+ * **A Region's currency moves and the Store's does not**, which is the asymmetry to read twice.
+ * The Store's default denominates every unconstrained Price, so moving it reinterprets those
+ * amounts (ADR-0065); a Region *selects*, so moving the selection changes which Prices apply to
+ * it rather than what any of them means.
+ */
+export const UpdateRegionRequest = z
+  .object({
+    name: z.string().optional(),
+    currency: z.string().optional().meta({
+      description:
+        "An ISO 4217 code this Store has enabled, read case-insensitively. One it has not is refused at 422 with `currency-not-enabled`.",
+    }),
+    metadata: Metadata.optional().meta({
+      description: "Replaces what is stored rather than merging into it.",
+    }),
+  })
+  .openapi("UpdateRegionRequest");
+
+/**
+ * Every way a Region operation can be refused, as a closed set.
+ *
+ * The keys are checked against the unions `store/region.ts` declares, so a rename there turns
+ * *this* red naming the reason.
+ */
+const REGION_REASONS = {
+  ...REQUEST_REASONS,
+  "region-not-found": "region-not-found",
+  "currency-not-enabled": "currency-not-enabled",
+  "region-in-use": "region-in-use",
+} as const satisfies {
+  [R in
+    | Refused<RegionCreation>
+    | Refused<RegionUpdate>
+    | Refused<RegionDeletion>
+    | RequestReason]: R;
+};
+
+export const RegionRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(REGION_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("RegionRefusal");
+
+/**
+ * A **Channel** — a route to market this Store sells through (#291, ADR-0005).
+ *
+ * A name, and that is the whole entity. ADR-0005 says kobai's Channel means *sales channel
+ * only*, against Vendure's, which overloads the same word to mean tenant boundary: so a Channel
+ * carries no scope, owns nothing, and is referenced by exactly one column — an API key's, which
+ * is how a request's Channel is decided (ADR-0020).
+ */
+export const Channel = z
+  .object({
+    id: z.uuid(),
+    name: z.string().meta({
+      description:
+        "What the Merchant calls it — `Web`, `Marketplace`. **Not unique**: a Channel is addressed by its identifier everywhere.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("Channel");
+
+/** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
+export const ChannelList = z
+  .object({ channels: z.array(Channel).readonly(), nextCursor: NextCursor })
+  .openapi("ChannelList");
+
+/** ADR-0064's two parameters and nothing else: this list narrows by nothing. */
+export const ChannelPageQuery = pageQuery("channels");
+
+export const CreateChannelRequest = z
+  .object({
+    name: z.string().meta({ description: "Required, and not empty." }),
+    metadata: Metadata.optional(),
+  })
+  .openapi("CreateChannelRequest");
+
+/**
+ * Name what should change; naming nothing is refused rather than treated as a no-op (ADR-0062).
+ *
+ * **There is deliberately no list of API keys here.** Which keys are in a Channel is decided
+ * when each is minted (`POST /admin/api-keys`), and a second field writing that fact from this
+ * side would be permanent under ADR-0060 and could disagree with the first.
+ */
+export const UpdateChannelRequest = z
+  .object({
+    name: z.string().optional(),
+    metadata: Metadata.optional().meta({
+      description: "Replaces what is stored rather than merging into it.",
+    }),
+  })
+  .openapi("UpdateChannelRequest");
+
+/**
+ * Every way a Channel operation can be refused, as a closed set.
+ *
+ * The smallest family on this surface beside a Collection's, and for the same kind of reason: a
+ * Channel's name is not unique, so nothing conflicts, and deleting one is refused for nothing —
+ * the keys that named it become unconstrained rather than losing anything.
+ */
+const CHANNEL_REASONS = {
+  ...REQUEST_REASONS,
+  "channel-not-found": "channel-not-found",
+} as const satisfies {
+  [R in
+    | Refused<ChannelCreation>
+    | Refused<ChannelUpdate>
+    | Refused<ChannelDeletion>
+    | RequestReason]: R;
+};
+
+export const ChannelRefusal = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.enum(CHANNEL_REASONS).meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("ChannelRefusal");
+
 /** No identifier, because there is only one (ADR-0005). */
 export const Store = z
   .object({
     name: z.string(),
-    defaultCurrency: z.string().meta({ description: "ISO 4217, upper case." }),
+    defaultCurrency: z.string().meta({
+      description:
+        "ISO 4217, upper case. What a Price carrying no Region and no Channel is denominated in, and it does not move (ADR-0065). It is always one of `currencies`.",
+    }),
+    currencies: z.array(EnabledCurrency).readonly().meta({
+      description:
+        "Every currency this Store may price in, by code — the vocabulary a Region selects from and a Price is denominated in (ADR-0074). Always includes `defaultCurrency`, which is why disabling that one is refused. Enabling a currency is not the same as having Prices in it: kobai converts nothing.",
+    }),
+    // **A union rather than `Region.nullable()`**, and that is not a style choice: `.nullable()`
+    // at a *reference* site is applied to the registered component itself, so `Region` would be
+    // published as `object | null` — and `GET /admin/regions` would then promise a page of items
+    // that may each be `null`, which is a thing no handler produces and, under ADR-0060, a
+    // `null` a client is entitled to expect for ever. `Inventory` and `CartShopper` read that
+    // way in the generated client already; they are referenced from one genuinely nullable
+    // place each, and this is the first component shared between a nullable field and a list.
+    // The `description` goes on the union for the same reason — a `.meta()` there would have
+    // overwritten the Region's own.
+    defaultRegion: z.union([Region, z.null()]).meta({
+      description:
+        "The Region a storefront that names none is answered for. Seeded at the first boot after this Store was created, from `defaultCurrency`, and renamed like any other Region; `null` only on a deployment whose Project never seeds one.",
+    }),
     metadata: Metadata,
   })
   .openapi("Store");
@@ -954,7 +1206,21 @@ export const UpdateStoreRequest = z
     }),
     defaultCurrency: z.string().optional().meta({
       description:
-        "ISO 4217, read case-insensitively. **Only the code this Store already prices in is accepted**, and naming it changes nothing: every Price carries the Store's default currency and no other (ADR-0008), so changing this would reinterpret every amount already stored rather than convert it. Another currency is refused with `default-currency-is-fixed`. Because naming the current one changes nothing, a body naming *only* this field is refused as a request that changes nothing — send it beside a `name` or a `metadata`.",
+        "ISO 4217, read case-insensitively. **Only the code this Store already prices in is accepted**, and naming it changes nothing: a Price carrying no Region and no Channel is denominated in it (ADR-0074), so changing this would reinterpret each of those amounts rather than convert them. Another currency is refused with `default-currency-is-fixed` — it is *enabled* in `currencies` and selected on a Region instead. Because naming the current one changes nothing, a body naming *only* this field is refused as a request that changes nothing — send it beside a `name` or a `metadata`.",
+    }),
+    // The **same shape** the read answers with, and that is the point rather than a symmetry
+    // for its own sake: {@link EnabledCurrency} is an object so that a per-currency setting can
+    // arrive beside `code` and be additive (ADR-0060), and a request taking bare strings would
+    // have exactly the problem the response was shaped to avoid — the day such a setting exists,
+    // this is where a Merchant would have to send it. `collections` on a Product takes
+    // `{ id }`s for the same reason.
+    currencies: z.array(EnabledCurrency).optional().meta({
+      description:
+        "**The complete list** of the currencies this Store may price in — so this is where one is enabled and where one is disabled, and an entry left out is a currency taken away. Each `code` is read case-insensitively. `defaultCurrency` has to be among them: leaving it out is refused with `default-currency-must-be-enabled`, because a Price carrying no Region and no Channel is denominated in it. A code a Region selects cannot be taken away either — that is `currency-in-use`, naming the Regions, and the repair is to move or delete them first.",
+    }),
+    defaultRegion: z.uuid().optional().meta({
+      description:
+        "The `id` of the Region a storefront that names none is answered for — `GET /admin/regions` lists them. One this Store has not got is refused with `region-not-found`. There is no way to say *no default Region*: a deployment is seeded one at its first boot, and taking it away would leave every storefront that sends no Region refused instead.",
     }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
@@ -974,6 +1240,9 @@ export const UpdateStoreRequest = z
 const STORE_REASONS = {
   ...REQUEST_REASONS,
   "default-currency-is-fixed": "default-currency-is-fixed",
+  "default-currency-must-be-enabled": "default-currency-must-be-enabled",
+  "currency-in-use": "currency-in-use",
+  "region-not-found": "region-not-found",
 } as const satisfies { [R in Refused<StoreUpdate> | RequestReason]: R };
 
 export const StoreRefusal = z
