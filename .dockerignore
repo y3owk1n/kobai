@@ -10,6 +10,9 @@ docs
 **/.env
 **/.env.*
 !**/.env.example
+# The uploads directory the shipped `MediaStorage` writes to. Runtime data rather than build
+# input, and `**/`-first because `.gitignore` names it at every depth (ADR-0068).
+**/kobai-media
 # Never as a file: an `.npmrc` for a private mirror holds an auth token, and a token in a
 # build context is in an image layer forever. This workspace resolves kobai through
 # `workspace:*` and needs none, so unlike the Project's Dockerfile there is nothing here to

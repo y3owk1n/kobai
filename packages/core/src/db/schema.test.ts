@@ -9,7 +9,7 @@ import {
   seedTestOrder,
 } from "../testing/index.ts";
 import type { PagedList } from "./page.ts";
-import { apiKey, cart, merchant, order, product, role } from "./schema.ts";
+import { apiKey, cart, media, merchant, order, product, role } from "./schema.ts";
 
 /**
  * Core's tables, as Postgres holds them.
@@ -188,6 +188,7 @@ const PAGED_TABLES: Record<PagedList, PagedTable> = {
   roles: role,
   merchants: merchant,
   carts: cart,
+  media,
 };
 
 /**

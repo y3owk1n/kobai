@@ -23,6 +23,12 @@ dist/
 # it already has.
 .claude/worktrees/
 
+# Where the `MediaStorage` kobai ships writes a Merchant's uploads, when nothing points it
+# somewhere else. It is runtime data rather than anything a checkout generates — but a
+# `devbox run up` or a `devbox run dev` in this repository does produce it, so `git status`
+# should not report an image somebody uploaded to their own machine as an untracked file.
+kobai-media/
+
 # OS
 .DS_Store
 Thumbs.db

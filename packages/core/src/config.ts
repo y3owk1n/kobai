@@ -1,5 +1,6 @@
 import type { SessionOptions } from "./auth/session.ts";
 import type { FulfilmentOptions } from "./fulfilment/strategy.ts";
+import type { MediaOptions } from "./media/storage.ts";
 import type { MigrationSet } from "./migrations/set.ts";
 import type { placeOrderWorkflow } from "./order/place-order.ts";
 import type { PaymentsOptions } from "./payment/provider.ts";
@@ -124,6 +125,30 @@ export type KobaiProjectConfig = {
    * enforce stops the boot, with a message naming this key, and nothing is clamped (ADR-0075).
    */
   readonly reservations?: ReservationsOptions;
+  /**
+   * Where this Project keeps its Media — the images and other catalog assets a Merchant
+   * uploads (ADR-0015).
+   *
+   * ```ts
+   * media: { storage: myBucket }
+   * ```
+   *
+   * **A subject, not a scalar**, for `session`'s and `payments`' reason: the next thing a
+   * deployment needs to say about its Media — a size ceiling, an accepted set of content types
+   * — goes beside the storage rather than forcing this shape after the fact.
+   *
+   * **Unlike `payments`, saying nothing here is a fully working Store**, and the reason Core may
+   * ship a default at all is recorded on `MediaStorage` in `media/storage.ts`: ADR-0051 closed #72 with two
+   * implementations from outside kobai, so Media no longer has to be the proof that dependency
+   * substitution works with somebody else's code. A deployment that says nothing writes files
+   * under `kobai-media/` and serves them from kobai's own `/media/{key}` — which is local disk,
+   * with everything that implies for a second container and for a deploy that keeps no volume.
+   *
+   * What a storage decides is not only *where* the bytes are but **where a storefront fetches
+   * them from**: the address on a Media is the storage's own answer, asked at read time, so a
+   * bucket behind a CDN serves its own bytes and none of them pass through this process.
+   */
+  readonly media?: MediaOptions;
 };
 
 /**

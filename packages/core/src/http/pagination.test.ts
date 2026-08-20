@@ -68,6 +68,7 @@ const LISTS = [
   { path: "/admin/roles", key: "roles", credential: "session" },
   { path: "/admin/merchants", key: "merchants", credential: "session" },
   { path: "/admin/carts", key: "carts", credential: "session" },
+  { path: "/admin/media", key: "media", credential: "session" },
   { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
 
@@ -654,6 +655,31 @@ async function seedThree(
     });
     for (let index = 0; index < 3; index += 1) {
       seeded.push((await seedTestCart(kobai, { catalog })).id);
+    }
+    return seeded;
+  }
+
+  // Three uploads through the multipart route, which is the only way a Media is made — a
+  // Merchant uploads them and nothing else writes one. **The bytes are deliberately not an
+  // image**: what is paged here is rows, and a fixture that was one would invite the next
+  // reader to think this file has an opinion about them. `media/media.test.ts` is where the
+  // record's own fields are asserted.
+  if (list.key === "media") {
+    for (let index = 0; index < 3; index += 1) {
+      const body = new FormData();
+      body.set(
+        "file",
+        new File([new Uint8Array([index + 1])], `poster-${index}.png`, {
+          type: "image/png",
+        }),
+      );
+      const uploaded = await kobai.request("/admin/media", {
+        method: "POST",
+        headers: merchant.headers,
+        body,
+      });
+      expect(uploaded.status, "uploading Media").toBe(201);
+      seeded.push(((await uploaded.json()) as { id: string }).id);
     }
     return seeded;
   }

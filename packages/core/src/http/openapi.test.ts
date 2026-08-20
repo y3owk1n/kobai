@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSION_POLICY } from "../auth/session.ts";
 import { CORE_FULFILMENT_STRATEGIES } from "../fulfilment/strategy.ts";
+import { filesystemMediaStorage } from "../media/storage.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
 import { placeOrderWorkflow } from "../order/place-order.ts";
 import { priceResolutionWorkflow } from "../pricing/resolve-price.ts";
@@ -47,6 +48,10 @@ function describeCore() {
     // is open (ADR-0014), so no schema here enumerates it and a deployment that wired a Plugin's
     // serves exactly these routes.
     fulfilment: CORE_FULFILMENT_STRATEGIES,
+    // The storage kobai ships, because a description does not move with a substituted one
+    // either: which `MediaStorage` a deployment wired decides what a `url` says and never which
+    // routes exist. Nothing below dispatches a request, so nothing is written anywhere.
+    mediaStorage: filesystemMediaStorage(),
     // The default, because `packages/core/openapi.json` is the description of stock kobai.
     // What a *configured* window does to it is asserted through the running application, in
     // `auth/auth.test.ts`.
@@ -68,8 +73,9 @@ function describeCore() {
  */
 function servedOperations(routes: readonly RouteEntry[]): string[] {
   const served = routes
-    // `ALL` is what a wildcard mount registers as, and there are exactly two paths:
-    // `/admin/*` and `/store/*`, carrying the migration gate and the two credential gates.
+    // `ALL` is what a wildcard mount registers as, and there are exactly three paths:
+    // `/admin/*`, `/store/*` and `/media/*`, carrying the migration gate and the two
+    // credential gates.
     // None of them is a path a caller asks for by name, and a description enumerates paths,
     // so none belongs in one. The JSON 404 an unrouted path gets is not here at all — it is
     // `app.notFound`, which is not a route (ADR-0040).
@@ -201,14 +207,27 @@ describe("the description names the release it describes", () => {
 /**
  * Which scheme an operation must name, from where it sits.
  *
- * Two operations name none, and both are named here rather than inferred from the absence:
- * `/health` is open on purpose, and `POST /admin/session` is what *mints* a session, so
- * requiring one would leave nobody able to obtain the first. **Everything else is behind its
- * surface's gate, with no exceptions** — `POST /admin/merchants` was one until #25, and the
- * shortest way to say what changed is that this function no longer has a third case.
+ * **Three** operations name none, and every one of them is written out here rather than
+ * inferred from an absence, because "this route is open" is exactly the claim that must not be
+ * arrivable at by accident:
+ *
+ * - `GET /health` is open on purpose (ADR-0048), and answers before migrations have applied.
+ * - `POST /admin/session` is what *mints* a session, so requiring one would leave nobody able
+ *   to obtain the first.
+ * - `GET /media/{key}` serves image bytes to an `<img>`, which sends no credential — so there
+ *   is no gate it could sit behind and still do its job. That is a decision rather than an
+ *   omission and it is argued at the route in `http/app.ts`: everything the storage kobai ships
+ *   holds is readable by anyone who knows a key, the keys are unguessable, and nothing there
+ *   enumerates. **A fourth entry in this list is a new open route**, which is a thing to weigh
+ *   rather than a line to add.
+ *
+ * Everything else is behind its surface's gate, with no exceptions — `POST /admin/merchants`
+ * was one until #25.
  */
+const OPEN_OPERATIONS = ["get /health", "post /admin/session", "get /media/{key}"];
+
 function expectedSchemes(operation: string): string[] {
-  if (operation === "get /health" || operation === "post /admin/session") return [];
+  if (OPEN_OPERATIONS.includes(operation)) return [];
   return operation.includes(" /store/")
     ? [SECURITY_SCHEMES.apiKey]
     : [SECURITY_SCHEMES.merchantSession];

@@ -90,6 +90,28 @@ books and asserts on them — `packages/core/src/payment/payment.test.ts` is the
 distinction is the same one ADR-0036 draws for a compensation that throws: "the code ran" and
 "the Shopper got their money back" are two facts, and a counter only ever knows the first.
 
+**The harness also points Media somewhere throwaway, and that one is about the checkout rather
+than about courtesy** (#254). `MediaStorage` is a dependency a Project may substitute and Core
+ships a working one, so a deployment that configures nothing writes files under `kobai-media/`
+in its **working directory** — which for a test run is this repository. `createTestKobai` gives
+each instance a `mkdtemp` of its own and deletes it with the database, so no suite leaves a
+Merchant's uploads in the tree and no two tests share a directory. **Nothing in the gate reaches
+a network or a real object store**, on the rule `@kobai/plugin-stripe` already follows: a test
+either substitutes a storage or points the shipped one at a directory it made.
+
+```ts
+await using kobai = await createTestKobai({ media: { storage: mine } });     // one of your own
+await using here = await createTestKobai({                                   // the shipped one,
+  media: { storage: filesystemMediaStorage({ directory }) },                 // somewhere you
+});                                                                          // can look inside
+```
+
+**Ask the storage what it is holding**, exactly as a test about payment asks the provider: a
+substitute that records what it was handed and is then asserted against — these bytes, this
+content type — is the acceptance for the interface, and a counter saying `put` was reached would
+pass against a Core that stored the bytes itself. `packages/core/src/media/media.test.ts` is the
+shape.
+
 **Almost every test needs something to sell before it can assert anything, and that
 arrangement is one line.** `seedTestCatalog` creates a Product, the Variant that makes it
 sellable and a Price on that Variant — through the public API, like everything else here, so

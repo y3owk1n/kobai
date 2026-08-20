@@ -70,6 +70,8 @@ import {
   type FulfilmentStrategies,
   fulfilmentStrategyNames,
 } from "../fulfilment/strategy.ts";
+import { listMedia, type MediaUploadOutcome, uploadMedia } from "../media/media.ts";
+import type { MediaStorage } from "../media/storage.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
@@ -117,6 +119,15 @@ export type AdminDependencies = {
    * Variants — a Variant may only point at a Strategy the Project actually wired.
    */
   readonly fulfilment: FulfilmentStrategies;
+  /**
+   * Where this deployment keeps its Media — what `kobai.config.ts` wired, or the
+   * local-filesystem storage Core ships (ADR-0015).
+   *
+   * Threaded through for the Strategies' reason above: it is a property of the instance, and
+   * the address a Media reports is the storage's own answer rather than a column, so two
+   * modules reaching for two storages would be two answers about where one Store's images are.
+   */
+  readonly mediaStorage: MediaStorage;
   /**
    * How long this deployment's sessions live (ADR-0050). The gate below enforces it, and the
    * two routes that answer with a `Session` describe it — which is why those two are declared
@@ -986,6 +997,69 @@ const setInventoryRoute = createRoute({
 });
 
 /**
+ * Uploads an image — **the surface's first binary route**, and the only one.
+ *
+ * Everything else here takes JSON, and this one takes `multipart/form-data` because bytes are
+ * what it is for: base64 in a JSON field would be a third more bytes on the wire and would put
+ * the whole file through a JSON parser to get it back. The description says so honestly — `file`
+ * is `type: string, format: binary`, which is OpenAPI's spelling of a file part — and **the
+ * answer is JSON like every other route's**, typechecked by `app.openapi` against
+ * `contract.Media` exactly as if the request had been JSON too.
+ *
+ * It sits behind `catalog:write` because Media *is* catalog data (ADR-0015): the same Permission
+ * that lets a Merchant write a Product lets them give it something to show. A Permission of its
+ * own would be one the `owner` Role would hold anyway and one every deployment's Roles would
+ * have to be taught about.
+ *
+ * Where the bytes go is `media/storage.ts`'s decision and the deployment's configuration, and
+ * this route has no opinion about either — it hands them to whatever `kobai.config.ts` wired
+ * and reports back the address that storage gave.
+ */
+const uploadMediaRoute = createRoute({
+  method: "post",
+  path: "/media",
+  summary: "Upload Media",
+  description:
+    "A Merchant-supplied catalog asset — a product image and the like (ADR-0015) — sent as `multipart/form-data`. kobai stores exactly what it is given: it does not resize, convert or generate thumbnails, so a Store that wants derivatives puts a CDN in front of its `MediaStorage`. The width and height on the answer are read out of the file's own header, and are `null` for a format kobai cannot read one from. Where the bytes end up is the deployment's — the storage it wired in `kobai.config.ts`, or the local-filesystem one kobai ships — and the `url` on the answer is that storage's own, so it may be absolute or root-relative.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
+  request: {
+    body: {
+      required: true,
+      content: { "multipart/form-data": { schema: contract.UploadMediaRequest } },
+    },
+  },
+  responses: {
+    201: json("The Media, and where it is served from.", contract.Media),
+    // `REFUSALS.invalid` and not a family's schema: nothing about Media is refused by the state
+    // of the Store, so `invalid` and `malformed-body` are the whole of this route's 400.
+    400: REFUSALS.invalid,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+const listMediaRoute = createRoute({
+  method: "get",
+  path: "/media",
+  summary: "List Media",
+  description: `Newest first, ${DEFAULT_PAGE_LIMIT} at a time — a Merchant listing them has just uploaded one and is looking for it. Ask for more with \`limit\`, and for what follows a page with the \`nextCursor\` it answered; \`nextCursor\` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). This is the only route that enumerates Media: the bytes are served at an unguessable address and nothing there lists anything.`,
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { query: contract.MediaPageQuery },
+  responses: {
+    200: json("A page of Media.", contract.MediaList),
+    400: PAGE_QUERY_INVALID,
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Mints an API key — the credential the store surface is gated by (ADR-0020).
  *
  * The value is in this response and in no other, ever: only a digest is stored, so there
@@ -1416,6 +1490,23 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     return c.json(counted.inventory, 200);
   });
 
+  guarded.openapi(uploadMediaRoute, async (c) => {
+    const form = c.req.valid("form");
+    const uploaded = await uploadMedia(deps.db, deps.mediaStorage, {
+      filename: form.file.name,
+      contentType: form.file.type,
+      bytes: new Uint8Array(await form.file.arrayBuffer()),
+      alt: form.alt,
+    });
+    if (!uploaded.ok) return refused(c, uploaded, MEDIA_STATUS);
+    return c.json(uploaded.media, 201);
+  });
+
+  guarded.openapi(listMediaRoute, async (c) => {
+    const page = await listMedia(deps.db, deps.mediaStorage, c.req.valid("query"));
+    return c.json({ media: page.items, nextCursor: page.nextCursor }, 200);
+  });
+
   guarded.openapi(listOrdersRoute, async (c) => {
     const page = await listOrders(deps.db, c.req.valid("query"));
     return c.json({ orders: page.items, nextCursor: page.nextCursor }, 200);
@@ -1558,6 +1649,18 @@ const VARIANT_CREATION_STATUS = {
   Exclude<VariantCreation, { ok: true }>["reason"],
   400 | 404 | 409 | 422
 >;
+
+/**
+ * Only one way to get an upload wrong that the schema cannot already see, and it is the
+ * request's fault: a file part with no bytes in it.
+ *
+ * There is no 404 and no 409 here. Nothing about Media is refused by the state of the Store —
+ * an asset conflicts with nothing, takes no name anybody else could hold, and is addressed by
+ * nothing on the way in.
+ */
+const MEDIA_STATUS = {
+  invalid: 400,
+} as const satisfies Record<Exclude<MediaUploadOutcome, { ok: true }>["reason"], 400>;
 
 /** Only one way to get a key wrong, and it is the request's fault. */
 const API_KEY_STATUS = {

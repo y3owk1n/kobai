@@ -1432,6 +1432,109 @@ export interface paths {
       };
     };
   };
+  "/admin/media": {
+    /**
+     * List Media
+     * @description Newest first, 20 at a time — a Merchant listing them has just uploaded one and is looking for it. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered; `nextCursor` is absent on the last page and that absence is the only end-of-list signal (ADR-0064). This is the only route that enumerates Media: the bytes are served at an unguessable address and nothing there lists anything.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Media. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["MediaList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+    /**
+     * Upload Media
+     * @description A Merchant-supplied catalog asset — a product image and the like (ADR-0015) — sent as `multipart/form-data`. kobai stores exactly what it is given: it does not resize, convert or generate thumbnails, so a Store that wants derivatives puts a CDN in front of its `MediaStorage`. The width and height on the answer are read out of the file's own header, and are `null` for a format kobai cannot read one from. Where the bytes end up is the deployment's — the storage it wired in `kobai.config.ts`, or the local-filesystem one kobai ships — and the `url` on the answer is that storage's own, so it may be absolute or root-relative.
+     */
+    post: {
+      requestBody: {
+        content: {
+          "multipart/form-data": components["schemas"]["UploadMediaRequest"];
+        };
+      };
+      responses: {
+        /** @description The Media, and where it is served from. */
+        201: {
+          content: {
+            "application/json": components["schemas"]["Media"];
+          };
+        };
+        /** @description The request does not fit this endpoint's schema, or is not JSON at all. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/orders": {
     /**
      * List Orders
@@ -1782,6 +1885,46 @@ export interface paths {
         404: {
           content: {
             "application/json": components["schemas"]["ApiKeyNotFound"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
+  "/media/{key}": {
+    /**
+     * Read Media
+     * @description The bytes of one Media, served with the content type the upload declared — the address `POST /admin/media` answered with, for a deployment using the local-filesystem storage kobai ships. **Open: no credential, because an `<img>` sends none.** The key is unguessable and nothing here lists anything, which is the whole of the protection — a deployment whose assets must not be public wires a `MediaStorage` that signs its own URLs and serves nothing through kobai. A deployment whose storage has an address of its own answers that address on the Media instead, and this route is never asked.
+     */
+    get: {
+      parameters: {
+        path: {
+          /** @description The storage key, as it appears in the `url` a Media reported. Opaque: it is whatever this deployment's `MediaStorage` called the object. */
+          key: string;
+        };
+      };
+      responses: {
+        /** @description The bytes, as the content type the upload declared. */
+        200: {
+          content: {
+            "application/octet-stream": string;
+          };
+        };
+        /** @description No Media is served at that key — it was never uploaded, its object has gone, or this deployment's storage serves its own bytes and not through kobai. */
+        404: {
+          content: {
+            "application/json": components["schemas"]["MediaNotFound"];
           };
         };
         /** @description Something failed inside kobai. */
@@ -3034,6 +3177,38 @@ export interface components {
       /** @description What the Store has, counted. Replaces whatever was there; it is not added to it. */
       onHand: number;
     };
+    Media: {
+      /** Format: uuid */
+      id: string;
+      /** @description Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own — a bucket, a CDN — and root-relative (`/media/…`) for the storage kobai ships, whose bytes kobai serves. Asked of the storage on every read rather than stored, so it moves with the deployment's configuration; a client renders it and parses none of it. */
+      url: string;
+      /** @description What the upload declared the bytes are — `image/png`. Served back verbatim by the byte route, and never sniffed. */
+      contentType: string;
+      /** @description The name the file had on the machine it was uploaded from, so a Media library reads as one. It is not part of the address and nothing resolves it. */
+      filename: string;
+      /** @description How many bytes were stored. */
+      byteSize: number;
+      /** @description The image's own width in pixels, read out of its header — or `null` where kobai could not read it, which is every format but PNG, JPEG, GIF and WebP. `null` rather than `0`, so a storefront can tell *unknown* from a measurement and reserve space only when it really knows. */
+      width: number | null;
+      /** @description Likewise, in pixels, or `null`. */
+      height: number | null;
+      /** @description What this shows, for a Shopper who cannot see it — or `null` where nobody has written it yet. Never an empty string: that is what a *decorative* image says, and it is a different fact from nobody having been asked. */
+      alt: string | null;
+    };
+    UploadMediaRequest: {
+      /**
+       * Format: binary
+       * @description The bytes, as a file part. kobai stores what it is given: it does not resize, convert or generate thumbnails, and a Project that wants derivatives puts a CDN in front of its `MediaStorage`. An empty file is refused at 400.
+       */
+      file: string;
+      /** @description What this shows, for a Shopper who cannot see it. Left out — or sent empty — the Media has no alt text rather than an empty one. */
+      alt?: string;
+    };
+    MediaList: {
+      media: components["schemas"]["Media"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
     OrderList: {
       orders: components["schemas"]["OrderSummary"][];
       /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
@@ -3260,6 +3435,15 @@ export interface components {
        * @enum {string}
        */
       reason: "api-key-not-found";
+    };
+    MediaNotFound: {
+      /** @description What went wrong, in prose. */
+      error: string;
+      /**
+       * @description Machine-readable. Branch on this.
+       * @enum {string}
+       */
+      reason: "media-not-found";
     };
     StoreProductList: {
       products: components["schemas"]["StoreProduct"][];

@@ -386,6 +386,41 @@ order. Five things about it are decisions rather than implementation:
   `StoreVariantOptionValue` are declared apart from their admin twins for `StoreVariantFulfilment`'s
   reason, though `StoreVariantOptionValue` happens to carry the same two fields.
 
+**Media is a record here and bytes somewhere else, and where the bytes come from is the
+surface's one open route** (#254, ADR-0015). `POST /admin/media` is the surface's **first and
+only binary request** — `multipart/form-data`, described honestly as `type: string, format:
+binary`, answering JSON typechecked against `contract.Media` like every other route — and it sits
+behind `catalog:write` because Media *is* catalog data, with `GET /admin/media` behind
+`catalog:read`. Five things about it are decisions rather than implementation:
+
+- **`GET /media/{key}` is open, and it is the only route on this surface no credential opens
+  besides `/health`.** An `<img>` sends no header, so a gate there would serve nothing to the
+  thing the route exists for — which means the question was never how to gate it but whether
+  kobai serves image bytes at all. It does, for one reason: the `MediaStorage` Core ships writes
+  files to a directory, and a file on a disk is reachable over HTTP by nothing. `openapi.test.ts`
+  names the three open operations in `OPEN_OPERATIONS` rather than inferring them from an
+  absence, so **a fourth entry there is a new open route and a thing to weigh.**
+- **The address is the storage's answer, asked at read time, and there is no `url` column.** A
+  deployment behind a CDN answers `https://…` on every Media and no image byte passes through the
+  application; `filesystemMediaStorage` answers `/media/{key}` and kobai serves those. So the
+  `url` on the wire may be absolute or root-relative and a client has to render both — and a
+  Store that puts a CDN in front of the bucket it already had changes one line of
+  `kobai.config.ts` rather than rewriting a table. `MediaStorage.read` answering `null` is the
+  other half: it means *not kobai's to serve*, and the byte route says `media-not-found` to
+  anyone who asks anyway.
+- **The bytes are served as the content type the *row* holds, with `nosniff`.** The upload
+  declared it and nothing since has been in a position to know better, and a browser guessing
+  `text/html` about a file a Merchant uploaded would be a stored script on the Store's own origin.
+- **`width` and `height` are read out of the file's header** (`media/dimensions.ts`) and are
+  `null` for a format kobai cannot read one from. Taking them as fields on the upload was the
+  alternative and is worse: a storefront would be laying out against a claim. Resizing,
+  converting and thumbnails stay out of scope — a Project that wants derivatives puts a CDN in
+  front.
+- **There is one refusal and it is not a family.** `MediaNotFound` carries a single literal, on
+  `ApiKeyNotFound`'s shape; uploading refuses `invalid` through `InvalidRequest`, because nothing
+  about Media is refused by the state of the Store — an asset conflicts with nothing and takes no
+  name anybody else could hold.
+
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.
 `packages/core/src/http/openapi.test.ts` regenerates the description and compares;

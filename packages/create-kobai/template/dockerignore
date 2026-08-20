@@ -13,6 +13,10 @@
 .git
 **/*.tsbuildinfo
 
+# The uploads directory the shipped `MediaStorage` writes to. Runtime data rather than build
+# input, and `**/`-first because `.gitignore` names it at every depth (ADR-0068).
+**/kobai-media
+
 # Prose. `.env.example` is documentation too, but it is the one a Developer copies, and
 # leaving it in costs nothing.
 *.md

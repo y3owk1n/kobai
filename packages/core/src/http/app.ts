@@ -6,6 +6,8 @@ import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
+import { readMediaBytes } from "../media/media.ts";
+import { MEDIA_PATH, type MediaStorage } from "../media/storage.ts";
 import type { MigrationStateHolder } from "../migrations/state.ts";
 import type { PlaceOrderWorkflow } from "../order/place-order.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
@@ -14,7 +16,7 @@ import type { WorkflowRegistry } from "../workflow/context.ts";
 import { createAdminRoutes } from "./admin.ts";
 import * as contract from "./contract.ts";
 import { health, requireMigrationsApplied } from "./health.ts";
-import { json, type OpenApiDocument, SECURITY_SCHEMES } from "./openapi.ts";
+import { json, type OpenApiDocument, REFUSALS, SECURITY_SCHEMES } from "./openapi.ts";
 import { createStoreRoutes } from "./store.ts";
 
 export type HttpDependencies = {
@@ -28,6 +30,15 @@ export type HttpDependencies = {
    * have, and `place-order` asks each line's Strategy what it answers.
    */
   readonly fulfilment: FulfilmentStrategies;
+  /**
+   * Where this deployment keeps its Media — what `kobai.config.ts` wired, or the
+   * local-filesystem storage Core ships (ADR-0015).
+   *
+   * Threaded through for the Strategies' reason: it is a property of the instance. Two surfaces
+   * read it — the admin routes that upload and list, and the open byte route below — and both
+   * have to be asking the same storage, or a Media would report an address nothing serves.
+   */
+  readonly mediaStorage: MediaStorage;
   readonly migrations: MigrationStateHolder;
   readonly logger: Logger;
   /**
@@ -160,6 +171,64 @@ function documentMetadata() {
   } as const;
 }
 
+/**
+ * The bytes behind one Media — **the only route on this surface that no credential opens**, and
+ * the one place a decision rather than an implementation is being recorded in this file.
+ *
+ * An `<img>` sends no credential. There is no header a browser can be talked into attaching to
+ * one, so a route behind the store surface's bearer key would serve nothing to the thing it
+ * exists for — which means the choice was never *how* to gate this, it was whether kobai serves
+ * image bytes at all. It does, for one reason: the `MediaStorage` Core ships writes files to a
+ * directory, and a file on a disk is reachable over HTTP by nothing. Without this route a
+ * deployment that configured nothing would record Media it could not show, and "a Store with no
+ * object store still shows its images" is the whole of what shipping a default storage is for.
+ *
+ * **A storage with an address of its own is never asked.** `MediaStorage.urlFor` is what a
+ * Media reports, so a bucket behind a CDN answers `https://…` and no byte of it passes through
+ * this process; such a storage answers `null` from `read` and this route says `media-not-found`
+ * to anyone who tries anyway. The route exists on every deployment all the same, because a
+ * description that enumerated different paths per configuration would not be a contract
+ * (`http/admin.ts` makes the same argument about the session schema).
+ *
+ * **So everything the shipped storage holds is public to anyone holding a key**, exactly as a
+ * public bucket's objects are, and the mitigation is that the key is a v4 UUID and that nothing
+ * here enumerates: `GET /admin/media` is the only listing and it is behind a Merchant session
+ * and `catalog:read`. Media is Merchant-supplied catalog data by definition — ADR-0015 puts a
+ * Shopper's uploaded artwork in the Project's own table precisely because that is *not* Media —
+ * so what this serves is what a storefront was going to publish. A deployment holding assets
+ * that must not be public wires a storage that signs its own URLs.
+ *
+ * It is behind the migration gate like every other route that reads a table, and unlike
+ * `/health`: it reads `core_media` for the content type, so on a half-migrated database the
+ * honest answer is 503 rather than a 500 naming a missing relation.
+ */
+const mediaBytesRoute = createRoute({
+  method: "get",
+  path: "/{key}",
+  summary: "Read Media",
+  description:
+    "The bytes of one Media, served with the content type the upload declared — the address `POST /admin/media` answered with, for a deployment using the local-filesystem storage kobai ships. **Open: no credential, because an `<img>` sends none.** The key is unguessable and nothing here lists anything, which is the whole of the protection — a deployment whose assets must not be public wires a `MediaStorage` that signs its own URLs and serves nothing through kobai. A deployment whose storage has an address of its own answers that address on the Media instead, and this route is never asked.",
+  request: { params: contract.MediaKeyParam },
+  responses: {
+    200: {
+      description: "The bytes, as the content type the upload declared.",
+      content: {
+        "application/octet-stream": { schema: { type: "string", format: "binary" } },
+      },
+    },
+    404: json(
+      "No Media is served at that key — it was never uploaded, its object has gone, or this deployment's storage serves its own bytes and not through kobai.",
+      contract.MediaNotFound,
+    ),
+    // A storage that fails for any reason other than "no such object" throws, and
+    // `app.onError` answers this — the same 500 every other route on the surface declares, and
+    // the reason `MediaStorage.put` and `read` report a broken deployment by throwing rather
+    // than by answering a refusal.
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
 const healthRoute = createRoute({
   method: "get",
   path: "/health",
@@ -270,10 +339,44 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
     createAdminRoutes({
       db: deps.db,
       fulfilment: deps.fulfilment,
+      mediaStorage: deps.mediaStorage,
       sessionPolicy: deps.sessionPolicy,
     }),
   );
   app.route("/admin", admin);
+
+  // The third surface, and the only open one but `/health`. It is its own mount rather than a
+  // route on the root app so that the migration gate reaches it the way it reaches the other
+  // two: this route reads `core_media`, so a half-migrated database owes a 503 rather than a
+  // 500 about a missing relation. See `mediaBytesRoute` for why it is open at all.
+  const mediaBytes = new OpenAPIHono();
+  mediaBytes.use("*", requireMigrationsApplied(deps.migrations));
+  mediaBytes.openapi(mediaBytesRoute, async (c) => {
+    const served = await readMediaBytes(
+      deps.db,
+      deps.mediaStorage,
+      c.req.valid("param").key,
+    );
+    if (!served) {
+      return c.json(
+        {
+          error:
+            "No Media is served at that key. It may never have existed, or this deployment's storage may serve its own bytes rather than kobai's.",
+          reason: "media-not-found" as const,
+        },
+        404,
+      );
+    }
+
+    // The content type comes off the row rather than off the bytes: the upload declared it and
+    // nothing since has been in a position to know better. `nosniff` because this route serves
+    // whatever a Merchant uploaded, and a browser guessing `text/html` about it would be a
+    // stored cross-site script served from the Store's own origin.
+    c.header("content-type", served.contentType);
+    c.header("x-content-type-options", "nosniff");
+    return c.body(served.bytes, 200);
+  });
+  app.route(MEDIA_PATH, mediaBytes);
 
   // The second authenticated surface, and a second gate rather than a second credential for
   // the first one: `/store` is opened by an API key, `/admin` by a Merchant session, and

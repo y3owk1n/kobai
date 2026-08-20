@@ -103,6 +103,7 @@ New to the project? These five carry the shape of everything else:
 | [0075](./0075-the-hold-window-is-a-projects-and-core-keeps-no-ceiling.md) | The hold window is a Project's, and Core keeps no ceiling over it | Accepted — 0050's shape, **without its cap**; carries out 0070 |
 | [0076](./0076-a-merchants-role-is-corrected-in-place.md) | A Merchant's Role is corrected in place, and a Merchant is still never removed | Accepted — 0062's shape on one more table; **discharges 0066's note** and makes 0059's repair reachable |
 | [0077](./0077-a-quote-is-a-route-not-a-total-on-the-cart.md) | A quote is a route, not a total on the Cart | Accepted — closes a hole in 0070; **leaves 0009 untouched** and says why |
+| [0078](./0078-media-bytes-come-from-the-storage-and-kobais-own-route-is-open.md) | Media bytes come from the storage, and kobai's own byte route is open | Accepted — Core ships an implementation here for a reason **0053 does not have**, and 0053 is untouched |
 
 ## Prototypes
 

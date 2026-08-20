@@ -1,6 +1,10 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { InitialMerchantCredentials } from "../auth/seed.ts";
 import type { KobaiProjectConfig, Logger } from "../config.ts";
 import { createKobai, type Kobai } from "../kobai.ts";
+import { filesystemMediaStorage } from "../media/storage.ts";
 import type { MigrationOutcome } from "../migrations/run.ts";
 import { createTestDatabase, type TestDatabase } from "./database.ts";
 import { testPaymentProvider } from "./payments.ts";
@@ -57,6 +61,18 @@ export const silentLogger: Logger = { info: () => {}, error: () => {} };
 export async function createTestKobai(options?: TestKobaiOptions): Promise<TestKobai> {
   const database = await createTestDatabase();
 
+  // Media goes in a directory of this instance's own, and it is dropped with the database.
+  //
+  // Core's default writes under the **process's** working directory, which for a test run is
+  // the repository — so a suite on the stock configuration would leave a Merchant's uploads in
+  // the checkout, and every test in it would be sharing one. This is the same courtesy
+  // `testPaymentProvider` and `silentLogger` are, and it is the rule the ticket that built this
+  // states: nothing in the gate reaches a network or a real object store, so every test either
+  // substitutes a `MediaStorage` or points the shipped one somewhere throwaway. A test whose
+  // subject *is* a storage passes its own, exactly as one about payment passes its own
+  // provider.
+  const mediaDirectory = await mkdtemp(join(tmpdir(), "kobai-media-"));
+
   // `createKobai` refuses a configuration it cannot serve, so a test whose subject is one has
   // a database already standing behind it. Dropped here rather than left for whatever runs
   // next, exactly as the migration failure below does it — a suite that leaks a database per
@@ -88,10 +104,17 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
       // defaulted: a deployment that says nothing has Core's `physical` and `digital`, and
       // that is what almost every test in this repository should be.
       fulfilment: options?.fulfilment,
+      // The storage this instance's uploads land in, unless the test named one — which is what
+      // a test whose subject is substitution does, and what one about the shipped storage does
+      // to point it at a directory it can then look inside.
+      media: options?.media ?? {
+        storage: filesystemMediaStorage({ directory: mediaDirectory }),
+      },
       logger: options?.logger ?? silentLogger,
     });
   } catch (cause) {
     await database.drop();
+    await rm(mediaDirectory, { recursive: true, force: true });
     throw cause;
   }
 
@@ -103,12 +126,14 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
   } catch (cause) {
     await kobai.close();
     await database.drop();
+    await rm(mediaDirectory, { recursive: true, force: true });
     throw cause;
   }
 
   const close = async () => {
     await kobai.close();
     await database.drop();
+    await rm(mediaDirectory, { recursive: true, force: true });
   };
 
   return {

@@ -230,6 +230,20 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   Variant's value with it. And **Up, Down and Remove are plain `Button`s rather than
   `ActionButton`s**: they rearrange the form and call kobai nothing, so there is no permission to
   explain — the one control that writes is the submit, and that is where `unavailable` goes.
+- **The Media screen is the one form in this Admin that is not JSON, and it is the one that
+  does not use react-hook-form** (#254). A file input's value is a `FileList` the browser owns
+  and nothing may set, so `reset()` cannot clear it and the controlled value every other field
+  here relies on does not exist — the file is held in state beside a `ref` used only to clear
+  the input after a successful upload, and "a file was chosen" is expressed as the submit button
+  being dead rather than as a schema message. The request goes through `@kobai/client` like
+  every other call, with a `bodySerializer` building the `FormData`: `openapi-fetch` hands one
+  on untouched and leaves the boundary to the browser, which is the only party that can make
+  one. **Each row renders `media.url` exactly as kobai answered it** — absolute for a Store on a
+  CDN, root-relative for the storage kobai ships — because building an address out of a key here
+  would be a second answer to a question the API already answers, and wrong on the first
+  deployment that moved its bucket. Its `alt` is `one.alt ?? ""` on the `<img>`, which is what a
+  screen reader is told about a decorative image; inventing prose there would announce a
+  filename.
 - **A closed refusal family is narrowed, never matched on prose.** `lib/refusal.ts` holds one
   `Record` per family keyed by that family's own union and a `narrowing()` built from it, so a
   `reason` added in Core has no key, does not compile, and reddens the Admin in the same commit
