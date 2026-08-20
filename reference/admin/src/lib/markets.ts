@@ -18,17 +18,40 @@ import { useKobaiClient } from "@/lib/session";
  */
 
 /**
- * How many of each are offered, and the gap that comes with it.
+ * How many are asked for at a time — kobai's own ceiling, so a Store with few of either is one
+ * request (`MAX_PAGE_LIMIT`, promised under ADR-0064).
  *
- * **Neither list pages**, which is `lib/collections.ts`'s known gap one noun along and taken for
- * its reason: a cursor inside the Prices card would sit in an address that already locates a
- * Product, and there is one of these cards per Variant. The Store screen's Default Region card
- * is the same argument on a different address (#311) — a cursor there would sit in one that
- * already locates the Store. A Store with more than a hundred Regions
- * would have some it cannot constrain a Price to from this screen — and a Store with more than a
- * hundred *geographies* has bigger questions than this control.
+ * A number above it is **refused** rather than reduced, so this is the largest page there is
+ * and asking for more would be a 400 rather than a longer answer.
  */
-export const OFFERED_MARKETS = 100;
+const A_PAGE = 100;
+
+/**
+ * How many pages are followed, and it is a bound rather than a ceiling on the Store (#310).
+ *
+ * **These reads used to stop at the first page**, so a deployment past a hundred Regions had
+ * some it could not constrain a Price to from any screen — silently, since a picker missing its
+ * last rows looks exactly like a picker. They follow the cursor now, which is the only way
+ * there is to reach the rest (ADR-0064 gives up the page number on purpose), and a filled
+ * picker is what a Merchant gets.
+ *
+ * The loop is bounded for the reason every cursor walk in this repository is bounded: a cursor
+ * that never advanced would spin here rather than fail, and a tab that never settles is a worse
+ * failure than a short list. Two thousand of either is far past the point at which a picker is
+ * the wrong control — **a Store with that many markets wants a screen with a search box, not a
+ * longer listbox** — so reaching this bound is a finding about the control rather than a limit
+ * to raise.
+ *
+ * **At the bound it truncates rather than failing, and that is the one uncomfortable choice
+ * here.** It is the defect this ticket fixed, surviving one order of magnitude up: a picker
+ * missing its oldest rows looks exactly like a picker. Throwing instead would say *something* —
+ * the field would report a failed read and go dead — but it would take the Store screen's
+ * Default Region card with it, so a Store past the bound could not set a default Region **at
+ * all**, which is a capability lost to protect against a list being incomplete. A usable
+ * picker missing its two-thousand-and-first row is the lesser failure, and the sentence above
+ * is where the choice is recorded rather than left to be rediscovered.
+ */
+const OFFERED_PAGES = 20;
 
 /** Its own cache keys, deliberately not those of the screens that page these lists. */
 const OFFERED_REGIONS = "offered-regions";
@@ -45,11 +68,49 @@ export type OfferedMarkets<T> = {
    * because the Store has none, so a control that said *this Store has no Channels* before
    * kobai replied would be announcing the wrong thing for the length of a round trip and
    * permanently if the read failed.
+   *
+   * **It is still one answer although the read may be several requests**, which is what makes
+   * following the cursor invisible to every caller: a page that failed half way through throws,
+   * so the query is a failure rather than a truncated list nobody was told about.
    */
   readonly answered: boolean;
   readonly isPending: boolean;
   readonly error: unknown;
 };
+
+/**
+ * One page of a list, as this module reads one — the rows, and where the next page starts.
+ *
+ * A shape of its own so that {@link everyPage} can be written once for the two lists: what
+ * differs between them is the path and what the envelope calls its rows, and neither is
+ * something a loop over cursors should have to know.
+ */
+type PageOf<Row> = {
+  readonly rows: readonly Row[];
+  readonly nextCursor?: string;
+};
+
+/**
+ * Every row of a list, followed page by page to the end (ADR-0064).
+ *
+ * **`nextCursor`'s absence is the only end-of-list signal there is**, and a short page is not
+ * one — so this stops on the missing cursor rather than on a page smaller than it asked for.
+ */
+async function everyPage<Row>(
+  read: (after: string | undefined) => Promise<PageOf<Row>>,
+): Promise<Row[]> {
+  const found: Row[] = [];
+  let after: string | undefined;
+
+  for (let page = 0; page < OFFERED_PAGES; page += 1) {
+    const answered = await read(after);
+    found.push(...answered.rows);
+    if (answered.nextCursor === undefined) return found;
+    after = answered.nextCursor;
+  }
+
+  return found;
+}
 
 export function useOfferedRegions(): OfferedMarkets<Region> {
   const client = useKobaiClient();
@@ -57,15 +118,18 @@ export function useOfferedRegions(): OfferedMarkets<Region> {
   const query = useQuery({
     queryKey: [OFFERED_REGIONS],
     queryFn: async () =>
-      orThrow(
-        await client.GET("/admin/regions", {
-          params: { query: { limit: OFFERED_MARKETS } },
-        }),
-      ),
+      everyPage(async (after) => {
+        const answered = orThrow(
+          await client.GET("/admin/regions", {
+            params: { query: { limit: A_PAGE, after } },
+          }),
+        );
+        return { rows: answered.regions, nextCursor: answered.nextCursor };
+      }),
   });
 
   return {
-    offered: query.data?.regions ?? [],
+    offered: query.data ?? [],
     answered: query.isSuccess,
     isPending: query.isPending,
     error: query.isError ? query.error : null,
@@ -91,15 +155,18 @@ export function useOfferedChannels(): OfferedMarkets<Channel> {
   const query = useQuery({
     queryKey: [OFFERED_CHANNELS],
     queryFn: async () =>
-      orThrow(
-        await client.GET("/admin/channels", {
-          params: { query: { limit: OFFERED_MARKETS } },
-        }),
-      ),
+      everyPage(async (after) => {
+        const answered = orThrow(
+          await client.GET("/admin/channels", {
+            params: { query: { limit: A_PAGE, after } },
+          }),
+        );
+        return { rows: answered.channels, nextCursor: answered.nextCursor };
+      }),
   });
 
   return {
-    offered: query.data?.channels ?? [],
+    offered: query.data ?? [],
     answered: query.isSuccess,
     isPending: query.isPending,
     error: query.isError ? query.error : null,

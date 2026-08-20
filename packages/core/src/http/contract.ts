@@ -2579,6 +2579,86 @@ export const PriceRefusal = z
   })
   .openapi("PriceRefusal");
 
+// ---- The Prices a Store holds -----------------------------------------------------------
+
+/**
+ * One row of `GET /admin/prices` — a Price, and the Variant it prices (#310).
+ *
+ * **Declared apart from {@link Price} rather than adding a field to it**, and the argument is
+ * ADR-0060's rather than #207's: a field added to `Price` is promised at every route that
+ * answers one, and a Price nested under the Variant it belongs to has no use for a copy of that
+ * Variant. Two components restating one shape is what that costs, which is the same bargain
+ * `StoreProduct` takes beside `Product` for a different reason — there the risk is asymmetric
+ * (a publishable key reads one of them) and here it is simply that the two shapes are free to
+ * move apart. It sits here rather than beside `Price` because it names
+ * {@link VariantIdentity}, which is declared just above — one shape for *the Variant this is
+ * about*, whether a Workflow resolved it or a list is reporting it.
+ *
+ * **The pair of identifiers is the point rather than a courtesy.**
+ * `DELETE /admin/variants/{id}/prices/{priceId}` takes both, so every row of this list is a
+ * Price a Merchant can act on — which is the test ADR-0059 applies to a refusal, and the reason
+ * `core_price`'s cascade could be re-argued once this list existed rather than resting on there
+ * being no route that names those rows.
+ *
+ * It carries no Product. A Variant is what is sellable and what a Price hangs off (ADR-0008),
+ * and the SKU is what identifies one to a Merchant; a title is additive the day a client wants
+ * one, where a field taken back out would be a major.
+ */
+export const ListedPrice = z
+  .object({
+    id: z.uuid(),
+    amount: z.int().meta({
+      description: "Minor units of `currency` — 1250 is USD 12.50.",
+    }),
+    currency: z.string(),
+    variant: VariantIdentity.meta({
+      description:
+        "The Variant this Price prices. Its `id` and this Price's own `id` are what `DELETE /admin/variants/{id}/prices/{priceId}` takes, so a Price found here can be removed without opening the Product it hangs under.",
+    }),
+    region: z.union([RegionIdentity, z.null()]).meta({
+      description:
+        "The Region this Price is constrained to, or `null` for **every** Region. An unconstrained Price is answered by the whole list rather than by `?region=`, which narrows to the Prices that *name* a Region.",
+    }),
+    channel: z.union([ChannelIdentity, z.null()]).meta({
+      description:
+        "The Channel this Price is constrained to, or `null` for **every** Channel. `?channel=` narrows the same way `?region=` does.",
+    }),
+    metadata: Metadata,
+  })
+  .openapi("ListedPrice");
+
+/** The list, in an envelope — the same shape, and the same reason, as {@link ProductList}. */
+export const PriceList = z
+  .object({ prices: z.array(ListedPrice).readonly(), nextCursor: NextCursor })
+  .openapi("PriceList");
+
+/**
+ * The Prices list's query: ADR-0064's two parameters, and the two things it narrows by.
+ *
+ * A **constant** built by {@link pageQueryOf}, like every other filtered list on this surface:
+ * filters are added and nothing about paging is re-decided (#183).
+ *
+ * **Both are plain optional strings, for {@link CollectionFilter}'s reason.** Declaring them
+ * `uuid` would refuse a malformed value with one sentence and a well-formed value naming no
+ * Region with another, for what is one mistake — so shape and existence are judged together, in
+ * `store/region.ts`'s `unusableRegion` and `store/channel.ts`'s `unusableChannel`, and answered
+ * with the same `invalid` at 400 every other unusable query parameter gets.
+ *
+ * **The two compose**, because they are two optional parameters on one schema: a Merchant
+ * asking what a marketplace charges in Malaysia sends both and is answered by what neither
+ * narrowing gives alone.
+ */
+export const PricePageQuery = pageQueryOf("prices", {
+  region: z.string().optional().meta({
+    description:
+      "Narrow to the Prices **entered for** one Region, by its `id` — the rows a deletion of that Region would take with it. It is deliberately not *the Prices that would apply there*: which of several a Shopper is charged is `resolve-price`'s answer, in a Workflow a Project may have replaced, so a Price naming no Region is answered by the unfiltered list rather than by every value of this parameter. A value that names no Region this Store has is **refused at 400** rather than answered with an empty page.",
+  }),
+  channel: z.string().optional().meta({
+    description:
+      "Narrow to the Prices entered for one Channel, by its `id`. It composes with `region` rather than replacing it, so the two together answer what one market is charged through one route to market. A value that names no Channel this Store has is **refused at 400**.",
+  }),
+});
+
 // ---- Carts ----------------------------------------------------------------------------
 
 /**

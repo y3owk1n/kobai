@@ -183,6 +183,44 @@ refusal there names something a Merchant can act on. The day `GET /admin/prices?
 this cascade is worth revisiting — and that is the trigger to watch for rather than a promise to
 change it.
 
+### The trigger fired, and the cascade is kept on a different argument (#310)
+
+`GET /admin/prices?region=` and `?channel=` exist. The premise above — *the advice would name no
+reachable control* — is therefore false, and every row of that list carries the pair
+`DELETE /admin/variants/{id}/prices/{priceId}` needs, deliberately, so the control a refusal
+would have pointed at is now there. The cascade is **kept**, and this is what it now rests on:
+
+- **The repair a refusal could demand is the deletion the cascade performs.** A Price constrained
+  to a Region that no longer exists can never apply to anything again — the paragraph above,
+  unchanged and still the load-bearing half — so there is nothing else to do with one. A
+  `restrict` would refuse the Region's deletion until the Merchant had made exactly the same rows
+  go away, **one request each**, since no route deletes Prices in bulk. That is `role-in-use`
+  turned inside out: there the repair *moves* a Merchant onto another Role and the Role survives
+  with its holders intact, and here it can only destroy the same rows more slowly.
+- **What the list actually buys is the better half of what refusing would have.** A refusal
+  arrives after the act and names a cost the Merchant has already tried to pay; a list is read
+  *before* it. `catalog/the-prices-entered-for-a-market.test.ts` asserts that sequence rather than leaving
+  it as prose — the Prices are read, the Region is deleted, and the Prices that applied everywhere
+  are untouched.
+- **`set null` is still the worst of the three**, unchanged, and it is the answer a `restrict`
+  advocate should be asked about first: it is the only one of the three that changes what a
+  Shopper is charged somewhere nobody was talking about.
+
+**One caveat, recorded rather than papered over.** The list sits behind **`catalog:read`** and
+deleting a Region or a Channel sits behind **`store:write`** (#291), so a Role holding only the
+second is pointed by that route's own prose at a list it may not open. Both gates are right on
+their own terms — a Price is catalog data, and a Region is the Store's configuration — and which
+gate a route sits behind is promised (ADR-0060), so neither moves to make the sentence tidier.
+What it means is that *reading the cost first* is available to a Merchant who may read the
+catalog, which `owner` and every Role that administers markets in practice holds, and not to a
+Role deliberately narrowed away from the catalog. That Role could not have acted on a refusal
+either.
+
+**What would reopen this**: a route that deletes Prices in bulk — `DELETE /admin/prices?region=`,
+or a `region` a Price could be *moved* to — because that is the first version of this where a
+refusal names a repair that is not simply the cascade performed by hand. Until then the choice is
+between doing it and making the Merchant do it.
+
 ## Consequences
 
 - **Both reason strings are now promised in prose and nowhere else.** Until the first publish,

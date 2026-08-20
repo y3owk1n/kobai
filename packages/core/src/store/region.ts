@@ -16,6 +16,7 @@ import {
   changesFrom,
   changesNothing,
   mustBeText,
+  type NotUsable,
   notUsable,
   openData,
   text,
@@ -269,10 +270,10 @@ export async function updateRegion(
  * point the Store at this Region in between, and the foreign key is the only thing that cannot
  * be raced.
  *
- * **Every Price constrained to this Region goes with it** (#292), which is `db/schema.ts`'s
- * argument at the column: a Price for a Region that no longer exists could never apply to
- * anything again, refusing would name rows nothing lists, and leaving them unconstrained would
- * silently widen a Price a Merchant entered for one market to all of them.
+ * **Every Price constrained to this Region goes with it** (#292, re-argued in #310), and the
+ * argument is `db/schema.ts`'s at the column rather than a second copy of it here. The one thing
+ * to know at this end: `GET /admin/prices?region=` is where a Merchant reads what the deletion
+ * will cost, **before** making it.
  */
 export async function deleteRegion(db: Database, id: string): Promise<RegionDeletion> {
   if (!isUuid(id)) return noSuchRegion(id);
@@ -357,4 +358,35 @@ export async function unknownRegion(
   id: string,
 ): Promise<{ ok: false; reason: typeof REGION_NOT_FOUND; detail: string } | undefined> {
   return (await readRegion(db, id)) === undefined ? noSuchRegion(id) : undefined;
+}
+
+/**
+ * The refusal for a `?region=` naming no Region — or `undefined` where it names one (#310).
+ *
+ * **A different answer from {@link unknownRegion}, and the difference is where the value came
+ * from.** A `regionId` on a *body* names a record this Store has not got and is refused **422
+ * `region-not-found`**, the Region's own word; a **query parameter** it cannot use does not fit
+ * the endpoint at all and is refused **400 `invalid`**, which is what `?collection=` and the
+ * price routes' `?region=` already answer. That line is drawn on the surface rather than here —
+ * `catalog/collection.ts`'s `unknownCollection` is the shape this copies — and the reason a
+ * `reason` of its own was not minted is ADR-0060's: a new one is permanent, and *stop sending
+ * this value* is a distinction no client can act on differently.
+ *
+ * **One answer covers a value that is not a UUID and a UUID naming nothing**, because they are
+ * one mistake: this parameter takes the identifier of a Region this Store has, and neither of
+ * those is one.
+ *
+ * It is asked **before** the page is read rather than folded into it, so an unknown Region
+ * cannot arrive as a 200 with an empty `prices` — the filtering convention's second promise,
+ * and the answer a caller would read as the truth.
+ */
+export async function unusableRegion(
+  db: Queryable,
+  regionId: string,
+): Promise<NotUsable | undefined> {
+  return (await readRegion(db, regionId)) === undefined
+    ? notUsable(
+        `\`region\` names ${JSON.stringify(regionId)}, which is not a Region this Store has. Send the \`id\` of one — \`GET /admin/regions\` lists them — or leave the parameter out for every Price this Store holds.`,
+      )
+    : undefined;
 }

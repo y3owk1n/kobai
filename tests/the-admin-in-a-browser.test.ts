@@ -4660,3 +4660,101 @@ describe("Merchants, Roles and the Store", () => {
     await auditAccessibility(page, "the Regions screen whose Store read failed");
   });
 });
+
+/**
+ * **A picker over a set kobai names offers all of it, however many pages that is** (#310).
+ *
+ * `lib/markets.ts` asked kobai for one page and stopped, so a deployment past a hundred Regions
+ * had some it could not constrain a Price to and could not make its default — silently, because
+ * a picker missing its oldest rows looks exactly like a picker. It follows the cursor to the end
+ * now, and **nothing smaller than a browser can say so**: the loop is in the Admin, the route
+ * was answering correctly the whole time, and what went wrong was a control quietly offering a
+ * prefix of the answer.
+ *
+ * **Watched failing before it was trusted**, against a build whose read stopped after one page:
+ * the picker drew a hundred Regions and the hundred-and-first was not among them, which is
+ * exactly what a Merchant met.
+ *
+ * It is the last thing in this file on purpose. Arranging it leaves two hundred rows in a
+ * deployment every other case shares, and a case that ran after it would be looking through
+ * somebody else's arrangement.
+ */
+describe("a Store with more markets than one page holds", () => {
+  /**
+   * How many of each are made — one more than the page `lib/markets.ts` asks kobai for.
+   *
+   * The **first** one made is what the assertions name: a hundred newer rows sit above it, so it
+   * is the first row of the second page and is offered only if the cursor was followed. It is
+   * kobai's own ceiling plus one rather than an arbitrary number, because a page larger than
+   * `MAX_PAGE_LIMIT` is refused rather than answered — this is the smallest arrangement that can
+   * reach a page boundary at all.
+   */
+  const PAST_ONE_PAGE = 101;
+
+  /** Marks this case's rows apart from the handful the cases above left behind. */
+  const OVERFLOW = `Overflow ${Date.now()}`;
+
+  /** Makes that many, and answers the first — the one a picker that stopped would not offer. */
+  async function fill(kind: "regions" | "channels", currency?: string): Promise<string> {
+    const made: string[] = [];
+    for (let index = 0; index < PAST_ONE_PAGE; index += 1) {
+      const name = `${OVERFLOW} ${kind} ${index}`;
+      await seam.api("POST", `/admin/${kind}`, currency ? { name, currency } : { name });
+      made.push(name);
+    }
+    const first = made[0];
+    if (first === undefined) throw new Error("unreachable: rows were made");
+    return first;
+  }
+
+  it("offers a Region and a Channel that a hundred newer ones sit above", async () => {
+    const store = await theStore();
+    const oldestRegion = await fill("regions", store.defaultCurrency);
+    const oldestChannel = await fill("channels");
+
+    // The Store's own Default Region card, one of the three controls over this set.
+    const settings = await seam.signedIn("/settings");
+    const regions = settings.getByRole("combobox", { name: "Region" });
+    await shows(regions, "the Store screen's default Region picker");
+    await regions.click();
+
+    // **Past the boundary rather than merely long**: this row is the hundred-and-first, so a
+    // read that stopped at the page it asked for draws a picker without it, and one that
+    // followed the cursor draws every Region this Store has.
+    await shows(
+      settings.getByRole("option", { name: new RegExp(`^${oldestRegion} — `) }),
+      "a Region older than a hundred others, in the picker",
+    );
+    await expect
+      .poll(() => settings.getByRole("option").count())
+      .toBeGreaterThan(PAST_ONE_PAGE - 1);
+
+    // **Audited with the popup closed, deliberately, and the reason is a finding rather than a
+    // convenience.** A `Select` popup holding more options than fit scrolls, and the element
+    // that scrolls is the popup rather than the focusable list inside it — which axe reports as
+    // `scrollable-region-focusable`, at *serious*. That is a property of `ui/select.tsx` and a
+    // long list, not of anything this ticket changed: a Store with a hundred Regions drew the
+    // same popup before these reads followed the cursor, and no case had ever opened one.
+    // Fixing it means moving the overflow onto `Select.List` in a vendored component every
+    // picker in this Admin composes, which is a change to argue on its own — and #300 already
+    // says a list too long to look through wants `combobox-field.tsx` instead. So the screen is
+    // audited, the violation is named here, and neither is quietly dropped.
+    await settings.keyboard.press("Escape");
+    await auditAccessibility(settings, "the Store screen offering every Region");
+
+    // And the Channel picker, which is the same hook one noun along: the two were extracted into
+    // one module because a Price is constrained by the pair, and a fix applied to one of them
+    // alone is exactly what that module exists to stop.
+    const keys = await seam.signedIn("/developer/api-keys");
+    const channels = keys.getByRole("combobox", { name: "Channel" });
+    await shows(channels, "the mint form's Channel picker");
+    await channels.click();
+
+    await shows(
+      keys.getByRole("option", { name: oldestChannel, exact: true }),
+      "a Channel older than a hundred others, in the picker",
+    );
+    await keys.keyboard.press("Escape");
+    await auditAccessibility(keys, "the API keys screen offering every Channel");
+  });
+});

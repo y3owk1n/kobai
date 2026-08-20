@@ -195,6 +195,21 @@ export type FulfilmentStrategySummary =
   components["schemas"]["FulfilmentStrategySummary"];
 export type Price = components["schemas"]["Price"];
 /**
+ * One row of `GET /admin/prices` — a Price, and the Variant it prices (#310).
+ *
+ * Declared apart from {@link Price} rather than as that shape with a field added: a Price nested
+ * under the Variant it belongs to has no use for a copy of it. **The pair of identifiers is what
+ * this is for** — `variant.id` and the Price's own `id` are what `DELETE
+ * /admin/variants/{id}/prices/{priceId}` takes, so a Price found by asking which apply to a
+ * Region can be removed without opening the Product it hangs under.
+ *
+ * `region` and `channel` are the constraints the row **names**, and `null` on either means it
+ * applies to all of them. Which Price a Shopper is actually charged is best match rather than a
+ * row read — `GET /store/variants/{id}/price`.
+ */
+export type ListedPrice = components["schemas"]["ListedPrice"];
+export type PriceList = components["schemas"]["PriceList"];
+/**
  * A Merchant-supplied catalog asset, and the address it is served at (ADR-0015).
  *
  * **`url` is the whole of what a client is told about where the bytes are**, and it may be

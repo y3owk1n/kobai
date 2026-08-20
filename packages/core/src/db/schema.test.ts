@@ -17,6 +17,7 @@ import {
   media,
   merchant,
   order,
+  price,
   product,
   region,
   role,
@@ -194,6 +195,7 @@ type PagedTable = PgTable & {
 
 const PAGED_TABLES: Record<PagedList, PagedTable> = {
   products: product,
+  prices: price,
   "store-products": product,
   orders: order,
   "api-keys": apiKey,

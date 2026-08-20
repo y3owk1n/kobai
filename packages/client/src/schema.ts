@@ -1201,6 +1201,64 @@ export interface paths {
       };
     };
   };
+  "/admin/prices": {
+    /**
+     * List Prices
+     * @description Newest first, 20 at a time — every Price this Store holds, whichever Variant carries it, each naming that Variant. **`region` and `channel` narrow to the Prices *entered for* one**, which is what a Merchant opening a market asks and what a deletion of that Region or Channel would take with it; they compose, and omitting both answers the whole list, including every Price that applies to all of them. What a Shopper is actually charged is best match rather than a row read — `GET /store/variants/{id}/price` is that question. Ask for more with `limit`, and for what follows a page with the `nextCursor` it answered; `nextCursor` is absent on the last page, and that absence is the only end-of-list signal, which a filtered page being short is not (ADR-0064).
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description How many to answer with. Between 1 and 100; 20 if it is not sent. More than 100 is **refused** rather than quietly reduced, because a caller that asked for 5,000 and received 100 would read the short page as the end of the list. */
+          limit?: number;
+          /** @description The `nextCursor` of the previous page **of this same list**. **Opaque** — it is not an identifier, not a timestamp, and nothing about what is inside it is promised, beyond its being refused by any other list. Send it back exactly as it was received; omit it for the first page. */
+          after?: string;
+          /** @description Narrow to the Prices **entered for** one Region, by its `id` — the rows a deletion of that Region would take with it. It is deliberately not *the Prices that would apply there*: which of several a Shopper is charged is `resolve-price`'s answer, in a Workflow a Project may have replaced, so a Price naming no Region is answered by the unfiltered list rather than by every value of this parameter. A value that names no Region this Store has is **refused at 400** rather than answered with an empty page. */
+          region?: string;
+          /** @description Narrow to the Prices entered for one Channel, by its `id`. It composes with `region` rather than replacing it, so the two together answer what one market is charged through one route to market. A value that names no Channel this Store has is **refused at 400**. */
+          channel?: string;
+        };
+      };
+      responses: {
+        /** @description A page of Prices. */
+        200: {
+          content: {
+            "application/json": components["schemas"]["PriceList"];
+          };
+        };
+        /** @description `limit` is not a whole number between 1 and 100, or `after` is not a cursor **this list** issued — a cursor is bound to the list that handed it back, so one from another list is refused here rather than answering a page of it. A `limit` above the ceiling is refused rather than reduced to it. */
+        400: {
+          content: {
+            "application/json": components["schemas"]["InvalidRequest"];
+          };
+        };
+        /** @description No live Merchant session was presented — the `kobai_session` cookie was absent, unusable, unknown or expired. */
+        401: {
+          content: {
+            "application/json": components["schemas"]["SessionRefusal"];
+          };
+        };
+        /** @description The Merchant's Role does not hold the permission this route requires. */
+        403: {
+          content: {
+            "application/json": components["schemas"]["PermissionDenied"];
+          };
+        };
+        /** @description Something failed inside kobai. */
+        500: {
+          content: {
+            "application/json": components["schemas"]["ServerError"];
+          };
+        };
+        /** @description Migrations have not applied, so nothing but `/health` is served yet. */
+        503: {
+          content: {
+            "application/json": components["schemas"]["Unavailable"];
+          };
+        };
+      };
+    };
+  };
   "/admin/variants/{id}": {
     /**
      * Delete a Variant
@@ -2125,7 +2183,7 @@ export interface paths {
     };
     /**
      * Delete a Region
-     * @description Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again.
+     * @description Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again. **Every Price entered for this Region goes with it**, because a Price naming a Region that no longer exists could never apply again; `GET /admin/prices?region=` is where to read them before deleting. Prices that name no Region are untouched and go on applying everywhere.
      */
     delete: {
       parameters: {
@@ -2401,7 +2459,7 @@ export interface paths {
     };
     /**
      * Delete a Channel
-     * @description **Deletes the Channel and none of the API keys minted against it.** Each of those keys becomes unconstrained — in no particular Channel, which is what every key is until one is minted against one — so this is refused for nothing but there being no such Channel.
+     * @description **Deletes the Channel and none of the API keys minted against it.** Each of those keys becomes unconstrained — in no particular Channel, which is what every key is until one is minted against one — so this is refused for nothing but there being no such Channel. **Every Price entered for this Channel goes with it**, because a Price naming a Channel that no longer exists could never apply again; `GET /admin/prices?channel=` is where to read them before deleting.
      */
     delete: {
       parameters: {
@@ -4288,6 +4346,33 @@ export interface components {
       /** @description What it should now be called. */
       name: string;
     };
+    PriceList: {
+      prices: components["schemas"]["ListedPrice"][];
+      /** @description Pass as `after` to fetch what follows this page. **Absent when there is no further page**, which is the only way to know the list has ended — a short page is not one. */
+      nextCursor?: string;
+    };
+    ListedPrice: {
+      /** Format: uuid */
+      id: string;
+      /** @description Minor units of `currency` — 1250 is USD 12.50. */
+      amount: number;
+      currency: string;
+      variant: components["schemas"]["VariantIdentity"];
+      /** @description The Region this Price is constrained to, or `null` for **every** Region. An unconstrained Price is answered by the whole list rather than by `?region=`, which narrows to the Prices that *name* a Region. */
+      region: components["schemas"]["RegionIdentity"] | null;
+      /** @description The Channel this Price is constrained to, or `null` for **every** Channel. `?channel=` narrows the same way `?region=` does. */
+      channel: components["schemas"]["ChannelIdentity"] | null;
+      /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
+      metadata: {
+        [key: string]: unknown;
+      };
+    };
+    /** @description The Variant this Price prices. Its `id` and this Price's own `id` are what `DELETE /admin/variants/{id}/prices/{priceId}` takes, so a Price found here can be removed without opening the Product it hangs under. */
+    VariantIdentity: {
+      /** Format: uuid */
+      id: string;
+      sku: string;
+    };
     UpdateVariantRequest: {
       /** @description A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused. */
       sku?: string;
@@ -4340,11 +4425,6 @@ export interface components {
         name: string;
         steps: components["schemas"]["StepReport"][];
       };
-    };
-    VariantIdentity: {
-      /** Format: uuid */
-      id: string;
-      sku: string;
     };
     StepReport: {
       /** @description The slot the Workflow declares. */

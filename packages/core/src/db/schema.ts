@@ -736,12 +736,19 @@ export const price = pgTable(
      *
      * **`cascade` rather than `restrict`, and it is the one place this table departs from
      * ADR-0059's refuse-rather-than-cascade** — recorded in that ADR, under the heading naming
-     * this column. The test ADR-0059 actually applies is whether
-     * the repair is a control the Merchant has, and here it is not: nothing lists Prices by
-     * Region, so a `restrict` would refuse the deletion and point at rows a Merchant could only
-     * find by opening every Variant. `set null` is the worse third answer — a Price entered for
-     * Malaysia would silently become the fallback for everywhere — where a Price constrained to
-     * a Region that no longer exists is a row that can never apply to anything again.
+     * this column. The test ADR-0059 actually applies is whether the repair is a control the
+     * Merchant has, and #292 answered that with *nothing lists Prices by Region*: a `restrict`
+     * would have refused the deletion and pointed at rows a Merchant could only find by opening
+     * every Variant.
+     *
+     * **`GET /admin/prices?region=` lists them now (#310), and the cascade is kept on a
+     * different argument.** The repair a `restrict` would demand *is* the deletion this
+     * performs — a Price constrained to a Region that no longer exists can never apply to
+     * anything again, so there is nothing else to do with one — and it would demand it one row
+     * at a time, because no route deletes Prices in bulk. What the list changes is that the
+     * cost is legible **before** the act rather than named by a refusal after it, which is the
+     * better half of what refusing would have bought. `set null` is still the worse third
+     * answer — a Price entered for Malaysia would silently become the fallback for everywhere.
      */
     regionId: uuid("region_id").references(() => region.id, { onDelete: "cascade" }),
     /** The Channel this Price applies to, or `null` for **every** Channel. See `region_id`. */
@@ -754,6 +761,9 @@ export const price = pgTable(
     // Resolution reads every Price of one Variant and picks among them, so this index is
     // what makes "a row, not a column" cost a join rather than a scan.
     index("core_price_variant_idx").on(table.variantId),
+    // What `GET /admin/prices` pages along (#310) — see `core_api_key`'s for why both columns,
+    // and `db/schema.test.ts` for the sweep that fails a paged list without one.
+    index("core_price_created_at_id_idx").on(table.createdAt, table.id),
     // Not for a read — resolution asks by Variant and chooses in TypeScript — but for the
     // `cascade` above: deleting a Region asks this table which rows name it, and without an
     // index that question is a scan of every Price in the Store.

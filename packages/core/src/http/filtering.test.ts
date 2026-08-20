@@ -182,6 +182,14 @@ type Filter = {
  */
 const ABSENT_COLLECTION = "00000000-0000-4000-8000-000000000000";
 
+/**
+ * A well formed identifier that names neither a Region nor a Channel, and never will.
+ *
+ * One constant for both, because what makes it unusable is the same in either case — nothing in
+ * this Store answers to it — and the refusal quotes it back either way.
+ */
+const ABSENT_MARKET = "00000000-0000-4000-8000-0000000000ff";
+
 const FILTERS: readonly Filter[] = [
   {
     // The filter the convention was inferred from (#227, ADR-0071), and until #252 nothing
@@ -214,6 +222,25 @@ const FILTERS: readonly Filter[] = [
     credential: "session",
     unknown: ABSENT_COLLECTION,
     arrange: arrangeCollections,
+  },
+  {
+    // The first list whose values are identifiers **and** whose two filters are about one row
+    // rather than about two different facts (#310): a Price is constrained by a Region and a
+    // Channel, and a Merchant opening a market asks about both at once.
+    path: "/admin/prices",
+    key: "prices",
+    parameter: "region",
+    credential: "session",
+    unknown: ABSENT_MARKET,
+    arrange: arrangePricesByRegion,
+  },
+  {
+    path: "/admin/prices",
+    key: "prices",
+    parameter: "channel",
+    credential: "session",
+    unknown: ABSENT_MARKET,
+    arrange: arrangePricesByChannel,
   },
   {
     // The first entry on the **store** surface, and the reason this table grew a credential
@@ -700,4 +727,131 @@ async function arrangeCollections(
     },
     paged: summer,
   };
+}
+
+/**
+ * A Store with three Regions and five Prices — three entered for one of them, one for another,
+ * none for the third, and one entered for no Region at all.
+ *
+ * **The unconstrained Price is what this arrangement is really for.** `?region=` narrows to the
+ * Prices that *name* a Region, so the one naming none is in `all` and in **no** value's
+ * `matching` — which is the assertion that the parameter is a filter on the row rather than a
+ * claim about what would apply there. What would apply is best match inside the currency rule,
+ * which is `resolve-price`'s answer and `pricing/a-price-in-a-region.test.ts`'s subject.
+ *
+ * The Region nothing is priced for is `arrangeCollections`' empty Collection one noun along: a
+ * value that narrows to nothing is a real answer, and the sweep above asks for it.
+ */
+function arrangePricesByRegion(
+  kobai: TestKobai,
+  merchant: TestSession,
+): Promise<Arranged> {
+  return arrangePricesConstrainedTo(kobai, merchant, "regions");
+}
+
+/** The same Store one noun along, and the same five Prices constrained through Channels. */
+function arrangePricesByChannel(
+  kobai: TestKobai,
+  merchant: TestSession,
+): Promise<Arranged> {
+  return arrangePricesConstrainedTo(kobai, merchant, "channels");
+}
+
+/**
+ * The arrangement both of those are, parameterised by which constraint the Prices carry.
+ *
+ * **Two entries and one arrangement**, because what differs between them is a path and a body
+ * key while what is being swept — three Prices for one market, one for another, none for a
+ * third, one for nowhere in particular — is the same shape twice. The two `Filter` entries stay
+ * separate for the reason this file's table already gives: `matching`'s keys **are** the values
+ * an entry sweeps, and a Region's identifiers are not a Channel's.
+ *
+ * That the two filters also **compose** is not this file's question: it is a fact about the
+ * Prices list, asserted in `catalog/the-prices-entered-for-a-market.test.ts` where what a
+ * narrowing means belongs.
+ */
+async function arrangePricesConstrainedTo(
+  kobai: TestKobai,
+  merchant: TestSession,
+  kind: "regions" | "channels",
+): Promise<Arranged> {
+  const catalog = await seedTestCatalog(kobai, { merchant, prices: [] });
+  const constraint = kind === "regions" ? "regionId" : "channelId";
+
+  const busy = await marketOf(kobai, merchant, kind, `A busy ${kind}`);
+  const quiet = await marketOf(kobai, merchant, kind, `A quiet ${kind}`);
+  const unused = await marketOf(
+    kobai,
+    merchant,
+    kind,
+    `Nothing is priced for this ${kind}`,
+  );
+
+  // One at a time, so `created_at` orders them and the pages below are predictable. The first
+  // is constrained to nothing at all, which is the ordinary Price and the one no value matches.
+  const everywhere = await priceOf(kobai, merchant, catalog.variantId, { amount: 1250 });
+  const first = await priceOf(kobai, merchant, catalog.variantId, {
+    amount: 1300,
+    [constraint]: busy,
+  });
+  const elsewhere = await priceOf(kobai, merchant, catalog.variantId, {
+    amount: 1400,
+    [constraint]: quiet,
+  });
+  const second = await priceOf(kobai, merchant, catalog.variantId, {
+    amount: 1500,
+    [constraint]: busy,
+  });
+  const third = await priceOf(kobai, merchant, catalog.variantId, {
+    amount: 1600,
+    [constraint]: busy,
+  });
+
+  // Newest first, which is what the list answers.
+  return {
+    all: [third, second, elsewhere, first, everywhere],
+    matching: {
+      [busy]: [third, second, first],
+      [quiet]: [elsewhere],
+      [unused]: [],
+    },
+    paged: busy,
+  };
+}
+
+/**
+ * A Region or a Channel, made the one way there is to make one.
+ *
+ * One helper for both because the two creates differ by a path and by a `currency` a Region
+ * selects — this Store's own, which is the only code it has enabled.
+ */
+async function marketOf(
+  kobai: TestKobai,
+  merchant: TestSession,
+  kind: "regions" | "channels",
+  name: string,
+): Promise<string> {
+  const response = await kobai.request(`/admin/${kind}`, {
+    method: "POST",
+    headers: { ...merchant.headers, "content-type": "application/json" },
+    body: JSON.stringify(kind === "regions" ? { name, currency: "USD" } : { name }),
+  });
+  expect(response.status, `creating ${name}`).toBe(201);
+  return ((await response.json()) as { id: string }).id;
+}
+
+/** One Price on a Variant, however it is constrained — an insert, never an update (ADR-0008). */
+async function priceOf(
+  kobai: TestKobai,
+  merchant: TestSession,
+  variantId: string,
+  body: Record<string, unknown>,
+): Promise<string> {
+  const response = await kobai.request(`/admin/variants/${variantId}/prices`, {
+    method: "POST",
+    headers: { ...merchant.headers, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  expect(response.status, `pricing at ${JSON.stringify(body)}`).toBe(201);
+  return ((await response.json()) as { id: string }).id;
 }

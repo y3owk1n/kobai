@@ -933,9 +933,41 @@ that surface are decisions rather than implementation:
   the short of it is that growing a Step's *input* alone breaks nobody.
 - **Deleting a Region or a Channel takes the Prices constrained to it**, which is the one place
   `core_price` departs from ADR-0059's refuse-rather-than-cascade. The test ADR-0059 applies is
-  whether the repair is a control the Merchant has, and nothing lists Prices by Region — a
-  refusal would name rows only findable by opening every Variant. The column's own comment in
-  `db/schema.ts` carries it, along with why `set null` is the worse third answer.
+  whether the repair is a control the Merchant has, and #292 answered it with *nothing lists
+  Prices by Region*. **`GET /admin/prices?region=` lists them since #310 and the cascade is kept
+  on a restated argument**: the repair a refusal could demand is that same deletion one row at a
+  time, since no route deletes Prices in bulk, and what the list changed is that the cost is
+  read before the act rather than named by a refusal after it. The column's own comment in
+  `db/schema.ts` carries it, ADR-0059 carries the re-examination, and both say why `set null` is
+  still the worse third answer.
+
+**Every Price a Store holds is a list of its own, narrowed by the two things one may be
+constrained to** (#310). `GET /admin/prices` pages `core_price` newest first behind
+**`catalog:read`**, each row naming the Variant it prices, and `?region=` and `?channel=` narrow
+it. Four things about it are decisions rather than implementation:
+
+- **A filter narrows to the Prices that *name* a Region, never to the ones that would apply
+  there.** The second question is `resolve-price`'s — the currency rule, then best match — and it
+  lives in a Workflow a Project may have replaced (ADR-0017), so answering it in a `where` clause
+  would put a second implementation of pricing where no replacement can reach it, which is the
+  argument that already keeps `load-prices` unfiltered. **A Price constrained to nothing applies
+  everywhere and is answered by the unfiltered list**, rather than by every value of the
+  parameter; the sentence a client reads is on the parameter's own description.
+- **There is no `?variant=`, and its absence is the decision.** A Variant's Prices are on the
+  Product read already, in full — a filter here would be a second way to ask a settled question,
+  and one that could disagree. The rule is `#253`'s about a route that takes a combination:
+  do not answer one question twice.
+- **`ListedPrice` is declared apart from `Price`**, on #207's line, and what it adds is
+  `VariantIdentity`. That pair is the point rather than a courtesy: `DELETE
+  /admin/variants/{id}/prices/{priceId}` needs both identifiers, so every row of this list is a
+  Price a Merchant can act on — which is what let ADR-0059's cascade be re-argued rather than
+  merely restated.
+- **The two filters take an identifier and are judged in the handler**, exactly as `?collection=`
+  is: `unusableRegion` and `unusableChannel` are asked **before** the page is read and answer the
+  same `invalid` at 400, because whether a Region exists is a fact about the Store and no schema
+  can hold it. A `regionId` on a *body* is still 422 `region-not-found` — the two are the line
+  this surface already draws between a parameter it cannot use and a body naming a record the
+  Store has not got.
 
 **A Cart is denominated, and it switches Region in place** (#293, ADR-0074's amendment). A Cart
 carries `currency` and a `region`, both on the wire; `regionId` is on `POST /store/carts` and on
