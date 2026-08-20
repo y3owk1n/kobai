@@ -16,6 +16,7 @@ import { useNavigate } from "react-router";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
 import { CollectionsField } from "@/components/collections-field";
+import { ComboboxField } from "@/components/combobox-field";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { FormField } from "@/components/form-field";
 import { FulfilmentStrategyField } from "@/components/fulfilment-strategy-field";
@@ -1213,15 +1214,28 @@ function Prices({
               Merchant made next door. Every one of them is a deployment's decision, so a list
               written into this file would be wrong on the first Store that made another. */}
           <div className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
-            <ListboxField
+            {/* **The currency picker is the Region screen's**, over the same enabled set and
+                named the same way (#300), because a Merchant choosing a currency here is being
+                asked the question they are asked two screens away — filterable with it, and
+                strictly closed with it, since a Price is denominated in something the Store has
+                enabled. **The Region and Channel pickers beside it are deliberately not**: their
+                vocabulary is rows a Merchant made, a Store has a handful of each, and neither
+                changed here. */}
+            <ComboboxField
               id={`variant-new-price-currency-${variant.id}`}
               control={form.control}
               name="currency"
               label="Currency"
+              // The Store's default heads the list and is **not** a currency: it is how a
+              // Merchant says "whatever this Store prices in", which is why it keeps its own
+              // words rather than being named after a code. Typing narrows to the codes, as it
+              // should — somebody typing `MYR` is not reaching for the default — and it is there
+              // again the moment the box is empty.
               options={[
                 { value: THE_STORES_DEFAULT, label: "This Store's default" },
                 ...currencies.options,
               ]}
+              empty="Nothing matches that. A Price is denominated in a currency this Store has enabled — the Store screen is where another is."
               description={
                 suggested === null
                   ? "Any currency this Store has enabled. Left as it is, kobai uses the Store's default."

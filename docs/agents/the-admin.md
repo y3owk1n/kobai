@@ -437,7 +437,34 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   Fulfilment Strategy field reads ADR-0067's route, because `physical` and `digital` in a
   `const` is ADR-0014's closed set moved into the client. It is the same rule as
   `lib/refusal.ts`'s `Record`s one step out: the Admin may hold what kobai's *types* close, and
-  must ask about what a deployment decides. **A documented default is not the set**, which is
+  must ask about what a deployment decides. **A vocabulary that is nobody's decision is asked of
+  the browser** (#300), which is the one set here that is neither: `lib/currencies.ts` is ISO 4217
+  out of `Intl.supportedValuesOf("currency")` with `Intl.DisplayNames` for the names, because
+  which three-letter codes exist is a standard that changes without us, kobai holds no table of it
+  either, and a route for it would be Core promising a vocabulary it does not own. A bundled
+  dataset and a seeded `core_currency` table with a route in front of it were both weighed and
+  refused — the table would additionally close a vocabulary Core deliberately left open
+  (`core_store_currency` has a length check and no foreign key), and would carry names in one
+  language where `Intl` localises. That is the Store screen's *enable* field; a **Region's**
+  currency is the enabled set and so is read from kobai through `lib/store.ts`, which is the
+  ordinary rule. Two things follow from the difference and neither is decoration. **The one over
+  a browser's list suggests and does not fence**: a code this runtime does not list is offered
+  anyway and goes up upper-cased, and a runtime with no `Intl.supportedValuesOf` at all keeps the
+  plain text box, because this screen is the only way a Merchant reaches a route that takes any
+  three-character code and a gap in a browser must not become a gap in kobai. **The one over the
+  Store's enabled set stays shut**, since `currency-not-enabled` is a real refusal and there is
+  nothing to escape to. Fall back to the bare code where a runtime has no display name — a row
+  reading `undefined` is worse than either.
+  **Naming a code and choosing which codes exist are two questions, and separating them is what
+  makes three screens agree.** `currencyLabel` is the whole of the first and `lib/store.ts` calls
+  it on the enabled set, so the Region screen, the New Region form and the Price editor's
+  currency field render one list built in one place — no screen shows a bare code where another
+  shows a named one, and `ringgit` finds the row on all three. A fourth spelling of those options
+  is the thing this rules out. The Price editor's `This Store's default` is the one row in any of
+  them that is **not** a currency: it keeps its own words rather than being named after a code,
+  and typing one narrows past it, which is right — a Merchant reaching for `MYR` is not reaching
+  for the default. **A documented
+  default is not the set**, which is
   the one thing that may still be a constant: `DEFAULT_STRATEGY` is `physical` because
   `CreateVariantRequest` promises "Defaults to `physical`" under ADR-0060, so a new Variant
   starts on the Strategy the same request without that field would have got. Starting on the
@@ -519,6 +546,28 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   whether the read failed — which is all `FulfilmentStrategyField` and `screens/merchants.tsx`'s
   `RoleField` are now. **A third picker composed from the vendored `Select` is the thing this
   rules out**, and reaching for it anyway means answering the landmark question first.
+- **A list too long to look through is `components/combobox-field.tsx` instead** (#300), and the
+  two are separate components rather than one with a `filterable` flag. Base UI draws the line
+  and it is the list that decides: a `Select` is a listbox, a `Combobox` is the same list behind a
+  box you type in, and a search field over the two Fulfilment Strategies a deployment wired is
+  noise. ISO 4217 is the case that earned it — the Store screen's `store-enable-currency` offers
+  `Intl.supportedValuesOf("currency")`, which is a few hundred rows, and a Merchant who knows they
+  want `MYR` should type it. What is typed is matched against the **label**, so a caller that puts
+  a code and a name in one label gets both searchable for nothing. Everything else it holds it
+  holds for `listbox-field.tsx`'s reasons, and one thing is its own: **the box lives inside the
+  popup, and that is not a matter of taste.** With the box outside — the arrangement that looks
+  like a text field — Base UI's focus manager is modal and `aria-hidden`s everything the popup is
+  not, the field's own label and the frame's `h1` included; axe reports `label`,
+  `page-has-heading-one` and `aria-hidden-focus` for it, which is a red gate and a real fault.
+  Inside, the popup is a `role="dialog"` — so **this one needs none of the portal plumbing above**,
+  for `ui/dialog.tsx`'s reason, and `ui/combobox.tsx` is exactly what `shadcn add` wrote. The
+  browser seam drives it through the dialog's own search box, and was watched failing on the other
+  arrangement. **Whether a Merchant may type a value that is on no row is the caller's**, through
+  `novel`, because it is a question about what kobai will accept rather than about the control:
+  closed is the default and the Store's enable field is the one caller that opens it. The two
+  fallbacks it exists for are reachable in no other way, so the seam arranges them by taking the
+  `Intl` function away in an init script — the one place in that file where the *runtime* rather
+  than the deployment is what a case arranges.
 - **A field whose *set* comes from the record above it is built from that record.** Each Variant
   card renders one value field per option **the Product** declares — not per value the Variant
   happens to hold — which is what makes an option declared a moment ago appear as an empty required

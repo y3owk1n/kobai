@@ -1,8 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
+import { ComboboxField } from "@/components/combobox-field";
 import { FormField } from "@/components/form-field";
 import { ListboxField } from "@/components/listbox-field";
 import { Problem } from "@/components/problem";
@@ -19,6 +21,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { isoCurrencies } from "@/lib/currencies";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { orThrow, problemOf, storeReasonOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
@@ -244,10 +247,14 @@ function StoreSettings({
  * Three letters is what the column's own `char_length` check holds, and it is structure rather
  * than a rule: **whether a code is one this Store may enable is nothing a browser can decide**,
  * and neither is whether it is a real ISO 4217 code — kobai does not hold a table of the world
- * either, deliberately, so a list here would be one more place to go stale.
+ * either, deliberately.
+ *
+ * The rule stayed when the text box became a picker (#300), because the picker did not stop a
+ * Merchant typing: a code this runtime does not list is offered anyway and a runtime that lists
+ * none at all gets the text box back, so this is still the shape a submitted value has to have.
  */
 const CurrenciesForm = z.object({
-  typed: z
+  code: z
     .string()
     .trim()
     .regex(/^[A-Za-z]{3}$/, "An ISO 4217 code is three letters — USD, MYR, EUR."),
@@ -283,7 +290,7 @@ function Currencies({
 
   const form = useForm<CurrenciesValues>({
     resolver: zodResolver(CurrenciesForm),
-    defaultValues: { typed: "" },
+    defaultValues: { code: "" },
   });
 
   const write = useMutation({
@@ -301,7 +308,27 @@ function Currencies({
     },
   });
 
-  const enabled = currencies.map((one) => one.code);
+  // Memoised on the query's own array rather than rebuilt each render, because it is what
+  // {@link offered} is derived from and a `Combobox` reads a new list of options as a new answer
+  // to what is on offer.
+  const enabled = useMemo(() => currencies.map((one) => one.code), [currencies]);
+
+  /**
+   * ISO 4217 as this browser lists it, less what the Store already prices in — or `null` where
+   * this runtime does not list currencies at all.
+   *
+   * **Offering an enabled code would be offering a write that changes nothing** — the whole set
+   * travels on every save, so enabling a code that is already there sends the set the Store
+   * already has. That is an affordance rather than a rule, exactly like the missing Remove on
+   * the default currency's row: kobai would accept it, and a Merchant would be left wondering
+   * what they had done.
+   */
+  const offered = useMemo(() => {
+    const listed = isoCurrencies();
+    if (listed === null) return null;
+    const already = new Set(enabled);
+    return listed.filter((one) => !already.has(one.value));
+  }, [enabled]);
 
   return (
     <Card>
@@ -313,9 +340,13 @@ function Currencies({
           in a currency has no price in it.
         </CardDescription>
       </CardHeader>
+      {/* Upper case on the way out, because kobai stores it that way and both halves of this
+          field can produce something else: a code typed into the fallback box below, and one
+          typed at the picker that no row carries. What is picked off a row is already upper
+          case, so this changes nothing for the ordinary path. */}
       <form
         onSubmit={form.handleSubmit((values) =>
-          write.mutate([...enabled, values.typed.toUpperCase()]),
+          write.mutate([...enabled, values.code.trim().toUpperCase()]),
         )}
       >
         <CardContent className="grid gap-6">
@@ -356,14 +387,49 @@ function Currencies({
             ))}
           </ul>
 
-          <FormField
-            id="store-enable-currency"
-            label="Enable another"
-            placeholder="MYR"
-            description="An ISO 4217 code. Enabling one is not the same as having Prices in it — set those on each Variant."
-            error={form.formState.errors.typed}
-            {...form.register("typed")}
-          />
+          {/* A picker rather than the text box #291 shipped (#300). The vocabulary is ISO 4217,
+              which is neither kobai's to answer nor ours to write down — `lib/currencies.ts`
+              argues that — and it is filterable because a few hundred codes is not a list
+              anybody scrolls: a Merchant who knows they want `MYR` types it and confirms.
+
+              **The picker suggests and does not fence.** This screen is the only way a Merchant
+              reaches a route that takes any three-character code, so a code this browser does
+              not list is offered anyway and a runtime that lists none at all keeps the box it
+              had. Either way the code goes up the way kobai stores it, and either way kobai
+              answers — the dropdown is the affordance and `core_store_currency` is the boundary
+              (ADR-0063). */}
+          {offered === null ? (
+            <FormField
+              id="store-enable-currency"
+              label="Enable another"
+              placeholder="MYR"
+              description="An ISO 4217 code. This browser does not list them, so there is nothing to pick from — kobai takes the code itself. Enabling one is not the same as having Prices in it: set those on each Variant."
+              error={form.formState.errors.code}
+              {...form.register("code")}
+            />
+          ) : (
+            <ComboboxField
+              id="store-enable-currency"
+              control={form.control}
+              name="code"
+              label="Enable another"
+              placeholder="Choose a currency"
+              search="Type a code or a name — MYR, ringgit"
+              empty="Nothing to enable for that. A currency this Store already prices in is not offered again; anything else is three letters."
+              options={offered}
+              // What a Merchant typed that no row carries, offered as itself. Three letters is
+              // the shape `core_store_currency` holds and the only thing predicted here; whether
+              // the code means anything is kobai's answer, and this Store already pricing in it
+              // is the one case worth keeping off the list, since enabling it again would send
+              // the set the Store already has.
+              novel={(text) => {
+                const code = text.trim().toUpperCase();
+                if (!/^[A-Z]{3}$/.test(code) || enabled.includes(code)) return null;
+                return { value: code, label: `${code} — not one this browser lists` };
+              }}
+              description="Pick from ISO 4217, as this browser lists it — or type any three-letter code, which is what kobai takes. Enabling one is not the same as having Prices in it: set those on each Variant."
+            />
+          )}
         </CardContent>
         <CardFooter className="mt-4">
           <ActionButton

@@ -5,10 +5,10 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
+import { ComboboxField } from "@/components/combobox-field";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
-import { ListboxField } from "@/components/listbox-field";
 import { Problem } from "@/components/problem";
 import {
   Card,
@@ -180,12 +180,18 @@ function RegionIdentity({
             error={form.formState.errors.name}
             {...form.register("name")}
           />
-          <ListboxField
+          {/* The set is the Store's enabled currencies, read from `GET /admin/store` — a
+              deployment's decision, so it is asked about rather than written down (ADR-0063).
+              Filterable for the reason the Store screen's picker is (#300): the control a
+              Merchant types a code into is the same control on both screens, and a Store that
+              prices in a dozen places has a list worth narrowing. */}
+          <ComboboxField
             control={form.control}
             name="currency"
             id="region-currency"
             label="Currency"
             options={currencies.options}
+            empty="This Store does not price in that. The Store screen is where a currency is enabled."
             description="One of the currencies this Store may price in — the Store screen is where another is enabled. Moving a Region onto another currency changes which Prices apply here; it converts nothing."
           />
         </CardContent>
