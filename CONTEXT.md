@@ -51,7 +51,10 @@ The credential a storefront authenticates with, and the only thing that opens th
 surface. **Publishable** or **secret**, and which one is visible in the value itself —
 `kobai_pk_…` against `kobai_sk_…` — so a secret shipped to a browser is a mistake a
 Developer can see. Belongs to a deployment rather than to a person, so it carries no Role.
-Core owns these; Shopper credentials it does not (ADR-0020).
+Core owns these; Shopper credentials it does not (ADR-0020). It opens `/store` and **never
+`/admin`**, however secret it is: a credential with no Role could only be admitted there with
+every Permission or none, and that is the root credential ADR-0066's model exists to rule out
+(ADR-0081).
 _Avoid_: token, secret (that is one *kind* of key), credential, access key, API token
 
 **Session**:
@@ -94,10 +97,26 @@ have drifted — see ADR-0034.
 _Avoid_: boilerplate, skeleton, scaffold (the noun; scaffolding is the act)
 
 **Admin**:
-The pre-built UI a Merchant works in. Its source is **vendored into the Project** rather than
-shipped by Core: a Developer owns the files and edits them directly. It reaches Core only
-through the public API. See ADR-0010 and ADR-0033.
+The pre-built UI a Merchant works in — and, in one section of it, a Developer (ADR-0079). Its
+source is **vendored into the Project** rather than shipped by Core: a Developer owns the files
+and edits them directly. It reaches Core only through the public API. See ADR-0010 and ADR-0033.
 _Avoid_: dashboard, backoffice, admin panel, CMS UI
+
+**Deployment**:
+One running Project — one process, one database, one Store. It is the thing that can be *asked
+what it is*: which version of Core, which migration sets applied, which Fulfilment Strategies are
+wired, which Steps have been replaced (ADR-0080). Distinct from the Project, which is a
+repository: a staging and a production deployment of one Project differ in their configuration
+and their data and in nothing else.
+_Avoid_: environment, instance, server, install, tenant (never — see Store)
+
+**Playground**:
+The screen in the Admin where a Developer sends a real request to this deployment's own API and
+reads the real answer. **Not a sandbox**: there is no test mode and nothing is simulated, so a
+deletion sent from it deletes. Every request carries a credential **chosen on the screen** — the
+Merchant's own Session is one of the choices rather than the one that rides along unasked
+(ADR-0081).
+_Avoid_: sandbox, test mode, console, REPL, API explorer (it sends, it does not only explore)
 
 **Plugin**:
 A distributable unit of behaviour a Project installs to extend Core, owning its own data
@@ -367,6 +386,14 @@ Collection.
 Deliberately absent: nothing of consequence remains. The runtime topology — package
 boundaries and what runs in the container — is the last open question, and it is
 implementation shape rather than domain language.
+
+**A bearer credential for the admin surface has no name here yet, on purpose.** ADR-0081
+weighed one — a Merchant-bound token that would let a script, a CI job or a CLI drive `/admin`
+without keeping a cookie jar — and deferred it rather than refusing it, because its beneficiary
+is a Developer at a terminal and not the Playground. Naming it now would put a word in this
+glossary for a thing no route accepts. When it arrives it is **not** an API key, whatever it
+looks like: an API key belongs to a deployment and carries no Role, and this would belong to a
+Merchant and carry theirs.
 
 **"Time-based pricing" is banned.** It conflates three unrelated mechanisms: **lead-time
 pricing** (ADR-0012, what kobai's first store needs), **yield pricing** (deferred), and

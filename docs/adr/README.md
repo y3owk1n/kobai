@@ -104,6 +104,9 @@ New to the project? These five carry the shape of everything else:
 | [0076](./0076-a-merchants-role-is-corrected-in-place.md) | A Merchant's Role is corrected in place, and a Merchant is still never removed | Accepted — 0062's shape on one more table; **discharges 0066's note** and makes 0059's repair reachable |
 | [0077](./0077-a-quote-is-a-route-not-a-total-on-the-cart.md) | A quote is a route, not a total on the Cart | Accepted — closes a hole in 0070; **leaves 0009 untouched** and says why |
 | [0078](./0078-media-bytes-come-from-the-storage-and-kobais-own-route-is-open.md) | Media bytes come from the storage, and kobai's own byte route is open | Accepted — Core ships an implementation here for a reason **0053 does not have**, and 0053 is untouched |
+| [0079](./0079-the-admin-takes-a-second-audience-and-it-is-one-app.md) | The Admin takes a second audience, and it is one app | Accepted — extends 0010, 0033 and 0063; **amends `CONTEXT.md`'s Admin** |
+| [0080](./0080-a-deployment-describes-itself.md) | A deployment describes itself | Accepted — **0010's second finding**, after 0067; bounded by 0067 and gated by a new Permission |
+| [0081](./0081-the-playground-attaches-its-credential-and-omits-the-ambient-one.md) | The Playground attaches its credential, and omits the ambient one | Accepted — extends 0032 and 0055; **defers a bearer credential for `/admin`** |
 
 ## Prototypes
 
