@@ -697,7 +697,7 @@ const updateProductRoute = createRoute({
   path: "/products/{id}",
   summary: "Correct a Product",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. **`media` is where images are attached to this Product, reordered on it and detached from it**, and it is the whole list in the order it should be shown in — the first one is the one that leads. Detaching removes the attachment and never the Media: the asset stays in the Store's library and may still be showing on another Product. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written, and where a picture is attached to one.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -716,6 +716,10 @@ const updateProductRoute = createRoute({
     // The one status this route gained with the handle, and it is creation's own: an address
     // two Products share addresses neither, whichever route asked for it (ADR-0060).
     409: json("Another Product already answers to that handle.", contract.CatalogRefusal),
+    422: json(
+      "Well formed, and still refused: `media` names an asset this Store has no Media for (`media-not-found`). Upload it at `POST /admin/media` and attach the identifier that answers with.",
+      contract.CatalogRefusal,
+    ),
     500: REFUSALS.serverError,
     503: REFUSALS.unavailable,
   },
@@ -850,7 +854,7 @@ const updateVariantRoute = createRoute({
   path: "/variants/{id}",
   summary: "Correct a Variant",
   description:
-    "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. **`options` is where this Variant says what it is** — its value for each option its Product declares — and it **replaces** every value stored rather than merging into them, so it must answer every declared option and only those. That is also how a Variant is given a value for an option declared on the Product since this Variant was written. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
+    "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. **`options` is where this Variant says what it is** — its value for each option its Product declares — and it **replaces** every value stored rather than merging into them, so it must answer every declared option and only those. That is also how a Variant is given a value for an option declared on the Product since this Variant was written. **`media` is where the picture a Shopper sees when they pick this one is attached**, as the whole list in the order it should be shown in; an empty list detaches everything, and detaching never deletes the Media. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -871,7 +875,7 @@ const updateVariantRoute = createRoute({
       contract.CatalogRefusal,
     ),
     422: json(
-      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Variant's Product declares (`variant-options-mismatch`).",
+      "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Variant's Product declares (`variant-options-mismatch`), or `media` names an asset this Store has no Media for (`media-not-found`).",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1400,20 +1404,25 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(createProductRoute, async (c) => {
-    const created = await createProduct(deps.db, c.req.valid("json"), deps.fulfilment);
+    const created = await createProduct(
+      deps.db,
+      deps.mediaStorage,
+      c.req.valid("json"),
+      deps.fulfilment,
+    );
     if (!created.ok) return refused(c, created, PRODUCT_STATUS);
     return c.json(created.product, 201);
   });
 
   guarded.openapi(listProductsRoute, async (c) => {
-    const page = await listProducts(deps.db, c.req.valid("query"));
+    const page = await listProducts(deps.db, deps.mediaStorage, c.req.valid("query"));
     // `undefined` rather than `null`, and `JSON.stringify` drops the key — which is the wire
     // shape ADR-0064 asks for: absent means there is no further page.
     return c.json({ products: page.items, nextCursor: page.nextCursor }, 200);
   });
 
   guarded.openapi(readProductRoute, async (c) => {
-    const found = await readProduct(deps.db, c.req.valid("param").id);
+    const found = await readProduct(deps.db, deps.mediaStorage, c.req.valid("param").id);
     if (!found) {
       return c.json(
         { error: "No such Product exists.", reason: "product-not-found" as const },
@@ -1426,6 +1435,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   guarded.openapi(updateProductRoute, async (c) => {
     const corrected = await updateProduct(
       deps.db,
+      deps.mediaStorage,
       c.req.valid("param").id,
       c.req.valid("json"),
     );
@@ -1436,6 +1446,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   guarded.openapi(addVariantRoute, async (c) => {
     const added = await addVariant(
       deps.db,
+      deps.mediaStorage,
       c.req.valid("param").id,
       c.req.valid("json"),
       deps.fulfilment,
@@ -1459,6 +1470,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   guarded.openapi(updateVariantRoute, async (c) => {
     const corrected = await updateVariant(
       deps.db,
+      deps.mediaStorage,
       c.req.valid("param").id,
       c.req.valid("json"),
       deps.fulfilment,
@@ -1625,9 +1637,14 @@ const PRODUCT_UPDATE_STATUS = {
   invalid: 400,
   "product-not-found": 404,
   "handle-taken": 409,
+  // 422 for a `media` naming an asset this Store has none of, on
+  // `unknown-fulfilment-strategy`'s distinction: the body is well formed and the state of the
+  // Store is what refuses it. Not 404 — that belongs to the Product this request addressed and
+  // found — and not 409, which would say somebody got there first and invite a retry.
+  "media-not-found": 422,
 } as const satisfies Record<
   Exclude<ProductUpdate, { ok: true }>["reason"],
-  400 | 404 | 409
+  400 | 404 | 409 | 422
 >;
 
 /**
@@ -1711,6 +1728,10 @@ const VARIANT_UPDATE_STATUS = {
   // 422 for the same reason and with the same word, wherever a Variant is written — see
   // `PRODUCT_STATUS` above.
   "variant-options-mismatch": 422,
+  // 422 at the same status the Product's correction answers it at, because it is one fact about
+  // a `media` list and where the list was sent changes neither what is wrong nor how it is
+  // fixed — `variant-options-mismatch`'s argument one field along.
+  "media-not-found": 422,
 } as const satisfies Record<
   Exclude<VariantUpdate, { ok: true }>["reason"],
   400 | 404 | 409 | 422

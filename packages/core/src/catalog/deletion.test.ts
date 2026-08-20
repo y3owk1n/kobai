@@ -216,6 +216,9 @@ describe("DELETE /admin/products/{id}", () => {
           // sell. Named here rather than left out: this is a whole-body assertion, and a field
           // that goes missing from a Merchant's list should fail it.
           status: "published",
+          // Nothing attached, and named for the same reason `status` is: this is a whole-body
+          // assertion, and a field that went missing from a Merchant's list should fail it.
+          media: [],
           metadata: {},
         },
       ],

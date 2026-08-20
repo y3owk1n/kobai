@@ -107,6 +107,7 @@ New to the project? These five carry the shape of everything else:
 | [0079](./0079-the-admin-takes-a-second-audience-and-it-is-one-app.md) | The Admin takes a second audience, and it is one app | Accepted — extends 0010, 0033 and 0063; **amends `CONTEXT.md`'s Admin** |
 | [0080](./0080-a-deployment-describes-itself.md) | A deployment describes itself | Accepted — **0010's second finding**, after 0067; bounded by 0067 and gated by a new Permission |
 | [0081](./0081-the-playground-attaches-its-credential-and-omits-the-ambient-one.md) | The Playground attaches its credential, and omits the ambient one | Accepted — extends 0032 and 0055; **defers a bearer credential for `/admin`** |
+| [0082](./0082-a-detached-media-is-still-the-stores.md) | A detached Media is still the Store's, and kobai deletes no bytes | Accepted — 0059's rule reached one table out, held by a `restrict`; **declines 0078's `remove`** and says what would settle it |
 
 ## Prototypes
 

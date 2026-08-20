@@ -10,6 +10,9 @@ import {
 } from "../db/page.ts";
 import { product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import type { Media } from "../media/media.ts";
+import type { MediaStorage } from "../media/storage.ts";
+import { readProductMedia, readVariantMedia } from "./media.ts";
 import { readProductOptions, readVariantOptionValues } from "./options.ts";
 import { PUBLISHED } from "./status.ts";
 
@@ -54,6 +57,16 @@ import { PUBLISHED } from "./status.ts";
  *   being a rule anybody enforces. What is dropped is the option's **identifier**: a storefront
  *   addresses nothing by it, the name is unique within the Product and is what a Variant's
  *   values are keyed by, and it is `PATCH /admin/products/{id}` that needs one.
+ * - **The Media, kept — and it is a shape of its own rather than the admin one.** A product page
+ *   with no picture is not a product page (story 19), and the leading image is what a catalog
+ *   grid is made of, so both shapes carry the list in the Merchant's own order and a Variant
+ *   carries its own beside it. What is dropped is everything on a Media that is about the
+ *   *file* rather than about the picture: `filename` is the name it had on the Merchant's own
+ *   machine, and `contentType` and `byteSize` are facts the thing fetching the bytes is told by
+ *   the response that carries them — publishing any of the three would be promising a browser
+ *   something about an object a CDN in front is free to change (ADR-0060 makes taking one back
+ *   out a major). What is left is what a page lays out with: the address, the alt text, and the
+ *   dimensions that let it reserve the space before the image arrives.
  * - **`status`, dropped — and not merely dropped: never carried.** It is a Merchant's field, and
  *   it is the one this whole split was argued about. A `status` on these shapes would tell every
  *   browser holding a publishable key which Products a Merchant has not finished writing and
@@ -92,6 +105,24 @@ export type StoreVariantFulfilment = {
   readonly strategy: string;
 };
 
+/**
+ * One image, as a storefront sees it — where it is, what it shows, and how big it is.
+ *
+ * Declared apart from {@link Media} for {@link StoreVariantFulfilment}'s reason, and here the
+ * split does real work rather than merely holding the line: three of that shape's eight fields
+ * are about the **file** — its name on a Merchant's machine, its content type, its weight — and
+ * none of them is something a page renders. The `url` is still the deployment's `MediaStorage`'s
+ * own answer, asked at read time (ADR-0078), so it is absolute for a Store on a CDN and
+ * root-relative for the storage kobai ships, and a storefront renders both.
+ */
+export type StoreMedia = {
+  readonly id: string;
+  readonly url: string;
+  readonly alt: string | null;
+  readonly width: number | null;
+  readonly height: number | null;
+};
+
 /** One option a Product is chosen by, as a storefront sees it: the name, and no identifier. */
 export type StoreProductOption = {
   readonly name: string;
@@ -110,6 +141,16 @@ export type StoreVariant = {
   readonly fulfilment: StoreVariantFulfilment;
   /** What this Variant is, in its Product's option order — the storefront's half of the pair. */
   readonly options: readonly StoreVariantOptionValue[];
+  /**
+   * The images of **this** Variant, in the Merchant's order — empty unless somebody attached
+   * one, which is the ordinary Variant.
+   *
+   * It does not fall back to the Product's, deliberately: a storefront with both lists in front
+   * of it decides whether picking Red replaces the gallery or adds to it, and a kobai that
+   * copied one into the other would have taken that decision on its behalf and left it with no
+   * way to tell an inherited picture from an attached one.
+   */
+  readonly media: readonly StoreMedia[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -121,6 +162,14 @@ export type StoreProduct = {
   readonly description: string | null;
   /** The address it is known by — what `/products/blue-poster` is built out of. */
   readonly handle: string;
+  /**
+   * The images this Product shows, in the Merchant's own order — the first one leads (story 9).
+   *
+   * On the list shape as well as on the detail, unlike the options: a catalog grid is nothing
+   * but leading images, and a storefront that had to open every Product to draw one would be
+   * making a request per tile.
+   */
+  readonly media: readonly StoreMedia[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -141,6 +190,7 @@ export type StoreProductDetail = StoreProduct & {
  */
 export async function listStoreProducts(
   db: Database,
+  storage: MediaStorage,
   page: PageRequest,
 ): Promise<Page<StoreProduct>> {
   const rows = await db
@@ -161,14 +211,23 @@ export async function listStoreProducts(
 
   const { rows: found, nextCursor } = takePage(rows, page);
 
+  // One query for the whole page rather than one per Product, which is what makes a catalog grid
+  // one request. A Product nobody has attached an image to is absent from the map.
+  const shown = await readProductMedia(
+    db,
+    storage,
+    found.map((row) => row.id),
+  );
+
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
-  // response by being forgotten about. A Product reports five fields here and these are them.
+  // response by being forgotten about. A Product reports six fields here and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
       title: row.title,
       description: row.description,
       handle: row.handle,
+      media: asStoreMedia(shown.get(row.id)),
       metadata: row.metadata,
     })),
     nextCursor,
@@ -195,6 +254,7 @@ export async function listStoreProducts(
  */
 export async function readStoreProduct(
   db: Database,
+  storage: MediaStorage,
   idOrHandle: string,
 ): Promise<StoreProductDetail | undefined> {
   const [row] = await db
@@ -233,10 +293,22 @@ export async function readStoreProduct(
     variants.map((one) => one.id),
   );
 
+  // The Product's images and the Variants' are two reads and two lists, because they are two
+  // facts: what this Product shows, and what picking one of its Variants shows instead.
+  const shownOnProduct = await readProductMedia(db, storage, [row.id]);
+  const shownOnVariants = await readVariantMedia(
+    db,
+    storage,
+    variants.map((one) => one.id),
+  );
+
   return {
     ...row,
+    media: asStoreMedia(shownOnProduct.get(row.id)),
     options: options.map((one) => ({ name: one.name })),
-    variants: variants.map((one) => asStoreVariant(one, chosenBy.get(one.id) ?? [])),
+    variants: variants.map((one) =>
+      asStoreVariant(one, chosenBy.get(one.id) ?? [], shownOnVariants.get(one.id)),
+    ),
   };
 }
 
@@ -259,6 +331,7 @@ const IS_PUBLISHED = eq(product.status, PUBLISHED);
  */
 export async function readStoreVariant(
   db: Database,
+  storage: MediaStorage,
   id: string,
 ): Promise<StoreVariant | undefined> {
   if (!isUuid(id)) return undefined;
@@ -271,7 +344,8 @@ export async function readStoreVariant(
   if (!row) return undefined;
 
   const chosenBy = await readVariantOptionValues(db, [row.id]);
-  return asStoreVariant(row, chosenBy.get(row.id) ?? []);
+  const shown = await readVariantMedia(db, storage, [row.id]);
+  return asStoreVariant(row, chosenBy.get(row.id) ?? [], shown.get(row.id));
 }
 
 /**
@@ -301,12 +375,35 @@ function asStoreVariant(
     readonly metadata: Record<string, unknown>;
   },
   options: readonly StoreVariantOptionValue[],
+  media: readonly Media[] | undefined,
 ): StoreVariant {
   return {
     id: row.id,
     sku: row.sku,
     fulfilment: { strategy: row.fulfilmentStrategy },
     options,
+    media: asStoreMedia(media),
     metadata: row.metadata,
   };
+}
+
+/**
+ * The Media the admin surface reports, narrowed to what a storefront is published — and the one
+ * place that narrowing happens.
+ *
+ * Field by field rather than by omission, so a field added to {@link Media} for a Merchant
+ * reaches the store surface only by somebody editing this function. That is #207's split
+ * expressed as code rather than as a rule: the alternative is a spread with three `delete`s
+ * beside it, where the *next* field is published by the deploy that adds it.
+ *
+ * `undefined` is the map having no entry, which is a subject nobody attached anything to.
+ */
+function asStoreMedia(media: readonly Media[] | undefined): StoreMedia[] {
+  return (media ?? []).map((one) => ({
+    id: one.id,
+    url: one.url,
+    alt: one.alt,
+    width: one.width,
+    height: one.height,
+  }));
 }

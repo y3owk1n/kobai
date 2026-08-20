@@ -668,6 +668,62 @@
           "archived"
         ]
       },
+      "Media": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "url": {
+            "type": "string",
+            "description": "Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own — a bucket, a CDN — and root-relative (`/media/…`) for the storage kobai ships, whose bytes kobai serves. Asked of the storage on every read rather than stored, so it moves with the deployment's configuration; a client renders it and parses none of it."
+          },
+          "contentType": {
+            "type": "string",
+            "description": "What the upload declared the bytes are — `image/png`. Served back verbatim by the byte route, and never sniffed."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The name the file had on the machine it was uploaded from, so a Media library reads as one. It is not part of the address and nothing resolves it."
+          },
+          "byteSize": {
+            "type": "integer",
+            "description": "How many bytes were stored."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The image's own width in pixels, read out of its header — or `null` where kobai could not read it, which is every format but PNG, JPEG, GIF and WebP. `null` rather than `0`, so a storefront can tell *unknown* from a measurement and reserve space only when it really knows."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Likewise, in pixels, or `null`."
+          },
+          "alt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What this shows, for a Shopper who cannot see it — or `null` where nobody has written it yet. Never an empty string: that is what a *decorative* image says, and it is a different fact from nobody having been asked."
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "contentType",
+          "filename",
+          "byteSize",
+          "width",
+          "height",
+          "alt"
+        ]
+      },
       "ProductOption": {
         "type": "object",
         "properties": {
@@ -705,6 +761,13 @@
             },
             "description": "This Variant's value for each option its Product declares, **in the Product's own option order** — so a storefront zips the two lists to map a chosen combination to a SKU. Empty for a Product that declares no options, which is the ordinary Product. Short of the Product's list only where an option was declared after this Variant was written; correcting the Variant is what ends that."
           },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Media"
+            },
+            "description": "The Media attached to **this Variant**, in the order a Merchant set — so a storefront told that Red was picked can swap the picture for the red one. Empty unless somebody attached one, which is the ordinary Variant: its Product's images are what a page shows then, and this list deliberately does not fall back to them. Set the whole list with `PATCH /admin/variants/{id}`."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -726,6 +789,7 @@
           "sku",
           "fulfilment",
           "options",
+          "media",
           "metadata",
           "prices",
           "inventory"
@@ -842,6 +906,13 @@
           "status": {
             "$ref": "#/components/schemas/ProductStatus"
           },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Media"
+            },
+            "description": "The Media this Product shows, **in the order a Merchant put them in** — so the first one is the one that leads. On the list shape as well as on the detail, because a catalog grid is nothing but leading images and a client that had to open every Product to draw one would be making a request per tile. Attaching, reordering and detaching are all `media` on `PATCH /admin/products/{id}`; detaching removes the attachment and never the Media."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -854,6 +925,7 @@
           "description",
           "handle",
           "status",
+          "media",
           "metadata"
         ]
       },
@@ -878,7 +950,8 @@
               "stock-is-reserved",
               "unsupported-currency",
               "unknown-fulfilment-strategy",
-              "variant-options-mismatch"
+              "variant-options-mismatch",
+              "media-not-found"
             ],
             "description": "Machine-readable. Branch on this."
           }
@@ -1018,6 +1091,13 @@
               }
             ]
           },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaAttachment"
+            },
+            "description": "**The complete list of the Media this Product shows, in the order it should be shown in** — so this is where an image is attached, where they are reordered, and where one is detached. An empty list detaches everything. **Detaching does not delete the Media**: it stays in this Store's library, may still be showing on another Product, and can be attached again — kobai deletes no asset and no bytes, ever. A Media this Store does not have is refused at 422 with `media-not-found`."
+          },
           "options": {
             "type": "array",
             "items": {
@@ -1031,6 +1111,19 @@
             "description": "Replaces what is stored rather than merging into it."
           }
         }
+      },
+      "MediaAttachment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Media to show, as `POST /admin/media` answered with and `GET /admin/media` lists. One this Store has no Media for is refused at 422 with `media-not-found`."
+          }
+        },
+        "required": [
+          "id"
+        ]
       },
       "ProductOptionCorrection": {
         "type": "object",
@@ -1065,6 +1158,13 @@
                 "description": "The Fulfilment Strategy this Variant is delivered by, replacing the one it points at — how a poster becomes a download. Naming one this deployment has not wired is refused. Whatever stock has been counted for this Variant stays counted either way: the Strategy answers whether selling one takes something off a shelf, and the count only ever said how many."
               }
             ]
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaAttachment"
+            },
+            "description": "**The complete list of the Media this Variant shows, in the order it should be shown in** — the picture a storefront swaps to when a Shopper picks this size or colour. An empty list detaches everything, and detaching never deletes the Media: it stays in the Store's library and may still be showing elsewhere. It does not extend its Product's list and is not extended by it — a storefront has both and decides. Absent leaves what is attached, as every field here does."
           },
           "options": {
             "type": "array",
@@ -1112,62 +1212,6 @@
         },
         "required": [
           "onHand"
-        ]
-      },
-      "Media": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "url": {
-            "type": "string",
-            "description": "Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own — a bucket, a CDN — and root-relative (`/media/…`) for the storage kobai ships, whose bytes kobai serves. Asked of the storage on every read rather than stored, so it moves with the deployment's configuration; a client renders it and parses none of it."
-          },
-          "contentType": {
-            "type": "string",
-            "description": "What the upload declared the bytes are — `image/png`. Served back verbatim by the byte route, and never sniffed."
-          },
-          "filename": {
-            "type": "string",
-            "description": "The name the file had on the machine it was uploaded from, so a Media library reads as one. It is not part of the address and nothing resolves it."
-          },
-          "byteSize": {
-            "type": "integer",
-            "description": "How many bytes were stored."
-          },
-          "width": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "The image's own width in pixels, read out of its header — or `null` where kobai could not read it, which is every format but PNG, JPEG, GIF and WebP. `null` rather than `0`, so a storefront can tell *unknown* from a measurement and reserve space only when it really knows."
-          },
-          "height": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Likewise, in pixels, or `null`."
-          },
-          "alt": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What this shows, for a Shopper who cannot see it — or `null` where nobody has written it yet. Never an empty string: that is what a *decorative* image says, and it is a different fact from nobody having been asked."
-          }
-        },
-        "required": [
-          "id",
-          "url",
-          "contentType",
-          "filename",
-          "byteSize",
-          "width",
-          "height",
-          "alt"
         ]
       },
       "UploadMediaRequest": {
@@ -1911,6 +1955,13 @@
             "type": "string",
             "description": "The address this Product is known by, unique across the Store — `blue-poster`, so a storefront's URL can be `/products/blue-poster` rather than a UUID. `GET /store/products/{idOrHandle}` accepts it in place of the identifier."
           },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreMedia"
+            },
+            "description": "The images this Product shows, **in the order a Merchant put them in** — the first one leads. On the list shape as well as on the detail, so a catalog grid is one request rather than one per tile. Empty for a Product nobody has attached an image to."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -1922,7 +1973,49 @@
           "title",
           "description",
           "handle",
+          "media",
           "metadata"
+        ]
+      },
+      "StoreMedia": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "url": {
+            "type": "string",
+            "description": "Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own, and root-relative (`/media/…`) for the storage kobai ships. Render it; parse none of it."
+          },
+          "alt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What this shows, for a Shopper who cannot see it — or `null` where nobody has written it. Never an empty string: that is what a *decorative* image says, which is a different fact from nobody having been asked. A storefront falling back to an empty `alt` is telling a screen reader the image is decoration, which for an undescribed one is the honest of the two answers available to it."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The image's own width in pixels, or `null` where kobai could not read the format's header. `null` rather than `0`, so a page reserves space only when it really knows how much."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Likewise, in pixels, or `null`."
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "alt",
+          "width",
+          "height"
         ]
       },
       "ApiKeyRefusal": {
@@ -2007,6 +2100,13 @@
             },
             "description": "What this Variant is, for each option its Product declares, **in the Product's option order** — the storefront's half of the pair that makes a picker possible."
           },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreMedia"
+            },
+            "description": "The images of **this** Variant, in the Merchant's own order — so a page told that Red was picked can show the red one. Empty unless somebody attached one, which is the ordinary Variant; it deliberately does not fall back to the Product's list, so a storefront with both in front of it decides whether picking a colour replaces the gallery or adds to it."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": {},
@@ -2018,6 +2118,7 @@
           "sku",
           "fulfilment",
           "options",
+          "media",
           "metadata"
         ]
       },
@@ -4229,7 +4330,7 @@
       },
       "patch": {
         "summary": "Correct a Product",
-        "description": "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written.",
+        "description": "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. **`media` is where images are attached to this Product, reordered on it and detached from it**, and it is the whole list in the order it should be shown in — the first one is the one that leads. Detaching removes the attachment and never the Media: the asset stays in the Store's library and may still be showing on another Product. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written, and where a picture is attached to one.",
         "security": [
           {
             "merchantSession": []
@@ -4310,6 +4411,16 @@
           },
           "409": {
             "description": "Another Product already answers to that handle.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Well formed, and still refused: `media` names an asset this Store has no Media for (`media-not-found`). Upload it at `POST /admin/media` and attach the identifier that answers with.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4641,7 +4752,7 @@
       },
       "patch": {
         "summary": "Correct a Variant",
-        "description": "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. **`options` is where this Variant says what it is** — its value for each option its Product declares — and it **replaces** every value stored rather than merging into them, so it must answer every declared option and only those. That is also how a Variant is given a value for an option declared on the Product since this Variant was written. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
+        "description": "Changes only what is named; a field left out is left alone. The SKU and the Fulfilment Strategy are both free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009) — and a stock count taken for this Variant is left exactly as it is whichever Strategy it now points at. **`options` is where this Variant says what it is** — its value for each option its Product declares — and it **replaces** every value stored rather than merging into them, so it must answer every declared option and only those. That is also how a Variant is given a value for an option declared on the Product since this Variant was written. **`media` is where the picture a Shopper sees when they pick this one is attached**, as the whole list in the order it should be shown in; an empty list detaches everything, and detaching never deletes the Media. A Price is not set here: `POST /admin/variants/{id}/prices` adds one, which supersedes.",
         "security": [
           {
             "merchantSession": []
@@ -4731,7 +4842,7 @@
             }
           },
           "422": {
-            "description": "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Variant's Product declares (`variant-options-mismatch`).",
+            "description": "Well formed, and still refused: this deployment has not wired a Fulfilment Strategy of that name — Core ships `physical` and `digital`, and a Plugin's is wired in the Project's `kobai.config.ts` — or the `options` are not exactly the ones this Variant's Product declares (`variant-options-mismatch`), or `media` names an asset this Store has no Media for (`media-not-found`).",
             "content": {
               "application/json": {
                 "schema": {

@@ -10,7 +10,10 @@ import {
 } from "../db/page.ts";
 import { price, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
+import type { Media } from "../media/media.ts";
+import type { MediaStorage } from "../media/storage.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
+import { readProductMedia, readVariantMedia } from "./media.ts";
 import {
   type ProductOption,
   readProductOptions,
@@ -77,6 +80,16 @@ export type Variant = {
    * Variant is what ends it (`catalog/options.ts`).
    */
   readonly options: readonly VariantOptionValue[];
+  /**
+   * The Media attached to **this Variant**, in the order a Merchant set — so a storefront that
+   * has just been told Red can swap the picture for the red one (story 10).
+   *
+   * Empty for a Variant nobody attached anything to, which is the ordinary Variant: the
+   * Product's own images are what a page shows then, and the two lists are separate rather than
+   * one inheriting from the other, because a storefront deciding that is a storefront with both
+   * of them in front of it.
+   */
+  readonly media: readonly Media[];
   readonly metadata: Record<string, unknown>;
   readonly prices: readonly Price[];
   /**
@@ -121,6 +134,19 @@ export type Product = {
    * published Products and nothing else instead, in the route.
    */
   readonly status: ProductStatus;
+  /**
+   * The Media this Product shows, **in the order the Merchant put them in** — so the first one
+   * is the one that leads (story 9).
+   *
+   * On the list shape as well as on the detail, unlike {@link ProductDetail}'s options: a
+   * catalog list is the one screen that is nothing but a grid of leading images, and a client
+   * that had to open every Product to draw one would be making a request per tile.
+   *
+   * Attaching, reordering and detaching are one field of `PATCH /admin/products/{id}` —
+   * `media`, the whole list in the order it should end up in. Detaching removes the attachment
+   * and never the Media (ADR-0082).
+   */
+  readonly media: readonly Media[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -165,6 +191,7 @@ export type ProductPageRequest = PageRequest & { readonly status?: ProductStatus
  */
 export async function listProducts(
   db: Database,
+  storage: MediaStorage,
   page: ProductPageRequest,
 ): Promise<Page<Product>> {
   const rows = await db
@@ -194,9 +221,19 @@ export async function listProducts(
 
   const { rows: found, nextCursor } = takePage(rows, page);
 
+  // A second query rather than a join, for the reason `readVariants` takes four: a Product with
+  // no Media has no row here at all, and that is every Product until somebody attaches
+  // something. One query for the whole page rather than one per Product, which is what makes a
+  // catalog list a grid of leading images at the cost of one more statement.
+  const shown = await readProductMedia(
+    db,
+    storage,
+    found.map((row) => row.id),
+  );
+
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
   // response by being forgotten about — the same reason a Payment is rebuilt rather than
-  // spread. A Product reports six fields, and these are them.
+  // spread. A Product reports seven fields, and these are them.
   return {
     items: found.map((row) => ({
       id: row.id,
@@ -204,6 +241,7 @@ export async function listProducts(
       description: row.description,
       handle: row.handle,
       status: row.status,
+      media: shown.get(row.id) ?? [],
       metadata: row.metadata,
     })),
     nextCursor,
@@ -217,6 +255,7 @@ export async function listProducts(
  */
 export async function readProduct(
   db: Database,
+  storage: MediaStorage,
   id: string,
 ): Promise<ProductDetail | undefined> {
   if (!isUuid(id)) return undefined;
@@ -239,8 +278,9 @@ export async function readProduct(
 
   return {
     ...row,
+    media: (await readProductMedia(db, storage, [row.id])).get(row.id) ?? [],
     options: await readProductOptions(db, row.id),
-    variants: await readVariants(db, row.id),
+    variants: await readVariants(db, storage, row.id),
   };
 }
 
@@ -256,7 +296,11 @@ export async function readProduct(
  * next request left. It takes no lock of its own either way: these are plain reads, and a plain
  * read in Postgres blocks on nothing.
  */
-export async function readVariants(db: Queryable, productId: string): Promise<Variant[]> {
+export async function readVariants(
+  db: Queryable,
+  storage: MediaStorage,
+  productId: string,
+): Promise<Variant[]> {
   const variants = await db
     .select({
       id: variant.id,
@@ -311,10 +355,19 @@ export async function readVariants(db: Queryable, productId: string): Promise<Va
     variants.map((row) => row.id),
   );
 
+  // A fifth, and the same reason again: a Variant nobody attached an image to has no row here,
+  // and that is the ordinary Variant — its Product's images are what a page shows for it.
+  const shown = await readVariantMedia(
+    db,
+    storage,
+    variants.map((row) => row.id),
+  );
+
   return variants.map(({ fulfilmentStrategy, ...row }) => ({
     ...row,
     fulfilment: { strategy: fulfilmentStrategy },
     options: chosenBy.get(row.id) ?? [],
+    media: shown.get(row.id) ?? [],
     prices: byVariant.get(row.id) ?? [],
     inventory: stock.get(row.id) ?? null,
   }));

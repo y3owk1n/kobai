@@ -340,8 +340,12 @@ separate things)
 **Media**:
 A **Merchant**-supplied catalog asset — a product image and the like. Managed, reusable,
 long-lived. Explicitly **not** Shopper-supplied input such as uploaded artwork, which is
-order data and belongs to the Project. See ADR-0015.
-_Avoid_: asset, file, upload, image, attachment
+order data and belongs to the Project. It belongs to the **Store** rather than to whatever is
+showing it: it is *attached* to a Product or to a Variant in an order the Merchant sets, is
+*detached* without being deleted, and outlives everything it was ever attached to — kobai
+deletes no Media and no bytes. See ADR-0015, ADR-0078 and ADR-0082.
+_Avoid_: asset, file, upload, image, attachment (a Media is attached; the join row is not a
+noun this domain has)
 
 ## Process
 

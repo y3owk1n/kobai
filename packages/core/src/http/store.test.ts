@@ -334,6 +334,10 @@ describe("browsing the catalog", () => {
           // storefront builds `/products/a-poster` out of it, which is what the whole column
           // was added for.
           handle: "a-poster",
+          // Published on purpose as well, and empty here because nothing has been attached: a
+          // catalog grid is nothing but leading images, so the list is on this shape and not
+          // only on the detail (#255). `catalog/media.test.ts` follows one all the way through.
+          media: [],
           metadata: { blurb: "Printed on heavy stock." },
         },
       ],
@@ -354,6 +358,7 @@ describe("browsing the catalog", () => {
       title: "A poster",
       description: "Printed on 200gsm uncoated stock.",
       handle: "a-poster",
+      media: [],
       metadata: { blurb: "Printed on heavy stock." },
       // The options a Shopper chooses by, in the Merchant's order — empty for a Product sold
       // as one thing, and carrying **no identifier** when it is not, which is the one field
@@ -371,6 +376,9 @@ describe("browsing the catalog", () => {
           // Product declares no options. `catalog/options.test.ts` is where a Product that
           // does is followed all the way to a Shopper choosing a combination (#253).
           options: [],
+          // This Variant's **own** images, which deliberately do not fall back to its Product's
+          // — a storefront has both lists and decides (#255).
+          media: [],
           metadata: {},
         },
       ],
@@ -391,6 +399,7 @@ describe("browsing the catalog", () => {
       sku: "POSTER-A2",
       fulfilment: { strategy: "physical" },
       options: [],
+      media: [],
       metadata: {},
     });
   });

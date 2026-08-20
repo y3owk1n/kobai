@@ -162,6 +162,7 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
   "unsupported-currency": true,
   "unknown-fulfilment-strategy": true,
   "variant-options-mismatch": true,
+  "media-not-found": true,
 };
 
 /**

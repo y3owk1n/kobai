@@ -419,7 +419,42 @@ behind `catalog:write` because Media *is* catalog data, with `GET /admin/media` 
 - **There is one refusal and it is not a family.** `MediaNotFound` carries a single literal, on
   `ApiKeyNotFound`'s shape; uploading refuses `invalid` through `InvalidRequest`, because nothing
   about Media is refused by the state of the Store — an asset conflicts with nothing and takes no
-  name anybody else could hold.
+  name anybody else could hold. **Attaching one added that literal's word to `CatalogRefusal`**
+  and no family beside it (#255) — one fact gets one word, whichever end it is asked from.
+
+**Media is attached to a Product and to a Variant, and attaching is a list rather than a route**
+(#255, ADR-0082). `media` on `PATCH /admin/products/{id}` and on `PATCH /admin/variants/{id}` is
+the whole list of what that subject shows, in the order it should be shown in — so attaching,
+reordering and detaching are one field, an empty list detaches everything, and there is
+deliberately no `POST …/media` or `DELETE …/media/{mediaId}` beside them. That is `options`'
+bargain one noun along and it is taken for the same reason. Five things about it are decisions
+rather than implementation:
+
+- **Two join tables, `core_product_media` and `core_variant_media`, and never one polymorphic
+  one.** A single table with a `subject_type` and a nullable target is the shape a foreign key
+  cannot constrain, which is the whole reason Core's tables are relational rather than a bag
+  (ADR-0004) — and `metadata` is the escape hatch, deliberately not this. The cost is the same
+  four columns twice; what it buys is `on delete cascade` stating "a deleted Product takes its
+  attachments" in the database rather than in a function somebody has to remember to call.
+- **What becomes of a Media nothing references is ADR-0082, and the answer is nothing at all.**
+  Detaching removes the attachment; the row and the bytes stay, and no cascade, sweep or route
+  deletes either. Both `media_id` columns are `on delete restrict`, which is ADR-0059's rule
+  held by Postgres — so the delete route, when somebody writes one, is refused-while-attached by
+  construction and its repair (detach) already exists. **`MediaStorage` still has no `remove`**,
+  and adding one is a break for implementers that belongs to that ticket.
+- **`media` is on the correction and not on the create**, on either surface. The bytes go up at a
+  route of their own and that route answers an identifier, so attaching is a second act however
+  the surface is shaped — where a Product's `options` are in the create precisely so that a
+  Variant naming an undeclared option never exists for an instant. There is no such state here.
+- **A Variant's list does not extend its Product's and is not extended by it.** A storefront gets
+  both and decides; a kobai that copied one into the other would have taken that decision and
+  left no way to tell an inherited picture from an attached one.
+- **`StoreMedia` is declared apart from `Media` and drops `filename`, `contentType` and
+  `byteSize`** — #207's split, and here it does real work: those three are about the *file*
+  rather than the picture, and two of them are facts the thing fetching the bytes is told by the
+  response that carries them. `catalog/store-read.ts`'s `asStoreMedia` names the five fields that
+  are published, field by field rather than by omission, so the next field added to `Media` for a
+  Merchant reaches a browser only by somebody editing that function.
 
 **Drift fails the build, in two places.** `packages/core/openapi.json` and
 `packages/client/src/schema.ts` are both generated and both checked in.

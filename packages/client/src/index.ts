@@ -164,6 +164,15 @@ export type StoreProductDetail = components["schemas"]["StoreProductDetail"];
 export type StoreVariant = components["schemas"]["StoreVariant"];
 export type StoreProductOption = components["schemas"]["StoreProductOption"];
 export type StoreVariantOptionValue = components["schemas"]["StoreVariantOptionValue"];
+/**
+ * One image, as a storefront is shown it — and what it drops is everything about the *file*.
+ *
+ * Declared apart from {@link Media} for the reason above it: `filename` is what the image was
+ * called on a Merchant's own machine, and `contentType` and `byteSize` are facts the thing
+ * fetching the bytes is told by the response that carries them. What is left is what a page lays
+ * out with — the address, the alt text, and the two dimensions.
+ */
+export type StoreMedia = components["schemas"]["StoreMedia"];
 export type FulfilmentStrategySummary =
   components["schemas"]["FulfilmentStrategySummary"];
 export type Price = components["schemas"]["Price"];
@@ -183,6 +192,14 @@ export type Media = components["schemas"]["Media"];
 export type MediaList = components["schemas"]["MediaList"];
 /** The `multipart/form-data` an upload sends: the file part, and optional alt text. */
 export type UploadMediaRequest = components["schemas"]["UploadMediaRequest"];
+/**
+ * One entry of the list saying what a Product or a Variant shows.
+ *
+ * The whole list is sent, in the order it should be shown in, so attaching, reordering and
+ * detaching are one request; an empty list detaches everything. **Detaching does not delete the
+ * Media** — it stays in the Store's library and may still be showing elsewhere (ADR-0082).
+ */
+export type MediaAttachment = components["schemas"]["MediaAttachment"];
 export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
 export type Payment = components["schemas"]["Payment"];

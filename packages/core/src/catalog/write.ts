@@ -8,6 +8,7 @@ import {
   fulfilmentStrategyNames,
 } from "../fulfilment/strategy.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
+import type { MediaStorage } from "../media/storage.ts";
 import { text } from "../patch.ts";
 import { readStore } from "../store/read.ts";
 import { handleField, handleTaken, noHandleToPropose, proposeHandle } from "./handle.ts";
@@ -125,6 +126,7 @@ export type PriceCreation =
  */
 export async function createProduct(
   db: Database,
+  storage: MediaStorage,
   input: CreateProductInput,
   strategies: FulfilmentStrategies,
 ): Promise<ProductCreation> {
@@ -274,7 +276,7 @@ export async function createProduct(
   // the same code. Sorting the inserted rows here instead would sort them in JavaScript,
   // which compares UTF-16 code units while Postgres compares by collation, and two orders
   // for one list is one order too many.
-  const created = await readProduct(db, productId);
+  const created = await readProduct(db, storage, productId);
   if (!created) throw new Error("A Product was created and could not be read back.");
   return { ok: true, product: created };
 }
@@ -296,6 +298,7 @@ export async function createProduct(
  */
 export async function addVariant(
   db: Database,
+  storage: MediaStorage,
   productId: string,
   input: CreateVariantInput,
   strategies: FulfilmentStrategies,
@@ -366,7 +369,7 @@ export async function addVariant(
     // function that says what a Variant looks like. **Inside the transaction**, for
     // `updateVariant`'s reason: a `DELETE` landing between the two statements would otherwise
     // find nothing to read back and answer 500 on a write that succeeded.
-    const added = (await readVariants(tx, productId)).find(
+    const added = (await readVariants(tx, storage, productId)).find(
       (row) => row.id === created.id,
     );
     if (!added) throw new Error("A Variant was added and could not be read back.");

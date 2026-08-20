@@ -84,12 +84,12 @@ import { join, resolve } from "node:path";
  *   recorded here about *which* storage wrote an object: there is one per deployment, and a
  *   deployment that changes storage has to move its objects rather than read them from two
  *   places.
- * - **No `remove`, in this slice.** Nothing on the surface deletes Media yet, and an operation
- *   every implementer must write and nothing ever calls is a promise bought with somebody
- *   else's work. Adding one later is a break for implementers rather than for callers, which
- *   ADR-0058 makes cheap only until the first publish — so it is a decision that belongs to the
- *   ticket that gives a Merchant a way to delete an asset, taken then rather than guessed at
- *   now.
+ * - **No `remove`, and ADR-0082 declined to add one.** Nothing on the surface deletes Media —
+ *   detaching an image from a Product removes the attachment and leaves the asset here — so an
+ *   operation every implementer must write and nothing ever calls would be a promise bought with
+ *   somebody else's work. Adding one later is a break for implementers rather than for callers,
+ *   which ADR-0058 makes cheap only until the first publish, so it belongs to the ticket that
+ *   gives a Merchant a way to delete an asset and is taken then rather than guessed at now.
  */
 export type MediaStorage = {
   /**

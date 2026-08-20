@@ -880,6 +880,141 @@ export const StoreRefusal = z
   })
   .openapi("StoreRefusal");
 
+// ---- Media ------------------------------------------------------------------------------
+
+/**
+ * One Merchant-supplied catalog asset, as every route reports it (ADR-0015).
+ *
+ * **`url` is the whole of what a client is told about where the bytes are, and there is no
+ * storage key on this shape.** The address is the deployment's `MediaStorage`'s answer, asked
+ * fresh on every read rather than stored — so a Store that puts a CDN in front of its bucket
+ * changes one line of `kobai.config.ts` and every Media it has ever recorded reports the new
+ * address. Publishing the key instead would promise a client something only that one storage
+ * can interpret, permanently (ADR-0060).
+ *
+ * It may be **absolute or root-relative**, and a client has to handle both because both are
+ * ordinary: a bucket answers `https://…` and the storage Core ships answers `/media/{key}`,
+ * which is kobai's own open byte route.
+ */
+export const Media = z
+  .object({
+    id: z.uuid(),
+    url: z.string().meta({
+      description:
+        "Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own — a bucket, a CDN — and root-relative (`/media/…`) for the storage kobai ships, whose bytes kobai serves. Asked of the storage on every read rather than stored, so it moves with the deployment's configuration; a client renders it and parses none of it.",
+    }),
+    contentType: z.string().meta({
+      description:
+        "What the upload declared the bytes are — `image/png`. Served back verbatim by the byte route, and never sniffed.",
+    }),
+    filename: z.string().meta({
+      description:
+        "The name the file had on the machine it was uploaded from, so a Media library reads as one. It is not part of the address and nothing resolves it.",
+    }),
+    byteSize: z.int().meta({ description: "How many bytes were stored." }),
+    width: z.int().nullable().meta({
+      description:
+        "The image's own width in pixels, read out of its header — or `null` where kobai could not read it, which is every format but PNG, JPEG, GIF and WebP. `null` rather than `0`, so a storefront can tell *unknown* from a measurement and reserve space only when it really knows.",
+    }),
+    height: z.int().nullable().meta({ description: "Likewise, in pixels, or `null`." }),
+    alt: z.string().nullable().meta({
+      description:
+        "What this shows, for a Shopper who cannot see it — or `null` where nobody has written it yet. Never an empty string: that is what a *decorative* image says, and it is a different fact from nobody having been asked.",
+    }),
+  })
+  .openapi("Media");
+
+/** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
+export const MediaList = z
+  .object({ media: z.array(Media).readonly(), nextCursor: NextCursor })
+  .openapi("MediaList");
+
+/** ADR-0064's two parameters and nothing else: this list narrows by nothing yet. */
+export const MediaPageQuery = pageQuery("media");
+
+/**
+ * What the open byte route is addressed by — the storage's own key, not a kobai identifier.
+ *
+ * A plain string for {@link IdParam}'s reason and one of its own: what a key may look like is
+ * the deployment's `MediaStorage`'s business, and a schema narrowing it here would be kobai
+ * forming an opinion about a value it promises to treat as opaque. A key nothing was stored
+ * under is `media-not-found`, which is the same answer a key that never existed gets.
+ */
+export const MediaKeyParam = z.object({
+  key: z.string().meta({
+    description:
+      "The storage key, as it appears in the `url` a Media reported. Opaque: it is whatever this deployment's `MediaStorage` called the object.",
+  }),
+});
+
+/**
+ * What an upload carries — and it is the surface's first request that is not JSON.
+ *
+ * **`multipart/form-data`, described honestly**: `file` reaches the description as
+ * `type: string, format: binary`, which is what OpenAPI has for bytes, so a generated client and
+ * a `curl` line both come out right. The *response* is JSON like everything else here and is
+ * typechecked against {@link Media} exactly as every other route's is — the request being binary
+ * changes what a caller sends and nothing about what kobai answers.
+ *
+ * **There is no `metadata` here and no width or height either.** The dimensions are read out of
+ * the bytes (`media/dimensions.ts`), because a client-stated size is a claim a storefront would
+ * then lay out against.
+ */
+export const UploadMediaRequest = z
+  .object({
+    file: z.file().meta({
+      type: "string",
+      format: "binary",
+      description:
+        "The bytes, as a file part. kobai stores what it is given: it does not resize, convert or generate thumbnails, and a Project that wants derivatives puts a CDN in front of its `MediaStorage`. An empty file is refused at 400.",
+    }),
+    alt: z.string().optional().meta({
+      description:
+        "What this shows, for a Shopper who cannot see it. Left out — or sent empty — the Media has no alt text rather than an empty one.",
+    }),
+  })
+  .openapi("UploadMediaRequest");
+
+/**
+ * The one refusal the byte route makes, and its own schema for {@link ApiKeyNotFound}'s reason:
+ * a single literal, bound to the handler that writes it by the schema it is typechecked
+ * against.
+ *
+ * It is not a family — nothing else on this surface refuses about Media. Uploading refuses
+ * `invalid` through {@link InvalidRequest}, which is what a request that could not be used
+ * already says everywhere else, and reading the list refuses only a page query.
+ */
+export const MediaNotFound = z
+  .object({
+    error: z.string().meta({ description: "What went wrong, in prose." }),
+    reason: z.literal("media-not-found").meta({
+      description: "Machine-readable. Branch on this.",
+    }),
+  })
+  .openapi("MediaNotFound");
+
+/**
+ * One entry of the list saying what a Product or a Variant shows — an identifier, and nothing
+ * else (#255).
+ *
+ * **An object rather than a bare `uuid`**, for the reason {@link FulfilmentStrategySummary} is
+ * one: whatever an attachment one day needs to say for itself — a caption of its own, a role —
+ * then arrives as a field beside this one and is additive, where a list of strings could only
+ * grow by changing the type of every element (ADR-0060).
+ *
+ * **There is no `position`.** The order of the array *is* the order, exactly as it is for a
+ * Product's options, so nothing has to agree with anything and a Merchant reorders by sending
+ * the list in another order.
+ */
+export const MediaAttachment = z
+  .object({
+    id: z.uuid().meta({
+      description:
+        "The Media to show, as `POST /admin/media` answered with and `GET /admin/media` lists. One this Store has no Media for is refused at 422 with `media-not-found`.",
+    }),
+  })
+  .openapi("MediaAttachment");
+
 // ---- Catalog --------------------------------------------------------------------------
 
 export const Price = z
@@ -994,6 +1129,10 @@ export const Variant = z
       description:
         "This Variant's value for each option its Product declares, **in the Product's own option order** — so a storefront zips the two lists to map a chosen combination to a SKU. Empty for a Product that declares no options, which is the ordinary Product. Short of the Product's list only where an option was declared after this Variant was written; correcting the Variant is what ends that.",
     }),
+    media: z.array(Media).readonly().meta({
+      description:
+        "The Media attached to **this Variant**, in the order a Merchant set — so a storefront told that Red was picked can swap the picture for the red one. Empty unless somebody attached one, which is the ordinary Variant: its Product's images are what a page shows then, and this list deliberately does not fall back to them. Set the whole list with `PATCH /admin/variants/{id}`.",
+    }),
     metadata: Metadata,
     prices: z.array(Price).readonly().meta({
       description:
@@ -1074,6 +1213,10 @@ export const Product = z
     description: ProductDescription,
     handle: ProductHandle,
     status: ProductStatus,
+    media: z.array(Media).readonly().meta({
+      description:
+        "The Media this Product shows, **in the order a Merchant put them in** — so the first one is the one that leads. On the list shape as well as on the detail, because a catalog grid is nothing but leading images and a client that had to open every Product to draw one would be making a request per tile. Attaching, reordering and detaching are all `media` on `PATCH /admin/products/{id}`; detaching removes the attachment and never the Media.",
+    }),
     metadata: Metadata,
   })
   .openapi("Product");
@@ -1270,6 +1413,10 @@ export const UpdateProductRequest = z
       description:
         "**Where a Product is published and where it is archived.** `published` puts it on the storefront, `archived` takes it off without touching the Orders that reference it — an Order's Line Items are a snapshot (ADR-0009) — and `draft` puts it back into preparation. There is no `null`: a Product with no status is not a state kobai has.",
     }),
+    media: z.array(MediaAttachment).optional().meta({
+      description:
+        "**The complete list of the Media this Product shows, in the order it should be shown in** — so this is where an image is attached, where they are reordered, and where one is detached. An empty list detaches everything. **Detaching does not delete the Media**: it stays in this Store's library, may still be showing on another Product, and can be attached again — kobai deletes no asset and no bytes, ever. A Media this Store does not have is refused at 422 with `media-not-found`.",
+    }),
     options: z.array(ProductOptionCorrection).optional().meta({
       description:
         "**The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for.",
@@ -1304,6 +1451,10 @@ export const UpdateVariantRequest = z
     fulfilment: VariantFulfilment.optional().meta({
       description:
         "The Fulfilment Strategy this Variant is delivered by, replacing the one it points at — how a poster becomes a download. Naming one this deployment has not wired is refused. Whatever stock has been counted for this Variant stays counted either way: the Strategy answers whether selling one takes something off a shelf, and the count only ever said how many.",
+    }),
+    media: z.array(MediaAttachment).optional().meta({
+      description:
+        "**The complete list of the Media this Variant shows, in the order it should be shown in** — the picture a storefront swaps to when a Shopper picks this size or colour. An empty list detaches everything, and detaching never deletes the Media: it stays in the Store's library and may still be showing elsewhere. It does not extend its Product's list and is not extended by it — a storefront has both and decides. Absent leaves what is attached, as every field here does.",
     }),
     options: z.array(VariantOptionValue).optional().meta({
       description:
@@ -1366,6 +1517,11 @@ const CATALOG_REASONS = {
   "unsupported-currency": "unsupported-currency",
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
   "variant-options-mismatch": "variant-options-mismatch",
+  // The one word #255 added, and it is `GET /media/{key}`'s own said about the same fact from
+  // the other end: `media` names an asset this Store has none of. One fact gets one word
+  // (ADR-0060) — which is also why {@link MediaNotFound} carries it as a literal rather than as
+  // a family of its own.
+  "media-not-found": "media-not-found",
 } as const satisfies {
   [R in
     | Refused<ProductCreation>
@@ -1388,119 +1544,6 @@ export const CatalogRefusal = z
     }),
   })
   .openapi("CatalogRefusal");
-
-// ---- Media ------------------------------------------------------------------------------
-
-/**
- * One Merchant-supplied catalog asset, as every route reports it (ADR-0015).
- *
- * **`url` is the whole of what a client is told about where the bytes are, and there is no
- * storage key on this shape.** The address is the deployment's `MediaStorage`'s answer, asked
- * fresh on every read rather than stored — so a Store that puts a CDN in front of its bucket
- * changes one line of `kobai.config.ts` and every Media it has ever recorded reports the new
- * address. Publishing the key instead would promise a client something only that one storage
- * can interpret, permanently (ADR-0060).
- *
- * It may be **absolute or root-relative**, and a client has to handle both because both are
- * ordinary: a bucket answers `https://…` and the storage Core ships answers `/media/{key}`,
- * which is kobai's own open byte route.
- */
-export const Media = z
-  .object({
-    id: z.uuid(),
-    url: z.string().meta({
-      description:
-        "Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own — a bucket, a CDN — and root-relative (`/media/…`) for the storage kobai ships, whose bytes kobai serves. Asked of the storage on every read rather than stored, so it moves with the deployment's configuration; a client renders it and parses none of it.",
-    }),
-    contentType: z.string().meta({
-      description:
-        "What the upload declared the bytes are — `image/png`. Served back verbatim by the byte route, and never sniffed.",
-    }),
-    filename: z.string().meta({
-      description:
-        "The name the file had on the machine it was uploaded from, so a Media library reads as one. It is not part of the address and nothing resolves it.",
-    }),
-    byteSize: z.int().meta({ description: "How many bytes were stored." }),
-    width: z.int().nullable().meta({
-      description:
-        "The image's own width in pixels, read out of its header — or `null` where kobai could not read it, which is every format but PNG, JPEG, GIF and WebP. `null` rather than `0`, so a storefront can tell *unknown* from a measurement and reserve space only when it really knows.",
-    }),
-    height: z.int().nullable().meta({ description: "Likewise, in pixels, or `null`." }),
-    alt: z.string().nullable().meta({
-      description:
-        "What this shows, for a Shopper who cannot see it — or `null` where nobody has written it yet. Never an empty string: that is what a *decorative* image says, and it is a different fact from nobody having been asked.",
-    }),
-  })
-  .openapi("Media");
-
-/** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
-export const MediaList = z
-  .object({ media: z.array(Media).readonly(), nextCursor: NextCursor })
-  .openapi("MediaList");
-
-/** ADR-0064's two parameters and nothing else: this list narrows by nothing yet. */
-export const MediaPageQuery = pageQuery("media");
-
-/**
- * What the open byte route is addressed by — the storage's own key, not a kobai identifier.
- *
- * A plain string for {@link IdParam}'s reason and one of its own: what a key may look like is
- * the deployment's `MediaStorage`'s business, and a schema narrowing it here would be kobai
- * forming an opinion about a value it promises to treat as opaque. A key nothing was stored
- * under is `media-not-found`, which is the same answer a key that never existed gets.
- */
-export const MediaKeyParam = z.object({
-  key: z.string().meta({
-    description:
-      "The storage key, as it appears in the `url` a Media reported. Opaque: it is whatever this deployment's `MediaStorage` called the object.",
-  }),
-});
-
-/**
- * What an upload carries — and it is the surface's first request that is not JSON.
- *
- * **`multipart/form-data`, described honestly**: `file` reaches the description as
- * `type: string, format: binary`, which is what OpenAPI has for bytes, so a generated client and
- * a `curl` line both come out right. The *response* is JSON like everything else here and is
- * typechecked against {@link Media} exactly as every other route's is — the request being binary
- * changes what a caller sends and nothing about what kobai answers.
- *
- * **There is no `metadata` here and no width or height either.** The dimensions are read out of
- * the bytes (`media/dimensions.ts`), because a client-stated size is a claim a storefront would
- * then lay out against.
- */
-export const UploadMediaRequest = z
-  .object({
-    file: z.file().meta({
-      type: "string",
-      format: "binary",
-      description:
-        "The bytes, as a file part. kobai stores what it is given: it does not resize, convert or generate thumbnails, and a Project that wants derivatives puts a CDN in front of its `MediaStorage`. An empty file is refused at 400.",
-    }),
-    alt: z.string().optional().meta({
-      description:
-        "What this shows, for a Shopper who cannot see it. Left out — or sent empty — the Media has no alt text rather than an empty one.",
-    }),
-  })
-  .openapi("UploadMediaRequest");
-
-/**
- * The one refusal the byte route makes, and its own schema for {@link ApiKeyNotFound}'s reason:
- * a single literal, bound to the handler that writes it by the schema it is typechecked
- * against.
- *
- * It is not a family — nothing else on this surface refuses about Media. Uploading refuses
- * `invalid` through {@link InvalidRequest}, which is what a request that could not be used
- * already says everywhere else, and reading the list refuses only a page query.
- */
-export const MediaNotFound = z
-  .object({
-    error: z.string().meta({ description: "What went wrong, in prose." }),
-    reason: z.literal("media-not-found").meta({
-      description: "Machine-readable. Branch on this.",
-    }),
-  })
-  .openapi("MediaNotFound");
 
 // ---- The catalog, as a storefront sees it ----------------------------------------------
 
@@ -1529,6 +1572,39 @@ export const StoreVariantFulfilment = z
     }),
   })
   .openapi("StoreVariantFulfilment");
+
+/**
+ * One image, as a storefront sees it — where it is, what it shows, and how big it is.
+ *
+ * **Declared apart from {@link Media}, and what it drops is everything about the *file*.**
+ * `filename` is the name the image had on a Merchant's own machine, and `contentType` and
+ * `byteSize` are facts the thing fetching the bytes is told by the response that carries them —
+ * so publishing any of the three would be promising a browser something about an object a CDN
+ * in front is free to change, and under ADR-0060 taking a field back out again is a major. What
+ * is left is what a page lays out with.
+ *
+ * `url` is still the deployment's `MediaStorage`'s own answer, asked at read time and never
+ * stored (ADR-0078): absolute for a Store on a CDN, root-relative for the storage kobai ships,
+ * and a storefront renders both without parsing either.
+ */
+export const StoreMedia = z
+  .object({
+    id: z.uuid(),
+    url: z.string().meta({
+      description:
+        "Where the bytes are. Absolute for a deployment whose `MediaStorage` has an address of its own, and root-relative (`/media/…`) for the storage kobai ships. Render it; parse none of it.",
+    }),
+    alt: z.string().nullable().meta({
+      description:
+        "What this shows, for a Shopper who cannot see it — or `null` where nobody has written it. Never an empty string: that is what a *decorative* image says, which is a different fact from nobody having been asked. A storefront falling back to an empty `alt` is telling a screen reader the image is decoration, which for an undescribed one is the honest of the two answers available to it.",
+    }),
+    width: z.int().nullable().meta({
+      description:
+        "The image's own width in pixels, or `null` where kobai could not read the format's header. `null` rather than `0`, so a page reserves space only when it really knows how much.",
+    }),
+    height: z.int().nullable().meta({ description: "Likewise, in pixels, or `null`." }),
+  })
+  .openapi("StoreMedia");
 
 /**
  * One option a Product is chosen by, as a storefront sees it — the name, and no identifier.
@@ -1591,6 +1667,10 @@ export const StoreVariant = z
       description:
         "What this Variant is, for each option its Product declares, **in the Product's option order** — the storefront's half of the pair that makes a picker possible.",
     }),
+    media: z.array(StoreMedia).readonly().meta({
+      description:
+        "The images of **this** Variant, in the Merchant's own order — so a page told that Red was picked can show the red one. Empty unless somebody attached one, which is the ordinary Variant; it deliberately does not fall back to the Product's list, so a storefront with both in front of it decides whether picking a colour replaces the gallery or adds to it.",
+    }),
     metadata: Metadata,
   })
   .openapi("StoreVariant");
@@ -1614,6 +1694,16 @@ export const StoreProduct = z
      * every storefront back on the UUID — and this is the route that reads one back.
      */
     handle: ProductHandle,
+    /**
+     * **Published deliberately, and as a shape of its own.** A product page with no picture is
+     * not a product page, and a catalog grid is nothing but leading images — so the list is on
+     * this shape as well as on the detail, in the Merchant's own order, with the first one
+     * leading. {@link StoreMedia} is where the decision about *which fields* is taken.
+     */
+    media: z.array(StoreMedia).readonly().meta({
+      description:
+        "The images this Product shows, **in the order a Merchant put them in** — the first one leads. On the list shape as well as on the detail, so a catalog grid is one request rather than one per tile. Empty for a Product nobody has attached an image to.",
+    }),
     metadata: Metadata,
   })
   .openapi("StoreProduct");
