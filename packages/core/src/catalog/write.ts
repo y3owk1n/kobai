@@ -11,6 +11,12 @@ import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { text } from "../patch.ts";
 import { readStore } from "../store/read.ts";
+import {
+  type CollectionMissing,
+  collectionsThisStoreDoesNotHave,
+  parseCollectionMemberships,
+  setProductCollections,
+} from "./collection.ts";
 import { handleField, handleTaken, noHandleToPropose, proposeHandle } from "./handle.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
 import {
@@ -62,9 +68,19 @@ export type CreateProductInput = {
   readonly handle?: unknown;
   readonly metadata?: unknown;
   readonly options?: unknown;
+  readonly collections?: unknown;
   readonly variants?: unknown;
 };
 
+/**
+ * Creating a Product refuses six ways, and the last of them is about a *different* table.
+ *
+ * **`collection-not-found` is #280's, and it is the word `PATCH /admin/products/{id}` already
+ * refuses an unknown Collection with** — one fact gets one word, whichever end it is asked from
+ * (ADR-0060), so a client that already branches on the catalog family needed no new arm the day
+ * `collections` reached this body. It is 422 for the reason it is 422 there: the body is well
+ * formed and what refuses it is the state of the Store.
+ */
 export type ProductCreation =
   | { readonly ok: true; readonly product: ProductDetail }
   | {
@@ -74,7 +90,8 @@ export type ProductCreation =
         | "handle-taken"
         | "sku-taken"
         | "unknown-fulfilment-strategy"
-        | "variant-options-mismatch";
+        | "variant-options-mismatch"
+        | "collection-not-found";
       readonly detail: string;
     };
 
@@ -184,6 +201,18 @@ export async function createProduct(
   const options = parseOptionDeclarations(input.options);
   if (!options.ok) return options;
 
+  // The Collections this Product is created into — `[]` where the body named none, because at a
+  // create absent and empty are the same fact. They are two facts on the correction, where an
+  // absent field means "leave it" and an empty one takes the Product out of everything
+  // (ADR-0062); a Product being created is in nothing to be left in or taken out of. Read by the
+  // very function `PATCH /admin/products/{id}` reads it with, so the same body is refused in the
+  // same words whichever route a Merchant sent it to.
+  const grouped =
+    input.collections === undefined
+      ? ({ ok: true, value: [] } as const)
+      : parseCollectionMemberships(input.collections);
+  if (!grouped.ok) return grouped;
+
   const variants = parseVariants(input.variants);
   if (!variants.ok) return variants;
 
@@ -220,68 +249,99 @@ export async function createProduct(
 
   let productId: string;
   try {
-    productId = await db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(product)
-        // **No `status`, and that is the decision rather than an omission** (story 6). A create
-        // gets the column's own default — `draft` — so publishing is an act a Merchant performs
-        // at `PATCH /admin/products/{id}` rather than a side effect of typing a title. Naming it
-        // here, even as `draft`, would be a second place the answer is kept and the first place
-        // somebody would let a body choose it.
-        .values({ title, description, handle, metadata })
-        // The unique constraint is the check, and this is how its answer is read — exactly as
-        // the SKUs below read theirs. A `select` for the handle and then an `insert` would let
-        // two requests offering the same address both find nothing, and the loser would surface
-        // as a 500 rather than as the conflict it is (ADR-0018).
-        .onConflictDoNothing({ target: product.handle })
-        .returning({ id: product.id });
-      // Nothing else about this insert can decline it, so no row back *is* the conflict. It
-      // throws for the Variants' reason one statement down: a Product half created is the
-      // zero-Variant state this whole function exists to prevent.
-      if (!created) throw new HandleTaken(handle);
+    // A refusal or the identifier of what was written — never both, and the refusal only ever
+    // from **before** the first write. #255's lesson is the whole reason this signature is a
+    // union: a refusal *returned* from inside a transaction commits it, so the one judgement
+    // here that reads other tables is the transaction's first statement and everything after it
+    // is a write. The two refusals decided *among* the writes still travel as throws, because by
+    // then there is a half-created Product to unwind.
+    const written = await db.transaction(
+      async (tx): Promise<{ readonly productId: string } | CollectionMissing> => {
+        // Asked here, before the Product exists, so a body naming a Collection this Store has not
+        // got leaves nothing behind at all — no Product, no Variants, no handle taken. No
+        // `lockCollectionsOf`: that lock serialises two requests changing *one Product's*
+        // memberships, and nothing else can be changing the memberships of a Product no request
+        // has yet been told the identifier of.
+        const missing = await collectionsThisStoreDoesNotHave(tx, grouped.value);
+        if (missing) return missing;
 
-      // In the same transaction as the Product and the Variants, which is the whole of why
-      // options belong in this body: a Variant naming an option its Product has not declared is
-      // not a state that exists for an instant, rather than one detected afterwards.
-      const declared = await declareProductOptions(tx, created.id, options.value);
+        const [created] = await tx
+          .insert(product)
+          // **No `status`, and that is the decision rather than an omission** (story 6). A create
+          // gets the column's own default — `draft` — so publishing is an act a Merchant performs
+          // at `PATCH /admin/products/{id}` rather than a side effect of typing a title. Naming it
+          // here, even as `draft`, would be a second place the answer is kept and the first place
+          // somebody would let a body choose it.
+          .values({ title, description, handle, metadata })
+          // The unique constraint is the check, and this is how its answer is read — exactly as
+          // the SKUs below read theirs. A `select` for the handle and then an `insert` would let
+          // two requests offering the same address both find nothing, and the loser would surface
+          // as a 500 rather than as the conflict it is (ADR-0018).
+          .onConflictDoNothing({ target: product.handle })
+          .returning({ id: product.id });
+        // Nothing else about this insert can decline it, so no row back *is* the conflict. It
+        // throws for the Variants' reason one statement down: a Product half created is the
+        // zero-Variant state this whole function exists to prevent.
+        if (!created) throw new HandleTaken(handle);
 
-      const inserted = await tx
-        .insert(variant)
-        .values(
-          variants.value.map((row) => ({
-            productId: created.id,
-            sku: row.sku,
-            fulfilmentStrategy: row.fulfilmentStrategy,
-            metadata: row.metadata,
+        // In the same transaction as the Product and the Variants, which is the whole of why
+        // options belong in this body: a Variant naming an option its Product has not declared is
+        // not a state that exists for an instant, rather than one detected afterwards.
+        const declared = await declareProductOptions(tx, created.id, options.value);
+
+        const inserted = await tx
+          .insert(variant)
+          .values(
+            variants.value.map((row) => ({
+              productId: created.id,
+              sku: row.sku,
+              fulfilmentStrategy: row.fulfilmentStrategy,
+              metadata: row.metadata,
+            })),
+          )
+          // The unique index on `sku` is the check, and this is how its answer is read. A
+          // select-then-insert would let two requests offering the same SKU both find nothing,
+          // and the loser would surface as a 500 rather than as the conflict it is.
+          .onConflictDoNothing({ target: variant.sku })
+          .returning({ id: variant.id, sku: variant.sku });
+
+        if (inserted.length !== variants.value.length) {
+          const kept = new Set(inserted.map((row) => row.sku));
+          // Rolls the Product back with it: a half-created Product — one whose Variants were
+          // refused — is the zero-Variant state this whole function exists to prevent.
+          throw new SkuTaken(
+            variants.value.map((row) => row.sku).filter((sku) => !kept.has(sku)),
+          );
+        }
+
+        // One statement for every Variant's values rather than one per Variant, and paired **by
+        // SKU** rather than by position, for the reason a read reports Variants in SKU order:
+        // `returning` is under no obligation to answer in the order the values were given.
+        const bySku = new Map(variants.value.map((row) => [row.sku, row.options]));
+        await writeVariantOptionValues(
+          tx,
+          inserted.map((row) => ({
+            variantId: row.id,
+            values: bySku.get(row.sku) ?? [],
           })),
-        )
-        // The unique index on `sku` is the check, and this is how its answer is read. A
-        // select-then-insert would let two requests offering the same SKU both find nothing,
-        // and the loser would surface as a 500 rather than as the conflict it is.
-        .onConflictDoNothing({ target: variant.sku })
-        .returning({ id: variant.id, sku: variant.sku });
-
-      if (inserted.length !== variants.value.length) {
-        const kept = new Set(inserted.map((row) => row.sku));
-        // Rolls the Product back with it: a half-created Product — one whose Variants were
-        // refused — is the zero-Variant state this whole function exists to prevent.
-        throw new SkuTaken(
-          variants.value.map((row) => row.sku).filter((sku) => !kept.has(sku)),
+          declared,
         );
-      }
 
-      // One statement for every Variant's values rather than one per Variant, and paired **by
-      // SKU** rather than by position, for the reason a read reports Variants in SKU order:
-      // `returning` is under no obligation to answer in the order the values were given.
-      const bySku = new Map(variants.value.map((row) => [row.sku, row.options]));
-      await writeVariantOptionValues(
-        tx,
-        inserted.map((row) => ({ variantId: row.id, values: bySku.get(row.sku) ?? [] })),
-        declared,
-      );
+        // Guarded rather than called unconditionally, because the writer this shares with the
+        // correction begins by deleting the memberships a Product already has — and a Product one
+        // statement old has none. So a create naming no Collection issues no statement here at
+        // all, and one that names some takes the same path a correction does.
+        if (grouped.value.length > 0) {
+          await setProductCollections(tx, created.id, grouped.value);
+        }
 
-      return created.id;
-    });
+        return { productId: created.id };
+      },
+    );
+    // The judgement above, read back out: nothing was written, so the transaction it commits is
+    // an empty one.
+    if ("reason" in written) return written;
+    productId = written.productId;
   } catch (cause) {
     if (cause instanceof HandleTaken) return handleTaken(cause.handle);
     if (cause instanceof SkuTaken) return skuTaken(cause.skus);

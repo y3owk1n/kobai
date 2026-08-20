@@ -887,7 +887,7 @@ export interface paths {
     };
     /**
      * Create a Product
-     * @description A Product, the options it is chosen by and the Variants that make it sellable, created together in one transaction. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce — and `options` is declared here for the same reason, so a Variant naming an option its Product has not declared is not one either. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.
+     * @description A Product, the options it is chosen by, the Variants that make it sellable and the Collections it belongs in, created together in one transaction. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce — and `options` is declared here for the same reason, so a Variant naming an option its Product has not declared is not one either. `collections` is here for a different one: grouping a Product is a set this route takes exactly as `PATCH /admin/products/{id}` does, so creating a Product into a Collection is one request rather than two. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.
      */
     post: {
       requestBody: {
@@ -926,7 +926,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description A Variant names a Fulfilment Strategy this deployment has not wired — Core ships `physical` and `digital`, a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it — or a Variant's `options` are not exactly the ones this body declares: `variant-options-mismatch`, naming what it left unanswered and what it named that was never declared. */
+        /** @description A Variant names a Fulfilment Strategy this deployment has not wired — Core ships `physical` and `digital`, a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it — or a Variant's `options` are not exactly the ones this body declares: `variant-options-mismatch`, naming what it left unanswered and what it named that was never declared — or `collections` names a Collection this Store has not got: `collection-not-found`, naming it, and with nothing written at all. */
         422: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -1736,7 +1736,7 @@ export interface paths {
     };
     /**
      * Create a Collection
-     * @description A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections` on `PATCH /admin/products/{id}`, which takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.
+     * @description A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections`, which is on `POST /admin/products` and on `PATCH /admin/products/{id}` alike and takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.
      */
     post: {
       requestBody: {
@@ -3558,7 +3558,7 @@ export interface components {
       status: components["schemas"]["ProductStatus"];
       /** @description The Media this Product shows, **in the order a Merchant put them in** — so the first one is the one that leads. On the list shape as well as on the detail, because a catalog grid is nothing but leading images and a client that had to open every Product to draw one would be making a request per tile. Attaching, reordering and detaching are all `media` on `PATCH /admin/products/{id}`; detaching removes the attachment and never the Media. */
       media: components["schemas"]["Media"][];
-      /** @description The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections` on `PATCH /admin/products/{id}`, which takes the whole set. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round. */
+      /** @description The Collections this Product is in, **by title** — a set rather than an ordered list, so there is no position to report. Grouping and ungrouping are both `collections`, which takes the whole set: on `POST /admin/products`, so a Product can be created straight into one, and on `PATCH /admin/products/{id}` thereafter. Empty for a Product nobody has grouped, and `GET /admin/products?collection=` is the question asked the other way round. */
       collections: components["schemas"]["Collection"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
@@ -3582,6 +3582,8 @@ export interface components {
       handle?: string;
       /** @description The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values — which is the one case two of them may answer nothing alike, since a Product declaring no options offers no combination to choose. Where it declares any, two Variants of this body answering them the same way is refused at 400: a storefront maps a combination to one Variant. */
       options?: components["schemas"]["ProductOptionDeclaration"][];
+      /** @description **The Collections this Product is created into** — the whole set, exactly as `PATCH /admin/products/{id}` takes it, so grouping a Product at the moment it is created is one request rather than two. Left out is the same as an empty list: a Product in no Collection, which is what every Product is until somebody groups it. The order carries no meaning — this is a set, not an ordered list like `media` on the correction — so what comes back is by title. A Collection this Store does not have is refused at 422 with `collection-not-found`, and **nothing is written**: no Product, no Variant and no membership. Nothing here creates a Collection; `POST /admin/collections` does. */
+      collections?: components["schemas"]["CollectionMembership"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -3591,6 +3593,13 @@ export interface components {
     ProductOptionDeclaration: {
       /** @description What this option is called — `Size`. Named twice in one list is refused. */
       name: string;
+    };
+    CollectionMembership: {
+      /**
+       * Format: uuid
+       * @description The Collection this Product should be in, as `POST /admin/collections` answered with and `GET /admin/collections` lists. One this Store has no Collection for is refused at 422 with `collection-not-found`.
+       */
+      id: string;
     };
     CreateVariantRequest: {
       sku: string;
@@ -3641,13 +3650,6 @@ export interface components {
       id?: string;
       /** @description What it should now be called. */
       name: string;
-    };
-    CollectionMembership: {
-      /**
-       * Format: uuid
-       * @description The Collection this Product should be in, as `POST /admin/collections` answered with and `GET /admin/collections` lists. One this Store has no Collection for is refused at 422 with `collection-not-found`.
-       */
-      id: string;
     };
     UpdateVariantRequest: {
       /** @description A new SKU for this Variant. Free to change: an Order's Line Items snapshot the SKU they were bought under (ADR-0009), and a Reservation names its subject by identifier rather than by SKU. One another Variant already carries is refused. */

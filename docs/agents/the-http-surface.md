@@ -577,6 +577,8 @@ rather than implementation:
   route of their own and that route answers an identifier, so attaching is a second act however
   the surface is shaped — where a Product's `options` are in the create precisely so that a
   Variant naming an undeclared option never exists for an instant. There is no such state here.
+  **`collections` is not the same absence and reached the create in #280**, which is argued where
+  membership is — do not read the two as one rule.
 - **A Variant's list does not extend its Product's and is not extended by it.** A storefront gets
   both and decides; a kobai that copied one into the other would have taken that decision and
   left no way to tell an inherited picture from an attached one.
@@ -606,13 +608,22 @@ rather than implementation:
   stopping — where `core_product_media.media_id` is `restrict`, and the two opposite judgements
   are the same rule read from two sides. Refusing here would mean emptying a Collection before it
   could be removed, which is tidying up in order to delete a name.
-- **Membership is a whole set on `PATCH /admin/products/{id}` and nowhere else.** `collections` is
-  `media`'s bargain one noun along, taken for half of `media`'s reason: a list of edits leaves no
-  way to say *and this one is gone*. The other half does **not** carry — a Product's images are
-  shown in an order a Merchant chose and a Product's Collections are a **set**, so there is no
-  `position`, the order of the array means nothing on the way in, and a read answers by title.
-  There is deliberately no `products` on `PATCH /admin/collections/{id}`: two fields writing one
-  fact would be permanent under ADR-0060 and could disagree about what an empty list means.
+- **Membership is a whole set, on `POST /admin/products` and on `PATCH /admin/products/{id}`, and
+  nowhere else.** `collections` is `media`'s bargain one noun along, taken for half of `media`'s
+  reason: a list of edits leaves no way to say *and this one is gone*. The other half does **not**
+  carry — a Product's images are shown in an order a Merchant chose and a Product's Collections
+  are a **set**, so there is no `position`, the order of the array means nothing on the way in,
+  and a read answers by title. There is deliberately no `products` on
+  `PATCH /admin/collections/{id}`: two fields writing one fact would be permanent under ADR-0060
+  and could disagree about what an empty list means. **It reached the create in #280 and `media`
+  did not**, which is the pair worth reading together: the two absences read alike and are not
+  the same thing. Media is bytes that go up at a route of their own and come back as an
+  identifier, so attaching is a second act however the create is shaped; a Collection is a row
+  that already exists, so the field costs nothing but itself and saves a client creating a
+  hundred Products into one a hundred requests. Absent and empty are one fact at the create — a
+  Product is in nothing until somebody groups it — and two at the correction, where absent means
+  "leave it" (ADR-0062). One reading (`parseCollectionMemberships`), one word, one status at both
+  ends.
 - **A Collection has no handle and no unique title, and both absences are decisions.** Nothing
   resolves one by name — a storefront browses one through `?collection=`, by the `id` the Product
   it was already holding reports — so a second unique string would be ADR-0038's whole dance taken
@@ -622,7 +633,7 @@ rather than implementation:
 - **`collection-not-found` is one word for one fact, whichever end asks.** It is
   `CollectionRefusal`'s and `CatalogRefusal`'s alike — 404 from the Collection routes, **422**
   from a `collections` list naming an asset the Store has not got, on `media-not-found`'s
-  distinction — and it is asked before the correction's first write, for #255's reason: a refusal
+  distinction — and it is asked before the *first* write either route makes, for #255's reason: a refusal
   returned from inside a transaction commits it.
 - **`StoreProduct` carries its Collections and there is no `GET /store/collections`.** A
   storefront renders breadcrumbs, and links a catalog tile at what it belongs to, from the Product

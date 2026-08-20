@@ -9,6 +9,7 @@ import { LayersIcon, PackageIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
+import { CollectionsField } from "@/components/collections-field";
 import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
 import { ListFilter, useListFilter } from "@/components/list-filter";
@@ -407,6 +408,11 @@ const NewProductForm = z.object({
         .number("A Price is a whole number of minor units — 1250 is 12.50.")
         .int("Minor units are whole: 1250, not 12.50."),
     ),
+  // The Collections this Product is created into — structure and nothing else, like every field
+  // beside it. Whether a Collection is one this Store has is kobai's question and arrives as a
+  // refusal; an empty list is an ordinary answer, since a Product in no Collection is what every
+  // Product is until somebody groups it.
+  collections: z.array(z.string()),
 });
 
 type NewProductInput = z.input<typeof NewProductForm>;
@@ -443,7 +449,7 @@ function NewProduct() {
 
   const form = useForm<NewProductInput, unknown, NewProductValues>({
     resolver: zodResolver(NewProductForm),
-    defaultValues: { title: "", handle: "", sku: "", amount: "" },
+    defaultValues: { title: "", handle: "", sku: "", amount: "", collections: [] },
   });
 
   // The proposal, and the whole of it: while the Merchant has not touched the handle box it
@@ -464,9 +470,18 @@ function NewProduct() {
   };
 
   const create = useMutation({
-    mutationFn: async ({ title, handle, sku, amount }: NewProductValues) => {
+    mutationFn: async ({
+      title,
+      handle,
+      sku,
+      amount,
+      collections: chosenCollections,
+    }: NewProductValues) => {
       // A Product and its Variants are created together: a Product with no Variant is not a
       // state the API can produce, because a Product is never sellable in itself (ADR-0008).
+      // **The Collections go in the same request** (#280): kobai takes the whole set at the
+      // create exactly as it takes it at the correction, so grouping a new Product is not a
+      // second round trip and there is no window in which it exists ungrouped.
       const product = orThrow(
         await client.POST("/admin/products", {
           body: {
@@ -474,6 +489,9 @@ function NewProduct() {
             // Left out rather than sent empty when the box is empty, which is what asks kobai
             // to propose one. `""` is a handle, and not one it would accept.
             ...(handle === "" ? {} : { handle }),
+            // Sent as it stands rather than conditionally: at a create an empty set and an
+            // absent field are the same fact, which is a Product in no Collection.
+            collections: chosenCollections.map((one) => ({ id: one })),
             variants: [{ sku }],
           },
         }),
@@ -503,7 +521,8 @@ function NewProduct() {
       <CardHeader>
         <CardTitle>New Product</CardTitle>
         <CardDescription>
-          One Product, one Variant, one Price — the thinnest sellable thing.
+          One Product, one Variant, one Price — the thinnest sellable thing — and the
+          Collections it belongs in, if there are any.
         </CardDescription>
       </CardHeader>
       {/* No guard of its own, deliberately: a browser performs the implicit submission of
@@ -546,6 +565,19 @@ function NewProduct() {
             error={form.formState.errors.amount}
             {...form.register("amount")}
           />
+
+          {/* Offered here because kobai takes `collections` at the create (#280) — a route that
+              exists and a form that does not use it is how the two drift. It passes no
+              `whenNone`: a Merchant filling in a new Product did not come looking for
+              Collections, so a Store that has none simply does not draw the field, where the
+              Product screen's card says where to make one. */}
+          <div className="sm:col-span-2">
+            <CollectionsField
+              idPrefix="new-product-collection"
+              control={form.control}
+              name="collections"
+            />
+          </div>
         </CardContent>
         <CardFooter className="mt-4">
           <ActionButton
@@ -600,6 +632,14 @@ function whyNotCreated(thrown: unknown): string {
       // kobai's own prose names the field, which is more than this screen knows.
       return problemOf(thrown, fallback);
 
+    case "collection-not-found":
+      // Reachable from this form since it began sending `collections` (#280), and only one way:
+      // a Collection that was on the screen when the boxes were ticked has been deleted since.
+      // Re-reading the list is the repair, and **nothing was created** — kobai judges the set
+      // before it writes anything at all, so this is a submit to make again rather than a
+      // half-made Product to go and find.
+      return "One of those Collections is no longer in this Store — it has been deleted since this form read the list. Nothing was created: untick it and create the Product again.";
+
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
     case "product-not-found":
@@ -610,11 +650,10 @@ function whyNotCreated(thrown: unknown): string {
     case "variant-options-mismatch":
     case "variant-combination-taken":
     case "media-not-found":
-    case "collection-not-found":
-      // Not reachable from this form as it stands — it declares no options, attaches no image
-      // and joins no Collection, so the Product it creates is in none of the three. All of them
-      // are done on the Product screen, once the Product exists. Reported as kobai said it
-      // rather than as a sentence written here for a case nobody has seen.
+      // Not reachable from this form as it stands — it declares no options and attaches no
+      // image, so the Product it creates has neither. Both are done on the Product screen, once
+      // the Product exists. Reported as kobai said it rather than as a sentence written here
+      // for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:

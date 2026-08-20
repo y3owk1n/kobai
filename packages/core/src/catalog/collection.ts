@@ -48,9 +48,11 @@ import {
  * is tidying up in order to delete a name. `collection.test.ts` asserts the Products directly
  * rather than trusting the DDL to imply them.
  *
- * **Membership is a whole list on `PATCH /admin/products/{id}`**, and it is `media`'s bargain
- * one noun along — {@link parseCollectionMemberships} is where the half of that argument which
- * *does* carry is written out, since a set has no order for the other half to be about.
+ * **Membership is a whole set, written at `POST /admin/products` and at
+ * `PATCH /admin/products/{id}` and nowhere else**, and it is `media`'s bargain one noun along —
+ * {@link parseCollectionMemberships} is where the half of that argument which *does* carry is
+ * written out, since a set has no order for the other half to be about, and where the create's
+ * arrival (#280) is argued.
  *
  * **`?collection=` is one predicate, and {@link inCollection} is it.** Both Product lists narrow
  * by the same expression, applied in the same statement as the page, so a filtered page that
@@ -226,7 +228,7 @@ export async function updateCollection(
   if (Object.keys(changes).length === 0) {
     return changesNothing(
       "a `title`, a `metadata`, or both",
-      "Which Products are in a Collection is not changed here: `collections` on `PATCH /admin/products/{id}` is the whole list of the Collections one Product is in.",
+      "Which Products are in a Collection is not changed here: `collections` on `POST /admin/products` and on `PATCH /admin/products/{id}` is the whole set of the Collections one Product is in.",
     );
   }
 
@@ -318,10 +320,20 @@ type Parsed<V> = { readonly ok: true; readonly value: V } | NotUsable;
  * `position` column here and the order of the array means nothing on the way in. What comes back
  * is by title, which is the only column of a Collection a Merchant would recognise.
  *
- * **It is on the correction and not on the create**, exactly as `media` is, and for the reason
- * that rules `options` out of the same treatment: a Variant naming an option its Product has not
- * declared must not exist for an instant, and there is no such state here. A Product that is in
- * no Collection for the length of one more request is an ordinary Product.
+ * **It is on the create as well as on the correction, and `media` is not** (#280). The two
+ * absences read alike and were not the same thing: Media is bytes uploaded at a route of its own
+ * that answers an identifier, so attaching is a second act however a create is shaped, while a
+ * Collection is a row that already exists — so the only thing keeping this off the create was
+ * that nothing had needed it, and grouping a hundred Products was two hundred requests. It is
+ * **one reading** rather than two, which is what makes the same body refused in the same words
+ * whichever route a Merchant sent it to; what differs is only what an *absent* field means. At
+ * the correction absent is "leave it" and `[]` takes the Product out of everything (ADR-0062);
+ * at a create the two are one fact, because a Product being made is in nothing to be left in.
+ *
+ * It is still not `options`' argument. A Variant naming an option its Product has not declared
+ * must not exist for an instant, and there is no such state here — a Product that is in no
+ * Collection for the length of one more request is an ordinary Product. What put this on the
+ * create is the request a client no longer makes twice, not a state that must never exist.
  */
 export function parseCollectionMemberships(value: unknown): Parsed<string[]> {
   if (!Array.isArray(value)) {
@@ -421,7 +433,9 @@ const PRODUCT_COLLECTIONS_LOCK_NAMESPACE = 274_118_960;
  * `updateProduct` returns from inside its transaction **commits** it, so a judgement made after
  * the Product's options had already been corrected would answer 422 over a Product whose options
  * really had been renamed. So the question is exported and {@link setProductCollections} is a
- * write and nothing else.
+ * write and nothing else. `createProduct` asks it as its transaction's **first statement**, where
+ * the failure is worse and louder: a Product judged after the `insert` is one a refused request
+ * leaves behind, holding the handle and the SKUs the Merchant is about to send again.
  *
  * A read rather than the foreign key's own answer, because the key can only say that *a*
  * reference was bad and this can name which. A Collection deleted in the window between the two

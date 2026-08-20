@@ -256,6 +256,83 @@ describe("a Product is in as many Collections as a Merchant put it in", () => {
     );
   });
 
+  it("is created into its Collections, in the one request that creates it", async () => {
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const summer = await createCollection(kobai, catalog.merchant, "Summer");
+    const cheap = await createCollection(kobai, catalog.merchant, "Under 20");
+
+    const created = await kobai.request("/admin/products", {
+      method: "POST",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "A grouped poster",
+        variants: [{ sku: "GROUPED-A2" }],
+        // Several at once and in an order the answer will not keep, which is what says this
+        // field is the same **set** `PATCH /admin/products/{id}` takes rather than a second,
+        // ordered spelling of it (#280).
+        collections: [{ id: cheap.id }, { id: summer.id }],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    const product = (await created.json()) as Product;
+    // By title, exactly as the correction's answer is: one shape for a Product, whether it was
+    // just created or merely looked at.
+    expect(product.collections.map((one) => one.title)).toEqual(["Summer", "Under 20"]);
+
+    // And it really is grouped rather than merely reported so — asked of the list that narrows
+    // by a Collection, which is the question a storefront asks (story 18).
+    await expect(
+      productIdsIn(
+        kobai,
+        `/admin/products?collection=${summer.id}`,
+        catalog.merchant.headers,
+      ),
+    ).resolves.toEqual([product.id]);
+  });
+
+  it("refuses a create naming a Collection this Store has not got, and writes nothing", async () => {
+    await using kobai = await createTestKobai();
+    const catalog = await seedTestCatalog(kobai);
+    const summer = await createCollection(kobai, catalog.merchant, "Summer");
+
+    const body = {
+      title: "An ungroupable poster",
+      handle: "an-ungroupable-poster",
+      variants: [{ sku: "UNGROUPED-A2" }],
+      // A real Collection beside an absent one, so what the refusal proves is that the
+      // judgement came before the writes rather than that the field was ignored.
+      collections: [{ id: summer.id }, { id: ABSENT }],
+    };
+
+    const refused = await kobai.request("/admin/products", {
+      method: "POST",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    // The correction's word at the correction's status, because it is the correction's fact:
+    // the body is well formed and the state of the Store is what refuses it.
+    expect(refused.status).toBe(422);
+    const refusal = (await refused.json()) as Refusal;
+    expect(refusal.reason).toBe("collection-not-found");
+    expect(refusal.error).toContain(ABSENT);
+
+    // **Nothing was written**, which is #255's lesson at a create: a refusal returned from
+    // inside a transaction commits it, so a judgement made after the `insert` would leave a
+    // Product behind — holding the handle and the SKU a Merchant is about to send again. Sending
+    // exactly that is how this is asked: a Product left behind refuses this with `handle-taken`.
+    const again = await kobai.request("/admin/products", {
+      method: "POST",
+      headers: { ...catalog.merchant.headers, "content-type": "application/json" },
+      body: JSON.stringify({ ...body, collections: [{ id: summer.id }] }),
+    });
+    expect(again.status).toBe(201);
+    const created = (await again.json()) as Product;
+    expect(created.collections.map((one) => one.title)).toEqual(["Summer"]);
+  });
+
   it("reports its Collections on the list shape as well as on the detail", async () => {
     await using kobai = await createTestKobai();
     const catalog = await seedTestCatalog(kobai);

@@ -763,7 +763,7 @@ const createProductRoute = createRoute({
   path: "/products",
   summary: "Create a Product",
   description:
-    "A Product, the options it is chosen by and the Variants that make it sellable, created together in one transaction. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce — and `options` is declared here for the same reason, so a Variant naming an option its Product has not declared is not one either. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.",
+    "A Product, the options it is chosen by, the Variants that make it sellable and the Collections it belongs in, created together in one transaction. There is no route that creates a Product alone, so a Product with no Variant is not a state this API can produce — and `options` is declared here for the same reason, so a Variant naming an option its Product has not declared is not one either. `collections` is here for a different one: grouping a Product is a set this route takes exactly as `PATCH /admin/products/{id}` does, so creating a Product into a Collection is one request rather than two. A `handle` left out is proposed from the title; one that is given is taken as given, and either way one another Product already answers to is refused rather than suffixed. **What this creates is a draft**, always: no Shopper can see it until `PATCH /admin/products/{id}` publishes it, because publishing is a decision rather than a side effect of creating.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -782,7 +782,7 @@ const createProductRoute = createRoute({
       contract.CatalogRefusal,
     ),
     422: json(
-      "A Variant names a Fulfilment Strategy this deployment has not wired — Core ships `physical` and `digital`, a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it — or a Variant's `options` are not exactly the ones this body declares: `variant-options-mismatch`, naming what it left unanswered and what it named that was never declared.",
+      "A Variant names a Fulfilment Strategy this deployment has not wired — Core ships `physical` and `digital`, a Plugin's is wired in the Project's `kobai.config.ts`, and installing the Plugin does not wire it — or a Variant's `options` are not exactly the ones this body declares: `variant-options-mismatch`, naming what it left unanswered and what it named that was never declared — or `collections` names a Collection this Store has not got: `collection-not-found`, naming it, and with nothing written at all.",
       contract.CatalogRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1297,7 +1297,7 @@ const createCollectionRoute = createRoute({
   path: "/collections",
   summary: "Create a Collection",
   description:
-    "A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections` on `PATCH /admin/products/{id}`, which takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.",
+    "A title, and optionally some `metadata`. A Collection starts empty: a Product is put into one with `collections`, which is on `POST /admin/products` and on `PATCH /admin/products/{id}` alike and takes the whole set of the Collections that Product is in. Titles are **not** unique — a Collection is addressed by its identifier everywhere, so two carrying one title are two groupings rather than a collision.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -2069,6 +2069,10 @@ const PRODUCT_STATUS = {
   // same status at a create, where the options are declared in the same body, because it is one
   // fact about a Variant and its Product either way.
   "variant-options-mismatch": 422,
+  // 422 for the reason it is 422 at the correction, which is the only other place this word is
+  // said about a `collections`: the body is well formed and the state of the Store is what
+  // refuses it. One fact, one word, one status, whichever route it is asked at (#280).
+  "collection-not-found": 422,
 } as const satisfies Record<
   Exclude<ProductCreation, { ok: true }>["reason"],
   400 | 409 | 422
