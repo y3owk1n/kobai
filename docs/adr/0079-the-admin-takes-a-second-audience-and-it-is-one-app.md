@@ -2,7 +2,7 @@
 
 **The Admin grows a `Developer` group** — API keys, **Playground** (the deployment's own
 description, browsable and runnable), and **Deployment** — and its sections become three groups:
-**Commerce** (Products, Media, Orders, Carts), **Settings** (Store, Merchants, Roles) and
+**Commerce** (Products, Media, Orders, Carts), **Settings** (Merchants, Roles, Store) and
 **Developer**. The three sit at `/developer/api-keys`, `/developer/playground` and
 `/developer/deployment`. It stays
 **one SPA, at one origin, in the one container**

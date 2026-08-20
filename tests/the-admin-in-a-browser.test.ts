@@ -100,6 +100,35 @@ function listRows(page: Page) {
 }
 
 /**
+ * The sidebar's landmark, wherever it renders — named by `app-layout.tsx`, and by nothing else.
+ *
+ * It is one function rather than one per block because the narrow window renders the sidebar as
+ * a sheet and the wide one as a column, and what a case asks for is the landmark either way.
+ */
+function sidebar(page: Page) {
+  return page.getByRole("complementary", { name: "Sections and account" });
+}
+
+/**
+ * The headings over the sidebar's groups, in the order a Merchant reads them (#266).
+ *
+ * Read off the label rather than off the group's accessible name, because the label is the
+ * thing on screen: a group named for a reader and headed with something else would satisfy
+ * {@link sectionsInGroup} and tell a Merchant looking at it nothing.
+ */
+function sectionGroups(page: Page): Promise<string[]> {
+  return sidebar(page).locator('[data-slot="sidebar-group-label"]').allInnerTexts();
+}
+
+/** What one of those groups holds, which are links rather than buttons (`LinkButton`, #175). */
+function sectionsInGroup(page: Page, group: string): Promise<string[]> {
+  return sidebar(page)
+    .getByRole("group", { name: group })
+    .getByRole("link")
+    .allInnerTexts();
+}
+
+/**
  * The New Product form, which is the one place in this Admin an action can be refused.
  *
  * Named by a field only it has, because the sign-in form and this one are both `<form>` and a
@@ -659,7 +688,7 @@ describe("the frame's own controls", () => {
     await keyboardTo(page, "Tab", apiKeys, "the API keys section");
     await page.keyboard.press("Enter");
 
-    expect(where(page)).toBe("/api-keys");
+    expect(where(page)).toBe("/developer/api-keys");
     await auditAccessibility(page, "the API keys screen");
   });
 });
@@ -692,11 +721,6 @@ describe("the frame's own controls", () => {
  * this**, which is why the case does that rather than leaning on the audit beside it.
  */
 describe("the frame on a narrow screen", () => {
-  /** The sidebar wherever it renders — named by `app-layout.tsx`, and by nothing else. */
-  function sidebar(page: Page) {
-    return page.getByRole("complementary", { name: "Sections and account" });
-  }
-
   /** The only way to a section below `md`, since the sidebar is not on screen until it is asked for. */
   function toggle(page: Page) {
     return page.getByRole("button", { name: "Toggle Sidebar" });
@@ -714,16 +738,24 @@ describe("the frame on a narrow screen", () => {
 
     await shows(sidebar(page), "the sidebar's landmark in a narrow window");
     // Its contents, rather than only the role: a landmark on something holding nothing would
-    // satisfy the assertion above and none of what the landmark is for. Two of the sections
-    // rather than all of them — `lib/sections.ts` is where that list lives, and a copy here
-    // would be the second answer to what this Admin has.
+    // satisfy the assertion above and none of what the landmark is for. The **groups**, since
+    // #266, because the sheet is the other document this Admin has and the grouping is drawn
+    // in it too — and two of the sections rather than all of them, since `lib/sections.ts` is
+    // where that list lives and a copy here would be the second answer to what this Admin has.
+    await expect
+      .poll(() => sectionGroups(page))
+      .toEqual(["Commerce", "Settings", "Developer"]);
     await shows(
-      sidebar(page).getByRole("link", { name: "Products" }),
-      "the Products section, inside the sheet",
+      sidebar(page)
+        .getByRole("group", { name: "Commerce" })
+        .getByRole("link", { name: "Products" }),
+      "the Products section, inside the sheet's Commerce group",
     );
     await shows(
-      sidebar(page).getByRole("link", { name: "Orders" }),
-      "the Orders section, inside the sheet",
+      sidebar(page)
+        .getByRole("group", { name: "Developer" })
+        .getByRole("link", { name: "API keys" }),
+      "the API keys section, inside the sheet's Developer group",
     );
     await auditAccessibility(
       page,
@@ -746,6 +778,105 @@ describe("the frame on a narrow screen", () => {
     // an assertion either way would be writing down today's answer to a question #193 never
     // asked, and this Admin does not close it.
     await auditAccessibility(page, "the Orders screen reached from the sheet");
+  });
+});
+
+/**
+ * The sections, in the three groups #266 puts them in (ADR-0079).
+ *
+ * A flat list stopped being a list at about eight entries, which is what #254 made it by adding
+ * Media as the second section in a row whose only available place was "at the end". So the
+ * sidebar draws **Commerce**, **Settings** and **Developer**, and the Developer group holds the
+ * screen that was always in it: API keys mints credentials for a storefront and explains a
+ * prefix convention, and no part of it is about running a shop.
+ *
+ * These are frame promises nothing else in this repository can ask. **Which groups a Role is
+ * offered** is the narrowing of `lib/sections.ts` seen from outside — a Role whose sections all
+ * sit in one group must meet that group alone rather than two empty headings, and a heading
+ * over nothing reads as a list that failed to load. **Where the order inside a group sends the
+ * front door** is the other one, and it is why `Settings` reads Merchants, Roles, Store: the
+ * front door is the head of the narrowed list, so the order those three were already in is the
+ * order that leaves an existing Role where it was. And **no redirect was left behind**: kobai
+ * is not published, so the address API keys used to have is one no screen answers, and the
+ * not-found screen is the honest answer to it.
+ *
+ * Two things this block deliberately does not repeat. The **new address** is asserted where the
+ * sidebar is already driven — the keyboard case above reaches the API keys entry and lands on
+ * `/developer/api-keys` — so what is left here is that the entry is inside the Developer group.
+ * And the **palette** is asserted where the palette is: it stays flat, and the case that spells
+ * its rows out is the one that also holds it to a single heading.
+ */
+describe("the sections, in three groups", () => {
+  /** What each group holds, in the order the sidebar draws them — `lib/sections.ts`'s order. */
+  const COMMERCE = ["Products", "Media", "Orders", "Carts"];
+  const SETTINGS = ["Merchants", "Roles", "Store"];
+  const DEVELOPER = ["API keys"];
+
+  it("draws Commerce, Settings and Developer, and every section inside one of them", async () => {
+    const page = await seam.signedIn("/products");
+    await shows(page.getByText("Everything this Store sells"), "the Products screen");
+
+    await expect
+      .poll(() => sectionGroups(page))
+      .toEqual(["Commerce", "Settings", "Developer"]);
+    // Exhaustively, and at this width only: this is the one case that says what the whole of
+    // this Admin's navigation is, and the narrow one asserts the groups are drawn in the sheet
+    // rather than repeating their contents.
+    await expect.poll(() => sectionsInGroup(page, "Commerce")).toEqual(COMMERCE);
+    await expect.poll(() => sectionsInGroup(page, "Settings")).toEqual(SETTINGS);
+    await expect.poll(() => sectionsInGroup(page, "Developer")).toEqual(DEVELOPER);
+
+    await auditAccessibility(page, "the Products screen with the sections grouped");
+  });
+
+  it("answers the address API keys used to have with no screen, and no redirect", async () => {
+    const page = await seam.signedIn("/api-keys");
+
+    // **No redirect is left behind** (ADR-0079). kobai is not published, so there is no
+    // bookmark to preserve, and a redirect would be permanent furniture in vendored source
+    // `kobai-upgrade` can never reach. Asserting the address as well as the screen, because a
+    // redirect that landed on the new screen would satisfy the second alone.
+    await shows(page.getByText("No such screen"), "the not-found screen");
+    expect(where(page)).toBe("/api-keys");
+    await auditAccessibility(page, "the old API keys address");
+  });
+
+  it("offers a Role holding only api-key:read the Developer group and nothing else", async () => {
+    // The screen moved and its Permission did not, so this is the same Role that could reach
+    // API keys before — meeting it in its new place, in the one group it can read anything in.
+    const narrow = await seam.merchantOnARole(["api-key:read"]);
+    const page = await seam.signedInAs(narrow, "/");
+
+    // The front door is still the head of the *filtered* list, which for this Role is the one
+    // section it holds — a heading over nothing is what a group that was drawn regardless
+    // would have given it.
+    await expect.poll(() => where(page)).toBe("/developer/api-keys");
+    await expect.poll(() => sectionGroups(page)).toEqual(["Developer"]);
+    await expect.poll(() => sectionsInGroup(page, "Developer")).toEqual(DEVELOPER);
+    await auditAccessibility(page, "the Admin on a Role that may read only the API keys");
+  });
+
+  it("lands a Role that reads the Store and the roster on Merchants, as it did before", async () => {
+    // **The order inside `Settings` is what decides this**, and nothing else does: the front
+    // door is the head of the narrowed list, so `Merchants` ahead of `Store` is what keeps this
+    // Role arriving where the flat list of eight put it. It is the case the order was chosen
+    // for, so it is asserted here rather than argued in a comment in `lib/sections.ts`.
+    //
+    // What could not be preserved is a Role whose head *was* API keys — one holding
+    // `api-key:read` alongside any of these three now lands on Merchants instead, because that
+    // screen is last rather than fifth and moving it into `Developer` is the whole of #266.
+    const narrow = await seam.merchantOnARole(["store:read", "merchant:read"]);
+    const page = await seam.signedInAs(narrow, "/");
+
+    await expect.poll(() => where(page)).toBe("/merchants");
+    // `Settings` alone, in the sidebar's order: `merchant:read` opens the Roles screen as well
+    // as the roster (ADR-0066), so this Role reads the whole group and no other.
+    await expect.poll(() => sectionGroups(page)).toEqual(["Settings"]);
+    await expect.poll(() => sectionsInGroup(page, "Settings")).toEqual(SETTINGS);
+    await auditAccessibility(
+      page,
+      "the front door on a Role that may read only the Settings",
+    );
   });
 });
 
@@ -838,7 +969,7 @@ describe("the command palette", () => {
 
     await page.keyboard.press("Enter");
 
-    expect(where(page)).toBe("/api-keys");
+    expect(where(page)).toBe("/developer/api-keys");
     await shows(
       page.getByText("The credentials a storefront presents at"),
       "the API keys screen",
@@ -861,11 +992,18 @@ describe("the command palette", () => {
         "Media",
         "Orders",
         "Carts",
-        "API keys",
         "Merchants",
         "Roles",
         "Store",
+        "API keys",
       ]);
+    // **Flat, and one heading over the lot** (#266, ADR-0079). The sidebar draws three groups
+    // and the palette draws none of them: what a palette is good at is answering a typed word
+    // with a destination, and one that nested would be a menu. A heading per group is exactly
+    // what reading `lib/sections.ts`'s new field here would have produced.
+    await expect
+      .poll(() => page.locator("[cmdk-group-heading]").allInnerTexts())
+      .toEqual(["Sections"]);
     await expect.poll(() => selected(page)).toEqual(["Products"]);
 
     await page.keyboard.press("ArrowDown");
@@ -1353,7 +1491,7 @@ describe("API keys", () => {
    * of what kobai answered.
    */
   it("shows a minted key once, and reads the list back rather than patching it", async () => {
-    const page = await seam.signedIn("/api-keys");
+    const page = await seam.signedIn("/developer/api-keys");
     const name = `Minted in a browser ${Date.now()}`;
 
     await page.getByLabel("Name").fill(name);
@@ -1373,7 +1511,7 @@ describe("API keys", () => {
   });
 
   it("checks the shape of the form without asking kobai", async () => {
-    const page = await seam.signedIn("/api-keys");
+    const page = await seam.signedIn("/developer/api-keys");
 
     let asked = 0;
     page.on("request", (request) => {
@@ -1400,7 +1538,7 @@ describe("API keys", () => {
   it("revokes a key and reads the list back rather than crossing it out", async () => {
     const name = `Revoked in a browser ${Date.now()}`;
     await seam.api("POST", "/admin/api-keys", { name, kind: "publishable" });
-    const page = await seam.signedIn("/api-keys");
+    const page = await seam.signedIn("/developer/api-keys");
 
     const row = page.getByRole("row", { name: new RegExp(name) });
     await shows(row, "the key to revoke");
@@ -1438,14 +1576,14 @@ describe("paging through the API keys", () => {
   }, BROWSER_SEAM_TIMEOUT);
 
   it("puts the cursor in the URL, so the older keys are reachable at all", async () => {
-    const page = await seam.signedIn("/api-keys");
+    const page = await seam.signedIn("/developer/api-keys");
     await shows(page.getByRole("link", { name: "Next" }), "the Next control");
     await holdsRows(page, aPage);
     const first = await firstCells(page);
 
     await page.getByRole("link", { name: "Next" }).click();
 
-    expect(where(page)).toMatch(/^\/api-keys\?after=.+/);
+    expect(where(page)).toMatch(/^\/developer\/api-keys\?after=.+/);
     await settlesOn(page, (names) => names.join() !== first.join());
 
     const beyond = await firstCells(page);
@@ -1756,7 +1894,7 @@ describe("what a Role may do", () => {
       name: `never revoked ${Date.now()}`,
       kind: "publishable",
     });
-    const page = await seam.signedInAs(narrow, "/api-keys");
+    const page = await seam.signedInAs(narrow, "/developer/api-keys");
     await shows(
       page.getByText("The credentials a storefront presents at"),
       "the API keys screen",

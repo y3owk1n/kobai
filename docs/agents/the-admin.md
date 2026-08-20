@@ -288,6 +288,24 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   onto the button that opens it — `finalFocus` on the popup, which is why it composes `Dialog`
   rather than taking `CommandDialog` whole — because choosing a section unmounts the screen
   focus would otherwise return to.
+  **Every section carries a `group`, and the sidebar is the only reader of it** (#266,
+  ADR-0079). Commerce, Settings and Developer, in that order, with the field required on every
+  entry rather than optional and set once — which is the shape that stays set once forever. The
+  sidebar draws `useGroupedSections`, which is a *view* of the narrowed list and never a second
+  narrowing, and it **drops a group that holds nothing**, because a heading over an empty list
+  reads as a list that failed to load. **The palette stays flat**: a palette that nests is a
+  menu, and what it is good at is answering a typed word with a destination — so it and the
+  front door read the flat list, one row per section and one head. **The order inside a group is
+  load-bearing, and reordering one is a decision about the front door**: it lands on the head of
+  the narrowed list, so a section moved past another moves the landing of every Role that reads
+  the second and not the first. Settings therefore reads Merchants, Roles, Store — the order
+  those three already had — and API keys moving into Developer is the one landing this ticket
+  could not preserve. **An address moved with its
+  screen and no redirect was left behind**: API keys is at `/developer/api-keys`, `/api-keys`
+  is an address no screen answers, and a redirect would be permanent furniture in vendored
+  source `kobai-upgrade` can never reach. `sectionOf` is why an address a hyphen away from
+  another still lights the right entry — it matches at the `/` boundary and never by bare
+  prefix.
 - **A permission check in the Admin is an affordance and never a boundary** (#178, ADR-0063).
   `requirePermission` in Core is the enforcement; `lib/permissions.ts` is where that is written
   down at length, because the next person to read one of these checks will assume it is doing
