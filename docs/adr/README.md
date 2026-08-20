@@ -110,6 +110,7 @@ New to the project? These five carry the shape of everything else:
 | [0082](./0082-a-detached-media-is-still-the-stores.md) | A detached Media is still the Store's, and kobai deletes no bytes | Accepted — 0059's rule reached one table out, held by a `restrict`; **declines 0078's `remove`** and says what would settle it |
 | [0083](./0083-the-commands-live-in-package-json-and-devbox-is-not-required.md) | The commands live in `package.json`, and devbox is not required | Accepted — **supersedes two of 0031's four clauses**; moves 0030's and 0039's guardrails |
 | [0084](./0084-a-linked-worktree-seeds-its-own-dot-env.md) | A linked worktree seeds its own `.env` | Accepted — **supersedes 0046**, whose one-source rule it keeps; completes 0083 |
+| [0085](./0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md) | Core emits, the Project wires a subscriber, and delivery is in-process | Accepted — fills 0003's events Extension Point; applies 0017 and 0036; **declines 0026's queue**, closing half of 0069's risk |
 
 ## Prototypes
 
@@ -136,9 +137,12 @@ Throwaway code kept as a primary source, on branches out of main.
   defers may not stay deferred. **Capacity is out**, which leaves ADR-0018 promising "one
   interface, two providers" while only one will exist at the first release; **that wording is
   owed a correction**, and correcting prose is cheaper than shipping a calendar to make an old
-  sentence true. And **ADR-0026's job queue may arrive unplanned**: #70 decides whether events
-  are durable, and if they are, the queue is pulled into the Order-after-Capture spec along
-  with the sweeper debt ADR-0057 already owes it.
+  sentence true. Its other half — that **ADR-0026's job queue may arrive unplanned** — is now
+  closed by
+  [ADR-0085](./0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md),
+  which decides events are in-process and not durable: the queue is not pulled into the
+  Order-after-Capture spec, and the sweeper debt ADR-0057 owes it stays where it is. What
+  would reopen it is written down there.
 
 _ADR-0051's risk — that the spine would grow Core while running none of the three named proofs
 — was discharged: `@kobai/plugin-made-to-order` ships, the reference Project wires it, and the

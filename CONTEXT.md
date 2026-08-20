@@ -379,6 +379,24 @@ completed Step's compensation is attempted, newest first, and one that throws st
 the rest nor the answer the run was going to give — see ADR-0017 and ADR-0036.
 _Avoid_: rollback, revert, cleanup, undo handler
 
+**Event**:
+A fact kobai announces **after** it has happened — a Fulfilment dispatched, and nothing else
+yet. **Core is the only thing that emits one**; a Plugin announces nothing on kobai's behalf.
+Emitted once the transaction that made the fact has committed and never from inside a Step, so
+a Subscriber cannot change or undo what it hears about. Delivered **in process**, at most once,
+with no retry and no durability — kobai's events are not webhooks. Its payload carries what
+happened and the facts of the transition, never a copy of the record it concerns. See ADR-0085.
+_Avoid_: webhook, hook, message, notification, signal, event bus, domain event, publish (kobai
+emits)
+
+**Subscriber**:
+What runs when an Event is emitted. A Plugin **offers** one and the Project **wires** it against
+one Event by name in `kobai.config.ts`, exactly as with a Step — installing a package subscribes
+to nothing, and there is no separate word for the offered half. It is handed the Event's payload
+and nothing else, cannot refuse, is never retried, and one that throws is logged and changes
+neither what emitted nor the Subscribers wired after it. See ADR-0085 and ADR-0017.
+_Avoid_: listener, handler, consumer, observer, hook, registering a subscriber
+
 ## Retired terms
 
 These appeared in early descriptions of kobai and should not be used again:
