@@ -94,10 +94,19 @@ distinction is the same one ADR-0036 draws for a compensation that throws: "the 
 than about courtesy** (#254). `MediaStorage` is a dependency a Project may substitute and Core
 ships a working one, so a deployment that configures nothing writes files under `kobai-media/`
 in its **working directory** — which for a test run is this repository. `createTestKobai` gives
-each instance a `mkdtemp` of its own and deletes it with the database, so no suite leaves a
-Merchant's uploads in the tree and no two tests share a directory. **Nothing in the gate reaches
-a network or a real object store**, on the rule `@kobai/plugin-stripe` already follows: a test
-either substitutes a storage or points the shipped one at a directory it made.
+each instance a `mkdtemp` of its own and deletes it with the database, so no two tests share a
+directory and nothing running in-process leaves a Merchant's uploads in the tree. **Nothing in
+the gate reaches a network or a real object store**, on the rule `@kobai/plugin-stripe` already
+follows: a test either substitutes a storage or points the shipped one at a directory it made.
+
+**The browser seam is the one exception, and it is not one a test may fix.** It boots the
+*built* reference Project as its own process from `reference/` — that Project configures no
+`media` at all, which is exactly what its upload case proves — so the bytes land in
+`reference/kobai-media/`, and **nothing deletes them**: `devbox run dev` writes a Developer's own
+uploads to that same directory. `.gitignore` keeps it out of `git status`. What `.gitignore`
+could not do is keep it out of the template, because `projectFiles` reads no ignore file — so
+`kobai-media` is named in that walk's own skip list, and one upload in the gate no longer sweeps
+a PNG into what every Developer receives (#254, ADR-0068).
 
 ```ts
 await using kobai = await createTestKobai({ media: { storage: mine } });     // one of your own
