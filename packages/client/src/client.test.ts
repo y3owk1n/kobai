@@ -148,11 +148,16 @@ describe("consuming kobai through the generated client", () => {
 
   it("hands back a refusal in the shape the description promised", async () => {
     await using kobai = await createTestKobai();
-    const catalog = await seedTestCatalog(kobai);
+    // A Variant a storefront may ask about and that carries no Price, so the refusal comes
+    // from a **Step**. An identifier nobody issued is deliberately not the arrangement any
+    // more: since #276 the store surface asks its own catalog whether a Shopper may see the
+    // Variant *before* it runs the Workflow, so that a draft and an identifier nobody issued
+    // are one answer — which means neither reaches a Step and neither carries a `workflow`.
+    const catalog = await seedTestCatalog(kobai, { prices: [] });
 
     const client = clientFor(kobai, { apiKey: catalog.apiKey.key });
     const { data, error, response } = await client.GET("/store/variants/{id}/price", {
-      params: { path: { id: "00000000-0000-4000-8000-000000000000" } },
+      params: { path: { id: catalog.variantId } },
     });
 
     expect(data).toBeUndefined();
@@ -160,11 +165,14 @@ describe("consuming kobai through the generated client", () => {
     // `error` is the union of every refusal this route declares, so reading `workflow` off
     // it means narrowing first — a 500 says nothing but `error`, and the types insist you
     // notice. That insistence is the deliverable.
-    if (error === undefined || !("workflow" in error)) {
+    // Two narrowings and not one: `in` picks the refusal arms that declare a `workflow` at
+    // all, and the second half is #276's — the field is **optional** on those, because this
+    // route can turn a request back before the Workflow runs.
+    if (error === undefined || !("workflow" in error) || error.workflow === undefined) {
       throw new Error(`expected a refused resolution, got ${JSON.stringify(error)}`);
     }
-    expect(error.reason).toBe("variant-not-found");
-    expect(error.workflow.failed).toBe("load-prices");
+    expect(error.reason).toBe("price-not-set");
+    expect(error.workflow.failed).toBe("select-price");
   });
 
   it("needs no credential for the one route that cannot require one", async () => {

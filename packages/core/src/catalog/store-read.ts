@@ -1,5 +1,5 @@
 import { and, asc, desc, eq } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
+import type { Database, Queryable } from "../db/client.ts";
 import {
   cursorAt,
   type Page,
@@ -385,19 +385,27 @@ export async function readStoreProduct(
 /**
  * The one status a storefront is answered with, and the one place it is said.
  *
- * Both reads above take it, because they are the two ways a Product is reached here and a filter
- * on one of them is a filter a client works around by using the other. It is deliberately a
- * constant rather than an argument: this reader has no caller that may ask for anything else,
- * which is what "enforced in the route" means.
+ * **All three reads take it**, because they are the three ways the catalog is reached here and a
+ * filter on two of them is a filter a client works around by using the third — which is exactly
+ * what #276 found: the Variant read carried no such clause, so a Shopper holding a `variantId`
+ * could price a draft, put it in a Cart and buy it while its Product was invisible. It is
+ * deliberately a constant rather than an argument: this reader has no caller that may ask for
+ * anything else, which is what "enforced in the route" means.
  */
 const IS_PUBLISHED = eq(product.status, PUBLISHED);
 
 /**
- * One Variant, or `undefined` when there is no such Variant.
+ * One Variant, or `undefined` when there is no such Variant **a Shopper may see**.
  *
  * A route of its own rather than a field of the Product, because a Cart line carries a
  * `variantId` and nothing else: rebuilding a page from one should not mean fetching the whole
  * Product it happens to belong to.
+ *
+ * **It joins its Product to ask one question of it, and only that one** (#276). A Variant is the
+ * sellable thing and carries no status of its own — whether a Shopper may see it is its
+ * Product's answer — so a read that stopped at `core_variant` answered for a Product the two
+ * reads above had already refused. The Product's own fields are not selected and are not
+ * reported: what a storefront gets back is still a Variant.
  */
 export async function readStoreVariant(
   db: Database,
@@ -409,13 +417,47 @@ export async function readStoreVariant(
   const [row] = await db
     .select(STORE_VARIANT_COLUMNS)
     .from(variant)
-    .where(eq(variant.id, id))
+    .innerJoin(product, eq(product.id, variant.productId))
+    .where(and(eq(variant.id, id), IS_PUBLISHED))
     .limit(1);
   if (!row) return undefined;
 
   const chosenBy = await readVariantOptionValues(db, [row.id]);
   const shown = await readVariantMedia(db, storage, [row.id]);
   return asStoreVariant(row, chosenBy.get(row.id) ?? [], shown.get(row.id));
+}
+
+/**
+ * Whether there is a Variant here **a Shopper may select** — the same question
+ * {@link readStoreVariant} answers, for the two callers that need the answer and not the
+ * Variant (#276).
+ *
+ * `POST /store/carts/{id}/line-items` asks it before it writes a Line Item, and
+ * `GET /store/variants/{id}/price` asks it before it runs `resolve-price`. Both are on the
+ * store surface and both would otherwise answer for a Product this module has already decided
+ * a Shopper cannot see — which is the whole of #276: *invisible* and *unbuyable* were two
+ * different facts, and only the first was enforced.
+ *
+ * **It is here rather than at either caller, and that is the answer to where the guard goes.**
+ * {@link IS_PUBLISHED} is the one statement of what a Shopper may see; a second `eq(product.status, …)`
+ * written in `cart/write.ts` would be a second statement of it, and the two would drift the day
+ * a fourth status arrives. So the Cart still selects the Variant and never the Product — what it
+ * now asks is whether *the store surface has such a Variant at all*, and that is the catalog's
+ * question rather than the Cart's.
+ */
+export async function storeVariantExists(db: Queryable, id: string): Promise<boolean> {
+  // Checked before Postgres sees it, exactly as the readers above do: a malformed uuid raises,
+  // and an unhandled raise is a 500 about something that does not exist.
+  if (!isUuid(id)) return false;
+
+  const [row] = await db
+    .select({ id: variant.id })
+    .from(variant)
+    .innerJoin(product, eq(product.id, variant.productId))
+    .where(and(eq(variant.id, id), IS_PUBLISHED))
+    .limit(1);
+
+  return row !== undefined;
 }
 
 /**

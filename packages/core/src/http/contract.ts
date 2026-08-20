@@ -2131,11 +2131,17 @@ export const PriceRefusal = z
   .object({
     error: z.string(),
     reason: stepReason(PRICE_RESOLUTION_REASONS),
-    workflow: z.object({
-      name: z.string(),
-      failed: z.string().meta({ description: "The slot that refused." }),
-      steps: z.array(StepReport).readonly(),
-    }),
+    workflow: z
+      .object({
+        name: z.string(),
+        failed: z.string().meta({ description: "The slot that refused." }),
+        steps: z.array(StepReport).readonly(),
+      })
+      .optional()
+      .meta({
+        description:
+          "How far the Workflow got. Absent when the request was turned back before it ran at all — which on the **store** surface is what a Variant whose Product is not published is refused by, since `resolve-price` prices a Variant and does not decide who may see one (#276). Branch on `reason` rather than on this.",
+      }),
   })
   .openapi("PriceRefusal");
 
@@ -2394,6 +2400,7 @@ const CART_RESERVATION_REASONS = {
   "cart-expired": "cart-expired",
   "cart-placed": "cart-placed",
   "cart-empty": "cart-empty",
+  "variant-unavailable": "variant-unavailable",
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
   "insufficient-inventory": "insufficient-inventory",
 } as const satisfies { [R in HoldCartRefusal]: R };
@@ -2571,6 +2578,7 @@ const QUOTE_REASONS = {
   "cart-expired": "cart-expired",
   "cart-placed": "cart-placed",
   "cart-empty": "cart-empty",
+  "variant-unavailable": "variant-unavailable",
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
   "variant-not-found": "variant-not-found",
   "price-not-set": "price-not-set",
@@ -2895,6 +2903,7 @@ const PLACE_ORDER_REASONS = {
   "cart-expired": "cart-expired",
   "cart-placed": "cart-placed",
   "cart-empty": "cart-empty",
+  "variant-unavailable": "variant-unavailable",
   "insufficient-inventory": "insufficient-inventory",
   "variant-not-found": "variant-not-found",
   "price-not-set": "price-not-set",

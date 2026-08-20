@@ -87,10 +87,11 @@ import type { MediaStorage } from "../media/storage.ts";
 import { listOrders, readOrder } from "../order/read.ts";
 import type { NotUsable } from "../patch.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
+import type { PriceResolutionWorkflow } from "../pricing/resolve-price.ts";
 import { type InventoryUpdate, setInventory } from "../reservation/inventory.ts";
 import { readStore } from "../store/read.ts";
 import { type StoreUpdate, updateStore } from "../store/write.ts";
-import type { WorkflowRegistry } from "../workflow/context.ts";
+import { openMetadata, type WorkflowRegistry } from "../workflow/context.ts";
 import * as contract from "./contract.ts";
 import {
   invalidRequestHook,
@@ -100,6 +101,11 @@ import {
   PAGE_QUERY_INVALID,
   REFUSALS,
 } from "./openapi.ts";
+import {
+  priceStatusFor,
+  resolvedPriceBody,
+  workflowRefusal,
+} from "./workflow-refusal.ts";
 
 /**
  * The admin surface — everything a Merchant reaches, and the only thing the Admin consumes
@@ -150,6 +156,26 @@ export type AdminDependencies = {
    * per instance and every other route on this surface is a module-level constant.
    */
   readonly sessionPolicy: SessionPolicy;
+  /**
+   * The `resolve-price` declaration this deployment runs, for the one route that previews what a
+   * storefront would be charged (#276).
+   *
+   * Handed in rather than imported, for exactly the reason the store surface's is: a route that
+   * imported Core's own declaration would preview Core's prices to a Project that replaced a
+   * pricing Step — which is the one thing a preview must never do, since the whole of its value
+   * is being the number the storefront gets.
+   */
+  readonly priceWorkflow: PriceResolutionWorkflow;
+  /**
+   * How long this deployment holds a Cart's stock (ADR-0075) — threaded here for the same route,
+   * and for the reason the store surface threads it.
+   *
+   * Nothing on this surface claims anything. It is on the context that route builds because a
+   * Workflow context is *the deployment's* context, and a route that handed a Step a smaller one
+   * than the storefront does would be the preview and the storefront disagreeing about what a
+   * replaced Step can read.
+   */
+  readonly holdWindowMs: number;
   /**
    * Every Workflow declaration this deployment runs, so `GET /admin/deployment` can report the
    * Step in each position and where it came from (ADR-0080).
@@ -1122,6 +1148,66 @@ const setInventoryRoute = createRoute({
 });
 
 /**
+ * **What a storefront would be charged for this Variant — asked by a Merchant** (#276).
+ *
+ * The store surface answers this question too, and only for a Product a Shopper may see: a
+ * draft is invisible there, and #276 made that true of the price route as well as of the two
+ * catalog reads. That closed a hole and would have taken a capability with it — **previewing an
+ * unpublished Product's price is the feature**, since it is how a Merchant checks what a
+ * replaced pricing Step will do *before* putting something on sale. So this is the deliberate
+ * way through, and four things about it are decisions rather than implementation:
+ *
+ * - **It runs the deployment's own `resolve-price`, and that is the whole point.** The
+ *   declaration is handed in exactly as it is to the store surface (ADR-0017), so a Project that
+ *   replaced `select-price` previews the price it will charge. A second implementation of
+ *   pricing behind `/admin` would be a preview that could disagree with the storefront, which is
+ *   worse than no preview at all — `catalog/a-draft-product-is-not-buyable.test.ts` holds the
+ *   two routes to answering identically for a Product that is on sale.
+ * - **It answers `ResolvedPrice`, the same schema, `workflow.steps` included.** The Steps that
+ *   ran are what let a Developer see that theirs did (spec story 33), and a Merchant looking at
+ *   an unexpected number needs that more here than anywhere.
+ * - **It is not a privileged capability, and ADR-0010 is untouched.** The Admin still uses only
+ *   the public API; what has changed is that the public API now has a route for a question the
+ *   store surface cannot honestly answer. A Developer's own tooling may ask it too.
+ * - **`catalog:read`**, because a resolved price is catalog data and this reads it — the same
+ *   Permission `GET /admin/products/{id}`, which already reports every Price row, sits behind.
+ *   A Permission of its own would gate a read behind something narrower than the read it is
+ *   derived from.
+ *
+ * It takes no `?status=`-shaped escape and offers none: it is on the surface a Merchant's
+ * session opens, which is what makes asking about a draft here legitimate and asking about one
+ * over `/store` not.
+ */
+const previewPriceRoute = createRoute({
+  method: "get",
+  path: "/variants/{id}/price",
+  summary: "What a storefront would be charged",
+  description:
+    "Runs this deployment's own `resolve-price` — the same Workflow, the same Steps, the same answer `GET /store/variants/{id}/price` gives — and answers **whatever the Product's status is**. That is what this route is for: a storefront cannot ask about a Product that is not published, and checking a price before putting something on sale is exactly when a Merchant wants to know. The response names the Steps that ran, so a replaced one is visible. Any query string is passed to the Workflow as its open context (ADR-0013), so a Step that reads one can be previewed with it.",
+  security: MERCHANT_SESSION,
+  middleware: [requirePermission(PERMISSIONS.catalogRead)] as const,
+  request: { params: contract.IdParam },
+  responses: {
+    200: json(
+      "The resolved Price, and the Steps that produced it.",
+      contract.ResolvedPrice,
+    ),
+    401: REFUSALS.noSession,
+    403: REFUSALS.forbidden,
+    404: json(
+      "A Step refused: there is no such Variant, or it carries no Price.",
+      contract.PriceRefusal,
+    ),
+    422: json(
+      "A Step this build of Core does not know refused. The request was well formed and the Workflow declined it.",
+      contract.PriceRefusal,
+    ),
+    500: REFUSALS.serverError,
+    503: REFUSALS.unavailable,
+  },
+});
+
+/**
  * Uploads an image — **the surface's first binary route**, and the only one.
  *
  * Everything else here takes JSON, and this one takes `multipart/form-data` because bytes are
@@ -1798,6 +1884,38 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     );
     if (!counted.ok) return refused(c, counted, INVENTORY_STATUS);
     return c.json(counted.inventory, 200);
+  });
+
+  guarded.openapi(previewPriceRoute, async (c) => {
+    const run = await deps.priceWorkflow.run(
+      { variantId: c.req.valid("param").id },
+      // **Every key the store surface puts on a Workflow context, and not a subset.** A Step is
+      // a Project's to replace and may read any of them, so a route that trimmed the context
+      // would be deciding on a Step's behalf which of this deployment's facts it may see — and
+      // this route's whole value is answering what the storefront will. The query string is
+      // ADR-0013's open half, so a Step that reads a lead time can be previewed with one; there
+      // is no body to merge, exactly as on `/store`.
+      {
+        db: deps.db,
+        metadata: openMetadata(new URL(c.req.url)),
+        workflows: deps.workflows,
+        paymentProvider: deps.paymentProvider,
+        fulfilment: deps.fulfilment,
+        holdWindowMs: deps.holdWindowMs,
+      },
+    );
+
+    if (!run.ok) {
+      return c.json(
+        workflowRefusal(run, deps.priceWorkflow.name),
+        priceStatusFor(run.reason),
+      );
+    }
+
+    // The same expression the store surface answers with, so the preview and the storefront
+    // cannot come to two shapes — which is the one thing that would make this route worse than
+    // no route at all.
+    return c.json(resolvedPriceBody(run, deps.priceWorkflow.name), 200);
   });
 
   guarded.openapi(uploadMediaRoute, async (c) => {

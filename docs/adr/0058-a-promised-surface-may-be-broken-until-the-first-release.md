@@ -233,6 +233,17 @@ freely the licence is being spent.
   `packages/core/src/upgrade/codemods.test.ts`, which the gate's `typecheck` step runs. Each was
   watched failing against the method spelling — `TS2578: Unused '@ts-expect-error' directive` —
   before the change it pins was made.
+- **#276 — `PriceRefusal.workflow` made optional.** The promised HTTP surface, and ADR-0060's
+  "making a present field optional is a break" exactly: a client narrowing `error.workflow.failed`
+  off a refused price stops compiling and has to ask whether the field is there. The argument is
+  written on the field in `packages/core/src/http/contract.ts` and at
+  `resolvePriceRoute` in `packages/core/src/http/store.ts`, and the short of it is that #276 made
+  `GET /store/variants/{id}/price` refuse a Variant whose Product a Shopper may not see **before**
+  `resolve-price` runs — so there is no run to report, and the alternatives were to invent a
+  `failed` slot that never failed or to answer a shape the description does not carry.
+  `PlaceOrderRefusal.workflow` was already optional for the same reason one door along, which is
+  what makes this the shape both now have rather than a second one. The blast radius is one
+  narrowing on the two price routes; `packages/client/src/client.test.ts` carries it and says so.
 
 ## What else the licence is holding up, and where that list went
 

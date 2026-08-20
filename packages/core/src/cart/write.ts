@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { ApiKeyKind } from "../auth/api-key.ts";
 import { lockVariant } from "../catalog/lock.ts";
+import { storeVariantExists } from "../catalog/store-read.ts";
 import type { Database, Queryable, Transaction } from "../db/client.ts";
 import { cart, cartLineItem, price } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
@@ -217,6 +218,16 @@ export async function addLineItem(
     // lock is and what order these rows are taken in; a Cart write holds no Product row and
     // no Inventory row, so this is the only one this transaction takes.
     if (!(await lockVariant(tx, variantId))) return noSuchVariant(variantId);
+
+    // **And whether a Shopper may select it at all** (#276). A Variant carries no status of its
+    // own — whether it is on the storefront is its Product's answer — so this is the store
+    // catalog's question rather than the Cart's, and it is asked of the module that owns it:
+    // `GET /store/variants/{id}` and this route must not disagree about whether there is such a
+    // Variant, or a storefront ends up holding a line it cannot render. The refusal is the
+    // ordinary `variant-not-found` for the same reason a draft Product answers
+    // `product-not-found` — invisible rather than forbidden, so nothing here tells a browser
+    // that a Merchant is preparing something.
+    if (!(await storeVariantExists(tx, variantId))) return noSuchVariant(variantId);
 
     // Asked after the Variant is known to exist and separately from it, because "there is no
     // such Variant" is the more fundamental answer — a caller told only that it is unpriced

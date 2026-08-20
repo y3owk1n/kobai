@@ -460,9 +460,14 @@ A storefront fills the open context in either of two places, and both land on th
 | A **`metadata` object on the request body** | Anything a URL may not: a card token, a completed bank authorisation, anything you would not want in a log. Values arrive as the **JSON you wrote** — a number stays a number, and a nested object stays nested. |
 
 **Only a route that runs a Workflow has an open context at all**, because a Step is the only
-thing that reads one. There are three of them: `GET /store/variants/{id}/price`, which has no
-body to grow and so has the query-string half alone, and `POST /store/orders` and
-`POST /store/carts/{id}/quote`, which have both. An ordinary Cart route takes a body and runs no
+thing that reads one. There are four of them: `GET /store/variants/{id}/price` and
+`GET /admin/variants/{id}/price`, which have no body to grow and so have the query-string half
+alone, and `POST /store/orders` and
+`POST /store/carts/{id}/quote`, which have both. The second of those four is the one a Merchant
+calls: it answers what a storefront would be charged for a Variant **whatever its Product's
+status**, since the store surface answers only published Products and a price is worth checking
+before you put something on sale. It runs the same `resolve-price` your storefront's request
+runs, so a Step of yours reading `leadTimeDays` reads it there too. An ordinary Cart route takes a body and runs no
 Workflow, so neither half of a request to one reaches anything — `POST /store/carts?tier=gold`
 is a parameter kobai discards.
 

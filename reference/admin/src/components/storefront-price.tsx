@@ -1,4 +1,4 @@
-import type { KobaiClient, ResolvedPrice } from "@kobai/client";
+import type { KobaiClient, ProductStatus, ResolvedPrice } from "@kobai/client";
 import { useMutation } from "@tanstack/react-query";
 import { ActionButton } from "@/components/action-button";
 import { Problem } from "@/components/problem";
@@ -28,12 +28,23 @@ import { useKobaiClient } from "@/lib/session";
 /**
  * The price a storefront would receive (spec story 53), and the screen that closes the loop.
  *
- * It does not ask the admin surface what the price is. There is no such route, and there
- * should not be: a resolved price is what the **store** surface answers, behind an API key,
- * and the only way to find out what a storefront gets is to make a storefront's request
- * (ADR-0010 — the Admin is a consumer of the public API, not a privileged one). So this
- * mints a publishable key through `POST /admin/api-keys`, and then calls
+ * **For a Product that is on sale it asks by being a storefront**, which is the shape this
+ * screen has always had and the one to keep: a resolved price is what the **store** surface
+ * answers, behind an API key, and the only way to find out what a storefront gets is to make a
+ * storefront's request (ADR-0010 — the Admin is a consumer of the public API, not a privileged
+ * one). So it mints a publishable key through `POST /admin/api-keys`, and then calls
  * `GET /store/variants/{id}/price` with it, exactly as a storefront's browser would.
+ *
+ * **For a draft or an archived Product there is no storefront to be** (#276). The store surface
+ * answers only published Products — on the price route as well as on the two catalog reads, as
+ * of that ticket — so a request over `/store` for a Product a Merchant has not published yet
+ * comes back `variant-not-found`, which is the correct answer to a question no storefront could
+ * ask. Checking a price *before* putting something on sale is exactly when a Merchant wants to
+ * know it, so the ask moves to `GET /admin/variants/{id}/price`: the same `resolve-price`, the
+ * same Steps, the same body, on the surface a Merchant's session opens. The screen **says which
+ * of the two it did**, because "what a storefront receives" and "what a storefront would receive
+ * if you published this" are two sentences and a Merchant should not have to work out which one
+ * they are reading.
  *
  * That indirection is the point rather than an inconvenience. In this Project the answer is
  * **not** the Price the Merchant entered: `kobai.config.ts` replaces the `select-price` Step
@@ -51,15 +62,26 @@ import { useKobaiClient } from "@/lib/session";
  */
 export function StorefrontPrice({
   variantId,
+  status,
   entered,
 }: {
   readonly variantId: string;
+  /**
+   * The **Product's** status, which decides which surface can answer at all.
+   *
+   * It comes from the record above rather than being read here: the screen has already asked
+   * for the Product, and a second read to find out something it is holding would be a second
+   * answer that could disagree with the badge beside it.
+   */
+  readonly status: ProductStatus;
   /** The newest Price the Merchant entered, if there is one, to compare against. */
   readonly entered: { readonly amount: number; readonly currency: string } | null;
 }) {
   const client = useKobaiClient();
+  const onSale = status === "published";
+
   /**
-   * Asking costs a key, so the Permission this control needs is the one that mints one.
+   * Asking as a storefront costs a key, so that ask's Permission is the one that mints one.
    *
    * `api-key:write` rather than anything about the catalog: the store surface is reached with a
    * credential and the first ask on a browser session with none mints it, so a Role that cannot
@@ -75,13 +97,28 @@ export function StorefrontPrice({
    * control would go available only on the next render that happened for some other reason,
    * which is the flicker `screens/api-keys.tsx` mirrors that value into state to avoid.
    */
-  const unavailable = useUnavailable(
+  const cannotMint = useUnavailable(
     PERMISSIONS.apiKeyWrite,
     "ask what a storefront would receive",
   );
+  /**
+   * And the Permission the *other* ask needs, which is the one that reads the catalog (#276).
+   *
+   * Both hooks are called on every render because that is what a hook is; which of the two
+   * answers is used is the branch below. A Merchant looking at this screen at all holds
+   * `catalog:read`, so this is `null` in practice — it is asked rather than assumed because the
+   * route really is gated on it, and an affordance that guessed would be the one thing
+   * `lib/permissions.ts` says these checks must not do.
+   */
+  const cannotRead = useUnavailable(
+    PERMISSIONS.catalogRead,
+    "ask what a storefront would receive",
+  );
+  const unavailable = onSale ? cannotMint : cannotRead;
 
   const ask = useMutation({
-    mutationFn: (): Promise<ResolvedPrice> => askAsAStorefront(client, variantId),
+    mutationFn: (): Promise<ResolvedPrice> =>
+      onSale ? askAsAStorefront(client, variantId) : askAsAMerchant(client, variantId),
   });
 
   const resolved = ask.data;
@@ -107,8 +144,18 @@ export function StorefrontPrice({
           {resolved ? "Ask again" : "What would a storefront receive?"}
         </ActionButton>
         <span className="text-muted-foreground text-xs">
-          Asked over <code>/store</code>, with a publishable API key — the way a
-          storefront asks.
+          {onSale ? (
+            <>
+              Asked over <code>/store</code>, with a publishable API key — the way a
+              storefront asks.
+            </>
+          ) : (
+            <>
+              This Product is not published, so no storefront can ask at all. Asked over{" "}
+              <code>/admin</code> instead — the same <code>resolve-price</code> Workflow,
+              on a Product a Shopper cannot see.
+            </>
+          )}
         </span>
       </div>
 
@@ -191,7 +238,8 @@ export function StorefrontPrice({
 }
 
 /**
- * Something the store surface, or the mint before it, would not do.
+ * Something kobai would not do — the store surface, the mint before it, or the admin route the
+ * unpublished half asks instead.
  *
  * It extends {@link Refused} rather than `Error` so that the refusal **body travels**, which is
  * the whole reason that class carries one: a screen that has to narrow still can, and
@@ -211,7 +259,29 @@ class PreviewRefused extends Refused {
 /** What to show when no price came back — never `TypeError: Failed to fetch`. */
 function whyNoPrice(thrown: unknown): string {
   if (thrown instanceof PreviewRefused) return thrown.message;
-  return "The store surface could not be reached at all, so no price was resolved.";
+  return "kobai could not be reached at all, so no price was resolved.";
+}
+
+/**
+ * The same question, asked over `/admin`, for a Product no storefront may see (#276).
+ *
+ * No key and no second client: this is the Merchant's own session, on a route that runs the
+ * deployment's `resolve-price` and answers the identical body — which is what makes the number
+ * on screen the one a storefront *would* be told the moment this Product is published. It is
+ * deliberately not a fallback the storefront path drops into on a refusal: the two are asked in
+ * two different situations, and a screen that retried over `/admin` whenever `/store` said no
+ * would quietly paper over a real refusal on a Product that is on sale.
+ */
+async function askAsAMerchant(
+  client: KobaiClient,
+  variantId: string,
+): Promise<ResolvedPrice> {
+  const { data, error } = await client.GET("/admin/variants/{id}/price", {
+    params: { path: { id: variantId } },
+  });
+  if (data) return data;
+
+  throw new PreviewRefused(error, "kobai refused to resolve a price.");
 }
 
 /**

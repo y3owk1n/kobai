@@ -707,12 +707,18 @@ const MERCHANT = {
 };
 
 /**
- * A Product, the one Variant that makes it sellable, and a Price on that Variant.
+ * A Product **on sale**, the one Variant that makes it sellable, and a Price on that Variant.
  *
  * Two of these are arranged and they differ in one field, so this is a helper rather than a
  * second copy of the shape. `fulfilmentStrategy` is spelled out rather than passed as
  * `fulfilment`, because the request body's `fulfilment` is an object and a caller here should
  * be naming a Strategy rather than assembling one.
+ *
+ * **The publish is the third request and it is not decoration** (#276). `POST /admin/products`
+ * creates a **draft** (#252) and this gate never published one, so until #276 it was buying
+ * something no storefront could see — the demonstration of the hole rather than an arrangement.
+ * A gate that arranges what a Merchant would arrange is the whole point of arranging over
+ * HTTP: a Merchant who wants something bought publishes it.
  */
 async function pricedVariant(
   origin: string,
@@ -741,7 +747,7 @@ async function pricedVariant(
     }),
     201,
     `creating the Product ${product.title}`,
-  )) as { variants: { id: string }[] };
+  )) as { id: string; variants: { id: string }[] };
 
   const variantId = created.variants[0]?.id;
   if (variantId === undefined) {
@@ -758,6 +764,17 @@ async function pricedVariant(
     }),
     201,
     `setting a Price on ${product.sku}`,
+  );
+
+  const productId = created.id;
+  await expectStatus(
+    await fetch(`${origin}/admin/products/${productId}`, {
+      method: "PATCH",
+      headers: merchant,
+      body: JSON.stringify({ status: "published" }),
+    }),
+    200,
+    `publishing ${product.title}`,
   );
 
   return variantId;

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import type { ProductStatus } from "@kobai/client";
 import { createTestDatabase, type TestDatabase } from "@kobai/core/testing";
 import axe from "axe-core";
 import {
@@ -218,11 +219,19 @@ export type AdminSeam = {
    * Nothing is priced by default, because most cases are about a list or an address rather
    * than about money. A case that needs a sellable Variant — anything reaching `/store` —
    * names an `amount`, in minor units, the way every price in kobai is written.
+   *
+   * **What it creates is `published`, and that is one extra `PATCH` it makes on your behalf**
+   * (#276), exactly as `seedTestCatalog` does and for the same reason: `POST /admin/products`
+   * creates a **draft**, the store surface answers no draft at all, and a seam that stopped at
+   * the create would arrange a catalog nothing could be bought from — which is what it did,
+   * and what let a browser case buy something no storefront could see. A case whose subject
+   * *is* the status says so and gets the Product left exactly where it asked.
    */
   createProduct(product: {
     title: string;
     sku?: string;
     amount?: number;
+    status?: ProductStatus;
   }): Promise<CreatedProduct>;
   /** Deletes every Product, for a case whose subject is a list with nothing in it. */
   emptyTheCatalog(): Promise<void>;
@@ -378,6 +387,7 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     title,
     sku = `SEAM-${randomSuffix()}`,
     amount,
+    status = "published",
   }) => {
     const created = await api<{
       id: string;
@@ -391,6 +401,12 @@ export async function startAdminSeam(): Promise<AdminSeam> {
     }
     if (amount !== undefined) {
       await api("POST", `/admin/variants/${variantId}/prices`, { amount });
+    }
+    // The create leaves a draft (#252), and a draft is invisible and unbuyable on the store
+    // surface (#276) — so the default is one more request rather than one more thing every
+    // case that reaches `/store` has to remember.
+    if (status !== "draft") {
+      await api("PATCH", `/admin/products/${created.id}`, { status });
     }
 
     return { id: created.id, title: created.title, variantId };

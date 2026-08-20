@@ -367,6 +367,63 @@ store shape**: it is a Merchant's field, so #207's split is what keeps it off a 
 responses, and its absence from both is asserted directly in `store.test.ts` beside `inventory`
 and `prices`.
 
+**Invisible and unbuyable are two facts, and shipping only the first is the bug #276 fixed.**
+The two Product reads above were the whole of it, so a Shopper holding a `variantId` could read
+its price, put it in a Cart and place an Order for a Product no storefront could show. **Every
+store-surface route that reaches a Variant now asks whether a Shopper may see it**, and the
+guard is in **three** places rather than at each of seven routes — which is the answer to where
+such a guard goes, and it is worth reading as a rule rather than as a list:
+
+- **`catalog/store-read.ts` is where `published` is *said*.** `IS_PUBLISHED` guards all three
+  catalog reads, `readStoreVariant` joining `core_product` to ask that one question and to
+  report none of its fields, and `storeVariantExists` is the same question exported for the two
+  callers that need the answer and not the Variant. A second `eq(product.status, …)` written
+  anywhere else would be a second statement of what a Shopper may see.
+- **`cart/write.ts` asks that question and does not answer it.** `addLineItem` refuses the
+  ordinary `variant-not-found`, so adding and reading agree about what exists — a storefront
+  that could add a line it cannot render is the failure. It still selects the Variant and never
+  the Product, which is what the module's own refusal has always said; what changed is that
+  *whether the store surface has such a Variant at all* is now asked of the catalog.
+- **`order/load-cart.ts` is the one place the whole Cart path goes through**, and it already
+  joined `core_product` for the title, so the mid-checkout case costs one column. `place-order`,
+  `POST /store/carts/{id}/reservations` and `POST /store/carts/{id}/quote` all read a Cart
+  through it, and all three therefore refuse **409 `variant-unavailable`**, naming the Variant
+  by SKU.
+- **`resolve-price` is deliberately *not* guarded.** It prices a Variant; it does not decide who
+  may see one. That is what makes the store price route's guard the route's own, and what leaves
+  `GET /admin/variants/{id}/price` able to preview a draft's price through the same declaration.
+
+**A Cart line whose Product left the storefront is refused, not dropped**, and the cost is
+accepted rather than avoided: a Shopper who did nothing wrong meets a dead end at the last step.
+Dropping the line silently changes what is being bought (ADR-0009's snapshot argument read
+forwards), so this is ADR-0059's refuse-rather-than-cascade with a repair the Shopper can carry
+out — remove that Line Item and the rest of the Cart places. **One word for draft and archived
+alike**, because a storefront can act on neither differently and the surface publishes no status.
+
+**Two refusals on this path carry no `workflow`, and that is why `PriceRefusal`'s is optional.**
+The store price route turns a hidden Variant back *before* `resolve-price` runs, so a
+`variant-not-found` there reports no run — exactly as `PlaceOrderRefusal` already answers an
+idempotency refusal. It also means the store surface answers **identically** for a Variant that
+never existed and one a Shopper may not see, which is `product-not-found`'s property one noun
+along: a client that could tell the two apart could enumerate what a Merchant is preparing.
+
+**`GET /admin/variants/{id}/price` is the deliberate way through, and it is not a privileged
+route.** Previewing an unpublished Product's price is the *feature* — it is how a Merchant checks
+what a replaced pricing Step will do before putting something on sale — so closing the store
+surface uniformly would have taken a capability away to fix a hole somewhere else. It sits behind
+**`catalog:read`**, runs the deployment's own `resolve-price` (never a second implementation of
+pricing) and answers `ResolvedPrice`, `workflow.steps` included. ADR-0010 is untouched: the Admin
+still uses only the public API, and what changed is that the public API now answers a question
+the store surface cannot answer honestly. `catalog/a-draft-product-is-not-buyable.test.ts` holds
+the two routes to answering **byte for byte identically** for a Product that is on sale, because
+a preview that could disagree with the storefront is worse than no preview.
+
+**`http/workflow-refusal.ts` is where a refusing run becomes a response**, for both surfaces:
+the body, the `statusMapper` each surface builds its own maps with, and the one map that *is*
+shared — price resolution's, which is the same two words wherever it is asked. The quote's and
+the placement's maps stay in `store.ts`, because those are routes only that surface has and a
+shared table would infer a status union covering routes that can never answer half of it.
+
 **A Product declares its options and a Variant names its value for each, and the pair is the
 whole picker** (#253). `ProductDetail` and `StoreProductDetail` carry the options **in the order
 the Merchant declared them**; `Variant` and `StoreVariant` carry a value for each, in that same
