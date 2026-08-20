@@ -9,9 +9,9 @@ import { GlobeIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { ActionButton } from "@/components/action-button";
+import { ComboboxField } from "@/components/combobox-field";
 import { FormField } from "@/components/form-field";
 import { LinkButton } from "@/components/link-button";
-import { ListboxField } from "@/components/listbox-field";
 import { Pager, usePageCursor } from "@/components/pager";
 import { Problem } from "@/components/problem";
 import {
@@ -236,13 +236,20 @@ function NewRegion() {
             error={form.formState.errors.name}
             {...form.register("name")}
           />
-          <ListboxField
+          {/* The same control the Region screen's currency field is, over the same set and read
+              the same way (#300): a Merchant asked for a currency here and asked for one there is
+              being asked one question, so a named row on one screen and a bare code on the other
+              would be this Admin disagreeing with itself. **Strictly closed**, unlike the Store
+              screen's enable field — what a Region may price in is what kobai has enabled, and
+              `currency-not-enabled` is a real refusal rather than a gap in a browser's list. */}
+          <ComboboxField
             control={form.control}
             name="currency"
             id="new-region-currency"
             label="Currency"
             placeholder="Choose a currency"
             options={currencies.options}
+            empty="This Store does not price in that. The Store screen is where a currency is enabled."
             description={
               currencies.answered && currencies.options.length <= 1
                 ? "This Store prices in one currency. Enable another on the Store screen and it will be offered here."

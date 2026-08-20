@@ -169,7 +169,11 @@ export function ListboxField<T extends FieldValues, Submitted extends FieldValue
  * is the untouched field, and `null` is what Base UI means by "nothing selected"; the two
  * agreed by accident before #239, a value serialising to `""` counting as empty for the
  * placeholder, but only `null` says it.
+ *
+ * **Exported for `components/combobox-field.tsx`**, which is this field for a list too long to
+ * look through and settles the same value against the same Base UI convention (#300). Two copies
+ * of one line is a rule that drifts rather than a duplication worth living with.
  */
-function chosenValue(value: unknown): string | null {
+export function chosenValue(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }

@@ -1,6 +1,7 @@
 import type { EnabledCurrency } from "@kobai/client";
 import { useQuery } from "@tanstack/react-query";
 import type { ListboxOption } from "@/components/listbox-field";
+import { currencyLabel } from "@/lib/currencies";
 import { orThrow } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
@@ -54,15 +55,43 @@ export function useEnabledCurrencies(): EnabledCurrencies {
     queryFn: async () => orThrow(await client.GET("/admin/store")),
   });
 
-  const currencies = query.data?.currencies ?? [];
+  const currencies = query.data?.currencies ?? EMPTY;
 
   return {
     currencies,
-    // The code is the label: a currency has no second name kobai holds, and inventing
-    // `US Dollar` here would be a table of the world in the place this module exists to remove
-    // one from.
-    options: currencies.map((one) => ({ value: one.code, label: one.code })),
+    // **The code carries its name, and this is the one place that is decided** (#300). It used
+    // to be the code alone, on the argument that writing `US Dollar` here would be a table of
+    // the world in the module that exists to remove one — which `lib/currencies.ts` answered:
+    // the name comes from `Intl.DisplayNames`, so it is the browser's and not ours. Every
+    // currency picker in this Admin reads these options, so a label decided here is why none of
+    // them shows a bare code where another shows a named one.
+    options: optionsOf(currencies),
     answered: query.isSuccess,
     isPending: query.isPending,
   };
+}
+
+/** One array for "kobai has not answered", so a caller's memo is not defeated by a fresh `[]`. */
+const EMPTY: readonly EnabledCurrency[] = [];
+
+/**
+ * The same set as `{ value, label }`, cached against the array it was built from.
+ *
+ * TanStack Query hands back the same `data` until it refetches, so keying on that array is what
+ * lets a caller's `useMemo` actually hold — and one caller says so in as many words:
+ * `components/combobox-field.tsx` reads a new list of options as a new answer to what is on
+ * offer. A `map` in the return above rebuilt it on every render and quietly defeated that.
+ */
+const asOptions = new WeakMap<readonly EnabledCurrency[], readonly ListboxOption[]>();
+
+function optionsOf(currencies: readonly EnabledCurrency[]): readonly ListboxOption[] {
+  const held = asOptions.get(currencies);
+  if (held !== undefined) return held;
+
+  const options = currencies.map((one) => ({
+    value: one.code,
+    label: currencyLabel(one.code),
+  }));
+  asOptions.set(currencies, options);
+  return options;
 }

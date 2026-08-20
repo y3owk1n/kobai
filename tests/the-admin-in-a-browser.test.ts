@@ -89,6 +89,70 @@ function where(page: Page): string {
 }
 
 /**
+ * The currency pickers, which are three screens' worth and one question (#300).
+ *
+ * These are at the file's level rather than inside a `describe` because two of them are: the
+ * Store and Region screens' pickers are asserted with the rest of the settings screens, and the
+ * Price editor's with the catalog, and every one of them offers the Store's enabled set under a
+ * name `Intl` gave it.
+ */
+
+/** This Store, straight from kobai — what it prices in, and what it is denominated in. */
+function theStore(): Promise<{
+  defaultCurrency: string;
+  currencies: { code: string }[];
+}> {
+  return seam.api("GET", "/admin/store");
+}
+
+/** What this Store prices in, which is the set every one of those pickers offers. */
+async function enabledCurrencies(): Promise<readonly string[]> {
+  return (await theStore()).currencies.map((one) => one.code);
+}
+
+/**
+ * Enables a currency if this Store has not got it, and answers the set as it now stands.
+ *
+ * **By appending**, because the whole set travels on every write: a body naming only what one
+ * case cares about would disable whatever another had enabled. A case that needs a second
+ * currency to look at arranges it rather than relying on the case that happens to run before it.
+ */
+async function alsoPricingIn(code: string): Promise<readonly string[]> {
+  const already = await enabledCurrencies();
+  if (already.includes(code)) return already;
+
+  await seam.api("PATCH", "/admin/store", {
+    currencies: [...already, code].map((one) => ({ code: one })),
+  });
+  return enabledCurrencies();
+}
+
+/**
+ * The box a Merchant types into, which is **inside** the picker's popup.
+ *
+ * That is Base UI's other arrangement for a combobox and the one this Admin uses, for the reason
+ * `components/combobox-field.tsx` gives at length: with the box outside, everything the popup is
+ * not is `aria-hidden` while it is open — the field's own label included — and the audits in
+ * these cases have been watched failing on exactly that. So the control on the screen is a
+ * trigger, and the search is in the dialog it opens.
+ */
+function currencySearch(page: Page): Locator {
+  return page.getByRole("dialog").getByRole("combobox");
+}
+
+/**
+ * The codes an open currency list is offering, off the head of each row.
+ *
+ * Every row reads `<code> — <what this runtime calls it>`, and the name is the runtime's own
+ * business — it moves with a browser's locale data and with the Merchant's locale. So the code is
+ * what a case asserts on, and that a row *has* a name is asked separately.
+ */
+async function currencyCodesOffered(page: Page): Promise<string[]> {
+  const rows = await page.getByRole("option").allInnerTexts();
+  return rows.map((text) => text.trim().split(" ")[0] ?? "");
+}
+
+/**
  * The rows of whatever list is on screen, which is what a page of one looks like.
  *
  * A header row's cells are `th` and a body row's are `td`, so this is "the rows with data in
@@ -3298,6 +3362,47 @@ describe("the catalog screens", () => {
     await shows(priceTable(page).getByText("1250"), "the Price that was left alone");
   });
 
+  it("offers a Price the Store's currencies, named, beside a default that is not one", async () => {
+    // The third of #300's currency pickers, and the one with something in its list that is not a
+    // currency at all. The other two are asserted with the Store and Region screens; what is
+    // only true here is that `This Store's default` sits at the head of a named list without
+    // being turned into a code — and that typing a code narrows past it, since a Merchant
+    // reaching for `JPY` is not reaching for the default.
+    // A second currency of its own, rather than one the settings cases happen to have enabled
+    // by the time this runs — they are in a `describe` below this one.
+    const enabled = await alsoPricingIn("JPY");
+    const product = await seam.createProduct({
+      title: `A poster to price ${Date.now()}`,
+      amount: 1250,
+    });
+    const page = await openAProduct(product);
+
+    const picker = page.getByRole("combobox", { name: "Currency" });
+    await shows(picker, "the Price editor's currency picker");
+    await picker.click();
+
+    // The Store's enabled set and the one choice that is not in it — which is what a Merchant
+    // says when they mean "whatever this Store prices in" (ADR-0074), so it is a row rather than
+    // an empty field.
+    await expect
+      .poll(async () => (await currencyCodesOffered(page)).sort())
+      .toEqual(["This", ...enabled].sort());
+    await shows(
+      page.getByRole("option", { name: "This Store's default", exact: true }),
+      "the choice that is not a currency, in its own words",
+    );
+    await shows(
+      page.getByRole("option", { name: /^JPY — .+/ }),
+      "an enabled currency, named as the Region screens name it",
+    );
+    await auditAccessibility(page, "the Product screen with the currency list open");
+
+    // Narrowed to the codes, the default filtered out with everything else — it is not a
+    // currency, and `JPY` is not what it is called.
+    await currencySearch(page).fill("JPY");
+    await expect.poll(() => currencyCodesOffered(page)).toEqual(["JPY"]);
+  });
+
   it("supersedes a Price by adding the new one before removing the old, and never edits one", async () => {
     const product = await seam.createProduct({
       title: "A poster whose price was wrong",
@@ -4133,5 +4238,315 @@ describe("Merchants, Roles and the Store", () => {
     );
     await expect(watching.settled()).resolves.toEqual([]);
     await auditAccessibility(page, "the Store screen with an unreadable metadata field");
+  });
+
+  /**
+   * The currency pickers on these screens, which are two of the three (#300).
+   *
+   * **Only a browser can ask either of these.** What a Merchant may enable is
+   * `Intl.supportedValuesOf("currency")` — the running browser's copy of ISO 4217, which no
+   * request-level test has and which is deliberately neither kobai's answer nor a table in this
+   * repository. What a Region may select is the Store's *enabled* set, and that a list on screen
+   * was built from `GET /admin/store` rather than from anything written down is a fact about a
+   * rendered popup. Both are filterable, and typing is not something a scanner sees either. The
+   * third is the Price editor's, asserted with the catalog screens where that form lives, and
+   * the helpers all three share are at this file's level.
+   *
+   * Nothing here is a boundary. `core_store_currency` still takes any three-character code and
+   * every refusal it has is unchanged — `currency-not-enabled` is asserted where it lives, and
+   * the picker is the affordance that stops a Merchant meeting it by typo.
+   */
+
+  /**
+   * A window whose `Intl` is missing something, which is how the two fallbacks are reached.
+   *
+   * **This is the one arrangement in this file that changes the runtime rather than the
+   * deployment**, and it is the only seam that can. Both fallbacks are about a browser older or
+   * poorer than the one the gate drives — `Intl.supportedValuesOf` arrived in 2022, and a
+   * runtime with no display name for a currency answers the bare code — so there is nothing
+   * kobai could answer that would put the Admin in either state, and the branches would
+   * otherwise be code no test can reach. It is not `page.route` inventing an answer kobai did
+   * not give: nothing about the deployment changes, and every request in these cases is real.
+   */
+  async function anIntlWithout(
+    missing: "supportedValuesOf" | "DisplayNames",
+    path: string,
+  ): Promise<Page> {
+    const page = await seam.signedIn(path);
+    await page.addInitScript(`delete Intl.${missing};`);
+    await page.reload();
+    return page;
+  }
+
+  it("enables a currency by typing a code and confirming, out of the browser's ISO 4217", async () => {
+    const page = await seam.signedIn("/settings");
+    const picker = page.getByRole("combobox", { name: "Enable another" });
+    await shows(picker, "the currency picker, in place of the text box #291 shipped");
+    await picker.click();
+
+    // Typed rather than scrolled to, which is the whole reason this is a combobox and not the
+    // `Select` every other picker in this Admin is: ISO 4217 is a list of a few hundred.
+    await currencySearch(page).fill("SGD");
+    const offered = page.getByRole("option");
+    // The code **and** the name this browser has for it, which is `Intl.DisplayNames` and no
+    // table of ours. A runtime with no display name falls back to the bare code, which is why
+    // the code leads.
+    await shows(offered, "the row a Merchant typed their way to");
+    await expect
+      .poll(async () => (await offered.allInnerTexts()).map((text) => text.trim()))
+      .toEqual(["SGD — Singapore Dollar"]);
+    // An overlay is a screen. This one is a `role="dialog"`, which is why the popup needs none
+    // of `ui/select.tsx`'s portal plumbing — and what the audit is really watching here is that
+    // the page behind it is still readable, since the arrangement that hid it also passed
+    // every other assertion in this case.
+    await auditAccessibility(page, "the Store screen with the currency list open");
+
+    // Confirmed from the keyboard — `ArrowDown` to the match, `Enter` to take it — which is the
+    // half of "filterable" a mouse never exercises.
+    await currencySearch(page).press("ArrowDown");
+    await currencySearch(page).press("Enter");
+    await expect
+      .poll(async () => (await picker.innerText()).trim())
+      .toBe("SGD — Singapore Dollar");
+
+    await page.getByRole("button", { name: "Enable currency" }).click();
+
+    // Read back rather than predicted (ADR-0063): what this Store prices in is kobai's answer.
+    await expect
+      .poll(enabledCurrencies, {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The currency chosen from the picker never reached kobai.",
+      })
+      .toContain("SGD");
+    await shows(
+      page.getByRole("button", { name: "Disable SGD" }),
+      "the newly enabled currency's row",
+    );
+
+    // And it is no longer on offer, because enabling it again would send the set the Store
+    // already has — an affordance, exactly like the missing Remove on the default currency's
+    // row, and never a rule: kobai would have accepted it.
+    await picker.click();
+    await currencySearch(page).fill("SGD");
+    await shows(
+      page.getByText("Nothing to enable for that."),
+      "a currency this Store already prices in, no longer offered",
+    );
+  });
+
+  it("enables a code this browser does not list, typed, and sends it upper case", async () => {
+    const page = await seam.signedIn("/settings");
+    // A three-letter code the **running** browser has no row for, asked of the browser rather
+    // than assumed: which codes `Intl` knows differs between a desktop Chromium and the headless
+    // shell the gate drives, so a code hard-coded here would be a case that passes for the wrong
+    // reason on one of them.
+    const unlisted = await page.evaluate(() => {
+      const listed = new Set(Intl.supportedValuesOf("currency"));
+      return ["XBT", "ZWD", "CNH", "TRL"].find((code) => !listed.has(code)) ?? null;
+    });
+    expect(
+      unlisted,
+      "this browser lists every code the case had to choose from, so it cannot test one it does not list",
+    ).not.toBeNull();
+    if (unlisted === null) return;
+
+    const picker = page.getByRole("combobox", { name: "Enable another" });
+    await picker.click();
+    // Typed the way somebody types, which is the other half of what has to survive: `core_store
+    // _currency` stores upper case, and a Merchant typing a code by hand is not thinking about
+    // that.
+    await currencySearch(page).fill(unlisted.toLowerCase());
+
+    // Offered as a row of its own and named for what it is, because every other row in this list
+    // is a currency the browser vouched for and this one is not.
+    const invented = page.getByRole("option", {
+      name: `${unlisted} — not one this browser lists`,
+    });
+    await shows(invented, "the code this browser does not list, offered anyway");
+    await auditAccessibility(
+      page,
+      "the Store screen offering a code the browser has no row for",
+    );
+
+    await invented.click();
+    await page.getByRole("button", { name: "Enable currency" }).click();
+
+    // The whole point of the escape hatch: this screen is the only way a Merchant reaches a
+    // route that takes any three characters, so a gap in this browser's `Intl` must not become
+    // a gap in kobai. Upper case, because that is how kobai stores one.
+    await expect
+      .poll(enabledCurrencies, {
+        timeout: LOCATOR_TIMEOUT,
+        message: "A code the browser does not list never reached kobai.",
+      })
+      .toContain(unlisted);
+  });
+
+  it("gives a browser that lists no currencies the text box it had", async () => {
+    const page = await anIntlWithout("supportedValuesOf", "/settings");
+
+    // No picker at all, and the field a Merchant had before #300 in its place — an empty menu
+    // would leave a deployment unable to enable anything, on a route that would have taken it.
+    const box = page.getByLabel("Enable another");
+    await shows(box, "the text box a runtime with no ISO 4217 list falls back to");
+    await expect(box.getAttribute("role")).resolves.toBeNull();
+    await shows(
+      page.getByText("This browser does not list them"),
+      "what this Merchant is told about the box",
+    );
+    await auditAccessibility(page, "the Store screen on a browser with no currency list");
+
+    await box.fill("bhd");
+    await page.getByRole("button", { name: "Enable currency" }).click();
+
+    await expect
+      .poll(enabledCurrencies, {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The typed code never reached kobai from the fallback box.",
+      })
+      .toContain("BHD");
+  });
+
+  it("labels a currency it has no name for with the bare code", async () => {
+    const page = await anIntlWithout("DisplayNames", "/settings");
+    // A code this browser lists and this Store has **not** enabled, since an enabled one is
+    // deliberately kept off the list — and which those are depends on the cases above, the
+    // deployment being shared.
+    const enabled = await enabledCurrencies();
+    const listed = await page.evaluate(
+      (already: readonly string[]) =>
+        Intl.supportedValuesOf("currency").find((code) => !already.includes(code)) ??
+        null,
+      enabled,
+    );
+    expect(
+      listed,
+      "this Store already prices in every currency the browser lists",
+    ).not.toBeNull();
+    if (listed === null) return;
+
+    await page.getByRole("combobox", { name: "Enable another" }).click();
+    await currencySearch(page).fill(listed);
+
+    // The ticket's own line: a row reading `undefined` is worse than a menu of unlabelled codes,
+    // and `Intl.DisplayNames` is a thing a runtime may not have. Asserted whole rather than by
+    // containment, because `SGD — undefined` carries the code too.
+    await expect
+      .poll(async () =>
+        (await page.getByRole("option").allInnerTexts()).map((text) => text.trim()),
+      )
+      .toEqual([listed]);
+    await auditAccessibility(
+      page,
+      "the Store screen with no display names to label rows with",
+    );
+  });
+
+  it("offers a Region the currencies this Store has enabled, and nothing else", async () => {
+    const store = await theStore();
+    const enabled = await alsoPricingIn("JPY");
+    const region = await seam.api<{ id: string }>("POST", "/admin/regions", {
+      name: `Somewhere with a currency ${Date.now()}`,
+      currency: store.defaultCurrency,
+    });
+
+    const page = await seam.signedIn(`/regions/${region.id}`);
+    const picker = page.getByRole("combobox", { name: "Currency" });
+    await shows(picker, "the Region's currency picker");
+    await picker.click();
+
+    // The whole assertion, and the one nothing else in this repository can make: this list is
+    // what `GET /admin/store` answered, rather than the world's currencies — which is what the
+    // *other* picker offers, on the screen next door. Read off the code each row leads with,
+    // because the rest of the row is the name this browser has for it.
+    await expect
+      .poll(async () => (await currencyCodesOffered(page)).sort())
+      .toEqual([...enabled].sort());
+    // And **named**, which is the half that makes all three of these screens read alike: a bare
+    // code here beside `SGD — Singapore Dollar` on the Store screen would be this Admin
+    // disagreeing with itself about the same currency. The name itself is the runtime's, so this
+    // asks that there is one rather than what it says.
+    await shows(
+      page.getByRole("option", { name: /^JPY — .+/ }),
+      "an enabled currency, named the way the Store screen names it",
+    );
+    await auditAccessibility(page, "the Region screen with the currency list open");
+
+    // A code this Store has not enabled is not reachable by typing either, and the popup says
+    // where one is enabled rather than going blank. `currency-not-enabled` is still Core's, and
+    // is still what answers anything that gets past this.
+    await currencySearch(page).fill("CHF");
+    await shows(
+      page.getByText("This Store does not price in that."),
+      "what a currency this Store has not enabled is answered with",
+    );
+
+    // Typed and confirmed from the keyboard, like the Store screen's — the two controls differ
+    // in what they offer and in nothing about how a Merchant reaches it.
+    await currencySearch(page).fill("JPY");
+    await currencySearch(page).press("ArrowDown");
+    await currencySearch(page).press("Enter");
+    await expect.poll(async () => (await picker.innerText()).trim()).toMatch(/^JPY\b/);
+    await page.getByRole("button", { name: "Save Region" }).click();
+
+    // Read back off kobai, which is what says the picker feeds the form it is in rather than
+    // merely rendering beside it.
+    await expect
+      .poll(() => seam.api<{ currency: string }>("GET", `/admin/regions/${region.id}`), {
+        timeout: LOCATOR_TIMEOUT,
+        message: "The Region never settled on the currency that was chosen.",
+      })
+      .toMatchObject({ currency: "JPY" });
+  });
+
+  it("asks for a new Region's currency the way the Region screen does", async () => {
+    // The same question two screens apart, which is why this case exists at all: a Merchant
+    // naming a currency on the create form and a Merchant changing one on the Region screen are
+    // choosing from one set, and #300 is about them reading alike rather than about either.
+    const enabled = await enabledCurrencies();
+    const page = await seam.signedIn("/regions");
+    const form = page.locator("form").filter({ hasText: "Create Region" });
+
+    const picker = form.getByRole("combobox", { name: "Currency" });
+    await shows(picker, "the New Region form's currency picker");
+    await picker.click();
+
+    await expect
+      .poll(async () => (await currencyCodesOffered(page)).sort())
+      .toEqual([...enabled].sort());
+    await shows(
+      page.getByRole("option", { name: /^JPY — .+/ }),
+      "the same named row the Region screen offers",
+    );
+    await auditAccessibility(page, "the Regions screen with the currency list open");
+
+    // Filterable by the **name** as well as the code, which is what one source for both halves
+    // of a label buys: the codes come from kobai and the names from `Intl`, and a Merchant who
+    // knows one or the other finds the row either way.
+    await currencySearch(page).fill("yen");
+    await expect.poll(() => currencyCodesOffered(page)).toEqual(["JPY"]);
+    await currencySearch(page).press("ArrowDown");
+    await currencySearch(page).press("Enter");
+
+    const named = `Somewhere created in a browser ${Date.now()}`;
+    await form.getByLabel("Name").fill(named);
+    await form.getByRole("button", { name: "Create Region" }).click();
+
+    // Read back off the list kobai answered, like every other create on this frame (ADR-0063).
+    await shows(
+      page.getByRole("row").filter({ hasText: named }),
+      "the Region this case created, in the list",
+    );
+    await expect
+      .poll(
+        async () =>
+          (
+            await seam.api<{ regions: { name: string; currency: string }[] }>(
+              "GET",
+              "/admin/regions?limit=100",
+            )
+          ).regions.find((one) => one.name === named)?.currency,
+      )
+      .toBe("JPY");
   });
 });
