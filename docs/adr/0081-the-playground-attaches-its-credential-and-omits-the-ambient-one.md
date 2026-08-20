@@ -109,6 +109,22 @@ control, and it lands with the sending. **What the sending ticket has to decide,
 does not**, is whether an operation with no send control is worth leaving in the list or should
 disappear from it — this paragraph is the place to record that answer.
 
+**Answered by [#269](https://github.com/y3owk1n/kobai/issues/269): they stay in the list, and
+each says at the line why it cannot be sent.** Two things settled it. The Admin's standing rule
+is that **a section is hidden and an action is shown**
+([ADR-0063](./0063-the-admins-frame-is-conventional-because-a-developer-inherits-it.md)) — a
+screen that 403s on load teaches nothing, while a control that is missing leaves a Merchant no
+way to learn the thing exists — and an operation that silently lacked a send button is the
+second of those, with the added insult that the *rest* of the screen still reads perfectly.
+Removing them would also cost the browsing half its whole value for these two: what
+`POST /admin/session` takes and what it refuses with is one of the first things a storefront
+Developer needs, and it is documented nowhere else a browser can reach. So the panel renders
+them in full — parameters, body, answers, refusals — and where the send control would have been
+it says what sending would do: *signing you out of the tab you are standing in*, or *making the
+Admin behind this screen whoever the body named*. **A sentence at the empty place is what makes
+this an explanation rather than an omission**, and it teaches the whole decision rather than
+hiding it.
+
 **Everything else is offered, including what the selected credential cannot do.** The Admin's
 standing rule is that nothing predicts a refusal — there is no `canDelete` prop
 ([ADR-0059](./0059-catalog-deletion-refuses-rather-than-cascading-or-releasing.md)) — and hiding

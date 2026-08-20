@@ -476,3 +476,64 @@ function groupPrefixOf(path: string): string {
   if (resource === undefined || resource.startsWith("{")) return `/${surface}`;
   return `/${surface}/${resource}`;
 }
+
+/**
+ * A body shaped the way the request schema says it should be, for the field to start from.
+ *
+ * **A starting point and never a validation** (ADR-0081). Nothing checks what a Developer then
+ * types, and a body the schema would refuse is exactly what somebody comes here to send: the
+ * refusal is the documentation, made by the authority that owns the rule.
+ *
+ * Two decisions about what it puts in the box:
+ *
+ * - **The required fields and only those.** An optional field seeded with a placeholder is a
+ *   value a Developer did not choose to send, and several routes in kobai *replace* rather than
+ *   merge what they are given (ADR-0062) — so a seeded `metadata: {}` would quietly empty a bag
+ *   nobody meant to touch. A body whose fields are all optional therefore seeds as `{}`, which
+ *   is a real request and the shortest true answer.
+ * - **Nothing is invented.** A string starts empty, a number at zero, a list as a list — and
+ *   where the schema closes itself to a set of words, the **first** of them, because that is a
+ *   value kobai named rather than one this Admin made up.
+ *
+ * It stops on a component already expanded on the way down, which is what terminates a
+ * recursive document, with {@link DEEPEST_FOLD} as the backstop behind that — the same pair
+ * every reader in this module uses.
+ */
+export function seedBody(document: OpenApiDescription, schema: unknown): string {
+  return `${JSON.stringify(sampleOf(document, schema, []), null, 2)}\n`;
+}
+
+/** One value shaped like its schema, as far down as the schema goes. */
+function sampleOf(
+  document: OpenApiDescription,
+  schema: unknown,
+  seen: readonly string[],
+): unknown {
+  if (seen.length >= DEEPEST_FOLD) return null;
+
+  const flat = flattenSchema(document, schema);
+  // An alternative is a shape kobai really sends, so the first of them is a real answer; making
+  // one up out of all of them would be a shape it never sends.
+  const chosen =
+    flat.alternatives.length > 0 ? flattenSchema(document, flat.alternatives[0]) : flat;
+  if (chosen.name !== undefined && seen.includes(chosen.name)) return null;
+
+  const values = enumOf(chosen.schema);
+  if (values.length > 0) return values[0];
+
+  const types = typesOf(chosen.schema);
+  if (types.includes("array")) return [];
+  if (types.includes("string")) return "";
+  if (types.includes("integer") || types.includes("number")) return 0;
+  if (types.includes("boolean")) return false;
+
+  const deeper = chosen.name === undefined ? seen : [...seen, chosen.name];
+  const fields = propertiesOf(chosen.schema).filter((field) => field.required);
+  if (fields.length > 0 || types.includes("object")) {
+    return Object.fromEntries(
+      fields.map((field) => [field.name, sampleOf(document, field.schema, deeper)]),
+    );
+  }
+
+  return null;
+}

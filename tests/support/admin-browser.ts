@@ -712,6 +712,38 @@ export async function refocusTheWindow(page: Page): Promise<void> {
   });
 }
 
+/** The two stores a page can write to, declared for `document`'s reason. */
+declare const sessionStorage: WebStorage;
+declare const localStorage: WebStorage;
+type WebStorage = {
+  readonly length: number;
+  key(index: number): string | null;
+  getItem(key: string): string | null;
+};
+
+/**
+ * Everything this browser has written down, as one string a case can search.
+ *
+ * For the cases whose subject is that a value was **not** stored — the Playground's pasted
+ * secret key, which ADR-0081 holds in memory only. An assertion that some named key is absent
+ * would pass just as well against a screen that wrote it under a different name, so what is
+ * asked here is the whole of both stores rather than a key of them.
+ *
+ * Both, because they are two different promises: `localStorage` outlives the browser session
+ * and `sessionStorage` outlives a reload, and a secret must survive neither.
+ */
+export async function storedInTheBrowser(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const everything = (store: WebStorage) =>
+      Array.from({ length: store.length }, (_, index) => {
+        const key = store.key(index);
+        return key === null ? "" : `${key}=${store.getItem(key) ?? ""}`;
+      }).join("\n");
+
+    return `${everything(sessionStorage)}\n${everything(localStorage)}`;
+  });
+}
+
 /**
  * The classes on `<html>`, which is where the Admin's theme lives.
  *
