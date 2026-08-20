@@ -63,25 +63,28 @@ import {
  *
  * That is worth saying plainly, because it is also the way the ban could be got round: the sweep
  * reads this file's **text** below the marker, so anything a helper declared above it does is
- * invisible to it. Two helpers are called from below — `aStoreThatTakesBankRedirects`, which
- * stocks the Store, and `theHoldLapses`, which is the clock — and neither may grow into a
+ * invisible to it. Three helpers are called from below — `aStoreWithSomethingToSell` and
+ * `aStoreThatTakesBankRedirects`, which stock the Store, and `theHoldLapses`, which is the
+ * clock — and none may grow into a
  * storefront doing something a storefront could not. **Arranging and acting are the line**: if a
  * helper up here starts doing what the Shopper is supposed to be doing, move it down and let the
  * sweep judge it.
  *
  * The sentence being walked, from ADR-0069, with what passes today in **bold**:
  *
- * > A Shopper **browses** a Collection, **opens a product page** and picks an option, **adds it
- * > to a Cart**, **has the stock held**, **pays through a bank redirect**, and **the Order exists
- * > once the bank has answered — whether or not the Shopper came back to the tab**. The Merchant
- * > dispatches it, and **the Shopper reads it back** dispatched. And the same purchase completes
- * > through the hosted Checkout as through a Developer's own.
+ * > A Shopper **browses a Collection**, **opens a product page** and **picks an option**, **adds
+ * > it to a Cart**, **has the stock held**, **pays through a bank redirect**, and **the Order
+ * > exists once the bank has answered — whether or not the Shopper came back to the tab**. The
+ * > Merchant dispatches it, and **the Shopper reads it back** dispatched. And the same purchase
+ * > completes through the hosted Checkout as through a Developer's own.
  *
- * So the journey walks as far as today's surface allows: browse, open a product page, read a
- * Variant on its own, ask what it costs, fill a Cart and change its mind twice, sign in, hold the
- * stock, place the Order, read it back — and then walks the purchase a second way, through a
- * bank, three times over: the Shopper who comes back, the Shopper who never does, and the hold
- * that lapsed while they were away. The last two are what ADR-0069 says this instrument is
+ * So the journey walks as far as today's surface allows: browse the catalog, follow one of the
+ * Collections a Product reports, open the product page at the handle that Collection listed,
+ * choose a value for every option the Product declares and resolve that combination to a SKU,
+ * read that Variant on its own, ask what it costs, fill a Cart and change its mind twice, sign
+ * in, hold the stock, place the Order, read it back — and then walks the purchase a second way,
+ * through a bank, three times over: the Shopper who comes back, the Shopper who never does, and
+ * the hold that lapsed while they were away. The last two are what ADR-0069 says this instrument is
  * *better* than a browser for: "the callback arrives and the return never does" is two calls and
  * one that is never made. It walks **every** operation `/store` serves, and that is derived
  * from the description rather than believed — a route added here without a clause in the
@@ -99,12 +102,25 @@ const BASE_URL = "http://kobai.test";
 const DESCRIPTION = new URL("../packages/core/openapi.json", import.meta.url);
 
 /**
- * A Store with two Products in it, and the two keys a storefront actually holds.
+ * A Store a Merchant has actually stocked, and the two keys a storefront actually holds.
  *
  * **Two keys, because that is the real pattern** (ADR-0055). The browser gets a publishable
  * one — it is shipped to a page, so it may browse and build a Cart and may not place an Order
  * or read one back — and the server gets a secret one for the purchase leg. A journey that ran
  * on one key would be a journey no storefront could copy.
+ *
+ * **Four Products, and every one of them is here to stop an assertion below passing for the
+ * wrong reason.** A poster, grouped into a Collection, declaring two options and carrying three
+ * Variants across them; a mug, in no Collection, so browsing one is a narrowing rather than a
+ * list of everything; and two Products the Merchant has **not** published — a draft and an
+ * archived one, both put *into* the Collection, so their absence from it is the store surface's
+ * filter working rather than the Merchant having forgotten to group them.
+ *
+ * **The grid is deliberately incomplete and deliberately ambiguous one option at a time.** The
+ * Store sells A2 in Matte, A2 in Glossy and A3 in Matte, and no A3 in Glossy. So a resolution
+ * that matched a single value would have two Variants to choose between and could take either,
+ * and a combination nobody made is simply absent — which is what the whole payload travelling to
+ * the page is for.
  *
  * Everything here is arrangement: it seeds through the public admin API, exactly as a Merchant
  * would, and hands back only what a storefront could have been told out of band — a key, and
@@ -116,29 +132,77 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
 }> {
   const posters = await seedTestCatalog(kobai, {
     title: THE_PRODUCT,
-    variants: [
-      { sku: THE_SKU, prices: [THE_PRICE] },
-      { sku: THE_OTHER_SKU, prices: [900] },
-    ],
+    variants: THE_GRID.map(({ sku, price }) => ({ sku, prices: [price] })),
   });
+  const json = { ...posters.merchant.headers, "content-type": "application/json" };
 
   // A second Product, so browsing is a choice rather than a list of one — and so that opening
-  // the right product page is something the journey has to actually do.
+  // the right product page is something the journey has to actually do. In no Collection, so
+  // that browsing one below narrows the catalog rather than answering all of it again.
   await seedTestCatalog(kobai, {
     merchant: posters.merchant,
     title: "A mug",
     variants: [{ sku: "MUG", prices: [600] }],
   });
 
-  // The copy a Project attaches through ADR-0004's escape hatch, which until catalog breadth
-  // lands is the only place a description or an image can live — so it is what a product page
-  // is built out of, and the journey reads it back.
+  // What the Merchant groups the posters under. A storefront's navigation is built out of the
+  // Collections the Products it read report, so nothing on the store surface enumerates these
+  // and the journey never asks it to.
+  const grouped = await kobai.request("/admin/collections", {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ title: THE_COLLECTION }),
+  });
+  expect(grouped.status, "making the Collection").toBe(201);
+  const collection = (await grouped.json()) as { readonly id: string };
+
+  // Two Products a Shopper must never meet, **in that same Collection**: one still being
+  // written and one taken off sale. Their handles are named rather than proposed, because the
+  // journey then asks for each by the address a Merchant might have shared.
+  for (const unpublished of THE_UNPUBLISHED) {
+    const prepared = await seedTestCatalog(kobai, {
+      merchant: posters.merchant,
+      title: unpublished.title,
+      status: unpublished.status,
+      variants: [{ sku: unpublished.sku, prices: [700] }],
+    });
+    const hidden = await kobai.request(`/admin/products/${prepared.productId}`, {
+      method: "PATCH",
+      headers: json,
+      body: JSON.stringify({
+        handle: unpublished.handle,
+        collections: [{ id: collection.id }],
+      }),
+    });
+    expect(hidden.status, `grouping ${unpublished.title}`).toBe(200);
+  }
+
+  // What a product page is made of: the copy a Merchant wrote, the bag a Project attaches its
+  // own through (ADR-0004), the options this Product is chosen by in the order a picker should
+  // offer them, and the Collection it belongs to. One `PATCH`, exactly as the Admin sends it.
   const described = await kobai.request(`/admin/products/${posters.productId}`, {
     method: "PATCH",
-    headers: { ...posters.merchant.headers, "content-type": "application/json" },
-    body: JSON.stringify({ metadata: { blurb: BLURB } }),
+    headers: json,
+    body: JSON.stringify({
+      description: THE_DESCRIPTION,
+      metadata: { blurb: BLURB },
+      options: [{ name: THE_SIZE }, { name: THE_FINISH }],
+      collections: [{ id: collection.id }],
+    }),
   });
   expect(described.status, "describing the poster").toBe(200);
+
+  // And what each Variant *is*, for each of those options. Declaring an option leaves every
+  // Variant already on the Product unanswered, so this is the second half of the same edit and
+  // the route refuses a Variant that answers anything but the whole declared set.
+  for (const { sku, options } of THE_GRID) {
+    const answers = await kobai.request(`/admin/variants/${posters.variant(sku).id}`, {
+      method: "PATCH",
+      headers: json,
+      body: JSON.stringify({ options }),
+    });
+    expect(answers.status, `giving ${sku} its options`).toBe(200);
+  }
 
   // Counted, because the journey holds this stock before it buys it and a Variant nobody has
   // counted holds nothing at all (ADR-0014). A Merchant counting a shelf is arrangement like
@@ -147,7 +211,7 @@ async function aStoreWithSomethingToSell(kobai: TestKobai): Promise<{
     `/admin/variants/${posters.variant(THE_SKU).id}/inventory`,
     {
       method: "PUT",
-      headers: { ...posters.merchant.headers, "content-type": "application/json" },
+      headers: json,
       body: JSON.stringify({ onHand: ON_THE_SHELF }),
     },
   );
@@ -308,6 +372,30 @@ const THE_PRODUCT = "A poster";
 const THE_SKU = "POSTER-A2";
 /** The other size, which the Shopper below adds to the Cart and then thinks better of. */
 const THE_OTHER_SKU = "POSTER-A3";
+/** The same size in the other finish — the Variant a half-matched combination would reach. */
+const THE_GLOSSY_SKU = "POSTER-A2-GLOSSY";
+
+/** What the Merchant groups the posters under, and the only Collection this Store has. */
+const THE_COLLECTION = "Wall art";
+/** Copy a Merchant wrote for a Shopper to read — `description`, its own column since #250. */
+const THE_DESCRIPTION = "A2 or A3, matte or glossy, printed to order.";
+
+/**
+ * The two options this Product is chosen by, and the four values they offer between them.
+ *
+ * Two rather than one, because with a single option "resolve the combination" and "find the
+ * first Variant that mentions the value" are the same code and the journey could not tell them
+ * apart. With two, neither value decides on its own.
+ */
+const THE_SIZE = "Size";
+const THE_FINISH = "Finish";
+
+/** What the Shopper picks, and what they would have picked instead. */
+const A2 = "A2";
+const A3 = "A3";
+const MATTE = "Matte";
+const GLOSSY = "Glossy";
+
 /**
  * Minor units — 12.50 of whatever the Store prices in, and the amount the first Order below has
  * to come to twice over. It is what a Merchant entered rather than what a Shopper is charged: the
@@ -315,6 +403,85 @@ const THE_OTHER_SKU = "POSTER-A3";
  * (`WHAT_THIS_PROJECT_CHARGES`).
  */
 const THE_PRICE = 1250;
+
+/**
+ * One value a Variant carries for one option, and the same shape a Shopper picks in.
+ *
+ * The two really are one thing — a Merchant's `Size` is `A2` and a Shopper's `Size` is `A2` —
+ * which is what makes resolving a combination a comparison rather than a translation, and is
+ * why `StoreVariantOptionValue` is the shape the page publishes.
+ */
+type APick = {
+  readonly name: string;
+  readonly value: string;
+};
+
+/**
+ * The Merchant's grid: every Variant, what it costs, and what it is for each option.
+ *
+ * **A2 in Glossy and A3 in Matte are why this is a grid rather than a list.** Each shares
+ * exactly one value with the combination the Shopper picks below, so a resolution matching one
+ * option would have two candidates and could answer either — and A3 in Glossy is deliberately
+ * missing, which is a combination being *unavailable* rather than an error (story 21).
+ *
+ * Only `THE_PRICE` is asserted on below; the other two amounts are simply different, so that a
+ * Cart holding the wrong Variant would come to the wrong money.
+ */
+const THE_GRID: readonly {
+  readonly sku: string;
+  readonly price: number;
+  readonly options: readonly APick[];
+}[] = [
+  {
+    sku: THE_SKU,
+    price: THE_PRICE,
+    options: [
+      { name: THE_SIZE, value: A2 },
+      { name: THE_FINISH, value: MATTE },
+    ],
+  },
+  {
+    sku: THE_OTHER_SKU,
+    price: 900,
+    options: [
+      { name: THE_SIZE, value: A3 },
+      { name: THE_FINISH, value: MATTE },
+    ],
+  },
+  {
+    sku: THE_GLOSSY_SKU,
+    price: 1500,
+    options: [
+      { name: THE_SIZE, value: A2 },
+      { name: THE_FINISH, value: GLOSSY },
+    ],
+  },
+];
+
+/**
+ * What the Shopper chooses on the page: a value for **every** option the Product declares.
+ *
+ * A combination answering fewer would be a Shopper who had not finished choosing — so the journey
+ * holds this list against the options the *page* reported, names and order both, rather than
+ * against the two constants above, which would only be agreeing with itself.
+ */
+const THE_COMBINATION: readonly APick[] = [
+  { name: THE_SIZE, value: A2 },
+  { name: THE_FINISH, value: MATTE },
+];
+
+/**
+ * The two Products a Shopper must never meet, and the addresses a Merchant might have shared.
+ *
+ * Both are put into `THE_COLLECTION` on purpose. A draft that was in no Collection would be
+ * missing from the browse below whatever the store surface did about `status`, so the assertion
+ * would pass against a route with no filter at all.
+ */
+const THE_UNPUBLISHED = [
+  { title: "A preview", handle: "a-preview", sku: "PREVIEW", status: "draft" },
+  { title: "Last year's", handle: "last-years", sku: "LAST-YEARS", status: "archived" },
+] as const;
+
 const BLURB = "Printed on heavy stock.";
 const HOW_MANY = 2;
 /** What the Store has of it — more than the Shopper takes, so what is held is visible. */
@@ -491,8 +658,69 @@ describe("the Shopper's half of this file reaches only the store surface", () =>
 
 // ---- The Shopper's session begins here -----------------------------------------------------
 
+/**
+ * One Variant, as far as choosing between them cares — the storefront's half of the pair.
+ *
+ * Structural rather than the client's own generated type, and the generic below is why: it keeps
+ * the *caller's* Variant type, so the Variant this resolves to is still the page's own — carrying
+ * its `id`, which the Cart is then filled from. What holds it to the published surface is the
+ * call site rather than this declaration: a page whose Variants stopped carrying `options`, or
+ * carried them under another name, would no longer satisfy it and `devbox run typecheck` would
+ * say so.
+ */
+type APickableVariant = {
+  readonly sku: string;
+  readonly options: readonly APick[];
+};
+
+/**
+ * The Variant a chosen combination resolves to, worked out **on the page** — the whole point.
+ *
+ * There is deliberately no route that takes a combination and answers a Variant (#253): the
+ * product page already carries the options in the Merchant's order and every Variant's value for
+ * each, so a storefront maps one to the other itself and gets the answer without a request. A
+ * combination no Variant answers is `undefined` rather than a refusal, which is a size being
+ * *unavailable* rather than an error.
+ *
+ * `every` over the picks rather than `some`, and that is the difference between a combination and
+ * a filter: `some` would answer any Variant that merely mentions one of the picked values, which
+ * on the grid below is two of them. It is exact rather than merely sufficient because of what
+ * sits on both sides of it — the caller answers every option the Product declares, and the routes
+ * a Merchant writes a Variant with refuse one answering anything but that same set — so a Variant
+ * matching every pick has no further value left to differ by.
+ */
+function variantAnswering<Variant extends APickableVariant>(
+  variants: readonly Variant[],
+  combination: readonly APick[],
+): Variant | undefined {
+  return variants.find((one) =>
+    combination.every((pick) =>
+      one.options.some((held) => held.name === pick.name && held.value === pick.value),
+    ),
+  );
+}
+
+/** The Shopper's combination with one value changed — what clicking one swatch does. */
+function insteadPicking(name: string, value: string): readonly APick[] {
+  return THE_COMBINATION.map((pick) => (pick.name === name ? { name, value } : pick));
+}
+
+/** Every value one option offers, drawn out of the Variants — what a picker is drawn from. */
+function valuesOffered(
+  variants: readonly APickableVariant[],
+  name: string,
+): readonly string[] {
+  return [
+    ...new Set(
+      variants.flatMap((one) =>
+        one.options.filter((held) => held.name === name).map((held) => held.value),
+      ),
+    ),
+  ];
+}
+
 describe("a Shopper buys something", () => {
-  it("browses, opens a product page, builds a Cart and places an Order", async () => {
+  it("browses a Collection, picks an option, builds a Cart and places an Order", async () => {
     await using kobai = await createTestKobai();
     const { browser, server } = await aStoreWithSomethingToSell(kobai);
 
@@ -510,22 +738,101 @@ describe("a Shopper buys something", () => {
     const listed = catalog.products.find((one) => one.title === THE_PRODUCT);
     expect(listed, `the Store lists no ${THE_PRODUCT}`).toBeDefined();
 
-    // The product page: one request, and everything on it — **fetched by the handle the list
-    // reported**, which is story 23 and the whole reason a Product has one. A storefront's own
-    // route is `/products/blue-poster`, so the identifier it holds at this point is the address
-    // in its URL rather than a UUID it would have had to carry separately.
+    // **Where a storefront's navigation comes from.** Nothing on the store surface enumerates
+    // Collections, deliberately (#256) — so the link to one is built out of the Collections the
+    // Products already on the page report, and this is the identifier that link carries.
+    const wallArt = listed?.collections.find((one) => one.title === THE_COLLECTION);
+    expect(wallArt, `${THE_PRODUCT} is in no ${THE_COLLECTION}`).toBeDefined();
+
+    // **Browsing the Collection** — this spec's clause, and a Shopper who holds nothing but that
+    // identifier. The Collection has three Products in it and a Shopper may see one: the mug is
+    // in no Collection at all, and the draft and the archived Product are in *this* one, which
+    // is what makes their absence the store surface's own filter rather than an arrangement
+    // that never grouped them (#252). A Shopper offered something they cannot buy is the whole
+    // failure that filter exists to prevent.
+    const browsed = answered(
+      await browser.GET("/store/products", {
+        params: { query: { collection: wallArt?.id ?? "" } },
+      }),
+      "browsing the Collection",
+    );
+    expect(browsed.products).toEqual([listed]);
+
+    // Nor by their address, which is the other half of invisible: a Merchant who shared a
+    // preview link shared a `product-not-found` — the refusal an unknown handle gets, rather
+    // than one that would confirm the handle is taken.
+    for (const { handle } of THE_UNPUBLISHED) {
+      const { error } = await browser.GET("/store/products/{idOrHandle}", {
+        params: { path: { idOrHandle: handle } },
+      });
+      expect(error && "reason" in error ? error.reason : undefined, handle).toBe(
+        "product-not-found",
+      );
+    }
+
+    // The product page: one request, and everything on it — **fetched by the handle the
+    // Collection reported**, which is story 23 and the whole reason a Product has one. A
+    // storefront's own route is `/products/blue-poster`, so the identifier it holds at this
+    // point is the address in its URL rather than a UUID it would have had to carry separately.
+    const inTheCollection = browsed.products.find((one) => one.title === THE_PRODUCT);
     const page = answered(
       await browser.GET("/store/products/{idOrHandle}", {
-        params: { path: { idOrHandle: listed?.handle ?? "" } },
+        params: { path: { idOrHandle: inTheCollection?.handle ?? "" } },
       }),
       "opening the product page",
     );
     expect(page.title).toBe(THE_PRODUCT);
-    // The copy a Project attached. Until catalog breadth lands this bag is the only place a
-    // description can live, so a product page that could not read it would not be one.
+    // What the Merchant wrote for a Shopper to read, in its own column since catalog breadth…
+    expect(page.description).toBe(THE_DESCRIPTION);
+    // …and the bag a Project attaches its own copy through, which is ADR-0004's escape hatch
+    // and is still the only place anything kobai has no column for can live.
     expect(page.metadata).toEqual({ blurb: BLURB });
-    const chosen = page.variants.find((one) => one.sku === THE_SKU);
-    expect(chosen, `${THE_PRODUCT} offers no ${THE_SKU}`).toBeDefined();
+    // And the Collection again, from the detail as well as from the list — a product page draws
+    // breadcrumbs, and it would be a second request if this did not travel with the Product.
+    expect(page.collections).toEqual(listed?.collections);
+
+    // **Picking.** The Shopper answers every option the page declared and nothing it did not, in
+    // the order the Merchant put them in, which is the order a picker should offer them — a
+    // combination naming fewer would be somebody who had not finished choosing. Asked of the
+    // page rather than of the two constants, which would only be the file agreeing with itself.
+    expect(THE_COMBINATION.map((pick) => pick.name)).toEqual(
+      page.options.map((one) => one.name),
+    );
+    // What they picked is on the page, and it was a choice. Both values are drawn out of the
+    // Variants — there is no route that lists an option's values and there does not need to be —
+    // so a value the Merchant renamed stops being offered here, and an option with one value
+    // would make the pick a formality rather than a pick.
+    for (const pick of THE_COMBINATION) {
+      const offered = valuesOffered(page.variants, pick.name);
+      expect(offered, `nothing offers a ${pick.name} of ${pick.value}`).toContain(
+        pick.value,
+      );
+      expect(offered.length, `${pick.name} is not a choice`).toBeGreaterThan(1);
+    }
+
+    // The SKU, resolved from the payload alone. This is the composition the whole clause is
+    // about: a Shopper who arrived holding a Collection's identifier now holds a Variant's.
+    const chosen = variantAnswering(page.variants, THE_COMBINATION);
+    expect(chosen?.sku, `no Variant is ${A2} in ${MATTE}`).toBe(THE_SKU);
+
+    // **And the combination is what decided it, not half of it.** The Store sells this size in
+    // the other finish and the other size in this finish, so a resolution that matched on one
+    // value would have had two candidates and could have answered either. Changing one value at
+    // a time reaches each of them by name, which is why they are on the shelf.
+    expect(variantAnswering(page.variants, insteadPicking(THE_FINISH, GLOSSY))?.sku).toBe(
+      THE_GLOSSY_SKU,
+    );
+    const otherSize = variantAnswering(page.variants, insteadPicking(THE_SIZE, A3));
+    expect(otherSize?.sku).toBe(THE_OTHER_SKU);
+    // A combination the Merchant never made is **absent rather than an error** (story 21): the
+    // page has everything, so it can say "unavailable" without asking kobai anything.
+    expect(
+      variantAnswering(page.variants, [
+        { name: THE_SIZE, value: A3 },
+        { name: THE_FINISH, value: GLOSSY },
+      ]),
+    ).toBeUndefined();
+
     const variantId = chosen?.id ?? "";
 
     // The same Variant read on its own, which is how a storefront rebuilds a page from a Cart
@@ -560,8 +867,8 @@ describe("a Shopper buys something", () => {
 
     // A Shopper who puts two things in a Cart and then changes their mind about both is the
     // ordinary path rather than the exotic one, and it is what drives the three Cart
-    // operations a straight-line purchase never touches. The other size goes in…
-    const otherSize = page.variants.find((one) => one.sku === THE_OTHER_SKU);
+    // operations a straight-line purchase never touches. The other size — the one the picker
+    // reached above — goes in…
     const considered = answered(
       await browser.POST("/store/carts/{id}/line-items", {
         params: { path: { id: started.id } },
