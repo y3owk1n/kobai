@@ -24,15 +24,19 @@ import { readDevbox } from "./support/devbox-config.ts";
  */
 
 /**
- * The copies this rule reaches, which is the workspace's.
+ * Every `devbox.json` this repository has ever had.
  *
- * A generated Project still ships one of its own with its own script list; #307 deletes both
- * that and `reference/devbox.json` outright, at which point this list stops needing to name
- * anything and every `devbox.json` in the repository is covered by the same sentence. Naming
- * them is better than a silent exclusion: the day they go, this fails to find them and says
- * so.
+ * There is one now. The reference Project's and the copy of it every Developer received are
+ * both gone (#307) — a Developer owns their Project outright, and a scaffolder that bakes a
+ * tool into the artifact makes that tool a dependency of running your own store. They are
+ * still named here rather than dropped from the list, so that one reappearing is checked
+ * rather than unnoticed.
  */
-const DEVBOX_FILES = ["devbox.json"] as const;
+const DEVBOX_FILES = [
+  "devbox.json",
+  "reference/devbox.json",
+  "packages/create-kobai/template/devbox.json",
+] as const;
 
 /** The copies that actually exist. */
 async function present(): Promise<string[]> {

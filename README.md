@@ -12,11 +12,13 @@ without forking.
 
 ```sh
 npm create kobai@latest my-store
-cd my-store && devbox run up
+cd my-store && docker compose up --build
 ```
 
 That generates a git repository you own outright, commits it, and brings up Postgres and the
-application. kobai is an ordinary versioned dependency in its `package.json`, so upgrading is
+application on http://localhost:3000. **Node and Docker are the whole of what it needs** — a
+Project ships no devbox and no toolchain of its own (ADR-0083), and every command it has is a
+`package.json` script. kobai is an ordinary versioned dependency in its `package.json`, so upgrading is
 a version bump rather than a merge — see
 [ADR-0001](./docs/adr/0001-customisation-lives-in-a-project-not-a-fork.md). Everything you
 customise is declared in one file, `kobai.config.ts`.

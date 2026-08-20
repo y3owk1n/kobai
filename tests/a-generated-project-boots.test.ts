@@ -94,10 +94,12 @@ describe("a Project generated into a clean directory", () => {
       );
 
       await runInProject(project, "pnpm", ["install"]);
-      // The same command the Project's own `devbox run build` and its Dockerfile run —
-      // `--include-workspace-root` included, because the Project is the root of its own
-      // workspace and `pnpm -r` alone would silently build only the Admin.
-      await runInProject(project, "pnpm", ["-r", "--include-workspace-root", "build"]);
+      // The Project's own `build` script, which is what its Dockerfile and its README run
+      // too — one definition of what building this Project means. It names the Admin and
+      // the Project's own TypeScript separately because `pnpm -r` skips the workspace root,
+      // and this Project *is* the root, so anything recursive would silently build only the
+      // Admin and leave `dist/src/server.js` absent.
+      await runInProject(project, "pnpm", ["run", "build"]);
 
       const served = await bootProject(project, database.url);
       try {
