@@ -164,6 +164,9 @@ describe("a Merchant opens one Order", () => {
           lineItemIds: [expect.any(String)],
         },
       ],
+      // Where it went, and `null` because this Cart carried no Address — the ordinary Cart.
+      // What a Merchant sees when there is one is `an-order-remembers-where-it-went.test.ts`.
+      address: null,
       metadata: {},
       payment: {
         id: expect.any(String),

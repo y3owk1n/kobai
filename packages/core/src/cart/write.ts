@@ -1,9 +1,17 @@
 import { and, asc, eq, sql } from "drizzle-orm";
+import { type ParsedAddress, parseAddress } from "../address/address.ts";
 import type { ApiKeyKind } from "../auth/api-key.ts";
 import { lockVariant } from "../catalog/lock.ts";
 import { storeVariantExists } from "../catalog/store-read.ts";
 import type { Database, Queryable, Transaction } from "../db/client.ts";
-import { cart, cartLineItem, price, reservation, variant } from "../db/schema.ts";
+import {
+  address,
+  cart,
+  cartLineItem,
+  price,
+  reservation,
+  variant,
+} from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { asMetadata, isJsonObject, metadataDetail, trimmed } from "../input.ts";
 import { changesFrom, changesNothing, openData } from "../patch.ts";
@@ -162,6 +170,16 @@ export type CartInput = {
   readonly metadata?: unknown;
   /** The Region this Cart is in — absent means the Store's default at a create, and *leave it* at a correction. */
   readonly regionId?: unknown;
+  /**
+   * Where what is in this Cart is to be delivered — **three-valued, exactly as `shopper` is**
+   * (#319, ADR-0072).
+   *
+   * Absent leaves whatever Address is on the Cart alone, `null` takes it off, and an object
+   * replaces the whole of it. There is no merge: an address is one fact, and a correction that
+   * merged would leave no way to take a postal code back out — which is the rule ADR-0062
+   * already states about a named `metadata`.
+   */
+  readonly address?: unknown;
 };
 
 /**
@@ -222,23 +240,136 @@ export async function createCart(
   const denominated = await denominate(db, parsed.value.regionId);
   if (!denominated.ok) return denominated;
 
-  const [created] = await db
-    .insert(cart)
-    .values({
-      // In SQL rather than from `Date.now()`, so one clock both sets the deadline and judges
-      // it — `read.ts` asks Postgres whether `now()` has passed this value.
-      expiresAt: sql`now() + ${CART_LIFETIME}::interval`,
-      shopperEmail: parsed.value.shopper?.email ?? null,
-      shopperExternalId: parsed.value.shopper?.externalId ?? null,
-      // Stamped, never read through the Region afterwards — see `db/schema.ts`.
-      currency: denominated.currency,
-      regionId: denominated.regionId,
-      metadata: parsed.value.metadata ?? {},
-    })
-    .returning({ id: cart.id });
-  if (!created) throw new Error("Inserting a Cart returned no row.");
+  // **In a transaction, because an Address is a second row.** A Cart pointing at an Address that
+  // was never written, or an Address no Cart names, are both states nothing in kobai can repair;
+  // the two writes go together or neither does.
+  return db.transaction(
+    async (
+      tx,
+    ): Promise<
+      CartResult<"invalid" | "secret-key-required" | typeof REGION_NOT_FOUND>
+    > => {
+      // Resolved before anything is written, which is the rule this whole surface follows for
+      // the reason `collection-not-found` already carries: a refusal returned out of a
+      // transaction **commits** it, so a write in front of one leaves its row behind.
+      let addressId: string | null = null;
+      if (parsed.value.address != null) {
+        const falls = await addressFallsIn(tx, parsed.value.address);
+        if (!falls.ok) return falls;
+        addressId = await writeAddress(tx, null, parsed.value.address, falls.regionId);
+      }
 
-  return read(db, created.id);
+      const [created] = await tx
+        .insert(cart)
+        .values({
+          // In SQL rather than from `Date.now()`, so one clock both sets the deadline and judges
+          // it — `read.ts` asks Postgres whether `now()` has passed this value.
+          expiresAt: sql`now() + ${CART_LIFETIME}::interval`,
+          shopperEmail: parsed.value.shopper?.email ?? null,
+          shopperExternalId: parsed.value.shopper?.externalId ?? null,
+          // Stamped, never read through the Region afterwards — see `db/schema.ts`.
+          currency: denominated.currency,
+          regionId: denominated.regionId,
+          addressId,
+          metadata: parsed.value.metadata ?? {},
+        })
+        .returning({ id: cart.id });
+      if (!created) throw new Error("Inserting a Cart returned no row.");
+
+      return read(tx, created.id);
+    },
+  );
+}
+
+/** The Region an Address falls in, or the one word saying this Store has not got it. */
+type AddressRegion =
+  | { readonly ok: true; readonly regionId: string | null }
+  | CartRefused<typeof REGION_NOT_FOUND>;
+
+/**
+ * Which of the Store's Regions an Address falls in — **the whole of what writing one can
+ * refuse**, asked apart from the write for that reason.
+ *
+ * `mutate` and `createCart` both return a refusal *out of* the transaction they are inside, so a
+ * refusal commits whatever has already been written — the rule `collection-not-found` follows on
+ * the admin surface, one noun along. Splitting the question from the write is what keeps a
+ * refused correction from leaving an Address row no Cart points at.
+ *
+ * `null` for an Address that named no Region, which is an ordinary Address.
+ */
+async function addressFallsIn(
+  tx: Transaction,
+  parsed: ParsedAddress,
+): Promise<AddressRegion> {
+  if (parsed.regionId === undefined) return { ok: true, regionId: null };
+  // In front of the read for the reason every other one on this surface is: a malformed uuid
+  // raises inside Postgres, and an unhandled raise is a 500 about something that is not there.
+  if (!isUuid(parsed.regionId)) return noSuchAddressRegion(parsed.regionId);
+
+  const named = await readRegion(tx, parsed.regionId);
+  return named === undefined
+    ? noSuchAddressRegion(parsed.regionId)
+    : { ok: true, regionId: named.id };
+}
+
+/**
+ * Writes the Address a Cart is to carry — **the row it already has, where it has one**.
+ *
+ * A Cart carries one Address, so setting one again *replaces* it rather than leaving the old row
+ * behind: nothing in kobai lists or deletes an Address of its own, so a create-per-correction
+ * would accumulate rows no route can reach and no sweep knows about.
+ *
+ * **Updating the row in place is safe precisely because an Order holds no reference to it**
+ * (ADR-0009). `core_order_address` is a copy taken at Capture, so a Shopper correcting the
+ * Address on a Cart they placed from — or on a Cart they are still filling — reaches nothing
+ * that has already been bought.
+ *
+ * **It refuses nothing**, which is the point: every caller has already asked
+ * {@link addressFallsIn}, so by the time this runs there is nothing left that could turn the
+ * request back after the row had been written.
+ */
+async function writeAddress(
+  tx: Transaction,
+  /** The Address this Cart already carries, or `null` for one that carries none. */
+  existing: string | null,
+  parsed: ParsedAddress,
+  regionId: string | null,
+): Promise<string> {
+  const values = {
+    country: parsed.country,
+    // Copied out of the readonly array Drizzle will not take as it stands.
+    lines: [...parsed.lines],
+    postalCode: parsed.postalCode,
+    regionId,
+  };
+
+  if (existing === null) {
+    const [written] = await tx
+      .insert(address)
+      .values(values)
+      .returning({ id: address.id });
+    if (!written) throw new Error("Inserting an Address returned no row.");
+    return written.id;
+  }
+
+  await tx.update(address).set(values).where(eq(address.id, existing));
+  return existing;
+}
+
+/**
+ * An `address.regionId` naming no Region this Store has.
+ *
+ * The same word and the same status a `regionId` on the Cart itself is refused with, because it
+ * is the same fact — this Store has not got that Region — reached from one field along
+ * (ADR-0060). The prose is its own, because the repairs read differently: one is about where the
+ * Cart is bought and this is about where it goes.
+ */
+function noSuchAddressRegion(regionId: string): CartRefused<typeof REGION_NOT_FOUND> {
+  return {
+    ok: false,
+    reason: REGION_NOT_FOUND,
+    detail: `No Region ${JSON.stringify(regionId)} exists. \`address.regionId\` says which of this Store's geographies the Address falls in, and \`GET /admin/regions\` lists the ones it has. Leave it out for an Address that names none.`,
+  };
 }
 
 /** Where a new Cart is bought and what it is denominated in, once the body has been read. */
@@ -348,9 +479,12 @@ export async function updateCart(
   if (
     input.shopper === undefined &&
     input.metadata === undefined &&
-    input.regionId === undefined
+    input.regionId === undefined &&
+    input.address === undefined
   ) {
-    return changesNothing("a `shopper`, a `metadata`, a `regionId`, or several of them");
+    return changesNothing(
+      "a `shopper`, a `metadata`, a `regionId`, an `address`, or several of them",
+    );
   }
 
   const parsed = parseCartInput(input, keyKind);
@@ -370,6 +504,42 @@ export async function updateCart(
     }
     if (parsed.value.metadata !== undefined) changes.metadata = parsed.value.metadata;
 
+    // **Every refusal is made before the first write, and that ordering is the decision.**
+    // `mutate` hands a refusal back *out of* the transaction it is inside rather than throwing,
+    // so the transaction commits — which means a row written in front of a refusal survives a
+    // request the caller was told was turned down. That is the rule `collection-not-found`
+    // already follows on the admin surface ("asked before the first write either route makes"),
+    // and here it would leave an Address row no Cart points at, or a destination silently
+    // rewritten by a `PATCH` answered 422.
+
+    // The row the Cart is pointing at now, read under the `for update` `mutate` is holding, so
+    // a second correction of the same Cart replaces the row this one wrote rather than racing it.
+    let destination:
+      | { readonly existing: string | null; readonly regionId: string | null }
+      | undefined;
+    let detached: string | null = null;
+    if (parsed.value.address !== undefined) {
+      const [holding] = await tx
+        .select({ addressId: cart.addressId })
+        .from(cart)
+        .where(eq(cart.id, cartId))
+        .limit(1);
+      // Unreachable: `mutate` found and locked this row a statement ago.
+      if (!holding) throw new Error("A locked Cart could not be read back.");
+
+      if (parsed.value.address === null) {
+        // `null` takes the Address off and takes the row with it. Nothing else can reach an
+        // Address row, so leaving it would leave a row no route lists, reads or deletes — and
+        // the Order's copy is in a table of its own, so nothing that has been bought is touched.
+        changes.addressId = null;
+        detached = holding.addressId;
+      } else {
+        const falls = await addressFallsIn(tx, parsed.value.address);
+        if (!falls.ok) return falls;
+        destination = { existing: holding.addressId, regionId: falls.regionId };
+      }
+    }
+
     if (parsed.value.regionId !== undefined) {
       // Inside the transaction that holds this Cart's row `for update`, so a line added while
       // the switch is being judged is either already in the check below or waiting behind it —
@@ -384,7 +554,22 @@ export async function updateCart(
       changes.currency = switched.currency;
     }
 
+    // Past every refusal, so the writes below are the whole of what this request does.
+    if (destination !== undefined && parsed.value.address != null) {
+      // Written even when it is the identifier the Cart already holds, so the Cart's own
+      // `updated_at` advances for a correction that only moved the Address (ADR-0037).
+      changes.addressId = await writeAddress(
+        tx,
+        destination.existing,
+        parsed.value.address,
+        destination.regionId,
+      );
+    }
+
     await tx.update(cart).set(changes).where(eq(cart.id, cartId));
+    // After the Cart has stopped pointing at it, so the delete meets no reference at all rather
+    // than relying on the column's `set null` to clear one.
+    if (detached !== null) await tx.delete(address).where(eq(address.id, detached));
     return undefined;
   });
 }
@@ -755,6 +940,8 @@ type ParsedCartInput = {
    * correction, which is ADR-0062's rule and the same absence `description` refuses a `null` on.
    */
   readonly regionId?: string;
+  /** The Address named — three-valued like `shopper`, because a Cart may carry none. */
+  readonly address?: ParsedAddress | null;
 };
 
 /** Named apart from `read.ts`'s `CartShopper`: this is what a caller sent, not what is stored. */
@@ -782,6 +969,7 @@ function parseCartInput(input: CartInput, keyKind: ApiKeyKind): ParsedCart {
     shopper?: AssertedShopper | null;
     metadata?: Record<string, unknown>;
     regionId?: string;
+    address?: ParsedAddress | null;
   } = {};
 
   if (input.shopper === null) {
@@ -836,6 +1024,17 @@ function parseCartInput(input: CartInput, keyKind: ApiKeyKind): ParsedCart {
       );
     }
     value.regionId = regionId;
+  }
+
+  // Structural only, and the module that owns an Address is where that is written down
+  // (ADR-0072): what comes back is a reading of the body, never a judgement about whether the
+  // place exists or whether the postal code fits the country's format.
+  if (input.address === null) {
+    value.address = null;
+  } else if (input.address !== undefined) {
+    const parsed = parseAddress(input.address);
+    if (!parsed.ok) return invalid(parsed.detail);
+    value.address = parsed.value;
   }
 
   return { ok: true, value };

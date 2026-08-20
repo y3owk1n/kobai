@@ -1008,6 +1008,47 @@ key was minted into. Six things about it are decisions rather than implementatio
   #292's second half: until this, `place-order` read the Store's default Region and passed
   `channel: null`, so a Store with a constrained Price quoted one number and charged another.
 
+**A Cart carries an Address and an Order snapshots one, and Core checks its shape and nothing
+else** (#319, ADR-0072, ADR-0009). `address` is on `POST /store/carts` and on
+`PATCH /store/carts/{id}`, three-valued exactly as `shopper` is — absent leaves it, `null` takes
+it off, an object replaces the whole of it — and `Cart.address` and `Order.address` are the two
+shapes that come back. It sits behind the Cart's own identifier and no credential of a Shopper's
+(ADR-0020), and there is **no new Permission**: a Merchant reads it through the Order, which
+`order:read` already covers. Six things about it are decisions rather than implementation:
+
+- **Structural, and the whole of what "structural" means here is four fields.** A two-letter
+  country code, at least one line, an optional postal code, and an optional `regionId`. There is
+  no `city`, no `state`, no recipient and no telephone number, because named parts would be kobai
+  asserting that every country's addresses decompose the same way — which is exactly the claim
+  ADR-0072 says no library settles. **A country's own format rules are refused by nothing**, and
+  `cart/an-address-on-a-cart.test.ts` places an Order for an address no postal authority would
+  accept, so that is a promise rather than an omission.
+- **The country is a *code* and that is a shape rather than a rule.** `char_length = 2`, on
+  `core_store_currency`'s bargain: what makes a code a real country is not a fact a table can
+  hold, and the length is. It is the one field Core's own arithmetic will read — shipping and tax
+  both key off it — so free text would have been an address kobai could model nothing from.
+- **Nothing makes an Address mandatory.** A Cart with none reads, quotes and places. Whether
+  *shipping* requires one is a decision about shipping and belongs to the ticket that builds it.
+- **One Address per Cart, replaced in place, and `null` deletes the row.** Nothing lists, reads
+  or deletes an Address on its own, so a create-per-correction would accumulate rows no route can
+  reach. `address.regionId` naming no Region is **422 `region-not-found`** — the word the admin
+  surface already answers, because one fact gets one word whichever end asks it (ADR-0060) — and
+  no new refusal family was added anywhere.
+- **The Order's copy is a table of copies, and `core_order_address` carries no `address_id` at
+  all.** Not nullable, not `set null`: absent. An Order that pointed at the Cart's Address would
+  be rewritten by a Shopper correcting their details and emptied by one clearing the Address off
+  the Cart, which is ADR-0009's Line Item argument one noun along. The one reference on that row
+  is `region_id`, which is navigation in the shape `core_order_line_item.variant_id` already
+  has — `set null`, with a snapshotted `region_name` beside it as what a person reads.
+- **Deleting the Region an Address names is `set null`, and it is a third answer rather than
+  either of the two already on this schema.** `core_cart.region_id` is `set null` and
+  `core_price.region_id` cascades; ADR-0059 is where the argument for the Address lives, under the
+  heading naming it, and the short of it is that a refusal would name rows only a Shopper can
+  repair and a cascade would throw away a destination that is still exactly where the parcel goes.
+  **`foreignKeysTargeting` is asked of `core_address`** in that test file — one key, the Cart's —
+  so the day it becomes a scoping key the build goes red rather than the retrofit going unnoticed,
+  and `region.test.ts`'s own sweep now names the two new keys onto `core_region`.
+
 **A Role is a row a Merchant can make, and one Permission administers every change to one**
 (ADR-0066, ADR-0076). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are
 #173's six, and `PATCH /admin/merchants/{id}` is #202's seventh.

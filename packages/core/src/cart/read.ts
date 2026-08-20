@@ -1,5 +1,11 @@
 import { and, asc, desc, eq, getTableName, not, type SQL, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
+import {
+  type Address,
+  addressColumns,
+  addressOf,
+  addressRegion,
+} from "../address/address.ts";
 import type { Queryable } from "../db/client.ts";
 import { joined } from "../db/join.ts";
 import {
@@ -10,7 +16,7 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { cart, cartLineItem, order, region, variant } from "../db/schema.ts";
+import { address, cart, cartLineItem, order, region, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import type { RegionIdentity } from "../store/region.ts";
 
@@ -147,6 +153,19 @@ export type CartSummary = {
    * bag travelling to a storefront on every Cart read is a field nobody asked for.
    */
   readonly region: RegionIdentity | null;
+  /**
+   * Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said (#319,
+   * ADR-0072).
+   *
+   * **Live, not a snapshot** — the same asymmetry {@link CartLineItem.variant} carries. An Order
+   * holds a copy taken at Capture, so correcting this one afterwards changes nothing about where
+   * a past parcel went (ADR-0009).
+   *
+   * On the summary as well as on the detail, because it is a fact about the Cart rather than
+   * about what is in it — a Merchant looking down a list of Carts for the one a Shopper is
+   * asking about is looking at where it goes.
+   */
+  readonly address: Address | null;
   readonly metadata: Record<string, unknown>;
   readonly expiresAt: string;
   /**
@@ -236,6 +255,7 @@ export async function listCarts(
       shopperExternalId: cart.shopperExternalId,
       currency: cart.currency,
       region: { id: region.id, name: region.name, currency: region.currency },
+      ...addressColumns,
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
@@ -248,6 +268,10 @@ export async function listCarts(
     // `left`, because a Cart started before Regions existed names none — an inner join would
     // drop exactly those rows out of the Merchant's list rather than reporting them.
     .leftJoin(region, eq(region.id, cart.regionId))
+    // `left` for the same reason twice over: most Carts carry no Address, and an Address may
+    // name no Region — or name one that has since been deleted, which clears the reference.
+    .leftJoin(address, eq(address.id, cart.addressId))
+    .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
     .where(and(rowsAfter(page, cart.createdAt, cart.id), inState(page.state)))
     // `id` breaks the tie, so two Carts started in the same instant come back in one stable
     // order rather than in whichever order Postgres happened to read them — and so that a
@@ -263,6 +287,7 @@ export async function listCarts(
       shopper: shopperOf(row),
       currency: row.currency,
       region: joined<RegionIdentity>(row.region),
+      address: addressOf(row),
       metadata: row.metadata,
       expiresAt: row.expiresAt.toISOString(),
       expired: row.expired,
@@ -298,6 +323,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
       shopperExternalId: cart.shopperExternalId,
       currency: cart.currency,
       region: { id: region.id, name: region.name, currency: region.currency },
+      ...addressColumns,
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
@@ -308,6 +334,8 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
     .from(cart)
     // `left`, for the list's reason: a Cart that names no Region still reads.
     .leftJoin(region, eq(region.id, cart.regionId))
+    .leftJoin(address, eq(address.id, cart.addressId))
+    .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
     .where(eq(cart.id, id))
     .limit(1);
   if (!row) return undefined;
@@ -334,6 +362,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
     // `joined` rather than `row.region ?? null`, because Drizzle answers an unjoined nested
     // selection as an object of nulls rather than as `null` — see `db/join.ts`.
     region: joined<RegionIdentity>(row.region),
+    address: addressOf(row),
     lineItems: lines.map((line) => ({
       id: line.id,
       variant: { id: line.variantId, sku: line.sku },

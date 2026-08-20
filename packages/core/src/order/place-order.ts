@@ -1,7 +1,13 @@
 import { lockVariants } from "../catalog/lock.ts";
 import type { Transaction } from "../db/client.ts";
 import { violatesUniqueIndex } from "../db/errors.ts";
-import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
+import {
+  order,
+  orderAddress,
+  orderAdjustment,
+  orderLineItem,
+  payment,
+} from "../db/schema.ts";
 import { keyOf, writeFulfilments } from "../fulfilment/fulfilment.ts";
 import type { AppliedFulfilment } from "../fulfilment/strategy.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
@@ -714,6 +720,23 @@ export const captureOrder = defineStep(
           })
           .returning({ id: order.id });
         if (!written) throw new Error("Writing an Order returned no row.");
+
+        // **Where it goes, copied rather than referenced** (#319, ADR-0009, ADR-0072). There is
+        // no `address_id` on this row and there is not going to be one: an Order that pointed at
+        // the Cart's Address would be rewritten by a Shopper correcting their details a year
+        // later, and emptied by one clearing the Address off the Cart. `load-cart` read it, so
+        // what is written is what the placement saw. No row at all for a Cart nobody addressed,
+        // which is an ordinary Cart.
+        if (input.cart.address !== null) {
+          await tx.insert(orderAddress).values({
+            orderId: written.id,
+            country: input.cart.address.country,
+            lines: [...input.cart.address.lines],
+            postalCode: input.cart.address.postalCode,
+            regionId: input.cart.address.region?.id ?? null,
+            regionName: input.cart.address.region?.name ?? null,
+          });
+        }
 
         // Before the lines, because a line names the Fulfilment it belongs to. One row per way
         // this Order is delivered, carrying what each Strategy answered — a snapshot, like

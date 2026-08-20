@@ -2662,6 +2662,94 @@ export const PricePageQuery = pageQueryOf("prices", {
 // ---- Carts ----------------------------------------------------------------------------
 
 /**
+ * An **Address** — where something goes, and the whole of what kobai checks about one
+ * (#319, ADR-0072).
+ *
+ * **Structural, and nothing beyond it.** Address formats differ by country to a degree no
+ * library settles, so refusing a badly-formed address is a Project's or a Plugin's decision:
+ * kobai takes a two-letter country code, at least one line, and an optional postal code, and
+ * asks no question about whether the place exists. That is `contract.ts`'s standing rule — a
+ * schema is names, types, presence and closed sets — applied to the field it was written for.
+ *
+ * There is no `city` and no `state`, on purpose: named parts would be kobai asserting that every
+ * country's addresses decompose the same way. And there is no `id`, because nothing addresses an
+ * Address — a Cart carries one and the Cart's own identifier is the authority over it.
+ */
+export const Address = z
+  .object({
+    country: z.string().meta({
+      description:
+        "ISO 3166-1 alpha-2 — `MY`, `SG`, `GB`. Upper-cased on the way in. kobai holds no table of countries and refuses no code it has never heard of; what it will not take is a country that is not a code, because shipping and tax are both worked out from one.",
+    }),
+    lines: z.array(z.string()).readonly().meta({
+      description:
+        "The address as it should be read, in that order — at least one. Write the lines the way the destination country writes them; kobai models no `city` and no `state`, because no two countries agree on those.",
+    }),
+    postalCode: z.string().nullable().meta({
+      description:
+        "`null` where none was given, which is an ordinary Address: several countries have no postal code at all, so kobai requires none and validates the format of none.",
+    }),
+    // A union rather than `RegionIdentity.nullable()`, for `Store.defaultRegion`'s reason.
+    region: z.union([RegionIdentity, z.null()]).meta({
+      description:
+        "Which of the Store's Regions this Address falls in. `null` for an Address that named none — and for one whose Region has since been deleted, which clears the reference and leaves the destination whole.",
+    }),
+  })
+  .openapi("Address");
+
+/**
+ * The Address an Order went to — a **snapshot**, taken at Capture (ADR-0009).
+ *
+ * Declared apart from {@link Address} rather than shared, and the difference is the whole point:
+ * every field here was copied, so correcting the Address on the Cart, replacing it, taking it off
+ * or deleting the Region it named reaches none of them. An Order that read a live Address would
+ * be rewritten by a Shopper correcting their details a year later.
+ *
+ * `region.id` is the one thing here that is not a copy, and it is what `OrderLineItem.variantId`
+ * is: navigation, `null` once the Region is gone, and never for display — `region.name` beside it
+ * is the snapshot.
+ */
+export const OrderAddress = z
+  .object({
+    country: z.string().meta({ description: "ISO 3166-1 alpha-2, as at Capture." }),
+    lines: z.array(z.string()).readonly().meta({
+      description: "The address as it should be read, as at Capture.",
+    }),
+    postalCode: z.string().nullable(),
+    region: z
+      .object({
+        id: z.uuid().nullable().meta({
+          description:
+            "For navigation only. `null` once that Region has been deleted — `name` beside it is what a person reads.",
+        }),
+        name: z.string().meta({
+          description:
+            "What that Region was called at Capture. Renaming it does not reach this.",
+        }),
+      })
+      .nullable()
+      .meta({
+        description:
+          "The Region the Address named, or `null` where it named none. **A copy rather than a `RegionIdentity`**, which is why it carries two fields where the live one carries three: a snapshot joins nothing, so every field here would have to be *copied*, and a copied currency on a destination is a second currency on an Order that nothing was ever charged in. `Cart.address.region` is a reference to a Region that still exists, so it names one the way every other reference on this surface does.",
+      }),
+  })
+  .openapi("OrderAddress");
+
+/**
+ * An Address as a caller writes one.
+ *
+ * Not a registered component, exactly as {@link AttachShopper} is not: it is inlined into the two
+ * Cart requests that take one, so there is no schema for a `null` to leak onto and
+ * `.nullable().optional()` reads on the field as it is written.
+ */
+const SetAddress = z.object({
+  country: z.string(),
+  lines: z.array(z.string()),
+  postalCode: z.string().nullable().optional(),
+  regionId: z.uuid().optional(),
+});
+
+/**
  * Who a storefront has said this Cart is for — a *reference*, never a credential.
  *
  * ADR-0020 has Core store an email with an optional external identity and trust the identity a
@@ -2726,6 +2814,11 @@ export const CartSummary = z
     region: z.union([RegionIdentity, z.null()]).meta({
       description:
         "Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region.",
+    }),
+    // A union, for `Store.defaultRegion`'s reason.
+    address: z.union([Address, z.null()]).meta({
+      description:
+        "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads, quotes and places.",
     }),
     metadata: Metadata,
     expiresAt: z.iso.datetime().meta({
@@ -2808,6 +2901,10 @@ export const CreateCartRequest = z
       description:
         "The `id` of the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at. **Left out is the Store's default Region**, so a storefront selling into one market never mentions a Region at all. One this Store has not got is refused with `region-not-found`. There is no `null`: a Cart is always bought somewhere.",
     }),
+    address: SetAddress.nullable().optional().meta({
+      description:
+        "Where what is in this Cart is to be delivered. Optional here and at the correction alike — nothing makes an Address mandatory, and a Cart with none reads, quotes and places. kobai checks the **shape and nothing beyond it** (ADR-0072): an `address.regionId` this Store has not got is refused with `region-not-found`, and a postal code no postal authority would recognise is not refused at all.",
+    }),
     metadata: Metadata.optional(),
   })
   .openapi("CreateCartRequest");
@@ -2822,6 +2919,10 @@ export const UpdateCartRequest = z
     regionId: z.uuid().optional().meta({
       description:
         "Move this Cart to another Region — **the same Cart, the same `id` and every Line Item on it**, re-denominated in the new Region's currency and re-priced there on the next read, because a Cart's lines carry no price snapshot (ADR-0009). Naming the Region it is already in changes nothing and is not refused, so a storefront may send the whole state it is holding. Refused with `cart-is-denominated` while this Cart is holding stock — a hold is claimed in the currency the Cart was in, and kobai serves no way to give one back by hand — and with `variant-not-priced-in-region`, naming them, where a line would have no Price in the new Region.",
+    }),
+    address: SetAddress.nullable().optional().meta({
+      description:
+        "Where what is in this Cart is to be delivered. **The whole Address, replacing whatever is on the Cart** — there is no merge, so a postal code left out of a correction is a postal code taken off. `null` removes the Address altogether; absent leaves it alone. kobai checks the shape and nothing beyond it (ADR-0072).",
     }),
     metadata: Metadata.optional(),
   })
@@ -3357,6 +3458,11 @@ export const Order = OrderSummary.extend({
   fulfilments: z.array(Fulfilment).readonly().meta({
     description:
       "How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed.",
+  }),
+  // A union, for `Store.defaultRegion`'s reason.
+  address: z.union([OrderAddress, z.null()]).meta({
+    description:
+      "Where this Order went, **as at Capture** — a snapshot, so correcting the Address on the Cart, replacing it, taking it off or deleting the Region it named changes none of it (ADR-0009). `null` for an Order placed from a Cart that carried no Address, and for every Order placed before Addresses existed.",
   }),
   metadata: Metadata,
 }).openapi("Order");
