@@ -2662,13 +2662,6 @@ export const PricePageQuery = pageQueryOf("prices", {
 // ---- Carts ----------------------------------------------------------------------------
 
 /**
- * Who a storefront has said this Cart is for — a *reference*, never a credential.
- *
- * ADR-0020 has Core store an email with an optional external identity and trust the identity a
- * storefront asserts over a secret key. There is no password here and no Shopper table behind
- * it, and `null` on the Cart is a guest, which is the ordinary path.
- */
-/**
  * An **Address** — where something goes, and the whole of what kobai checks about one
  * (#319, ADR-0072).
  *
@@ -2737,7 +2730,7 @@ export const OrderAddress = z
       .nullable()
       .meta({
         description:
-          "The Region the Address named, or `null` where it named none. Inline rather than a `RegionIdentity`: this is a copy, and a Region's currency is a pricing fact rather than part of a destination — the Order carries its own `currency`.",
+          "The Region the Address named, or `null` where it named none. **A copy rather than a `RegionIdentity`**, which is why it carries two fields where the live one carries three: a snapshot joins nothing, so every field here would have to be *copied*, and a copied currency on a destination is a second currency on an Order that nothing was ever charged in. `Cart.address.region` is a reference to a Region that still exists, so it names one the way every other reference on this surface does.",
       }),
   })
   .openapi("OrderAddress");
@@ -2756,6 +2749,13 @@ const SetAddress = z.object({
   regionId: z.uuid().optional(),
 });
 
+/**
+ * Who a storefront has said this Cart is for — a *reference*, never a credential.
+ *
+ * ADR-0020 has Core store an email with an optional external identity and trust the identity a
+ * storefront asserts over a secret key. There is no password here and no Shopper table behind
+ * it, and `null` on the Cart is a guest, which is the ordinary path.
+ */
 export const CartShopper = z
   .object({
     email: z

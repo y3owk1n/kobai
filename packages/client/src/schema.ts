@@ -4692,7 +4692,7 @@ export interface components {
       /** @description The address as it should be read, as at Capture. */
       lines: string[];
       postalCode: string | null;
-      /** @description The Region the Address named, or `null` where it named none. Inline rather than a `RegionIdentity`: this is a copy, and a Region's currency is a pricing fact rather than part of a destination — the Order carries its own `currency`. */
+      /** @description The Region the Address named, or `null` where it named none. **A copy rather than a `RegionIdentity`**, which is why it carries two fields where the live one carries three: a snapshot joins nothing, so every field here would have to be *copied*, and a copied currency on a destination is a second currency on an Order that nothing was ever charged in. `Cart.address.region` is a reference to a Region that still exists, so it names one the way every other reference on this surface does. */
       region: ({
         /**
          * Format: uuid

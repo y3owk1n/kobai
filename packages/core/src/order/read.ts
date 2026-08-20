@@ -444,12 +444,6 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
 }
 
 /**
- * What a Payment is read as, in one place, because two readers answer with the same shape.
- *
- * `orderId` is selected and not reported: the list needs it to say which Order each Payment
- * belongs to, and a caller already holding the Order has no use for it.
- */
-/**
  * One snapshotted destination as a caller reads it.
  *
  * `regionName` is what says whether there was a Region at all, and `regionId` is allowed to be
@@ -471,6 +465,12 @@ function addressOf(row: {
   };
 }
 
+/**
+ * What a Payment is read as, in one place, because two readers answer with the same shape.
+ *
+ * `orderId` is selected and not reported: the list needs it to say which Order each Payment
+ * belongs to, and a caller already holding the Order has no use for it.
+ */
 const paymentColumns = {
   orderId: payment.orderId,
   id: payment.id,

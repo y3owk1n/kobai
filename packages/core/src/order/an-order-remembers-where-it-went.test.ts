@@ -121,6 +121,28 @@ describe("Capture snapshots the Address", () => {
     expect(((await merchantsView.json()) as OrderBody).address).toEqual(destination);
   });
 
+  it("refuses to change the Cart's Address afterwards, and the Order is untouched", async () => {
+    await using kobai = await createTestKobai();
+    const { cart, order } = await placeAddressed(kobai);
+
+    const refused = await kobai.request(`/store/carts/${cart.id}`, {
+      method: "PATCH",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ address: { country: "SG", lines: ["1 Raffles Place"] } }),
+    });
+
+    // A Cart becomes exactly one Order and is spent afterwards, so this is the surface's own
+    // answer to "correcting an Address a year later": there is no route through which the Cart
+    // this Order was placed from can be re-addressed at all.
+    expect(refused.status).toBe(409);
+    expect((await refused.json()) as { reason: string }).toMatchObject({
+      reason: "cart-placed",
+    });
+    expect((await readOrder(kobai, cart, order.id)).address).toMatchObject({
+      country: "MY",
+    });
+  });
+
   it("leaves the Order's destination alone when the source Address row is edited", async () => {
     await using kobai = await createTestKobai();
     const { cart, order } = await placeAddressed(kobai);

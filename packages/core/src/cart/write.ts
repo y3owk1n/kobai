@@ -249,11 +249,14 @@ export async function createCart(
     ): Promise<
       CartResult<"invalid" | "secret-key-required" | typeof REGION_NOT_FOUND>
     > => {
+      // Resolved before anything is written, which is the rule this whole surface follows for
+      // the reason `collection-not-found` already carries: a refusal returned out of a
+      // transaction **commits** it, so a write in front of one leaves its row behind.
       let addressId: string | null = null;
       if (parsed.value.address != null) {
-        const written = await writeAddress(tx, null, parsed.value.address);
-        if (!written.ok) return written;
-        addressId = written.addressId;
+        const falls = await addressFallsIn(tx, parsed.value.address);
+        if (!falls.ok) return falls;
+        addressId = await writeAddress(tx, null, parsed.value.address, falls.regionId);
       }
 
       const [created] = await tx
@@ -278,10 +281,36 @@ export async function createCart(
   );
 }
 
-/** An Address row written, or the one word saying the Region it named is not this Store's. */
-type WrittenAddress =
-  | { readonly ok: true; readonly addressId: string }
+/** The Region an Address falls in, or the one word saying this Store has not got it. */
+type AddressRegion =
+  | { readonly ok: true; readonly regionId: string | null }
   | CartRefused<typeof REGION_NOT_FOUND>;
+
+/**
+ * Which of the Store's Regions an Address falls in — **the whole of what writing one can
+ * refuse**, asked apart from the write for that reason.
+ *
+ * `mutate` and `createCart` both return a refusal *out of* the transaction they are inside, so a
+ * refusal commits whatever has already been written — the rule `collection-not-found` follows on
+ * the admin surface, one noun along. Splitting the question from the write is what keeps a
+ * refused correction from leaving an Address row no Cart points at.
+ *
+ * `null` for an Address that named no Region, which is an ordinary Address.
+ */
+async function addressFallsIn(
+  tx: Transaction,
+  parsed: ParsedAddress,
+): Promise<AddressRegion> {
+  if (parsed.regionId === undefined) return { ok: true, regionId: null };
+  // In front of the read for the reason every other one on this surface is: a malformed uuid
+  // raises inside Postgres, and an unhandled raise is a 500 about something that is not there.
+  if (!isUuid(parsed.regionId)) return noSuchAddressRegion(parsed.regionId);
+
+  const named = await readRegion(tx, parsed.regionId);
+  return named === undefined
+    ? noSuchAddressRegion(parsed.regionId)
+    : { ok: true, regionId: named.id };
+}
 
 /**
  * Writes the Address a Cart is to carry — **the row it already has, where it has one**.
@@ -294,21 +323,18 @@ type WrittenAddress =
  * (ADR-0009). `core_order_address` is a copy taken at Capture, so a Shopper correcting the
  * Address on a Cart they placed from — or on a Cart they are still filling — reaches nothing
  * that has already been bought.
+ *
+ * **It refuses nothing**, which is the point: every caller has already asked
+ * {@link addressFallsIn}, so by the time this runs there is nothing left that could turn the
+ * request back after the row had been written.
  */
 async function writeAddress(
   tx: Transaction,
   /** The Address this Cart already carries, or `null` for one that carries none. */
   existing: string | null,
   parsed: ParsedAddress,
-): Promise<WrittenAddress> {
-  let regionId: string | null = null;
-  if (parsed.regionId !== undefined) {
-    if (!isUuid(parsed.regionId)) return noSuchAddressRegion(parsed.regionId);
-    const named = await readRegion(tx, parsed.regionId);
-    if (named === undefined) return noSuchAddressRegion(parsed.regionId);
-    regionId = named.id;
-  }
-
+  regionId: string | null,
+): Promise<string> {
   const values = {
     country: parsed.country,
     // Copied out of the readonly array Drizzle will not take as it stands.
@@ -323,11 +349,11 @@ async function writeAddress(
       .values(values)
       .returning({ id: address.id });
     if (!written) throw new Error("Inserting an Address returned no row.");
-    return { ok: true, addressId: written.id };
+    return written.id;
   }
 
   await tx.update(address).set(values).where(eq(address.id, existing));
-  return { ok: true, addressId: existing };
+  return existing;
 }
 
 /**
@@ -478,8 +504,19 @@ export async function updateCart(
     }
     if (parsed.value.metadata !== undefined) changes.metadata = parsed.value.metadata;
 
+    // **Every refusal is made before the first write, and that ordering is the decision.**
+    // `mutate` hands a refusal back *out of* the transaction it is inside rather than throwing,
+    // so the transaction commits — which means a row written in front of a refusal survives a
+    // request the caller was told was turned down. That is the rule `collection-not-found`
+    // already follows on the admin surface ("asked before the first write either route makes"),
+    // and here it would leave an Address row no Cart points at, or a destination silently
+    // rewritten by a `PATCH` answered 422.
+
     // The row the Cart is pointing at now, read under the `for update` `mutate` is holding, so
     // a second correction of the same Cart replaces the row this one wrote rather than racing it.
+    let destination:
+      | { readonly existing: string | null; readonly regionId: string | null }
+      | undefined;
     let detached: string | null = null;
     if (parsed.value.address !== undefined) {
       const [holding] = await tx
@@ -497,11 +534,9 @@ export async function updateCart(
         changes.addressId = null;
         detached = holding.addressId;
       } else {
-        const written = await writeAddress(tx, holding.addressId, parsed.value.address);
-        if (!written.ok) return written;
-        // Written even when it is the identifier the Cart already holds, so the Cart's own
-        // `updated_at` advances for a correction that only moved the Address (ADR-0037).
-        changes.addressId = written.addressId;
+        const falls = await addressFallsIn(tx, parsed.value.address);
+        if (!falls.ok) return falls;
+        destination = { existing: holding.addressId, regionId: falls.regionId };
       }
     }
 
@@ -517,6 +552,18 @@ export async function updateCart(
       // The stamp is taken here and nowhere else: from this moment the Cart's own column is
       // what denominates it, and the Region's currency moving does not reach it.
       changes.currency = switched.currency;
+    }
+
+    // Past every refusal, so the writes below are the whole of what this request does.
+    if (destination !== undefined && parsed.value.address != null) {
+      // Written even when it is the identifier the Cart already holds, so the Cart's own
+      // `updated_at` advances for a correction that only moved the Address (ADR-0037).
+      changes.addressId = await writeAddress(
+        tx,
+        destination.existing,
+        parsed.value.address,
+        destination.regionId,
+      );
     }
 
     await tx.update(cart).set(changes).where(eq(cart.id, cartId));

@@ -226,6 +226,63 @@ describe("an Address on a Cart", () => {
   });
 });
 
+describe("a correction that is refused writes no Address at all", () => {
+  /**
+   * **A refusal returned out of a transaction commits it**, which is the rule
+   * `collection-not-found` already follows on the admin surface — so an Address written in front
+   * of a refusal would survive a request the caller was told was turned down.
+   *
+   * `PATCH /store/carts/{id}` takes an `address` and a `regionId` in one body, and the Region
+   * switch is the refusal that can follow the Address write. Both cases below were watched
+   * failing against a build that wrote first: the Cart came back with the new Address behind a
+   * 422, and — where it had none — `core_address` held a row no Cart pointed at.
+   */
+  it("leaves the Address the Cart already had exactly as it was", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+    await setAddress(kobai, cart, NONSENSE);
+
+    const refused = await kobai.request(`/store/carts/${cart.id}`, {
+      method: "PATCH",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        address: { country: "SG", lines: ["1 Raffles Place"] },
+        regionId: "00000000-0000-4000-8000-000000000000",
+      }),
+    });
+
+    expect(refused.status).toBe(422);
+    expect((await refused.json()) as { reason: string }).toMatchObject({
+      reason: "region-not-found",
+    });
+    // The refusal's own prose is that the Cart was left where it was, and this is that being
+    // true rather than said.
+    expect((await readCart(kobai, cart)).address).toMatchObject({ country: "MY" });
+  });
+
+  it("leaves no Address row behind for a Cart that had none", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+
+    const refused = await kobai.request(`/store/carts/${cart.id}`, {
+      method: "PATCH",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        address: NONSENSE,
+        regionId: "00000000-0000-4000-8000-000000000000",
+      }),
+    });
+    expect(refused.status).toBe(422);
+
+    expect((await readCart(kobai, cart)).address).toBeNull();
+    // Asked of the table rather than of the Cart, because the row this would leave behind is
+    // reachable from nothing: no route lists an Address, and no sweep knows about one.
+    await expect(
+      kobai.database.query("select count(*)::int as rows from core_address"),
+    ).resolves.toEqual([{ rows: 0 }]);
+  });
+});
+
 describe("Core checks an Address's shape and nothing beyond it", () => {
   it("takes an address no postal authority would accept", async () => {
     await using kobai = await createTestKobai();

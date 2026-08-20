@@ -1,6 +1,11 @@
 import { and, asc, desc, eq, getTableName, not, type SQL, sql } from "drizzle-orm";
-import { alias, type PgColumn } from "drizzle-orm/pg-core";
-import type { Address } from "../address/address.ts";
+import type { PgColumn } from "drizzle-orm/pg-core";
+import {
+  type Address,
+  addressColumns,
+  addressOf,
+  addressRegion,
+} from "../address/address.ts";
 import type { Queryable } from "../db/client.ts";
 import { joined } from "../db/join.ts";
 import {
@@ -79,61 +84,6 @@ export const cartHasBeenPlaced = sql<boolean>`exists (select 1 from ${order} whe
  */
 function qualified(column: PgColumn): SQL {
   return sql`${sql.identifier(getTableName(column.table))}.${sql.identifier(column.name)}`;
-}
-
-/**
- * The Region an Address falls in, under a name of its own.
- *
- * A Cart already joins `core_region` for the Region it is *bought* in, and these are two
- * different facts about one Cart — where it is being bought, and where it is going. Without the
- * alias the second join is the same table twice under one name, which Postgres refuses.
- */
-const addressRegion = alias(region, "core_cart_address_region");
-
-/** The Address columns both readers select. Two levels rather than one nested object, because
- * the Region comes from a second join and so cannot sit inside the first. */
-const addressColumns = {
-  address: {
-    id: address.id,
-    country: address.country,
-    lines: address.lines,
-    postalCode: address.postalCode,
-  },
-  addressRegion: {
-    id: addressRegion.id,
-    name: addressRegion.name,
-    currency: addressRegion.currency,
-  },
-} as const;
-
-/**
- * The Address a Cart carries, or `null` where it carries none.
- *
- * `joined` on both halves rather than `?? null`, for the reason that helper exists: Drizzle
- * answers an unjoined nested selection as an object of `null`s, which is truthy.
- */
-function addressOf(row: {
-  readonly address: {
-    readonly id: string;
-    readonly country: string;
-    readonly lines: readonly string[];
-    readonly postalCode: string | null;
-  } | null;
-  readonly addressRegion: {
-    readonly id: string;
-    readonly name: string;
-    readonly currency: string;
-  } | null;
-}): Address | null {
-  const found = joined(row.address);
-  if (!found) return null;
-
-  return {
-    country: found.country,
-    lines: found.lines,
-    postalCode: found.postalCode,
-    region: joined<RegionIdentity>(row.addressRegion),
-  };
 }
 
 /** One line of a Cart: a Variant, and how many of it. */

@@ -1,3 +1,6 @@
+import { alias } from "drizzle-orm/pg-core";
+import { joined } from "../db/join.ts";
+import { address, region } from "../db/schema.ts";
 import type { RegionIdentity } from "../store/region.ts";
 
 /**
@@ -67,6 +70,11 @@ export type Address = {
  * (ADR-0009). The Region is the one thing here that is not purely a copy, and it is split the
  * way a Line Item's `variantId` and `title` are: an identifier for navigation, which goes `null`
  * once the Region is deleted, and a **name** taken at Capture, which does not.
+ *
+ * **It names its Region with two fields where {@link Address} uses `RegionIdentity`'s three**,
+ * and the difference is the snapshot rather than an inconsistency: a copy joins nothing, so every
+ * field here has to be *copied*, and a copied currency on a destination would be a second
+ * currency on an Order nothing was ever charged in.
  */
 export type OrderAddress = {
   readonly country: string;
@@ -82,6 +90,97 @@ export type OrderAddressRegion = {
   /** What it was called at Capture. Renaming the Region does not reach this. */
   readonly name: string;
 };
+
+/**
+ * The Region an Address falls in, under a name of its own.
+ *
+ * A Cart already joins `core_region` for the Region it is *bought* in, and these are two
+ * different facts about one Cart — where it is being bought, and where it is going. Without the
+ * alias the second join is the same table twice under one name, which Postgres refuses.
+ *
+ * Exported so the two readers below share it: `cart/read.ts` joins both and
+ * `order/load-cart.ts` joins only this, and two aliases spelled the same in two files is the
+ * thing that goes wrong quietly when one of them is renamed.
+ */
+export const addressRegion = alias(region, "core_cart_address_region");
+
+/**
+ * The Address columns every reader of a **live** Address selects, and the join that fills them.
+ *
+ * Two selections rather than one nested object, because the Region comes from a second join and
+ * so cannot sit inside the first. `id` is selected and never reported: {@link addressOf} reads it
+ * to tell an Address from a join that found none.
+ *
+ * Written once because there are two readers and they must agree about what a Cart's Address is:
+ * `cart/read.ts` answers a storefront with it and `order/load-cart.ts` reads it for Capture to
+ * copy, and a second reading of it would be a second answer to where the parcel goes.
+ */
+export const addressColumns = {
+  address: {
+    id: address.id,
+    country: address.country,
+    lines: address.lines,
+    postalCode: address.postalCode,
+  },
+  addressRegion: {
+    id: addressRegion.id,
+    name: addressRegion.name,
+    currency: addressRegion.currency,
+  },
+} as const;
+
+/** What {@link addressOf} reads — the two halves of the join, either of which may have found none. */
+export type JoinedAddress = {
+  readonly address: {
+    readonly id: string;
+    readonly country: string;
+    readonly lines: readonly string[];
+    readonly postalCode: string | null;
+  } | null;
+  readonly addressRegion: {
+    readonly id: string;
+    readonly name: string;
+    readonly currency: string;
+  } | null;
+};
+
+/**
+ * The Address a Cart carries, or `null` where it carries none.
+ *
+ * `joined` on both halves rather than `?? null`, for the reason that helper exists: Drizzle
+ * answers an unjoined nested selection as an object of `null`s, which is truthy.
+ */
+export function addressOf(row: JoinedAddress): Address | null {
+  const found = joined(row.address);
+  if (!found) return null;
+
+  return {
+    country: found.country,
+    lines: found.lines,
+    postalCode: found.postalCode,
+    region: joined<RegionIdentity>(row.addressRegion),
+  };
+}
+
+/**
+ * The same Address as Capture will write it — the live one with its Region reduced to a copy.
+ *
+ * The currency goes because a snapshot joins nothing: see {@link OrderAddress}. It is derived
+ * from {@link addressOf} rather than read separately, so the Cart a storefront sees and the Cart
+ * a placement copies cannot describe two different destinations.
+ */
+export function addressToSnapshot(row: JoinedAddress): OrderAddress | null {
+  const found = addressOf(row);
+  if (!found) return null;
+
+  return {
+    country: found.country,
+    lines: found.lines,
+    postalCode: found.postalCode,
+    region:
+      found.region === null ? null : { id: found.region.id, name: found.region.name },
+  };
+}
 
 /** A reading that did not fit, with the sentence saying what would. */
 export type AddressRefused = { readonly ok: false; readonly detail: string };

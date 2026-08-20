@@ -1,11 +1,14 @@
 import { asc, eq } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
-import type { OrderAddress } from "../address/address.ts";
+import {
+  addressColumns,
+  addressRegion,
+  addressToSnapshot,
+  type OrderAddress,
+} from "../address/address.ts";
 import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
 import { PUBLISHED } from "../catalog/status.ts";
 import type { Queryable } from "../db/client.ts";
-import { joined } from "../db/join.ts";
-import { address, cart, cartLineItem, product, region, variant } from "../db/schema.ts";
+import { address, cart, cartLineItem, product, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import {
   type AppliedFulfilment,
@@ -33,41 +36,6 @@ import type { OrderShopper } from "./read.ts";
  * rather than this repository keeping two queries in step.
  */
 
-/**
- * The Region an Address falls in, under a name of its own.
- *
- * This query does not join `core_region` for the Cart's own Region — `regionId` travels as an
- * identifier — but the alias is written anyway, because reading `region` unaliased here would
- * make the next join of that table for the Cart's market a silent collision rather than an error.
- */
-const addressRegion = alias(region, "core_cart_address_region");
-
-/**
- * The Address as Capture will write it, or `null` for a Cart carrying none.
- *
- * `joined` on both halves for `db/join.ts`'s reason: Drizzle answers an unjoined nested selection
- * as an object of `null`s, which is truthy.
- */
-function addressToPlace(row: {
-  readonly address: {
-    readonly id: string;
-    readonly country: string;
-    readonly lines: readonly string[];
-    readonly postalCode: string | null;
-  } | null;
-  readonly addressRegion: { readonly id: string; readonly name: string } | null;
-}): OrderAddress | null {
-  const found = joined(row.address);
-  if (!found) return null;
-
-  return {
-    country: found.country,
-    lines: found.lines,
-    postalCode: found.postalCode,
-    region: joined(row.addressRegion),
-  };
-}
-
 /** The Cart's own fields the placement carries, copied rather than referenced. */
 export type CartToPlace = {
   readonly id: string;
@@ -94,9 +62,9 @@ export type CartToPlace = {
   /**
    * Where this Cart is to be delivered, **read here so Capture can copy it** (#319, ADR-0072).
    *
-   * Already flattened into what the snapshot needs — the Region's name rather than a reference —
+   * Already reduced to what the snapshot needs — the Region's name rather than a reference —
    * because `capture-order` writes a copy and a copy assembled from a join taken later would be
-   * a copy of whatever the catalog said by then. `null` is a Cart nobody has addressed, which is
+   * a copy of whatever the Store said by then. `null` is a Cart nobody has addressed, which is
    * an ordinary Cart: nothing here makes an Address mandatory.
    *
    * Read by *this* module rather than by the Step that writes it, for this file's whole reason:
@@ -217,15 +185,9 @@ export async function readCartToPlace(
       currency: cart.currency,
       regionId: cart.regionId,
       // Read here rather than by `capture-order`, so the hold route and the placement see one
-      // Cart. Flattened into what the snapshot holds — the Region's **name** — because Capture
-      // writes a copy and never a reference (ADR-0009).
-      address: {
-        id: address.id,
-        country: address.country,
-        lines: address.lines,
-        postalCode: address.postalCode,
-      },
-      addressRegion: { id: addressRegion.id, name: addressRegion.name },
+      // Cart — and through `address/address.ts`'s own selection, so the Cart a storefront reads
+      // and the Cart a placement copies cannot describe two different destinations.
+      ...addressColumns,
       metadata: cart.metadata,
       // The same expression the Cart's own routes judge expiry with, imported rather than
       // rewritten: a second spelling of it would be a second answer to whether a Cart is
@@ -317,7 +279,7 @@ export async function readCartToPlace(
             : { email: found.shopperEmail, externalId: found.shopperExternalId },
         currency: found.currency,
         regionId: found.regionId,
-        address: addressToPlace(found),
+        address: addressToSnapshot(found),
         metadata: found.metadata,
       },
       channel,
