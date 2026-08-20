@@ -82,7 +82,17 @@ export function Products() {
 
   // Every Collection this Store has, so the filter can offer them by name — through
   // `lib/collections.ts`, which the Product screen's own card reads from too.
-  const { collections: offered, read: collectionsRead } = useOfferedCollections();
+  //
+  // **The failure is taken as well as the list** (#311). This destructure used to name
+  // `collections` and `read` and nothing else, so a failed `GET /admin/collections` drew no
+  // Collection filter at all — which is exactly what a Store with no Collections draws, and the
+  // rule `docs/agents/the-admin.md` states one control along: an empty list is two states, and
+  // only one of them is something a Merchant can act on.
+  const {
+    collections: offered,
+    read: collectionsRead,
+    error: collectionsError,
+  } = useOfferedCollections();
   const { asked: askedCollection, unknownValue: unknownCollection } = useListFilter(
     COLLECTION,
     offered.map((one) => one.id),
@@ -193,6 +203,25 @@ export function Products() {
               options={offered.map((one) => ({ value: one.id, label: one.title }))}
             />
           ) : null}
+
+          {/* **Why there is no Collection filter, where the filter would have been** (#311). A
+              nav that simply vanishes says the same thing for a Store with no Collections and
+              for a read that never landed, and the second is the one a Merchant can do
+              something about. It is the Products list that is the subject of this screen, so
+              this reports a narrowing that is missing rather than blanking a list that arrived:
+              the `Problem` below, which is the page's own read, is a different failure and both
+              can be true at once. */}
+          <Problem
+            problem={
+              collectionsError === null
+                ? null
+                : problemOf(
+                    collectionsError,
+                    "kobai did not say which Collections this Store has.",
+                  )
+            }
+            title="The Products cannot be narrowed by Collection."
+          />
 
           <Problem
             problem={

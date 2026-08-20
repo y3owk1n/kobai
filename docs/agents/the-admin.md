@@ -531,6 +531,13 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   today — so a failed read there costs a Merchant the *other* rows and nothing else, and the
   field says the read failed **and** that the ordinary key can still be minted. Naming a failure
   belongs to the module; what is still possible in spite of it belongs to the caller.
+  **`tests/a-read-that-failed-is-not-discarded.test.ts` holds all of this that a scan can
+  hold**, and its own header is where the boundary is argued: it reads the modules and the call
+  sites out of the tree, so a `lib/` read written tomorrow is swept the day it exists, and it
+  claims that a failure is *taken* rather than that it is rendered well. Its first run found a
+  third instance nobody had reported — the Products list dropped `error` at the destructure, so
+  a failed Collections read simply removed the Collection filter, which is what a Store with no
+  Collections looks like.
 - **A `Select` is given `items`, its options are wrapped in a `SelectGroup`, and "no value" is
   `null`** (#239). All three are Base UI's documented shape and this Admin had none of them, so
   each was a defect the type checker could not see. `Select.Value` renders the **raw value**
