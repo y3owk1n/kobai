@@ -7,6 +7,7 @@ import {
   checkoutWithNoDotenv,
   discardCheckouts,
   runInitHook,
+  thisCheckout,
 } from "./support/init-hook.ts";
 
 /**
@@ -23,6 +24,18 @@ import {
  * up *and* who it lets in. The failure it prevents is the same one, and so is the reason it
  * has to be tested by running the hook — the gate runs with `KOBAI_TEST_DATABASE_URL`
  * already exported, so nothing else here can see what built it.
+ *
+ * **This is the only file in the suite that creates a Postgres *role*** (#282), and a role is
+ * the one server-level object here that a later run can trip over. A database is server-level
+ * too — `createTestDatabase` makes one per test and an interrupted run leaks it — but that
+ * name is random, so it collides with nothing, and `drop database` never refuses. A role's
+ * name is written down, it outlives both the database this file made and the run that made
+ * it, and its own cleanup is the only thing that removes it. So an interrupted run left one
+ * behind that the next attempt could not drop —
+ * `role "kobai admin=1" cannot be dropped because some objects depend on it` — and the
+ * symptom was not local to this file: it presented as timeouts in a dozen unrelated ones.
+ * Three things below answer it, and each answers a different half; `clearAway` says which,
+ * and which of them is doing the actual work.
  */
 
 /**
@@ -44,16 +57,84 @@ const PASSWORD = `p@ss w0rd="it's #1"; 50%/?!`;
 const DOTENV_PASSWORD = String.raw`p@ss w0rd=\"it's #1\"; 50%/?!`;
 
 /**
+ * What this checkout calls its containers, its compose project and its volume — asked of the
+ * derivation in `devbox.json`'s `init_hook` rather than restated here (#21).
+ *
+ * It is `kobai-<the checkout path, hashed>`, and a second, independently-derived hash for the
+ * names below would be the very disagreement that derivation exists to prevent.
+ *
+ * Run rather than read out of `process.env`, because the suite runs under `devbox run test`
+ * and outside it alike and only one of those has it exported — but a pin *is* taken from the
+ * environment and handed on, because the hook lets one beat its own derivation while
+ * `runInitHook` deliberately passes nothing through. Without that, a pinned name would be on
+ * the containers while this named something else.
+ */
+async function deriveComposeProject(): Promise<string> {
+  const pinned = process.env.COMPOSE_PROJECT_NAME;
+  const { COMPOSE_PROJECT_NAME } = await runInitHook({
+    root: thisCheckout(),
+    ...(pinned === undefined ? {} : { env: { COMPOSE_PROJECT_NAME: pinned } }),
+    report: ["COMPOSE_PROJECT_NAME"],
+  });
+  return COMPOSE_PROJECT_NAME;
+}
+
+const COMPOSE_PROJECT = await deriveComposeProject();
+
+/**
+ * `name`, scoped to a compose project — and the only shape anything below ever matches a role
+ * on.
+ *
+ * The suffix is what stops an interrupted run being *contagious* (#282): a role left behind
+ * carries the hash of the checkout that made it, so no other checkout sharing a Postgres —
+ * and no human — has one by that name, and a leaked set is `like 'kobai admin=1 %'` away from
+ * being found. It also keeps the reach of `drop owned by` in `clearTheLoginAway` down to the
+ * one role this file creates for this checkout, which is a hazard the ticket names by name.
+ *
+ * The project is an argument rather than read from above so that the refusal below can be
+ * watched from a test rather than only reasoned about.
+ */
+function scopedTo(project: string, name: string): string {
+  const scoped = `${name} ${project}`;
+  // Postgres truncates an identifier past 63 bytes rather than refusing it, so an
+  // over-long COMPOSE_PROJECT_NAME would create a role under one name and dial it under
+  // another — an authentication failure naming neither. Say so instead.
+  const bytes = new TextEncoder().encode(scoped).length;
+  if (bytes > 63) {
+    throw new Error(
+      `The Postgres login this file creates would be ${bytes} bytes (${scoped}), and Postgres silently truncates an identifier at 63. COMPOSE_PROJECT_NAME is what makes it this long; derived it is \`kobai-<8 hex>\`, so this is a pin in \`.env\` or the environment.`,
+    );
+  }
+  return scoped;
+}
+
+/**
  * The Postgres login the end-to-end cases use, none of it a bare word.
  *
  * `POSTGRES_LOGIN` rather than a role: in kobai a **Role** is the named set of Permissions a
  * Merchant holds (`CONTEXT.md`), and this is a Postgres one — the same care
  * `packages/core/src/testing/database.ts` takes to say "maintenance" rather than "admin".
+ *
+ * Both names carry this checkout's own, and the space in front of it is one more awkward
+ * character in a name that already had to survive quoting.
  */
 const POSTGRES_LOGIN = {
-  user: "kobai admin=1",
+  user: scopedTo(COMPOSE_PROJECT, "kobai admin=1"),
   password: PASSWORD,
   dotenvPassword: DOTENV_PASSWORD,
+  database: scopedTo(COMPOSE_PROJECT, "kobai db=1"),
+} as const;
+
+/**
+ * What this file called the same two things before #282, when neither carried a checkout.
+ *
+ * A Postgres volume older than that change may still be holding that role, stuck for exactly
+ * the reason the ticket describes — and nothing else will ever clear it, since no run creates
+ * those names any more. Both are exact, and both are this file's own, so this reaches nothing
+ * a human made. **Delete it once no volume predates #282.**
+ */
+const LEGACY_LOGIN = {
+  user: "kobai admin=1",
   database: "kobai db=1",
 } as const;
 
@@ -84,29 +165,39 @@ async function deriveTheLogin(): Promise<string> {
 }
 
 /**
- * Runs `work` with the harness pointed at `url` — the harness itself, not a connection this
- * file opens, because "the suite can sign in with these credentials" is the claim.
+ * Runs `work` with the harness pointed at `url`, and puts `KOBAI_TEST_DATABASE_URL` back.
  *
- * `KOBAI_TEST_DATABASE_URL` is put back afterwards. devbox exports it in front of every
- * script, so it is set under the gate and every other file in this run is using it.
+ * devbox exports that variable in front of every script, so it is set under the gate and
+ * every other file in this run is using it.
+ */
+async function pointingTheHarnessAt<T>(url: string, work: () => Promise<T>): Promise<T> {
+  const previous = process.env.KOBAI_TEST_DATABASE_URL;
+  process.env.KOBAI_TEST_DATABASE_URL = url;
+  try {
+    return await work();
+  } finally {
+    if (previous === undefined) delete process.env.KOBAI_TEST_DATABASE_URL;
+    else process.env.KOBAI_TEST_DATABASE_URL = previous;
+  }
+}
+
+/**
+ * Runs `work` against a throwaway database of the harness's own making, signed in as `url`
+ * says — the harness itself, not a connection this file opens, because "the suite can sign in
+ * with these credentials" is the claim.
  */
 async function asHarness<T>(
   url: string,
   work: (database: Awaited<ReturnType<typeof createTestDatabase>>) => Promise<T>,
 ): Promise<T> {
-  const previous = process.env.KOBAI_TEST_DATABASE_URL;
-  process.env.KOBAI_TEST_DATABASE_URL = url;
-  try {
+  return pointingTheHarnessAt(url, async () => {
     const database = await createTestDatabase();
     try {
       return await work(database);
     } finally {
       await database.drop();
     }
-  } finally {
-    if (previous === undefined) delete process.env.KOBAI_TEST_DATABASE_URL;
-    else process.env.KOBAI_TEST_DATABASE_URL = previous;
-  }
+  });
 }
 
 /** `"` doubled, the way Postgres quotes an identifier holding a space or an `=`. */
@@ -120,41 +211,110 @@ function literal(value: string): string {
 }
 
 /**
- * Runs maintenance SQL as the Developer's own superuser — the credentials this checkout is
+ * Runs maintenance work as the Developer's own superuser — the credentials this checkout is
  * already running under — through a throwaway database of the harness's own making.
  */
-async function asSuperuser(statements: readonly string[]): Promise<void> {
+async function asSuperuser<T>(
+  work: (database: Awaited<ReturnType<typeof createTestDatabase>>) => Promise<T>,
+): Promise<T> {
   const database = await createTestDatabase();
   try {
-    for (const statement of statements) await database.query(statement);
+    return await work(database);
   } finally {
     await database.drop();
   }
 }
 
-/** The Postgres login the end-to-end cases sign in as, created and dropped around them. */
-const login = {
-  create: [
-    `drop database if exists ${identifier(POSTGRES_LOGIN.database)} with (force)`,
-    `drop role if exists ${identifier(POSTGRES_LOGIN.user)}`,
+/**
+ * Everything a Postgres login of this file's owns, gone — and **the same call whether the run
+ * that made it finished or was killed** (#282). `beforeAll` reconciles with it and `afterAll`
+ * cleans up with it, so the repair is on the path every run already takes rather than on one
+ * a human has to remember with `psql`.
+ *
+ * Three statements, in an order that is the whole of the fix:
+ *
+ * 1. **The databases the login owns, found by owner.** This is the load-bearing one, and it
+ *    is the one the ticket's three shapes do not include: `drop owned by` deliberately does
+ *    **not** remove a database — a database is not "within the current database" — so the
+ *    dependency that refuses `drop role` survives it. Watched: against a role owning one, the
+ *    two statements below still answered `cannot be dropped because some objects depend on it
+ *    … owner of database`. By **owner** rather than by name because the databases that
+ *    actually pin the role down are `createTestDatabase`'s own `kobai_test_<random hex>`
+ *    throwaways, made under this login by `asHarness` and named nothing anyone wrote down.
+ * 2. **`drop owned by`**, for anything the login owns in the database this is running in and
+ *    for its privileges on shared objects. It takes no `if exists`, which is why the role is
+ *    asked after first.
+ * 3. **`drop role`**, which by then has nothing left depending on it.
+ *
+ * **The role is matched by its exact name, bound as a parameter, and never by a pattern.**
+ * `drop owned by` drops what a role owns, so aiming it at a `like` would be a real hazard —
+ * `kobai admin=1 %` would reach another checkout's role on a shared Postgres, and a bare
+ * `kobai%` a Developer's own. The two names it is ever handed are this file's own: this
+ * checkout's, and the one this file used before #282.
+ */
+async function clearAway(
+  database: Awaited<ReturnType<typeof createTestDatabase>>,
+  login: { readonly user: string; readonly database: string },
+): Promise<void> {
+  const [present] = await database.query<{ present: number }>(
+    "select 1 as present from pg_roles where rolname = $1",
+    [login.user],
+  );
+
+  if (present !== undefined) {
+    const owned = await database.query<{ name: string }>(
+      "select datname as name from pg_database join pg_roles on datdba = pg_roles.oid where rolname = $1",
+      [login.user],
+    );
+    for (const { name } of owned) {
+      await database.query(`drop database if exists ${identifier(name)} with (force)`);
+    }
+
+    await database.query(`drop owned by ${identifier(login.user)}`);
+    await database.query(`drop role ${identifier(login.user)}`);
+  }
+
+  // Unconditional, because a database can outlive the role that owned it only if something
+  // reassigned it — and this name belongs to this file either way.
+  await database.query(
+    `drop database if exists ${identifier(login.database)} with (force)`,
+  );
+}
+
+/** This checkout's login and the one that predates #282, both cleared away. */
+async function clearTheLoginsAway(
+  database: Awaited<ReturnType<typeof createTestDatabase>>,
+): Promise<void> {
+  await clearAway(database, POSTGRES_LOGIN);
+  await clearAway(database, LEGACY_LOGIN);
+}
+
+/**
+ * That login, made — and whatever the last run left behind cleared away first, in the same
+ * session, because a throwaway database costs more than every statement in it.
+ */
+async function createTheLogin(): Promise<void> {
+  await asSuperuser(async (database) => {
+    await clearTheLoginsAway(database);
     // `createdb` because that is what the harness does with a maintenance database: one
-    // throwaway per test file.
-    `create role ${identifier(POSTGRES_LOGIN.user)} with login createdb password ${literal(POSTGRES_LOGIN.password)}`,
-    `create database ${identifier(POSTGRES_LOGIN.database)} owner ${identifier(POSTGRES_LOGIN.user)}`,
-  ],
-  drop: [
-    `drop database if exists ${identifier(POSTGRES_LOGIN.database)} with (force)`,
-    `drop role if exists ${identifier(POSTGRES_LOGIN.user)}`,
-  ],
-} as const;
+    // throwaway per test file. It is also what makes the role hard to drop later, since
+    // every database it creates is a dependency on it.
+    await database.query(
+      `create role ${identifier(POSTGRES_LOGIN.user)} with login createdb password ${literal(POSTGRES_LOGIN.password)}`,
+    );
+    await database.query(
+      `create database ${identifier(POSTGRES_LOGIN.database)} owner ${identifier(POSTGRES_LOGIN.user)}`,
+    );
+  });
+}
 
 beforeAll(async () => {
-  await asSuperuser(login.create);
+  await createTheLogin();
 });
 
 afterAll(async () => {
   await discardCheckouts();
-  await asSuperuser(login.drop);
+  await asSuperuser(clearTheLoginsAway);
 });
 
 describe("the credentials the test harness dials with", () => {
@@ -298,6 +458,87 @@ describe("the credentials the test harness dials with", () => {
     });
 
     expect(new URL(KOBAI_TEST_DATABASE_URL).port).not.toBe("");
+  });
+});
+
+/**
+ * The interruption this file used to need a human to recover from (#282).
+ *
+ * It comes last of the two describes that touch the login, because it takes the login apart
+ * and puts it back: everything above has run by the time it starts, and the describe below
+ * asks nothing of Postgres at all.
+ */
+describe("a run that was killed before it could clean up", () => {
+  /**
+   * A database made under this run's login and deliberately never dropped — what an
+   * interrupted run leaves, staged. Its name is the harness's own random one, which is the
+   * point: nothing could look for it by name.
+   */
+  async function abandonADatabase(): Promise<string> {
+    return pointingTheHarnessAt(
+      await deriveTheLogin(),
+      async () => (await createTestDatabase()).name,
+    );
+  }
+
+  it("gives its Postgres login the name this checkout's containers carry", async () => {
+    // Not tidiness: a fixed name is a role every checkout sharing a Postgres competes for,
+    // and one an interrupted run leaves in every one of their way. This is the same
+    // `COMPOSE_PROJECT_NAME` `docker ps` shows, from the same hash of the same path (#21) —
+    // so a leaked role is attributable to a checkout, and a sweep can find them by prefix.
+    expect(COMPOSE_PROJECT).not.toBe("");
+    expect(POSTGRES_LOGIN.user).toBe(`kobai admin=1 ${COMPOSE_PROJECT}`);
+    expect(POSTGRES_LOGIN.database).toBe(`kobai db=1 ${COMPOSE_PROJECT}`);
+  });
+
+  // The name above is only this checkout's if the derivation was handed this checkout's path,
+  // and the hash is of the *string*: a trailing slash is a different checkout as far as
+  // `cksum` is concerned, so every name in this file would follow it while each assertion
+  // went on agreeing with itself about the wrong one. That is exactly what the first version
+  // of this did, and the leaked role sat untouched under the real name the whole time. So the
+  // path is held against the one devbox actually passes, which is the side nothing here
+  // derived — and unlike the project name, it is not something anyone pins. Skipped outside
+  // devbox, the one place there is no second side to ask.
+  it.skipIf(process.env.DEVBOX_PROJECT_ROOT === undefined)(
+    "hands the derivation the very path devbox hands it",
+    () => {
+      expect(thisCheckout()).toBe(process.env.DEVBOX_PROJECT_ROOT);
+    },
+  );
+
+  it("refuses a name Postgres would silently truncate", () => {
+    // Reachable only through a pinned COMPOSE_PROJECT_NAME — a derived one is 14 bytes — and
+    // what it prevents is a role created under one name and dialled under another, which
+    // arrives as an authentication failure naming neither.
+    expect(() => scopedTo(`kobai-${"x".repeat(60)}`, "kobai admin=1")).toThrow(/63/);
+    expect(() => scopedTo(COMPOSE_PROJECT, "kobai admin=1")).not.toThrow();
+  });
+
+  it("is repaired by the next attempt rather than by a human with psql", async () => {
+    const abandoned = await abandonADatabase();
+
+    // The refusal the ticket is named for, watched rather than described — otherwise the
+    // repair below would prove nothing, since a role nothing depends on drops cleanly and
+    // the assertions would read identically.
+    await expect(
+      asSuperuser((database) =>
+        database.query(`drop role ${identifier(POSTGRES_LOGIN.user)}`),
+      ),
+    ).rejects.toThrow(/cannot be dropped because some objects depend on it/);
+
+    // Exactly what `beforeAll` does, and the only thing the next run does differently from
+    // the one that was killed.
+    await createTheLogin();
+
+    await expect(
+      asSuperuser((database) =>
+        database.query("select datname from pg_database where datname = $1", [abandoned]),
+      ),
+    ).resolves.toEqual([]);
+    const session = await asHarness(await deriveTheLogin(), (database) =>
+      database.query<{ user: string }>("select current_user as user"),
+    );
+    expect(session[0]?.user).toBe(POSTGRES_LOGIN.user);
   });
 });
 

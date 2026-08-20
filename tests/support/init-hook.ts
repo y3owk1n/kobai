@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
@@ -79,6 +79,23 @@ export async function checkoutPinning(dotenv: string): Promise<string> {
  */
 export async function checkoutWithNoDotenv(): Promise<string> {
   return join(await checkoutWorkspace(), "no-such-checkout");
+}
+
+/**
+ * The checkout the suite is actually running in — not a fabricated one.
+ *
+ * Every other caller here wants a checkout it invented, because the subject is what the
+ * derivation does with an arbitrary path. This one is for the opposite question: what *this*
+ * run's containers, ports and database objects are called, which is one number and has to
+ * stay one number (#21). Running the hook against this path is how a test asks for it
+ * without exporting a second derivation of its own.
+ */
+export function thisCheckout(): string {
+  // `resolve` for the trailing slash a directory URL carries and `DEVBOX_PROJECT_ROOT` does
+  // not. It is one byte and it is the whole answer: the hash is of the *string*, so a path
+  // ending in `/` derives a different port, a different project and a different name for
+  // everything below — silently, and agreeing with itself wherever both sides asked here.
+  return resolve(fileURLToPath(repoRoot));
 }
 
 /** Drops every checkout made above. For an `afterAll`. */

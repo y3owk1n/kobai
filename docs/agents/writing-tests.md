@@ -782,6 +782,40 @@ would otherwise pair up and blank a live offence out of the scan, which is ADR-0
 arriving as a green build. And each assertion it made this repository rewrite was watched
 failing against a build that stores something, which the version it replaced passed.
 
+**A test that creates a Postgres *role* owns the cleanup nothing else can do, and it has to
+survive being killed** (#282). `createTestDatabase`'s throwaway database is server-level too,
+and an interrupted run leaks one — but its name is random, so it collides with nothing, and
+`drop database` never refuses. A role's name is written down: it outlives both the database and
+the run, and `tests/the-postgres-credentials-belong-to-dot-env.test.ts` — still the only file
+here that creates one — spent a while leaving behind a role that no later run could drop. It
+presented as a dozen timeouts in unrelated files, which is the expensive kind of failure. Three
+things, and a fourth that is the one actually doing the work:
+
+- **Name it after this checkout**, from the derivation that already names the containers:
+  `runInitHook({ root: thisCheckout(), report: ["COMPOSE_PROJECT_NAME"] })`. Never a second
+  hash of your own (#21). That is what stops a leak being *contagious* — no other checkout has
+  one by that name — and lets a leaked set be swept by prefix. **Hold `thisCheckout()` against
+  `DEVBOX_PROJECT_ROOT`**, which is the one side of this nobody derives and nobody pins: the
+  hash is of the *string*, so a trailing slash is a different checkout and every name follows
+  it while each assertion goes on agreeing with itself.
+- **Renaming one leaves the old name stranded**, since nothing creates it any more and so
+  nothing reconciles it. Clear the old pair away beside the new one, by exact name, and say
+  when that can go.
+- **Reconcile at set-up**, not only at teardown. The run that was killed is not coming back;
+  the next one is the only thing that can repair it, and a `beforeAll` that assumes a clean
+  server is asking for a human with `psql`.
+- **`drop owned by` before `drop role`**, which is the standard answer to
+  `cannot be dropped because some objects depend on it`.
+- **And find the databases the role owns *by owner*, because `drop owned by` does not remove
+  one.** A database is not "within the current database", so the dependency that refuses the
+  drop survives it — this was watched, and it means the standard answer alone is not one. The
+  databases in question are `createTestDatabase`'s own `kobai_test_<random hex>`, made under
+  that login, so nothing could look for them by name.
+
+**Match the role by its exact name, bound as a parameter — never by a `like`.** `drop owned by`
+drops what a role owns, so a pattern is the one thing here that can reach something a human
+made.
+
 Real Postgres rather than a fake, because under
 [ADR-0004](../adr/0004-plugins-own-their-tables-core-tables-are-closed.md),
 [ADR-0011](../adr/0011-postgres-and-drizzle.md) and ADR-0030 the schema and its migrations
