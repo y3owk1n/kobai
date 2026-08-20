@@ -83,7 +83,7 @@ import {
  * > A Shopper **browses a Collection**, **opens a product page** and **picks an option**, **adds
  * > it to a Cart**, **has the stock held**, **pays through a bank redirect**, and **the Order
  * > exists once the bank has answered — whether or not the Shopper came back to the tab**. **The
- * > Merchant dispatches** it, and **the Shopper reads it back dispatched**. And the same purchase
+ * > Merchant dispatches it**, and **the Shopper reads it back dispatched**. And the same purchase
  * > completes through the hosted Checkout as through a Developer's own.
  *
  * So the journey walks as far as today's surface allows: browse the catalog, follow one of the

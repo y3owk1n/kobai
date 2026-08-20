@@ -17,7 +17,9 @@ one Order; those are unique indexes rather than conditional updates, and both ar
 
 No sequential assertion can see any of this, so **the guardrail is a concurrent test** —
 `packages/core/src/reservation/the-last-unit.test.ts`, dispatching many `POST /store/orders` at
-one unit of stock. **There are three of them.** The second is
+one unit of stock. **There are four of them, and the fourth is not about scarcity at all** —
+`packages/core/src/fulfilment/the-fulfilment-dispatched-twice.test.ts`, under the Fulfilment
+lifecycle below. The second is
 `packages/core/src/reservation/the-variant-that-vanished.test.ts` — the same shape on the path
 where no money is involved (#145), dispatching six
 `DELETE /admin/variants/{id}` and six `PUT …/inventory` together after the count path was found
@@ -211,7 +213,12 @@ Order is immutable either way (ADR-0009). Six things about the surface over it a
   direction. The `where` names the states the move is legal from, derived from the same table the
   refusals are, so two Merchants dispatching one Fulfilment at once produce one 200 and one
   refusal rather than two 200s and a lost tracking reference. The refusal is read **after** the
-  failed write, so it names where the Fulfilment actually is.
+  failed write, so it names where the Fulfilment actually is. **That is the fourth concurrent
+  test** — `packages/core/src/fulfilment/the-fulfilment-dispatched-twice.test.ts`, beside the
+  three Reservation ones — and it was watched failing against the select-then-update shape, at
+  twenty of twenty-four requests answered 200. Its own header carries the one thing that departs
+  from the others: it dispatches **more** than the connection pool rather than fewer, because
+  here the queue is what makes the window visible, and at eight the broken build passed.
 - **`fulfilment:write`, and there is no `fulfilment:read`.** Dispatching is its own power so
   warehouse staff can dispatch and do nothing else; a Fulfilment is *read* through its Order,
   which `order:read` already covers, and the house rule adds a Permission when a route needs one

@@ -1,5 +1,5 @@
-import type { Order, OrderAddress } from "@kobai/client";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { Order, OrderAddress } from "@kobai/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ReceiptTextIcon } from "lucide-react";
 import { Fragment } from "react";
@@ -18,7 +18,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Empty,
   EmptyDescription,
@@ -27,6 +26,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -38,12 +38,7 @@ import {
 import { useCrumbTitle } from "@/lib/crumb";
 import { formatAmount } from "@/lib/money";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
-import {
-  fulfilmentReasonOf,
-  orderReasonOf,
-  orThrow,
-  problemOf,
-} from "@/lib/refusal";
+import { fulfilmentReasonOf, orderReasonOf, orThrow, problemOf } from "@/lib/refusal";
 import { useRouteId } from "@/lib/route";
 import { useKobaiClient } from "@/lib/session";
 
@@ -334,8 +329,8 @@ function Fulfilments({
         <CardTitle>How it gets there</CardTitle>
         <CardDescription>
           One entry per way this Order is delivered, each on its own timeline. There is no
-          status on the Order itself: a parcel and an emailed file do not share a lifecycle,
-          so dispatching one leaves the other exactly where it was.
+          status on the Order itself: a parcel and an emailed file do not share a
+          lifecycle, so dispatching one leaves the other exactly where it was.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6">

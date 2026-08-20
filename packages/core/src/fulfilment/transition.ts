@@ -54,6 +54,19 @@ export type FulfilmentTransition =
       readonly detail: string;
     };
 
+/**
+ * Which Fulfilment of which Order — both halves, because both are addressed.
+ *
+ * One object rather than two adjacent `string` parameters, and it is not tidiness: a
+ * `(orderId, fulfilmentId)` pair typechecks just as well transposed, and the failure it produces
+ * is `fulfilment-not-found` on a request that named two real records. Named, it cannot be
+ * written down the wrong way round.
+ */
+export type FulfilmentAddress = {
+  readonly orderId: string;
+  readonly fulfilmentId: string;
+};
+
 /** What a dispatch records beside the state, and the whole of what any transition takes. */
 export type FulfilmentTransitionInput = {
   /**
@@ -68,16 +81,15 @@ export type FulfilmentTransitionInput = {
 
 export async function transitionFulfilment(
   db: Database,
-  orderId: string,
-  fulfilmentId: string,
+  { orderId, fulfilmentId }: FulfilmentAddress,
   to: FulfilmentState,
   input: FulfilmentTransitionInput = {},
 ): Promise<FulfilmentTransition> {
   // A string that could never be an identifier and one nothing carries are the same answer to
-  // the caller, exactly as `IdParam`'s own description says.
-  if (!isUuid(orderId) || !isUuid(fulfilmentId)) {
-    return isUuid(orderId) ? noSuchFulfilment() : noSuchOrder();
-  }
+  // the caller, exactly as `IdParam`'s own description says. The outer address first, because
+  // naming that one is what tells a Merchant which half to fix.
+  if (!isUuid(orderId)) return noSuchOrder();
+  if (!isUuid(fulfilmentId)) return noSuchFulfilment();
 
   const [moved] = await db
     .update(fulfilment)

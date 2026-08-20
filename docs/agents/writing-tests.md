@@ -452,8 +452,13 @@ at six Variants together and holds every count to one of the two answers that ar
 `packages/core/src/reservation/the-cart-that-held-twice.test.ts` is the third, and it is the one
 whose subject is a lock rather than a conditional update — it dispatches eight holds at one Cart
 and eight at one unit of stock, because claim-or-adopt asks about *other* rows and so takes
-ADR-0018's other mechanism (ADR-0070). Four things about how they are written carry to the next
-one:
+ADR-0018's other mechanism (ADR-0070).
+`packages/core/src/fulfilment/the-fulfilment-dispatched-twice.test.ts` is the **fourth** (#320),
+and it is the one on a path where nothing is scarce at all: two Merchants dispatching one
+Fulfilment, where the forbidden shape loses a *tracking reference* rather than a unit of stock —
+which is why its last assertion is that the row carries the **winner's**, since a lost update
+leaves the Fulfilment `dispatched` either way. Four things about how they are written carry to the
+next one:
 
 - **Assert on what the losers were told, and on the books, not only on the winner.** One 201, and
   every other request refused with the *reason that is true* rather than failing some other way;
@@ -463,9 +468,14 @@ one:
   loser has been charged and refunded for a purchase that never happened.
 - **A Cart each, not one Cart many times.** A Cart becomes exactly one Order, so the second shape
   is a test about *that* uniqueness rather than about scarcity, and it would pass either way.
-- **How many is a named constant with its reason beside it.** Big enough that more than one
-  request is inside the gap on any scheduling, small enough to stay well inside the connection
-  pool — queueing behind connections serialises the very thing the test exists to overlap.
+- **How many is a named constant with its reason beside it, and the number is *measured*.** The
+  three Reservation tests stay well inside the connection pool, because queueing behind
+  connections serialises the very thing they exist to overlap. **The fourth goes the other way and
+  says so** — it dispatches twenty-four against a pool of ten, because there the queue is what
+  makes the window visible — and the reason that departure is written down rather than merely
+  taken is that at eight the *broken* implementation answered one 200 and passed. **Watch the
+  number fail, not only the shape**: a count too small is a green run over exactly the thing the
+  test forbids.
 - **Each was watched failing before it was made to pass** — the first against a deliberately
   non-atomic hold, the second against the two loose statements it was written about — and what
   each run did is written down in its own file. **Write the next such test the same way round**;

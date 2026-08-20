@@ -2021,7 +2021,7 @@ const readOrderRoute = createRoute({
  * to drift from the one status map every refusal actually goes through. Each route still
  * declares its own 200, because that is the one thing about them that differs — the sentence.
  */
-const FULFILMENT_TRANSITION_REFUSALS = {
+const REFUSALS_MOVING_A_FULFILMENT = {
   400: json(
     "The request does not fit this endpoint's schema.",
     contract.FulfilmentRefusal,
@@ -2057,7 +2057,7 @@ const dispatchFulfilmentRoute = createRoute({
   },
   responses: {
     200: json("The Fulfilment, dispatched.", contract.Fulfilment),
-    ...FULFILMENT_TRANSITION_REFUSALS,
+    ...REFUSALS_MOVING_A_FULFILMENT,
   },
 });
 
@@ -2072,7 +2072,7 @@ const deliverFulfilmentRoute = createRoute({
   request: { params: contract.OrderFulfilmentParams },
   responses: {
     200: json("The Fulfilment, delivered.", contract.Fulfilment),
-    ...FULFILMENT_TRANSITION_REFUSALS,
+    ...REFUSALS_MOVING_A_FULFILMENT,
   },
 });
 
@@ -2087,7 +2087,7 @@ const cancelFulfilmentRoute = createRoute({
   request: { params: contract.OrderFulfilmentParams },
   responses: {
     200: json("The Fulfilment, cancelled.", contract.Fulfilment),
-    ...FULFILMENT_TRANSITION_REFUSALS,
+    ...REFUSALS_MOVING_A_FULFILMENT,
   },
 });
 
@@ -2675,14 +2675,18 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
    * a promised response and a produced one the same thing. So each handler is three lines, and
    * what they share is `transitionFulfilment` and one status map.
    */
+  /** The two identifiers this route was addressed at, as the one thing they are. */
+  const addressed = (params: { readonly id: string; readonly fulfilmentId: string }) => ({
+    orderId: params.id,
+    fulfilmentId: params.fulfilmentId,
+  });
+
   guarded.openapi(dispatchFulfilmentRoute, async (c) => {
-    const params = c.req.valid("param");
     // The body is optional — a dispatch that records no tracking reference is the ordinary case
     // for a download — so an absent one is an empty request rather than a refused one.
     const moved = await transitionFulfilment(
       deps.db,
-      params.id,
-      params.fulfilmentId,
+      addressed(c.req.valid("param")),
       "dispatched",
       c.req.valid("json") ?? {},
     );
@@ -2691,11 +2695,9 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(deliverFulfilmentRoute, async (c) => {
-    const params = c.req.valid("param");
     const moved = await transitionFulfilment(
       deps.db,
-      params.id,
-      params.fulfilmentId,
+      addressed(c.req.valid("param")),
       "delivered",
     );
     if (!moved.ok) return refused(c, moved, FULFILMENT_TRANSITION_STATUS);
@@ -2703,11 +2705,9 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   });
 
   guarded.openapi(cancelFulfilmentRoute, async (c) => {
-    const params = c.req.valid("param");
     const moved = await transitionFulfilment(
       deps.db,
-      params.id,
-      params.fulfilmentId,
+      addressed(c.req.valid("param")),
       "cancelled",
     );
     if (!moved.ok) return refused(c, moved, FULFILMENT_TRANSITION_STATUS);
@@ -2976,11 +2976,12 @@ const CHANNEL_DELETION_STATUS = {
  * Moving a Fulfilment answers three ways, and the **409** is the one carrying a decision (#320).
  *
  * 409 rather than 422, on `cart-placed`'s distinction and for its reason: what refuses this is
- * the state the record is already in, and *somebody got there first* is the ordinary way a
- * Merchant meets it — the Admin only offers a control the state allows, so the refusal that
- * actually happens is a screen that went stale while a colleague dispatched. 422 is for a body
- * that is well formed and refused by how the Store is configured (`unknown-fulfilment-strategy`,
- * `currency-not-enabled`), and there is no configuration here to fix.
+ * the state the record is already in — the *record* conflicts, rather than the Store's
+ * configuration disagreeing with a well-formed body, which is what 422 is for
+ * (`unknown-fulfilment-strategy`, `currency-not-enabled`) and there is nothing configured here
+ * to fix. The Admin offers all three controls on every Fulfilment and renders whichever of these
+ * comes back, so these are ordinary answers rather than a last line of defence — see
+ * `docs/agents/the-admin.md` for why it holds no copy of the transition table.
  *
  * Two 404s, because there are two addresses: `POST /admin/orders/{a}/fulfilments/{b}/dispatch`
  * can be wrong about either, and naming which half is what tells a Merchant what to fix.
