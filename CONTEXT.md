@@ -91,7 +91,7 @@ is really run, not a sample to copy. The Template below is a different thing.
 
 **Template**:
 The tree `create-kobai` writes into a new directory, generated from the Reference Project by
-`devbox run template:generate` and checked in beside the scaffolder. It is an artifact, not a
+`pnpm run template:generate` and checked in beside the scaffolder. It is an artifact, not a
 source: it is never hand-edited, and a test regenerates it and fails the build if the two
 have drifted — see ADR-0034.
 _Avoid_: boilerplate, skeleton, scaffold (the noun; scaffolding is the act)

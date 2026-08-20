@@ -56,7 +56,7 @@ New to the project? These five carry the shape of everything else:
 | [0028](./0028-the-core-membership-rule.md) | The Core membership rule | Accepted |
 | [0029](./0029-the-reference-project-is-the-release-gate-and-content-is-built-first.md) | The reference Project is the release gate, and ~~the content Plugin is built first~~ | **"Content first" amended by 0051.** Release gate stands |
 | [0030](./0030-generate-and-migrate-only-never-drizzle-kit-push.md) | `generate` and `migrate` only — never `drizzle-kit push` | Accepted |
-| [0031](./0031-the-runtime-shape-devbox-a-pnpm-workspace-hono-and-one-gate.md) | The runtime shape: devbox, a pnpm workspace, Hono, and one gate command | Accepted |
+| [0031](./0031-the-runtime-shape-devbox-a-pnpm-workspace-hono-and-one-gate.md) | The runtime shape: ~~devbox~~, a pnpm workspace, Hono, and one gate command | **Toolchain and gate clauses superseded by 0083.** Workspace and Hono stand |
 | [0032](./0032-merchant-sessions-travel-in-an-httponly-cookie.md) | Merchant sessions travel in an httpOnly cookie, and SameSite is the CSRF answer | Accepted |
 | [0033](./0033-the-admins-shape-a-vendored-vite-spa-at-a-path.md) | The Admin's shape: a vendored Vite SPA, built into the Project and served at a path | Accepted — its CSS exclusion lifted by 0039 |
 | [0034](./0034-kobai-is-published-and-the-reference-project-is-what-create-kobai-generates.md) | kobai's packages are published, and the reference Project is what `create-kobai` generates | Accepted |
@@ -71,7 +71,7 @@ New to the project? These five carry the shape of everything else:
 | 0043 | *Never used* — a number reserved and then given up | **Burned.** Never reassigned — see [Conventions](#conventions) |
 | [0044](./0044-the-cli-and-migrator-agreement-is-asserted-in-the-gate.md) | The CLI/migrator agreement is asserted in the gate, not behind an opt-in step | Accepted — enforces 0030 |
 | [0045](./0045-sessions-expire-on-inactivity-under-an-absolute-cap.md) | Sessions expire on inactivity, under an absolute cap | **"The window is hardcoded" superseded by 0050.** Rest stands |
-| [0046](./0046-the-postgres-credentials-belong-to-dot-env-too.md) | The Postgres credentials come from `.env`, and devbox is where they are encoded | Accepted — completes 0031 |
+| [0046](./0046-the-postgres-credentials-belong-to-dot-env-too.md) | The Postgres credentials come from `.env`, ~~and devbox is where they are encoded~~ | **Superseded by 0084**, which keeps its one-source rule |
 | [0047](./0047-the-test-harness-is-promised-surface.md) | The test harness is promised surface, and it is not a sixth Extension Point | Accepted |
 | [0048](./0048-readiness-is-asked-over-the-transport-the-application-uses.md) | Readiness is asked over the transport the application uses, and waiting is not migrating | Accepted |
 | [0049](./0049-migration-counts-are-derived-and-the-strength-moved-to-the-effect.md) | Migration counts are derived, and the strength moved to the effect | Accepted |
@@ -108,6 +108,8 @@ New to the project? These five carry the shape of everything else:
 | [0080](./0080-a-deployment-describes-itself.md) | A deployment describes itself | Accepted — **0010's second finding**, after 0067; bounded by 0067 and gated by a new Permission |
 | [0081](./0081-the-playground-attaches-its-credential-and-omits-the-ambient-one.md) | The Playground attaches its credential, and omits the ambient one | Accepted — extends 0032 and 0055; **defers a bearer credential for `/admin`** |
 | [0082](./0082-a-detached-media-is-still-the-stores.md) | A detached Media is still the Store's, and kobai deletes no bytes | Accepted — 0059's rule reached one table out, held by a `restrict`; **declines 0078's `remove`** and says what would settle it |
+| [0083](./0083-the-commands-live-in-package-json-and-devbox-is-not-required.md) | The commands live in `package.json`, and devbox is not required | **Decided, being carried out under #304.** Supersedes two of 0031's four clauses; moves 0030's and 0039's guardrails |
+| [0084](./0084-a-linked-worktree-seeds-its-own-dot-env.md) | A linked worktree seeds its own `.env` | **Decided, being carried out under #304.** Supersedes 0046, whose one-source rule it keeps; completes 0083 |
 
 ## Prototypes
 

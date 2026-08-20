@@ -1,5 +1,16 @@
 # The Postgres credentials come from `.env`, and devbox is where they are encoded
 
+> **Superseded by [ADR-0084](./0084-a-linked-worktree-seeds-its-own-dot-env.md).** Its
+> subject — the `awk` `.env` reader and the two percent-encoders in `devbox.json`'s
+> `init_hook` — no longer exists: docker compose reads `.env` natively and so does Node.
+> **The rule survives and is restated there**: one source decides where the container comes
+> up *and* who it lets in, so an address is assembled from the parts at run time and never
+> written down alongside them. So does the finding underneath it — `pg` decodes the user and
+> password with `decodeURIComponent` and the database name with `decodeURI` — now two lines
+> of Node instead of thirty of `awk`. **The change is being carried out under
+> [#304](https://github.com/y3owk1n/kobai/issues/304)**; until it lands, the hook below
+> is still what runs.
+
 `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` decide what the `db` service comes up
 holding **and** what every address kobai derives signs in with. `devbox.json`'s `init_hook`
 reads all three out of `.env` the way it already read `POSTGRES_PORT`, percent-encodes them,
