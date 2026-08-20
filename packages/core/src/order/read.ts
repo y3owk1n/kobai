@@ -1,4 +1,5 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
+import type { OrderAddress } from "../address/address.ts";
 import type { Queryable } from "../db/client.ts";
 import {
   cursorAt,
@@ -8,7 +9,13 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { order, orderAdjustment, orderLineItem, payment } from "../db/schema.ts";
+import {
+  order,
+  orderAddress,
+  orderAdjustment,
+  orderLineItem,
+  payment,
+} from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { type Fulfilment, readFulfilmentsOf } from "../fulfilment/fulfilment.ts";
 
@@ -203,6 +210,20 @@ export type Order = OrderSummary & {
    * database kobai has just been upgraded in.
    */
   readonly fulfilments: readonly Fulfilment[];
+  /**
+   * Where this Order went — a **snapshot** taken at Capture, or `null` for one placed from a
+   * Cart that carried no Address (#319, ADR-0009, ADR-0072).
+   *
+   * Read out of `core_order_address`, which holds copies rather than a reference: correcting the
+   * Address on the Cart, replacing it, taking it off, or deleting the Region it named reaches
+   * none of it. That is the same asymmetry a Line Item's `title` and `unitAmount` carry against
+   * `core_variant`, one noun along.
+   *
+   * On the detail rather than on {@link OrderSummary}, deliberately. A list of Orders is a list
+   * of numbers, money and days; a destination is several lines of prose, and a Merchant asking
+   * where a parcel goes has opened the Order.
+   */
+  readonly address: OrderAddress | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -367,6 +388,22 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
 
   const fulfilments = await readFulfilmentsOf(db, row.id);
 
+  // At most one, in DDL — see `core_order_address`'s unique index on `order_id`. Selected column
+  // by column and **without a join onto `core_region`**, which is the whole of ADR-0009 on this
+  // table: `region_name` is the copy a person reads, and `region_id` is navigation that goes
+  // `null` when the Region does.
+  const [destination] = await db
+    .select({
+      country: orderAddress.country,
+      lines: orderAddress.lines,
+      postalCode: orderAddress.postalCode,
+      regionId: orderAddress.regionId,
+      regionName: orderAddress.regionName,
+    })
+    .from(orderAddress)
+    .where(eq(orderAddress.orderId, row.id))
+    .limit(1);
+
   // At most one, in DDL — see `core_payment`'s unique index on `order_id`.
   const [paid] = await db
     .select(paymentColumns)
@@ -399,6 +436,7 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
     lineItems: lines.map((line) => ({ ...line, adjustments: adjustmentsOf(line.id) })),
     adjustments: ownAdjustments,
     fulfilments,
+    address: destination ? addressOf(destination) : null,
     metadata: row.metadata,
     payment: paid ? paymentOf(paid) : null,
     createdAt: row.createdAt.toISOString(),
@@ -411,6 +449,28 @@ export async function readOrder(db: Queryable, id: string): Promise<Order | unde
  * `orderId` is selected and not reported: the list needs it to say which Order each Payment
  * belongs to, and a caller already holding the Order has no use for it.
  */
+/**
+ * One snapshotted destination as a caller reads it.
+ *
+ * `regionName` is what says whether there was a Region at all, and `regionId` is allowed to be
+ * `null` beside a name that is not: that pair is the whole point of the snapshot, and it is what
+ * an Order whose Region has since been deleted reads as.
+ */
+function addressOf(row: {
+  readonly country: string;
+  readonly lines: readonly string[];
+  readonly postalCode: string | null;
+  readonly regionId: string | null;
+  readonly regionName: string | null;
+}): OrderAddress {
+  return {
+    country: row.country,
+    lines: row.lines,
+    postalCode: row.postalCode,
+    region: row.regionName === null ? null : { id: row.regionId, name: row.regionName },
+  };
+}
+
 const paymentColumns = {
   orderId: payment.orderId,
   id: payment.id,

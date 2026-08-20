@@ -52,6 +52,9 @@ describe("a Merchant sees the Carts the Store is holding", () => {
           // question a Merchant scanning held Carts has (#293).
           currency: "USD",
           region: { id: expect.any(String), name: "USD", currency: "USD" },
+          // On the list as well, and for the list's own reason: a Merchant looking for the
+          // Cart a Shopper is asking about is looking at where it goes (#319).
+          address: null,
           metadata: {},
           expiresAt: expect.any(String),
           expired: false,
@@ -189,6 +192,7 @@ describe("a Merchant opens one Cart", () => {
           metadata: {},
         },
       ],
+      address: null,
       metadata: {},
       expiresAt: expect.any(String),
       expired: false,

@@ -1051,6 +1051,112 @@ export const productCollection = pgTable(
 export type ProductCollectionRow = typeof productCollection.$inferSelect;
 
 /**
+ * An **Address** — where something goes, and nothing else (ADR-0072).
+ *
+ * **Core's own entity, and validating one is not Core's.** ADR-0015 puts Shopper-supplied input
+ * on the Project's side, and the letter of that would put a delivery address there too; ADR-0072
+ * is where following the letter was argued down. The test it draws is whether the thing is an
+ * input to *Core's own arithmetic*: a printing customer's uploaded artwork means nothing to Core
+ * and no two businesses want the same validation of it, where shipping, tax and Fulfilment are
+ * all computed **from** an address. So the entity is here and the judgement is not — address
+ * formats differ by country to a degree no library settles, and refusing a badly-formed address
+ * is a Project's decision.
+ *
+ * **Four columns, and each of them is structural.** `country` is a code, `lines` is whatever a
+ * Shopper wrote and in the order they wrote it, `postal_code` is a string this table has no
+ * opinion about, and `region_id` says which of the Store's Regions it falls in. There is no
+ * `city`, no `state`, no recipient and no telephone number: an address that decomposed into
+ * named parts would be kobai holding an opinion about a country's format, which is the one
+ * thing ADR-0072 rules out.
+ *
+ * **No `metadata`, like `core_fulfilment` and `core_payment` beside it.** ADR-0004's escape
+ * hatch is for an entity somebody has something to say about, and nothing may say anything about
+ * an Address yet — a delivery note belongs on the Cart or on the Line Item, where a Project's
+ * Step already reads one.
+ *
+ * **Nothing about an Order points here** (ADR-0009). Capture copies the whole of it into
+ * `core_order_address`, so an Address a Shopper corrects a year later cannot rewrite where a
+ * past parcel went — which is why the sweep in `cart/an-address-on-a-cart.test.ts` expects
+ * exactly one foreign key onto this table, the Cart's.
+ */
+export const address = pgTable(
+  "core_address",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * ISO 3166-1 alpha-2 — `MY`, `SG`, `GB`.
+     *
+     * **A length check and no table of countries**, which is exactly `core_store_currency`'s
+     * bargain one noun along: what makes a code a *real* country is not a fact this table can
+     * hold, and the length is. A code is the one field here Core's own arithmetic will read —
+     * shipping and tax both key off it — so free text would have been an address kobai could
+     * model nothing from, where a country's own *format* rules remain refused by nothing.
+     */
+    country: text("country").notNull(),
+    /**
+     * The address itself, in the order it should be read — `["12 Jalan Ampang", "Kuala
+     * Lumpur"]`.
+     *
+     * **A list rather than named parts, and that is the decision.** A `city` and a `state`
+     * column would be kobai asserting that every country's addresses decompose that way, which
+     * is the claim ADR-0072 says no library settles. At least one line, in DDL: an address with
+     * none is not an address, which is a shape rather than a format rule.
+     */
+    lines: text("lines").array().notNull(),
+    /**
+     * Nullable, and that is a fact rather than a shortcut.
+     *
+     * Several countries have no postal code at all, so requiring one would be exactly the
+     * country-specific format rule ADR-0072 keeps out of Core. An empty string is refused at the
+     * route for the reason every other optional string here is: it would say a Shopper had
+     * written one.
+     */
+    postalCode: text("postal_code"),
+    /**
+     * Which of the Store's Regions this Address falls in, or `null` for one that names none.
+     *
+     * **`set null`, and it is the third answer this schema gives to the same question.**
+     * `core_cart.region_id` is `set null` because no Merchant can empty a Shopper's Cart, and
+     * `core_price.region_id` cascades because a Price constrained to a Region that no longer
+     * exists can never apply to anything again. Neither transfers here for free, and ADR-0059's
+     * actual test — *is the repair a control the Merchant has* — is what decides it:
+     *
+     * - **`restrict` fails that test.** The rows a refusal would name are Shoppers' Carts.
+     *   Nothing a Merchant can do empties one, so a Region would be undeletable for as long as
+     *   anybody was holding a basket addressed into it.
+     * - **`cascade` destroys something real.** A Price constrained to a deleted Region is a row
+     *   with no remaining meaning; an Address is not — deleting a Region does not move the
+     *   street, and the country, the lines and the postal code are still exactly where the
+     *   parcel goes. Cascading would throw away a Shopper's destination to tidy up a
+     *   Merchant's geography.
+     * - **`set null` leaves the destination whole and drops only the grouping**, which is the
+     *   one part of it that was kobai's rather than the Shopper's. The Cart still reads, still
+     *   quotes and still places, and the repair is the one a storefront already has: send the
+     *   address again naming another Region.
+     *
+     * **The Order's snapshot survives all three regardless**, because it is a copy in
+     * `core_order_address` rather than a reference to this row.
+     */
+    regionId: uuid("region_id").references(() => region.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Deleting a Region asks this table which rows name it, exactly as it asks `core_price` —
+    // and without an index that question is a scan of every Address in the Store.
+    index("core_address_region_idx").on(table.regionId),
+    // `core_price.currency`'s check, said about the other standard: what makes a code a real
+    // ISO 3166-1 code is not a fact this table can hold, and the length is.
+    check("core_address_country_is_iso3166", sql`char_length(${table.country}) = 2`),
+    // An address with no lines is not an address. `cardinality` rather than `array_length`,
+    // which answers `null` for an empty array and so would let one through.
+    check("core_address_has_a_line", sql`cardinality(${table.lines}) > 0`),
+  ],
+);
+
+export type AddressRow = typeof address.$inferSelect;
+
+/**
  * A Cart — a Shopper's **mutable, disposable, unauthoritative** selection before purchase
  * (`CONTEXT.md`, ADR-0009).
  *
@@ -1149,6 +1255,26 @@ export const cart = pgTable(
      * Product left the storefront.
      */
     regionId: uuid("region_id").references(() => region.id, { onDelete: "set null" }),
+    /**
+     * Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said
+     * (#319, ADR-0072).
+     *
+     * **Nullable, and nothing here makes it otherwise.** A Cart with no Address reads, quotes
+     * and places exactly as it did before this column existed — which is also why it needs none
+     * of ADR-0038's three steps. Whether *shipping* requires one is a decision about shipping,
+     * and it is not this column's.
+     *
+     * **One Address per Cart, replaced in place.** Setting one again writes the row that is
+     * already here rather than leaving a second behind, so nothing accumulates rows no route
+     * can reach; `address: null` deletes it and leaves this column `null`. The reference is
+     * `set null` as the backstop for a row deleted some other way (ADR-0004's unmediated
+     * writer), which is a Cart with no Address rather than a Cart nothing can read.
+     *
+     * **An Order does not read through this**, and that is ADR-0009: Capture copies the Address
+     * into `core_order_address`, so a Shopper correcting their details afterwards — or removing
+     * the Address from the Cart entirely — cannot rewrite where a past parcel went.
+     */
+    addressId: uuid("address_id").references(() => address.id, { onDelete: "set null" }),
     /** The Shopper reference's key. Null for a guest, which is the ordinary case (ADR-0020). */
     shopperEmail: text("shopper_email"),
     /** The Shopper's identity in whatever system the storefront actually authenticates against. */
@@ -1431,6 +1557,75 @@ export const orderLineItem = pgTable(
 );
 
 export type OrderLineItemRow = typeof orderLineItem.$inferSelect;
+
+/**
+ * Where an Order went — a **snapshot**, taken at Capture and never read through anything
+ * (#319, ADR-0009, ADR-0072).
+ *
+ * **A table of copies rather than a reference to `core_address`, and that is the whole
+ * decision.** An Order that pointed at the Address row its Cart carried would be rewritten by a
+ * Shopper correcting their details a year later and emptied by one clearing the Address off the
+ * Cart — the same failure ADR-0009 refuses for a Line Item's title and price, one noun along.
+ * So `country`, `lines` and `postal_code` are columns here, and there is **no `address_id`**:
+ * not nullable, not `set null`, absent. Nothing under this row can be edited or deleted,
+ * because there is nothing under it.
+ *
+ * **`region_id` is the one exception and it is navigation only**, exactly as
+ * `core_order_line_item.variant_id` is: `set null`, nullable, and never read for display or
+ * arithmetic. `region_name` beside it is the snapshot, so deleting the Region an Address named
+ * leaves this record saying where the parcel went and losing only the trail back.
+ *
+ * **Its own table rather than columns on `core_order`**, for two reasons that point the same
+ * way. `lines` is a repeated group, so it would be an array column on the Order whatever
+ * happened; and an Order has an Address or has none, so columns there would be four more
+ * nullables whose `null` meant two different things. One row or no row says it once.
+ *
+ * `updated_at` is here on a row nothing updates, and it is `core_order`'s tamper detector rather
+ * than `core_fulfilment`'s expectation of movement: this record should equal `created_at`
+ * forever, and a value that has moved is evidence somebody wrote to a snapshot (ADR-0037).
+ */
+export const orderAddress = pgTable(
+  "core_order_address",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      // An Order's destination is the Order's, exactly as its Line Items are.
+      .references(() => order.id, { onDelete: "cascade" }),
+    /** ISO 3166-1 alpha-2 as at Capture. See `core_address.country`. */
+    country: text("country").notNull(),
+    /** The address itself, in the order it should be read, as at Capture. */
+    lines: text("lines").array().notNull(),
+    postalCode: text("postal_code"),
+    /**
+     * The Region the Address named — **for navigation only**, and `null` once it is deleted.
+     *
+     * `set null` rather than `restrict` or `cascade`, and both alternatives are the ones
+     * ADR-0009 already refuses on a Line Item: a reference that could hold a Merchant's delete
+     * hostage, or take a financial record with it, is the Order depending on live data in a new
+     * place. {@link orderAddress.regionName} is what a person reads.
+     */
+    regionId: uuid("region_id").references(() => region.id, { onDelete: "set null" }),
+    /** What that Region was called at Capture. `null` where the Address named none. */
+    regionName: text("region_name"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // **One destination per Order, in DDL.** Reading an Order reads this by `order_id`, and a
+    // second row would make "where did it go" a question with two answers.
+    uniqueIndex("core_order_address_order_idx").on(table.orderId),
+    // For the `set null` above: deleting a Region asks this table which rows name it.
+    index("core_order_address_region_idx").on(table.regionId),
+    check(
+      "core_order_address_country_is_iso3166",
+      sql`char_length(${table.country}) = 2`,
+    ),
+    check("core_order_address_has_a_line", sql`cardinality(${table.lines}) > 0`),
+  ],
+);
+
+export type OrderAddressRow = typeof orderAddress.$inferSelect;
 
 /**
  * An **Adjustment** — a discount or a surcharge, held as its own row (ADR-0022).

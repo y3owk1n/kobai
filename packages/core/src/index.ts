@@ -6,6 +6,18 @@
  * kept small on purpose.
  */
 
+/**
+ * An Address — the live one a Cart carries, and the **snapshot** an Order holds (ADR-0072).
+ *
+ * Both are named because both are already reachable: `CartToPlace.address` is what a replaced
+ * `place-order` Step is handed, and `Order.address` is what a Capture answers with. Two names for
+ * one noun is ADR-0009's asymmetry made visible — correcting the first cannot rewrite the second,
+ * and `OrderAddress.region.id` goes `null` where its `name` does not.
+ *
+ * `AddressInput` and `ParsedAddress` are deliberately absent: reading a body is Core's, and a
+ * Project that wants to judge an address does so in front of kobai or in a Step of its own.
+ */
+export type { Address, OrderAddress, OrderAddressRegion } from "./address/address.ts";
 export type { ApiKeyKind, IssuedApiKey } from "./auth/api-key.ts";
 export { API_KEY_KINDS, API_KEY_PREFIX } from "./auth/api-key.ts";
 export type { MerchantIdentity, RoleSummary } from "./auth/identity.ts";

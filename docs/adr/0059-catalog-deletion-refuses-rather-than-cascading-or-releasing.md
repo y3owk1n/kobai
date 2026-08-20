@@ -221,6 +221,48 @@ or a `region` a Price could be *moved* to — because that is the first version 
 refusal names a repair that is not simply the cascade performed by hand. Until then the choice is
 between doing it and making the Merchant do it.
 
+## The third answer, and why an Address gets it
+
+**#319 made `core_address.region_id` `on delete set null`** — so deleting a Region leaves every
+Address that named it exactly where it was, minus the Region. That is neither of the two answers
+above, and it is recorded here for the same reason the cascade is: this table's `region_id` reads
+like `core_price`'s and is decided the other way, so a reader arriving at either deserves to find
+out that somebody weighed both.
+
+The same test applies and it rules out the other two — and the section above it is what makes the
+contrast worth reading, because #310 has just shown that reachability was never the *only* thing
+holding the Price cascade up:
+
+- **`restrict` fails it outright, and no route can make it stop failing.** The rows a refusal
+  would name are **Shoppers' Carts**, and no Merchant can empty one — so a Region would be
+  undeletable for as long as anybody was holding a basket addressed into it, and waiting is not an
+  answer either, since a Cart's lifetime is seven days and nothing shortens it. That is where this
+  differs from `core_price.region_id`: there, a list *did* arrive and turned the reachability
+  premise false; here, a list of Addresses would name rows a Merchant still has no way to act on,
+  because the repair belongs to the Shopper. `core_cart.region_id` is already `set null` on
+  exactly this argument.
+- **`cascade` destroys something real, which is where it differs from a Price.** What makes the
+  Price cascade honest is that a Price constrained to a deleted Region *can never apply to
+  anything again* — the row has no remaining meaning. An Address is the opposite: deleting a
+  Region does not move the street, and the country, the lines and the postal code are still
+  precisely where the parcel goes. Cascading would throw a Shopper's destination away to tidy up
+  a Merchant's geography, and the Shopper would find out by having their Cart lose its address.
+- **`set null` drops the one part of an Address that was kobai's rather than the Shopper's.**
+  The Cart still reads, still quotes and still places — nothing makes an Address mandatory — and
+  the repair is a control a storefront already has: send the address again naming another Region.
+
+**The Order's snapshot survives all three regardless, and that is deliberate rather than
+fortunate.** `core_order_address` holds *copies* — there is no `address_id` on it at all — so
+whatever happens to `core_address` reaches nothing that has been bought. The one column it shares
+with this argument is its own `region_id`, which is navigation on a snapshot in the shape
+`core_order_line_item.variant_id` already has: `set null`, with `region_name` beside it as the
+copy a person reads. So a deleted Region leaves a past Order still saying where the parcel went,
+and `order/an-order-remembers-where-it-went.test.ts` asserts that rather than the mechanism.
+
+**What would reopen it:** a route that lists or corrects an Address on somebody else's behalf. The
+whole argument above turns on a Merchant having no control over a Shopper's Cart, and a Merchant
+who could repair one would put `restrict` back on the table.
+
 ## Consequences
 
 - **Both reason strings are now promised in prose and nowhere else.** Until the first publish,

@@ -4614,18 +4614,20 @@ export interface components {
       /** Format: date-time */
       createdAt: string;
     };
-    Order: components["schemas"]["OrderSummary"] & {
+    Order: components["schemas"]["OrderSummary"] & ({
       /** @description In SKU order, the way a Product reports its Variants — not the order they were added to the Cart. Read a line by its `sku` rather than by position. */
       lineItems: components["schemas"]["OrderLineItem"][];
       /** @description The Adjustments on the Order as a whole — the ones belonging to no single line, such as a basket-wide voucher or a delivery surcharge. A line's own are on the line. These are the ones that carry a `tax` of their own, because there is no Line Item whose tax could carry it. */
       adjustments: components["schemas"]["OrderLevelAdjustment"][];
       /** @description How this Order gets to the Shopper — one per way, on independent timelines, because a mixed Order ships a poster and emails a PDF. Empty for an Order placed before Fulfilment existed. */
       fulfilments: components["schemas"]["Fulfilment"][];
+      /** @description Where this Order went, **as at Capture** — a snapshot, so correcting the Address on the Cart, replacing it, taking it off or deleting the Region it named changes none of it (ADR-0009). `null` for an Order placed from a Cart that carried no Address, and for every Order placed before Addresses existed. */
+      address: components["schemas"]["OrderAddress"] | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
       };
-    };
+    });
     OrderLineItem: {
       /** Format: uuid */
       id: string;
@@ -4684,6 +4686,23 @@ export interface components {
       /** @description The Line Items this Fulfilment covers, in the SKU order the Order reports its lines in. Every line of an Order kobai placed is in exactly one. */
       lineItemIds: string[];
     };
+    OrderAddress: {
+      /** @description ISO 3166-1 alpha-2, as at Capture. */
+      country: string;
+      /** @description The address as it should be read, as at Capture. */
+      lines: string[];
+      postalCode: string | null;
+      /** @description The Region the Address named, or `null` where it named none. Inline rather than a `RegionIdentity`: this is a copy, and a Region's currency is a pricing fact rather than part of a destination — the Order carries its own `currency`. */
+      region: ({
+        /**
+         * Format: uuid
+         * @description For navigation only. `null` once that Region has been deleted — `name` beside it is what a person reads.
+         */
+        id: string | null;
+        /** @description What that Region was called at Capture. Renaming it does not reach this. */
+        name: string;
+      }) | null;
+    };
     OrderRefusal: {
       error: string;
       /** @enum {string} */
@@ -4706,6 +4725,8 @@ export interface components {
       currency: string;
       /** @description Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region. */
       region: components["schemas"]["RegionIdentity"] | null;
+      /** @description Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads, quotes and places. */
+      address: components["schemas"]["Address"] | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata: {
         [key: string]: unknown;
@@ -4723,6 +4744,16 @@ export interface components {
       createdAt: string;
       /** Format: date-time */
       updatedAt: string;
+    };
+    Address: {
+      /** @description ISO 3166-1 alpha-2 — `MY`, `SG`, `GB`. Upper-cased on the way in. kobai holds no table of countries and refuses no code it has never heard of; what it will not take is a country that is not a code, because shipping and tax are both worked out from one. */
+      country: string;
+      /** @description The address as it should be read, in that order — at least one. Write the lines the way the destination country writes them; kobai models no `city` and no `state`, because no two countries agree on those. */
+      lines: string[];
+      /** @description `null` where none was given, which is an ordinary Address: several countries have no postal code at all, so kobai requires none and validates the format of none. */
+      postalCode: string | null;
+      /** @description Which of the Store's Regions this Address falls in. `null` for an Address that named none — and for one whose Region has since been deleted, which clears the reference and leaves the destination whole. */
+      region: components["schemas"]["RegionIdentity"] | null;
     };
     /**
      * @description Narrow to Carts in one state. `live` is holding stock and can still be placed, `expired` ran out of time, and `spent` has already become an Order. The three partition the list, so omitting this answers all of them.
@@ -4933,6 +4964,14 @@ export interface components {
        * @description The `id` of the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at. **Left out is the Store's default Region**, so a storefront selling into one market never mentions a Region at all. One this Store has not got is refused with `region-not-found`. There is no `null`: a Cart is always bought somewhere.
        */
       regionId?: string;
+      /** @description Where what is in this Cart is to be delivered. Optional here and at the correction alike — nothing makes an Address mandatory, and a Cart with none reads, quotes and places. kobai checks the **shape and nothing beyond it** (ADR-0072): an `address.regionId` this Store has not got is refused with `region-not-found`, and a postal code no postal authority would recognise is not refused at all. */
+      address?: ({
+        country: string;
+        lines: string[];
+        postalCode?: string | null;
+        /** Format: uuid */
+        regionId?: string;
+      }) | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;
@@ -4949,6 +4988,14 @@ export interface components {
        * @description Move this Cart to another Region — **the same Cart, the same `id` and every Line Item on it**, re-denominated in the new Region's currency and re-priced there on the next read, because a Cart's lines carry no price snapshot (ADR-0009). Naming the Region it is already in changes nothing and is not refused, so a storefront may send the whole state it is holding. Refused with `cart-is-denominated` while this Cart is holding stock — a hold is claimed in the currency the Cart was in, and kobai serves no way to give one back by hand — and with `variant-not-priced-in-region`, naming them, where a line would have no Price in the new Region.
        */
       regionId?: string;
+      /** @description Where what is in this Cart is to be delivered. **The whole Address, replacing whatever is on the Cart** — there is no merge, so a postal code left out of a correction is a postal code taken off. `null` removes the Address altogether; absent leaves it alone. kobai checks the shape and nothing beyond it (ADR-0072). */
+      address?: ({
+        country: string;
+        lines: string[];
+        postalCode?: string | null;
+        /** Format: uuid */
+        regionId?: string;
+      }) | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
         [key: string]: unknown;

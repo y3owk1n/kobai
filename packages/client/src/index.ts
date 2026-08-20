@@ -260,6 +260,20 @@ export type Order = components["schemas"]["Order"];
 export type OrderSummary = components["schemas"]["OrderSummary"];
 export type Payment = components["schemas"]["Payment"];
 /**
+ * Where something goes — the live one a Cart carries, and the **snapshot** an Order holds.
+ *
+ * Two names for one noun, deliberately, and the difference is ADR-0009's: `Address` is a row a
+ * Shopper may correct, and `OrderAddress` is the copy Capture took, so correcting the first
+ * cannot rewrite the second. `OrderAddress.region.id` is `null` once that Region is deleted and
+ * `region.name` beside it is not — navigation and snapshot, exactly as an `OrderLineItem` splits
+ * `variantId` from `title`.
+ *
+ * kobai checks an Address's **shape and nothing beyond it** (ADR-0072): a two-letter country
+ * code, at least one line, and an optional postal code whose format is refused by nothing here.
+ */
+export type Address = components["schemas"]["Address"];
+export type OrderAddress = components["schemas"]["OrderAddress"];
+/**
  * A Cart, and what a **Merchant's** list of them reports — the same shape either surface
  * answers with (ADR-0071).
  *

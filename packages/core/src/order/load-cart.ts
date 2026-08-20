@@ -1,8 +1,11 @@
 import { asc, eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import type { OrderAddress } from "../address/address.ts";
 import { cartHasBeenPlaced, cartHasExpired } from "../cart/read.ts";
 import { PUBLISHED } from "../catalog/status.ts";
 import type { Queryable } from "../db/client.ts";
-import { cart, cartLineItem, product, variant } from "../db/schema.ts";
+import { joined } from "../db/join.ts";
+import { address, cart, cartLineItem, product, region, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import {
   type AppliedFulfilment,
@@ -30,6 +33,41 @@ import type { OrderShopper } from "./read.ts";
  * rather than this repository keeping two queries in step.
  */
 
+/**
+ * The Region an Address falls in, under a name of its own.
+ *
+ * This query does not join `core_region` for the Cart's own Region — `regionId` travels as an
+ * identifier — but the alias is written anyway, because reading `region` unaliased here would
+ * make the next join of that table for the Cart's market a silent collision rather than an error.
+ */
+const addressRegion = alias(region, "core_cart_address_region");
+
+/**
+ * The Address as Capture will write it, or `null` for a Cart carrying none.
+ *
+ * `joined` on both halves for `db/join.ts`'s reason: Drizzle answers an unjoined nested selection
+ * as an object of `null`s, which is truthy.
+ */
+function addressToPlace(row: {
+  readonly address: {
+    readonly id: string;
+    readonly country: string;
+    readonly lines: readonly string[];
+    readonly postalCode: string | null;
+  } | null;
+  readonly addressRegion: { readonly id: string; readonly name: string } | null;
+}): OrderAddress | null {
+  const found = joined(row.address);
+  if (!found) return null;
+
+  return {
+    country: found.country,
+    lines: found.lines,
+    postalCode: found.postalCode,
+    region: joined(row.addressRegion),
+  };
+}
+
 /** The Cart's own fields the placement carries, copied rather than referenced. */
 export type CartToPlace = {
   readonly id: string;
@@ -53,6 +91,19 @@ export type CartToPlace = {
    * exactly what such a Cart was already priced for.
    */
   readonly regionId: string | null;
+  /**
+   * Where this Cart is to be delivered, **read here so Capture can copy it** (#319, ADR-0072).
+   *
+   * Already flattened into what the snapshot needs — the Region's name rather than a reference —
+   * because `capture-order` writes a copy and a copy assembled from a join taken later would be
+   * a copy of whatever the catalog said by then. `null` is a Cart nobody has addressed, which is
+   * an ordinary Cart: nothing here makes an Address mandatory.
+   *
+   * Read by *this* module rather than by the Step that writes it, for this file's whole reason:
+   * the hold route and the placement read one Cart through one query, so what is in a Cart has
+   * one answer.
+   */
+  readonly address: OrderAddress | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -165,6 +216,16 @@ export async function readCartToPlace(
       shopperExternalId: cart.shopperExternalId,
       currency: cart.currency,
       regionId: cart.regionId,
+      // Read here rather than by `capture-order`, so the hold route and the placement see one
+      // Cart. Flattened into what the snapshot holds — the Region's **name** — because Capture
+      // writes a copy and never a reference (ADR-0009).
+      address: {
+        id: address.id,
+        country: address.country,
+        lines: address.lines,
+        postalCode: address.postalCode,
+      },
+      addressRegion: { id: addressRegion.id, name: addressRegion.name },
       metadata: cart.metadata,
       // The same expression the Cart's own routes judge expiry with, imported rather than
       // rewritten: a second spelling of it would be a second answer to whether a Cart is
@@ -173,6 +234,9 @@ export async function readCartToPlace(
       placed: cartHasBeenPlaced,
     })
     .from(cart)
+    // `left` twice over: most Carts carry no Address, and an Address may name no Region.
+    .leftJoin(address, eq(address.id, cart.addressId))
+    .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
     .where(eq(cart.id, cartId))
     .limit(1);
   if (!found) return noSuchCart(cartId);
@@ -253,6 +317,7 @@ export async function readCartToPlace(
             : { email: found.shopperEmail, externalId: found.shopperExternalId },
         currency: found.currency,
         regionId: found.regionId,
+        address: addressToPlace(found),
         metadata: found.metadata,
       },
       channel,
