@@ -608,6 +608,7 @@ function whyNotCreated(thrown: unknown): string {
     case "last-variant":
     case "stock-is-reserved":
     case "variant-options-mismatch":
+    case "variant-combination-taken":
     case "media-not-found":
     case "collection-not-found":
       // Not reachable from this form as it stands — it declares no options, attaches no image

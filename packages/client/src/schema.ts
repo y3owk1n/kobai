@@ -1054,7 +1054,7 @@ export interface paths {
     };
     /**
      * Correct a Product
-     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. **`media` is where images are attached to this Product, reordered on it and detached from it**, and it is the whole list in the order it should be shown in — the first one is the one that leads. Detaching removes the attachment and never the Media: the asset stays in the Store's library and may still be showing on another Product. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written, and where a picture is attached to one.
+     * @description Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. Adding an option leaves the Variants under it unanswered until each is corrected; removing one is refused where it would leave two Variants answering one combination, naming the two. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. **`media` is where images are attached to this Product, reordered on it and detached from it**, and it is the whole list in the order it should be shown in — the first one is the one that leads. Detaching removes the attachment and never the Media: the asset stays in the Store's library and may still be showing on another Product. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written, and where a picture is attached to one.
      */
     patch: {
       parameters: {
@@ -1099,7 +1099,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description Another Product already answers to that handle. */
+        /** @description `handle-taken`: another Product already answers to that address. Or `variant-combination-taken`: this `options` removes an option two Variants were told apart by, which would leave both answering one combination — the refusal names the two, and correcting or deleting either of them is what lets the correction through. */
         409: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -1174,7 +1174,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description `sku-taken`: a Variant already carries that SKU, and a SKU identifies one Variant. */
+        /** @description `sku-taken`: a Variant already carries that SKU, and a SKU identifies one Variant. Or `variant-combination-taken`: a Variant of this Product already answers its options exactly this way, and a storefront maps a combination a Shopper chose to one Variant — the refusal names the Variant holding it, which is what correcting or deleting frees. */
         409: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -1303,7 +1303,7 @@ export interface paths {
             "application/json": components["schemas"]["CatalogRefusal"];
           };
         };
-        /** @description `sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant. */
+        /** @description `sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant. Or `variant-combination-taken`: another Variant of this Product already answers its options the way this correction asks for — re-sending the combination this Variant already answers is not refused, since a Variant is not its own sibling. */
         409: {
           content: {
             "application/json": components["schemas"]["CatalogRefusal"];
@@ -3572,7 +3572,7 @@ export interface components {
        * @description Machine-readable. Branch on this.
        * @enum {string}
        */
-      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch" | "media-not-found" | "collection-not-found";
+      reason: "invalid" | "malformed-body" | "product-not-found" | "variant-not-found" | "price-not-found" | "sku-taken" | "handle-taken" | "last-variant" | "stock-is-reserved" | "unsupported-currency" | "unknown-fulfilment-strategy" | "variant-options-mismatch" | "variant-combination-taken" | "media-not-found" | "collection-not-found";
     };
     CreateProductRequest: {
       title: string;
@@ -3580,7 +3580,7 @@ export interface components {
       description?: string;
       /** @description The address this Product is to be known by — lower-case letters and digits in groups separated by single hyphens, e.g. "blue-poster". **Left out, kobai proposes one from the title**, so a Merchant need not invent one for every Product. Either way a handle another Product already answers to is refused at 409 rather than quietly suffixed, and one that reads as a UUID is refused at 400: `GET /store/products/{idOrHandle}` resolves a UUID as an identifier, so a Product whose handle were one could not be reached by it. */
       handle?: string;
-      /** @description The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values. */
+      /** @description The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values — which is the one case two of them may answer nothing alike, since a Product declaring no options offers no combination to choose. Where it declares any, two Variants of this body answering them the same way is refused at 400: a storefront maps a combination to one Variant. */
       options?: components["schemas"]["ProductOptionDeclaration"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
@@ -3595,7 +3595,7 @@ export interface components {
     CreateVariantRequest: {
       sku: string;
       fulfilment?: components["schemas"]["VariantFulfilment"];
-      /** @description This Variant's value for each option its Product declares, by the option's name. It must answer **every** one and **only** those: a value for an option the Product never declared, or a declared option left unanswered, is refused at 422 with `variant-options-mismatch`. Left out entirely is the same as an empty list, which is what a Product declaring no options wants. */
+      /** @description This Variant's value for each option its Product declares, by the option's name. It must answer **every** one and **only** those: a value for an option the Product never declared, or a declared option left unanswered, is refused at 422 with `variant-options-mismatch`. It must also answer them in a way no other Variant of the same Product does, or it is refused at 409 with `variant-combination-taken` — a storefront maps the combination a Shopper chose to one Variant. Left out entirely is the same as an empty list, which is what a Product declaring no options wants. */
       options?: components["schemas"]["VariantOptionValue"][];
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
       metadata?: {
@@ -3617,7 +3617,7 @@ export interface components {
       status?: components["schemas"]["ProductStatus"];
       /** @description **The complete list of the Media this Product shows, in the order it should be shown in** — so this is where an image is attached, where they are reordered, and where one is detached. An empty list detaches everything. **Detaching does not delete the Media**: it stays in this Store's library, may still be showing on another Product, and can be attached again — kobai deletes no asset and no bytes, ever. A Media this Store does not have is refused at 422 with `media-not-found`. */
       media?: components["schemas"]["MediaAttachment"][];
-      /** @description **The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for. */
+      /** @description **The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for. **Removing one is refused at 409 with `variant-combination-taken` where it would leave two Variants answering one combination**, naming the two: correct or delete either of them and send this correction again. */
       options?: components["schemas"]["ProductOptionCorrection"][];
       /** @description **The complete set of the Collections this Product is in** — so this is where it is put into one and where it is taken out of one. An empty list takes it out of every Collection. A Product may be in as many as a Merchant likes, and the order carries no meaning: this is a set, not an ordered list like `media` beside it, so what a read answers with is by title. **Nothing here deletes a Collection**, and deleting one takes its Products out of it rather than deleting them. A Collection this Store does not have is refused at 422 with `collection-not-found`. */
       collections?: components["schemas"]["CollectionMembership"][];
@@ -3655,7 +3655,7 @@ export interface components {
       fulfilment?: components["schemas"]["VariantFulfilment"];
       /** @description **The complete list of the Media this Variant shows, in the order it should be shown in** — the picture a storefront swaps to when a Shopper picks this size or colour. An empty list detaches everything, and detaching never deletes the Media: it stays in the Store's library and may still be showing elsewhere. It does not extend its Product's list and is not extended by it — a storefront has both and decides. Absent leaves what is attached, as every field here does. */
       media?: components["schemas"]["MediaAttachment"][];
-      /** @description This Variant's value for each option its Product declares, **replacing** every value it holds rather than merging into them — the rule `metadata` follows, for the reason it follows it. Named, it must answer every declared option and only those, or it is refused at 422 with `variant-options-mismatch`. Absent leaves what is stored, so a Variant left unanswered by an option added since is still free to have its SKU corrected. */
+      /** @description This Variant's value for each option its Product declares, **replacing** every value it holds rather than merging into them — the rule `metadata` follows, for the reason it follows it. Named, it must answer every declared option and only those, or it is refused at 422 with `variant-options-mismatch`, and it must not answer them the way another Variant of the same Product does, or it is refused at 409 with `variant-combination-taken` — sending back the combination this Variant already answers is not that, since a Variant is not its own sibling. Absent leaves what is stored, so a Variant left unanswered by an option added since is still free to have its SKU corrected. */
       options?: components["schemas"]["VariantOptionValue"][];
       /** @description Replaces what is stored rather than merging into it. */
       metadata?: {

@@ -184,7 +184,10 @@ a Variant carries one **value** for each, and a Variant that answers an option i
 declared, or leaves a declared one unanswered, is refused. Together those two are everything a
 storefront needs to map a chosen combination to a SKU by itself, which is why there is no route
 that takes a combination and answers a Variant — and why a combination no Variant answers is
-simply **absent** rather than an error.
+simply **absent** rather than an error. That mapping is a **function**, so no two Variants of one
+Product may answer its options the same way: a Variant written onto a combination a sibling
+already answers is refused, and so is a correction to the Product's option list that would leave
+two of them sharing one.
 _Avoid_: attribute, property, facet (that is search's), specification, modifier, variant axis
 
 **Price**:

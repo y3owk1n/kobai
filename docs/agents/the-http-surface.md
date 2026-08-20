@@ -427,7 +427,7 @@ shared table would infer a status union covering routes that can never answer ha
 **A Product declares its options and a Variant names its value for each, and the pair is the
 whole picker** (#253). `ProductDetail` and `StoreProductDetail` carry the options **in the order
 the Merchant declared them**; `Variant` and `StoreVariant` carry a value for each, in that same
-order. Five things about it are decisions rather than implementation:
+order. Seven things about it are decisions rather than implementation:
 
 - **There is no route that takes a combination and answers a Variant, and that is the decision.**
   The detail payload already settles it — a storefront zips the two lists and a combination no
@@ -459,12 +459,58 @@ order. Five things about it are decisions rather than implementation:
   fields. The Admin's Variant form does send them every time and so does ask for the missing
   value — that is a decision about the form rather than about the route, and
   [the Admin](the-admin.md) is where it is argued.
-- **Nothing refuses two Variants answering the same combination**, and that is a **gap** rather
-  than one of these decisions. The unique index is `(variant_id, option_id)`: it makes one
-  Variant's answer to one option single and says nothing about two Variants agreeing on every
-  option, and such a Product is one the payload above cannot be chosen from. `catalog/options.ts`
-  carries it in full, at the head of the module, because the rule that would close it is about a
-  Variant against its *siblings* rather than against its Product.
+- **No two Variants of one Product may answer its options the same way** (#277), and the whole
+  of the payload above rests on it: a storefront maps a chosen combination to a SKU by itself,
+  and where two Variants share a combination that mapping is not a **function** — the picker
+  takes whichever it met first, and there is no route to fall back on because #253 deliberately
+  shipped none. The unique index is `(variant_id, option_id)`, which makes a Variant's answer to
+  one option single and says nothing whatever about two Variants agreeing on every option, so
+  the rule is code rather than a constraint: `catalog/options.ts`'s `combinationTaken`, asked
+  at **409 `variant-combination-taken`** by `POST /admin/products/{id}/variants` and `PATCH
+  /admin/variants/{id}` alike — `sku-taken`'s status for `sku-taken`'s reason, a combination
+  being what identifies a Variant *within its Product* as a SKU identifies one within the Store.
+  A **create** naming one combination twice in its own `variants` is `invalid` at 400 instead,
+  which is the line that list already draws for a SKU named twice: a body conflicting with
+  itself is not the Store refusing anything, and no retry of it as it stands will be taken. Four
+  things follow, and each is a decision:
+  - **A Variant is not its own sibling.** Re-sending the combination it already answers, which
+    is what a form does on every submit, is the Variant answering it rather than a collision.
+  - **Only a Variant that answers *every* declared option answers a combination at all**, so
+    one left short by an option added since is compared with nothing — it is unplaceable by a
+    picker rather than ambiguous with anything.
+  - **A Product declaring no options is not judged**, and that is the deliberate boundary: it
+    offers no combination to choose, so its Variants are told apart by their SKUs exactly as
+    they always have been, and several under one Product stay ordinary.
+  - **The lock is `lockProductOptions`, and the three writes take the same key on purpose.**
+    The fact is spread over one row per option, so no unique index can hold it and the check is
+    a `select` over other rows followed by an `insert` — ADR-0018's forbidden shape, which
+    `lockProduct` cannot fix because `for share` holders do not conflict.
+    `catalog/two-variants-of-one-combination.test.ts` is the concurrent test and it was watched
+    failing: eight adds of one combination, three of them 201.
+- **A correction to a Product's option list that would collide two Variants is refused, naming
+  them** (#277's ruling) — the same word at the same status, from `PATCH /admin/products/{id}`,
+  because it is one fact reached from another end. Removing an option takes every Variant's
+  answer to it, so two that differed only there answer one combination afterwards. **This does
+  not reopen the decision above it**, and the pair is worth reading together: adding an option is
+  *not* refused because the only repair would be to rebuild the Product, and removing one *is*
+  because the repair is a control the Merchant already has — correct or delete one of the two
+  Variants named, and send the correction again. The difference is precisely whether a reachable
+  repair exists, which is also ADR-0059's test. Three things follow:
+  - **The ruling says "newly" collide and the check does not ask, because nothing can tell the
+    two apart.** Every write path above refuses a collision, so a Product that holds one is a
+    Product no request could have produced — meaning "would newly collide" and "would leave
+    colliding" name the same set of corrections. Asking the question twice, before and after,
+    would be a branch no request can reach and no test can arrange. **The day rows written
+    before this rule exist** — by hand, or by a deployment older than it — that stops being
+    true, and such a Product's option list cannot be corrected at all until one of the pair is
+    repaired. That is the point at which asking "newly" earns its keep.
+  - **A rename or a reorder collides nothing**, because identity on the wire is the `id`: the
+    combinations either side of the correction are the same combinations.
+  - **A correction that leaves the Product declaring nothing is not judged**, and neither is one
+    that adds an option while removing another. Both fall out of the boundary above rather than
+    excepting it — the first leaves a Product with no combinations to share, the second leaves
+    every Variant unanswered — and both are asserted in `catalog/options.test.ts` rather than
+    left to be inferred.
 - **The store shape drops the option's identifier and nothing else.** A storefront addresses
   nothing by it — both lists are keyed by **name**, unique within a Product — and it exists so a
   Merchant can rename one without losing its values. `StoreProductOption` and

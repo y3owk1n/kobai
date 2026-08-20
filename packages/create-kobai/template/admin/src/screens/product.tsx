@@ -1673,6 +1673,7 @@ function isNoSuchProduct(thrown: unknown): boolean {
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
     case "variant-options-mismatch":
+    case "variant-combination-taken":
     case "media-not-found":
     case "collection-not-found":
       // Not reachable from a read of one Product as it stands, so kobai's own prose is shown
@@ -1725,11 +1726,12 @@ function whyNotDeleted(thrown: unknown, fallback: string): string {
     case "unsupported-currency":
     case "unknown-fulfilment-strategy":
     case "variant-options-mismatch":
+    case "variant-combination-taken":
     case "media-not-found":
     case "collection-not-found":
       // Not reachable from a delete, which sends no body and names no SKU, handle, currency,
-      // Strategy, option value, image or Collection. Reported as kobai said it rather than as a
-      // sentence written for a case nobody has seen.
+      // Strategy, option value, combination, image or Collection. Reported as kobai said it
+      // rather than as a sentence written for a case nobody has seen.
       return problemOf(thrown, fallback);
 
     case undefined:
@@ -1776,6 +1778,14 @@ function whyNotChanged(thrown: unknown): string {
       // kobai's prose names the options, which this form knows and the message may as well not
       // repeat; what it adds is where the answer is given.
       return "This Variant must say what it is for every option this Product declares, and for no other. Its Product's options may have changed since this page was opened — reload it, then fill in the value for each.";
+
+    case "variant-combination-taken":
+      // Reached two ways from this screen, and kobai's prose is better than anything written
+      // here for either: saving a Variant onto the combination another already answers, and
+      // removing an option two Variants were told apart by. Both refusals **name the Variants
+      // by SKU** — which is the whole of what a Merchant needs in order to go and repair one,
+      // and is exactly what this form does not know.
+      return problemOf(thrown, fallback);
 
     case "media-not-found":
       // The one refusal here a Merchant reaches by having *two* pages open: an image was

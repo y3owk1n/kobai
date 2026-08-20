@@ -422,7 +422,29 @@ describe("PATCH /admin/products/:id corrects the options", () => {
   it("removes one, taking every Variant's value for it with it", async () => {
     await using kobai = await createTestKobai();
     const headers = await merchantHeaders(kobai);
-    const product = await aPosterInSizesAndColours(kobai, headers);
+    // Its own Product rather than the grid above, because removing an option from a grid
+    // collides the Variants that differed only by it, which this route now refuses (#277) —
+    // these two are told apart by their Size and so survive losing their Colour.
+    const product = await createProduct(kobai, headers, {
+      title: "A poster",
+      options: [{ name: "Size" }, { name: "Colour" }],
+      variants: [
+        {
+          sku: "POSTER-S-RED",
+          options: [
+            { name: "Size", value: "S" },
+            { name: "Colour", value: "Red" },
+          ],
+        },
+        {
+          sku: "POSTER-M-BLUE",
+          options: [
+            { name: "Size", value: "M" },
+            { name: "Colour", value: "Blue" },
+          ],
+        },
+      ],
+    });
     const size = product.options.find((one) => one.name === "Size");
 
     const response = await kobai.request(`/admin/products/${product.id}`, {
@@ -610,6 +632,273 @@ describe("PATCH /admin/variants/:id corrects the values", () => {
     expect(corrected.options).toEqual([
       { name: "Size", value: "S" },
       { name: "Colour", value: "Red" },
+    ]);
+  });
+});
+
+describe("two Variants may not answer the same combination", () => {
+  it("refuses one added to a Product a sibling already answers that combination for", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}/variants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sku: "POSTER-S-RED-AGAIN",
+        options: [
+          { name: "Size", value: "S" },
+          { name: "Colour", value: "Red" },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    const refusal = (await response.json()) as Refusal;
+    expect(refusal.reason).toBe("variant-combination-taken");
+    // The repair is to correct or to remove the Variant already answering it, so the refusal
+    // names that one — a Merchant told only that it was taken would have to go looking.
+    expect(refusal.error).toContain('"POSTER-S-RED"');
+
+    const read = await kobai.request(`/admin/products/${product.id}`, { headers });
+    expect(((await read.json()) as Product).variants).toHaveLength(4);
+  });
+
+  it("refuses a create whose own `variants` answer one combination twice, and stores nothing", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const response = await kobai.request("/admin/products", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "A poster",
+        options: [{ name: "Size" }, { name: "Colour" }],
+        variants: [
+          {
+            sku: "POSTER-S-RED",
+            options: [
+              { name: "Size", value: "S" },
+              { name: "Colour", value: "Red" },
+            ],
+          },
+          {
+            // The same two answers in the other order, because a combination is a set of
+            // answers rather than the order a body happened to list them in.
+            sku: "POSTER-SMALL-RED",
+            options: [
+              { name: "Colour", value: "Red" },
+              { name: "Size", value: "S" },
+            ],
+          },
+        ],
+      }),
+    });
+
+    // `invalid` at 400 rather than the 409 the two routes below answer: this body conflicts
+    // with itself and no retry of it will be accepted, which is exactly the line `variants`
+    // naming one SKU twice already draws against `sku-taken`.
+    expect(response.status).toBe(400);
+    const refusal = (await response.json()) as Refusal;
+    expect(refusal.reason).toBe("invalid");
+    expect(refusal.error).toContain('"POSTER-S-RED"');
+    expect(refusal.error).toContain('"POSTER-SMALL-RED"');
+
+    await expect(productCount(kobai)).resolves.toBe(0);
+  });
+
+  it("leaves a Product that declares no options free to hold several Variants", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+
+    const created = await createProduct(kobai, headers, {
+      title: "A poster",
+      variants: [{ sku: "POSTER-A2" }, { sku: "MUG" }],
+    });
+
+    // **The deliberate boundary of the rule.** A combination is what a picker chooses, and a
+    // Product declaring nothing draws no picker — so its Variants are told apart by their SKUs,
+    // as they always have been, and two of them answering nothing is not two of them answering
+    // one thing.
+    expect(created.options).toEqual([]);
+    expect(created.variants.map((one) => one.sku)).toEqual(["MUG", "POSTER-A2"]);
+  });
+
+  it("refuses a Variant corrected onto a combination a sibling answers, and changes nothing", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+    const one = product.variants.find((row) => row.sku === "POSTER-M-RED");
+
+    const response = await kobai.request(`/admin/variants/${one?.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        sku: "POSTER-M-RED-2",
+        options: [
+          { name: "Size", value: "S" },
+          { name: "Colour", value: "Red" },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    const refusal = (await response.json()) as Refusal;
+    expect(refusal.reason).toBe("variant-combination-taken");
+    expect(refusal.error).toContain('"POSTER-S-RED"');
+
+    // The judgement is made before the columns are written, which is #255's rule: a refusal
+    // *returned* from inside a transaction commits it, so a SKU corrected alongside would have
+    // moved while the Merchant was told nothing had happened.
+    const read = await kobai.request(`/admin/products/${product.id}`, { headers });
+    const after = (await read.json()) as Product;
+    expect(after.variants.map((row) => row.sku)).toContain("POSTER-M-RED");
+    expect(after.variants.find((row) => row.sku === "POSTER-M-RED")?.options).toEqual([
+      { name: "Size", value: "M" },
+      { name: "Colour", value: "Red" },
+    ]);
+  });
+
+  it("lets a Variant keep the combination it already answers while another field is corrected", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+    const one = product.variants.find((row) => row.sku === "POSTER-S-RED");
+
+    const response = await kobai.request(`/admin/variants/${one?.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        sku: "POSTER-SMALL-RED",
+        options: [
+          { name: "Size", value: "S" },
+          { name: "Colour", value: "Red" },
+        ],
+      }),
+    });
+
+    // A Variant is not its own sibling. Sending the values unchanged beside the field being
+    // corrected is what a form does every time it is submitted, and refusing it against itself
+    // would make the rule unrepairable by the one control it names.
+    expect(response.status).toBe(200);
+    const corrected = (await response.json()) as Product["variants"][number];
+    expect(corrected.sku).toBe("POSTER-SMALL-RED");
+    expect(corrected.options).toEqual([
+      { name: "Size", value: "S" },
+      { name: "Colour", value: "Red" },
+    ]);
+  });
+
+  it("refuses removing an option that would leave two Variants answering one combination", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+    const size = product.options.find((one) => one.name === "Size");
+
+    const response = await kobai.request(`/admin/products/${product.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ options: [{ id: size?.id, name: "Size" }] }),
+    });
+
+    // The ruling on #277, and the half that is **not** #253's decision reopened: removing an
+    // option is refused where it would collide two Variants, because the repair is a control
+    // this Merchant has — correct or delete one of the two named — where refusing an option
+    // *added* would reject for every Variant at once with "rebuild the Product" as the way out.
+    expect(response.status).toBe(409);
+    const refusal = (await response.json()) as Refusal;
+    expect(refusal.reason).toBe("variant-combination-taken");
+    // Both of them, because a Merchant told only that two collide would have to find which.
+    expect(refusal.error).toContain('"POSTER-S-RED"');
+    expect(refusal.error).toContain('"POSTER-S-BLUE"');
+    // And the option it is the removal of, since that is the entry to put back.
+    expect(refusal.error).toContain('"Colour"');
+
+    // Nothing was written: the judgement precedes every write the correction makes, so the
+    // list is the one it started with rather than the one that was refused.
+    const read = await kobai.request(`/admin/products/${product.id}`, { headers });
+    const after = (await read.json()) as Product;
+    expect(after.options.map((one) => one.name)).toEqual(["Size", "Colour"]);
+    expect(after.variants.find((row) => row.sku === "POSTER-S-RED")?.options).toEqual([
+      { name: "Size", value: "S" },
+      { name: "Colour", value: "Red" },
+    ]);
+  });
+
+  it("takes a correction that leaves the Product declaring nothing, whatever its Variants answered", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ options: [] }),
+    });
+
+    // **The boundary above, reached from the other side, and it is a decision rather than a
+    // hole the check falls through.** Removing *Colour* alone is refused because the Product
+    // still asks a question two Variants would then answer identically; removing every option
+    // leaves it asking none, which is the ordinary Product that is sold as one thing and whose
+    // Variants are told apart by their SKUs. Refusing this would mean a Merchant who declared
+    // an option by mistake could never take it back off a Product that has Variants.
+    expect(response.status).toBe(200);
+    const corrected = (await response.json()) as Product;
+    expect(corrected.options).toEqual([]);
+    expect(corrected.variants.every((one) => one.options.length === 0)).toBe(true);
+  });
+
+  it("takes a correction that adds an option while removing one, leaving every Variant short", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+    const size = product.options.find((one) => one.name === "Size");
+
+    const response = await kobai.request(`/admin/products/${product.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        options: [{ id: size?.id, name: "Size" }, { name: "Finish" }],
+      }),
+    });
+
+    // Colour goes and Finish arrives, so afterwards no Variant answers every option this
+    // Product declares — and a Variant that answers none of a combination is unplaceable by a
+    // picker rather than ambiguous with another. That is #253's decision holding: the two
+    // Variants that were `S` in two colours are now both short, and correcting each is what
+    // ends it — the second of them will meet `variant-combination-taken` if it is corrected to
+    // what the first answers.
+    expect(response.status).toBe(200);
+    const corrected = (await response.json()) as Product;
+    expect(corrected.options.map((one) => one.name)).toEqual(["Size", "Finish"]);
+    expect(corrected.variants.find((one) => one.sku === "POSTER-S-RED")?.options).toEqual(
+      [{ name: "Size", value: "S" }],
+    );
+  });
+
+  it("takes a correction that renames the very option two Variants are told apart by", async () => {
+    await using kobai = await createTestKobai();
+    const headers = await merchantHeaders(kobai);
+    const product = await aPosterInSizesAndColours(kobai, headers);
+
+    const response = await kobai.request(`/admin/products/${product.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        options: [
+          { id: product.options[0]?.id, name: "Size" },
+          { id: product.options[1]?.id, name: "Colour" },
+        ].map((one, index) => (index === 1 ? { ...one, name: "Color" } : one)),
+      }),
+    });
+
+    // A rename is not a removal: identity is the `id` on the wire, so the combinations either
+    // side of this correction are the same combinations and nothing has newly collided.
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as Product).options.map((one) => one.name)).toEqual([
+      "Size",
+      "Color",
     ]);
   });
 });
