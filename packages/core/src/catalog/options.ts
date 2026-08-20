@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Queryable, Transaction } from "../db/client.ts";
-import { productOption, variantOptionValue } from "../db/schema.ts";
+import { productOption, variant, variantOptionValue } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import { isJsonObject, trimmed } from "../input.ts";
 import { type NotUsable, notUsable } from "../patch.ts";
@@ -30,24 +30,42 @@ import { type NotUsable, notUsable } from "../patch.ts";
  * and where the Product happens to have been declared in the same request changes neither what
  * is wrong nor how it is fixed.
  *
- * **Two Variants may answer the same combination, and nothing here refuses it — which is a
- * known gap rather than a decision.** The unique index is `(variant_id, option_id)`, so it makes
- * a Variant's answer to one option single and says nothing about two Variants agreeing on every
- * option. A Store that reaches that state has a Product detail payload a storefront cannot
- * choose from — `Size: S, Colour: Red` maps to two SKUs and the picker takes whichever came
- * first — which is exactly the claim the rest of this file rests on. Closing it is a rule about
- * a Variant against its *siblings* rather than against its Product, so it wants its own refusal
- * and its own place to be enforced from at all three write paths; #253 did not ask for it, and
- * it is recorded here rather than left to be rediscovered from a storefront.
+ * **The second rule, and it is about a Variant's *siblings* rather than about its Product**
+ * (#277): no two Variants of one Product may answer its options the same way. The unique index
+ * is `(variant_id, option_id)`, which makes a Variant's answer to one option single and says
+ * nothing whatever about two Variants agreeing on every option — so until this was written a
+ * Product could hold two Variants both answering `Size: S, Colour: Red`, and the payload above
+ * was one a storefront could not choose from: the mapping it rests on is a **function**, and
+ * where two Variants share a combination it is not one. The picker would take whichever it met
+ * first. {@link VARIANT_COMBINATION_TAKEN} is the word, refused wherever a Variant is written
+ * against siblings that already exist — {@link combinationTaken} is the question — and a create
+ * naming one combination twice is refused `invalid` instead, because a body that conflicts with
+ * *itself* is not the Store refusing anything (`variants` naming one SKU twice draws that same
+ * line against `sku-taken`).
  *
- * **A Product's own list is corrected freely and its Variants are not re-judged for it.** That
- * asymmetry is the decision that keeps the repair reachable: declaring a third option on a
- * Product that already has Variants would otherwise be refused for every Variant at once, with
- * the only remedy being to delete the Product and build it again (ADR-0059's rule, and
- * `the-http-surface.md`'s — a refusal whose advice names no reachable control is a finding
- * rather than something to word around). So adding an option leaves the Variants under it
- * unanswered until each is corrected, exactly as a Variant with no Price is unsellable until
- * one is set, and removing an option takes every Variant's answer to it with it by cascade.
+ * **Only a Variant that answers *every* option its Product declares answers a combination at
+ * all.** One left short by an option added since (below) is unplaceable by a picker rather than
+ * ambiguous with anything, so it is compared with nothing — and a Product declaring **no**
+ * options has no combinations, which is why several Variants under one may be told apart by
+ * their SKUs alone, as they always could.
+ *
+ * **A Product's own list is corrected freely, and the one correction that is judged against its
+ * Variants is one that would collide two of them** (#277's ruling). The asymmetry is the whole
+ * of it, and it is worth reading rather than remembering:
+ *
+ * - **Adding an option leaves the Variants under it unanswered and is never refused.** Judging
+ *   them would refuse the correction for every Variant at once, with the only remedy being to
+ *   delete the Product and build it again (ADR-0059, and `the-http-surface.md`'s rule — a
+ *   refusal whose advice names no reachable control is a finding rather than something to word
+ *   around). So they read back truthfully short until each is corrected, exactly as a Variant
+ *   with no Price is unsellable until one is set. It falls out of the rule above rather than
+ *   being excepted from it: an option nothing has answered leaves no Variant complete, so there
+ *   is nothing for two of them to share.
+ * - **Removing one is refused where it would collide two Variants**, naming them, because here
+ *   the repair *is* a control a Merchant has: correct or delete one of the pair and send the
+ *   correction again. The removal still takes every Variant's answer to the option with it by
+ *   cascade when it is allowed. The two cases differ in precisely that — whether a reachable
+ *   repair exists — and not in how much is being taken away.
  */
 
 /** One option a Product declares, as a read reports it. */
@@ -89,6 +107,34 @@ export type OptionsMismatch = {
   readonly reason: typeof VARIANT_OPTIONS_MISMATCH;
   readonly detail: string;
 };
+
+/**
+ * The one word every route refuses a Variant's **siblings** with (#277).
+ *
+ * One word for one fact, wherever it is asked from: adding a Variant, correcting one, and
+ * correcting the Product's option list under both. A combination identifies one Variant, which
+ * is the same thing a SKU does one column along — so this is `sku-taken`'s word and
+ * `sku-taken`'s status, for `sku-taken`'s reason.
+ */
+export const VARIANT_COMBINATION_TAKEN = "variant-combination-taken";
+
+/** A Variant answering a combination another Variant of the same Product already answers. */
+export type CombinationTaken = {
+  readonly ok: false;
+  readonly reason: typeof VARIANT_COMBINATION_TAKEN;
+  readonly detail: string;
+};
+
+/**
+ * Why two Variants may not answer one combination, in one sentence and one place.
+ *
+ * Three refusals say it — a Variant added onto a sibling's combination, a create naming one
+ * twice in its own body, and a correction that would leave two sharing one — and it is one fact
+ * about the Store rather than three, exactly as `skuTaken` is one sentence for two routes. What
+ * each of them adds is the repair, which is different at each.
+ */
+const WHY_ONE_ANSWERS =
+  "A storefront maps a combination a Shopper chose to one Variant, so two of them cannot answer it";
 
 type Parsed<V> = { readonly ok: true; readonly value: V } | NotUsable;
 
@@ -278,6 +324,266 @@ export function variantOptionsMismatch(
 }
 
 /**
+ * Whether a sibling of this Product already answers this combination — the rule at every route
+ * that writes a Variant into a Product that already exists (#277).
+ *
+ * `undefined` is the answer being no, so the call site reads as the guard it is. `which` names
+ * the Variant the way the request does, exactly as {@link variantOptionsMismatch}'s does, and
+ * `except` is the Variant being corrected: a Variant may keep the combination it already has,
+ * which is what makes correcting a *different* field of it possible at all.
+ *
+ * **The caller has taken {@link lockProductOptions} before the read.** This is a `select` over
+ * other rows followed by an `insert` of one, which is the shape ADR-0018 exists to rule out: two
+ * Variants written at the same instant each read a Product that does not yet hold the other, and
+ * both are allowed through. No constraint can stand in for it — the fact is spread over one row
+ * per option — so the advisory lock is what makes the read and the write one operation.
+ *
+ * **Only a Variant answering every declared option is compared, and a Product declaring none is
+ * not judged at all.** Both are the same sentence read from two ends: a combination is what a
+ * picker chooses, so where there is nothing to choose there is nothing two Variants can answer
+ * the same way, and a Variant left short by an option added since is unplaceable rather than
+ * ambiguous.
+ */
+export async function combinationTaken(
+  tx: Transaction,
+  productId: string,
+  declared: readonly ProductOption[],
+  values: readonly VariantOptionValue[],
+  which: string,
+  except?: string,
+): Promise<CombinationTaken | undefined> {
+  const wanted = combinationOfValues(declared, values);
+  if (wanted === undefined) return undefined;
+
+  const held = await readVariantCombinations(tx, productId);
+  const key = keyOf(wanted);
+  const taken = held.find((one) => {
+    if (one.variantId === except) return false;
+    const answers = restrictedTo(one.byOption, declared);
+    return answers !== undefined && keyOf(answers) === key;
+  });
+  if (!taken) return undefined;
+
+  return {
+    ok: false,
+    reason: VARIANT_COMBINATION_TAKEN,
+    detail: `${which} answers ${spelled(declared, (option) => option.id, wanted)}, and the Variant ${JSON.stringify(taken.sku)} already answers that combination. ${WHY_ONE_ANSWERS} — give this one a combination of its own, or correct or delete ${JSON.stringify(taken.sku)}.`,
+  };
+}
+
+/**
+ * The same question asked of a create's own list, which is a different question (#277).
+ *
+ * A create's Variants have no siblings — the Product is being made in the same transaction — so
+ * what two of them sharing a combination conflicts with is the **body**, not the Store. That is
+ * `invalid` at 400 rather than {@link VARIANT_COMBINATION_TAKEN} at 409, on exactly the
+ * distinction `variants` naming one SKU twice already draws against `sku-taken`: a 409 says
+ * somebody got there first and invites the same request again, and this request will never be
+ * accepted as it stands.
+ *
+ * It answers the sentence rather than a refusal, because the caller is the one that knows the
+ * word: it is one of `createProduct`'s `invalid`s.
+ */
+export function combinationNamedTwice(
+  declared: readonly { readonly name: string }[],
+  variants: readonly {
+    readonly sku: string;
+    readonly options: readonly VariantOptionValue[];
+  }[],
+): string | undefined {
+  if (declared.length === 0) return undefined;
+
+  const skuByCombination = new Map<string, string>();
+  for (const one of variants) {
+    // Named by the option's own name here rather than by an identifier, because nothing has
+    // been written yet and there is no identifier to name it by. It is the same key: a Product
+    // declares one option of a name, which `parseOptionDeclarations` has already held.
+    const wanted = new Map(one.options.map((value) => [value.name, value.value]));
+    if (wanted.size !== declared.length) continue;
+
+    const key = keyOf(wanted);
+    const first = skuByCombination.get(key);
+    if (first !== undefined) {
+      return `\`variants\` names ${JSON.stringify(first)} and ${JSON.stringify(one.sku)}, which answer this Product's options the same way — ${spelled(declared, (option) => option.name, wanted)}. ${WHY_ONE_ANSWERS}.`;
+    }
+    skuByCombination.set(key, one.sku);
+  }
+
+  return undefined;
+}
+
+/**
+ * Whether correcting this Product's options to the list it was given would leave two Variants
+ * answering one combination — the ruling on #277.
+ *
+ * **It is asked of the correction rather than of the Variants**, which is what keeps #253's
+ * decision intact rather than reopening it: an entry with no `id` is an option no Variant has
+ * answered yet, so a correction that adds one leaves every Variant short and this returns
+ * `undefined` without comparing anything. What can collide two Variants is a **removal** — and
+ * there the repair is a control a Merchant has, which is the whole of why one is refused and
+ * the other is not.
+ *
+ * Keyed by the option's **identifier**, because a correction may be renaming one and two names
+ * for one question are still one question — so a rename and a reorder collide nothing, the
+ * combinations either side of them being the same combinations.
+ *
+ * **The ruling says a correction that would *newly* collide two Variants, and this asks only
+ * whether it would leave two colliding.** They are the same question while every write path
+ * refuses a collision: a Product holding one is a Product no request could have produced, so
+ * there is no correction the two answers disagree about — and asking it twice, before and
+ * after, would be a branch nothing can reach and no test can arrange. It stops being the same
+ * question the day rows written before this rule exist, by hand or under an older deployment,
+ * and on such a Product every correction of the option list is refused until one of the pair is
+ * repaired — reachable, but a refusal for a fault the request did not introduce. That is when
+ * to write the second reading, not before.
+ */
+async function correctionWouldCollide(
+  tx: Transaction,
+  productId: string,
+  asked: readonly OptionCorrection[],
+  removed: readonly ProductOption[],
+): Promise<CombinationTaken | undefined> {
+  const kept = asked.flatMap((one) =>
+    one.id === undefined ? [] : [{ ...one, id: one.id }],
+  );
+  // A Product left declaring nothing has no combinations, and one left declaring an option
+  // nothing has answered leaves no Variant complete. Neither is a state two Variants can share.
+  if (kept.length === 0 || kept.length !== asked.length) return undefined;
+
+  const held = await readVariantCombinations(tx, productId);
+  const skuByCombination = new Map<string, string>();
+  for (const one of held) {
+    const answers = restrictedTo(one.byOption, kept);
+    if (answers === undefined) continue;
+
+    const key = keyOf(answers);
+    const first = skuByCombination.get(key);
+    if (first !== undefined) {
+      return {
+        ok: false,
+        reason: VARIANT_COMBINATION_TAKEN,
+        detail: `This correction would leave the Variants ${JSON.stringify(first)} and ${JSON.stringify(one.sku)} both answering ${spelled(kept, (option) => option.id, answers)}${
+          removed.length === 0
+            ? ""
+            : `, because it removes ${quoted(removed.map((option) => option.name))}`
+        }. ${WHY_ONE_ANSWERS} — correct or delete one of the two and send this correction again.`,
+      };
+    }
+    skuByCombination.set(key, one.sku);
+  }
+
+  return undefined;
+}
+
+/**
+ * A Variant's answers as this write is given them, by option identifier — or `undefined` where
+ * it has not answered every option, which is a Variant that answers no combination at all.
+ */
+function combinationOfValues(
+  declared: readonly ProductOption[],
+  values: readonly VariantOptionValue[],
+): Map<string, string> | undefined {
+  if (declared.length === 0) return undefined;
+
+  const byName = new Map(values.map((one) => [one.name, one.value]));
+  const wanted = new Map<string, string>();
+  for (const option of declared) {
+    const value = byName.get(option.name);
+    if (value === undefined) return undefined;
+    wanted.set(option.id, value);
+  }
+  return wanted;
+}
+
+/**
+ * The answers this Variant holds for exactly these options — `undefined` where one is missing.
+ *
+ * Answers to options that are not in the list are dropped rather than being a mismatch, which
+ * is what lets a correction ask this about the list a Product is *about* to have.
+ */
+function restrictedTo(
+  byOption: ReadonlyMap<string, string>,
+  options: readonly { readonly id: string }[],
+): Map<string, string> | undefined {
+  const answers = new Map<string, string>();
+  for (const option of options) {
+    const value = byOption.get(option.id);
+    if (value === undefined) return undefined;
+    answers.set(option.id, value);
+  }
+  return answers;
+}
+
+/**
+ * One combination as a string, so that two of them compare with `===`.
+ *
+ * Sorted by the key, because the order the rows came back in is not part of the fact — two
+ * Variants answering `Size: S, Colour: Red` do so whichever way round the rows were read.
+ */
+function keyOf(answers: ReadonlyMap<string, string>): string {
+  return JSON.stringify([...answers].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+}
+
+/**
+ * `Size "S" and Colour "Red"`, in the Product's own order — what a refusal names.
+ *
+ * `keyed` is how the caller says what its answers are keyed by, which is the option's
+ * identifier everywhere a Product exists and its name inside a create, where there is not yet
+ * one to name it by.
+ */
+function spelled<O extends { readonly name: string }>(
+  options: readonly O[],
+  keyed: (option: O) => string,
+  answers: ReadonlyMap<string, string>,
+): string {
+  return listed(
+    options.flatMap((option) => {
+      const value = answers.get(keyed(option));
+      return value === undefined ? [] : [`${option.name} ${JSON.stringify(value)}`];
+    }),
+  );
+}
+
+/** Every Variant of one Product, with the value it holds for each option, by identifier. */
+async function readVariantCombinations(
+  db: Queryable,
+  productId: string,
+): Promise<
+  readonly {
+    readonly variantId: string;
+    readonly sku: string;
+    readonly byOption: ReadonlyMap<string, string>;
+  }[]
+> {
+  // A `leftJoin`, so a Variant that has answered nothing is still a Variant this read knows
+  // about — it answers no combination, which is a fact the callers ask rather than infer from
+  // an absence.
+  const rows = await db
+    .select({
+      variantId: variant.id,
+      sku: variant.sku,
+      optionId: variantOptionValue.optionId,
+      value: variantOptionValue.value,
+    })
+    .from(variant)
+    .leftJoin(variantOptionValue, eq(variantOptionValue.variantId, variant.id))
+    .where(eq(variant.productId, productId));
+
+  const byVariant = new Map<string, { sku: string; byOption: Map<string, string> }>();
+  for (const row of rows) {
+    let one = byVariant.get(row.variantId);
+    if (one === undefined) {
+      one = { sku: row.sku, byOption: new Map() };
+      byVariant.set(row.variantId, one);
+    }
+    if (row.optionId !== null && row.value !== null)
+      one.byOption.set(row.optionId, row.value);
+  }
+
+  return [...byVariant].map(([variantId, one]) => ({ variantId, ...one }));
+}
+
+/**
  * The options a Product declares, in the order it declared them.
  *
  * `Queryable`, so a write can read back the list it just wrote inside its own transaction —
@@ -357,7 +663,15 @@ export async function declareProductOptions(
 }
 
 /**
- * Serialises every correction of one Product's options, for the length of the transaction.
+ * Serialises every write that reads one Product's options and writes against what it read, for
+ * the length of the transaction.
+ *
+ * **Three things take it, and they take the same key on purpose** (#253, #277): correcting the
+ * Product's option list, adding a Variant to it, and correcting a Variant's values. The last two
+ * judge a combination against the Variant's siblings, which is a read of other rows followed by
+ * a write — and a correction of the option list running between the two would judge against a
+ * list that no longer exists. Two keys would serialise each kind against itself and neither
+ * against the other, which is a collision reached by two writes that each refused to cause one.
  *
  * **Taken before the read, and it is a `pg_advisory_xact_lock` rather than a row lock** — the
  * same departure from ADR-0018's usual answer that `holdReservations` and the last-administrator
@@ -400,7 +714,8 @@ const PRODUCT_OPTIONS_LOCK_NAMESPACE = 611_204_017;
  *
  * **Every write here happens after every judgement**, so a refusal leaves the Product exactly
  * as it was — which is what lets the caller return one from inside its transaction rather than
- * throwing to unwind it.
+ * throwing to unwind it. There are **two** judgements since #277: an `id` this Product does not
+ * have, and a correction that would leave two Variants answering one combination.
  *
  * **The caller has taken {@link lockProductOptions} and then `lockProduct`**, in that order and
  * before the read below. The first is what makes this read-then-write one operation; the second
@@ -410,7 +725,7 @@ export async function correctProductOptions(
   tx: Transaction,
   productId: string,
   asked: readonly OptionCorrection[],
-): Promise<{ readonly ok: true } | NotUsable> {
+): Promise<{ readonly ok: true } | NotUsable | CombinationTaken> {
   const existing = await readProductOptions(tx, productId);
   const known = new Set(existing.map((one) => one.id));
 
@@ -428,15 +743,29 @@ export async function correctProductOptions(
   }
 
   const kept = new Set(asked.flatMap((one) => (one.id === undefined ? [] : [one.id])));
-  const removed = existing.filter((one) => !kept.has(one.id)).map((one) => one.id);
+  const removed = existing.filter((one) => !kept.has(one.id));
+
+  // **The second judgement, and still before the first write** (#277). Removing an option takes
+  // every Variant's answer to it, and two Variants that differed only there answer one
+  // combination afterwards — a Product whose detail payload a storefront cannot choose from. It
+  // is refused rather than allowed-and-reported because the repair is a control a Merchant has:
+  // correct or delete one of the two. Adding an option cannot reach this, which is #253's
+  // decision kept rather than reopened — see the head of this module.
+  const collided = await correctionWouldCollide(tx, productId, asked, removed);
+  if (collided) return collided;
+
   if (removed.length > 0) {
     // The values every Variant gave for them go too, by the cascade on `option_id`: an answer to
     // a question this Product no longer asks is not a fact about anything.
-    await tx
-      .delete(productOption)
-      .where(
-        and(eq(productOption.productId, productId), inArray(productOption.id, removed)),
-      );
+    await tx.delete(productOption).where(
+      and(
+        eq(productOption.productId, productId),
+        inArray(
+          productOption.id,
+          removed.map((one) => one.id),
+        ),
+      ),
+    );
   }
 
   // One statement per entry, in the list's own order, and a `position` written from that order
@@ -522,9 +851,13 @@ function namedTwice(name: string): string {
 
 /** `"Size" and "Colour"`, in a sentence. */
 function quoted(names: readonly string[]): string {
-  const written = names.map((name) => JSON.stringify(name));
-  const last = written.at(-1);
-  return written.length <= 1
+  return listed(names.map((name) => JSON.stringify(name)));
+}
+
+/** The same list-making, for the parts that carry their own quotation marks. */
+function listed(parts: readonly string[]): string {
+  const last = parts.at(-1);
+  return parts.length <= 1
     ? (last ?? "")
-    : `${written.slice(0, -1).join(", ")} and ${last}`;
+    : `${parts.slice(0, -1).join(", ")} and ${last}`;
 }

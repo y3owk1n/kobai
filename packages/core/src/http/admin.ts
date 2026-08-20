@@ -844,7 +844,7 @@ const updateProductRoute = createRoute({
   path: "/products/{id}",
   summary: "Correct a Product",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. **`media` is where images are attached to this Product, reordered on it and detached from it**, and it is the whole list in the order it should be shown in — the first one is the one that leads. Detaching removes the attachment and never the Media: the asset stays in the Store's library and may still be showing on another Product. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written, and where a picture is attached to one.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. **This is where a Product is published and where it is archived**, through `status`, and **where its options are renamed, reordered, added and removed**, through `options` — which is the whole list rather than a set of edits, so an entry carrying an `id` is the option that already has it and one this Product has that the list does not name is removed. Adding an option leaves the Variants under it unanswered until each is corrected; removing one is refused where it would leave two Variants answering one combination, naming the two. The title is free to move — an Order's Line Items are a snapshot, so nothing already sold is rewritten (ADR-0009). The handle is free to move too, and that is a different kind of freedom: it is the address a storefront links to, so anything already pointing at the old one stops resolving. **`media` is where images are attached to this Product, reordered on it and detached from it**, and it is the whole list in the order it should be shown in — the first one is the one that leads. Detaching removes the attachment and never the Media: the asset stays in the Store's library and may still be showing on another Product. Variants are not changed here: add one with `POST /admin/products/{id}/variants`, correct one with `PATCH /admin/variants/{id}` — which is also how a Variant is given a value for an option added since it was written, and where a picture is attached to one.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.catalogWrite)] as const,
   request: {
@@ -861,8 +861,12 @@ const updateProductRoute = createRoute({
     403: REFUSALS.forbidden,
     404: json("No such Product exists.", contract.CatalogRefusal),
     // The one status this route gained with the handle, and it is creation's own: an address
-    // two Products share addresses neither, whichever route asked for it (ADR-0060).
-    409: json("Another Product already answers to that handle.", contract.CatalogRefusal),
+    // two Products share addresses neither, whichever route asked for it (ADR-0060). #277's
+    // word joined it there rather than at a 422, on the same argument.
+    409: json(
+      "`handle-taken`: another Product already answers to that address. Or `variant-combination-taken`: this `options` removes an option two Variants were told apart by, which would leave both answering one combination — the refusal names the two, and correcting or deleting either of them is what lets the correction through.",
+      contract.CatalogRefusal,
+    ),
     422: json(
       "Well formed, and still refused: `media` names an asset this Store has no Media for (`media-not-found`). Upload it at `POST /admin/media` and attach the identifier that answers with.",
       contract.CatalogRefusal,
@@ -906,7 +910,7 @@ const addVariantRoute = createRoute({
     403: REFUSALS.forbidden,
     404: json("No such Product exists.", contract.CatalogRefusal),
     409: json(
-      "`sku-taken`: a Variant already carries that SKU, and a SKU identifies one Variant.",
+      "`sku-taken`: a Variant already carries that SKU, and a SKU identifies one Variant. Or `variant-combination-taken`: a Variant of this Product already answers its options exactly this way, and a storefront maps a combination a Shopper chose to one Variant — the refusal names the Variant holding it, which is what correcting or deleting frees.",
       contract.CatalogRefusal,
     ),
     422: json(
@@ -1018,7 +1022,7 @@ const updateVariantRoute = createRoute({
     403: REFUSALS.forbidden,
     404: json("No such Variant exists.", contract.CatalogRefusal),
     409: json(
-      "`sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant.",
+      "`sku-taken`: another Variant already carries that SKU, and a SKU identifies one Variant. Or `variant-combination-taken`: another Variant of this Product already answers its options the way this correction asks for — re-sending the combination this Variant already answers is not refused, since a Variant is not its own sibling.",
       contract.CatalogRefusal,
     ),
     422: json(
@@ -2103,6 +2107,12 @@ const PRODUCT_UPDATE_STATUS = {
   // 422 again, for a `collections` naming a Collection this Store has none of — the same
   // distinction one noun along, and answered with the word `GET /admin/collections/{id}` uses.
   "collection-not-found": 422,
+  // 409, at the status the two Variant routes answer this same word at, and on `handle-taken`'s
+  // distinction rather than `media-not-found`'s: what refuses it is a row that already holds
+  // the thing being asked for — here a combination rather than an address — and it becomes
+  // possible again the moment one of the two Variants named is corrected or deleted, which is a
+  // control the Merchant reading the refusal has.
+  "variant-combination-taken": 409,
 } as const satisfies Record<
   Exclude<ProductUpdate, { ok: true }>["reason"],
   400 | 404 | 409 | 422
@@ -2123,6 +2133,11 @@ const VARIANT_CREATION_STATUS = {
   // 422 for the same reason and with the same word, wherever a Variant is written — see
   // `PRODUCT_STATUS` above.
   "variant-options-mismatch": 422,
+  // 409 and not 422, which is `sku-taken`'s distinction two lines up and is the same fact one
+  // column along: a combination identifies one Variant of a Product exactly as a SKU identifies
+  // one Variant of the Store, another row already holds it, and it is free again as soon as
+  // that row is corrected or deleted (#277).
+  "variant-combination-taken": 409,
 } as const satisfies Record<
   Exclude<VariantCreation, { ok: true }>["reason"],
   400 | 404 | 409 | 422
@@ -2229,6 +2244,9 @@ const VARIANT_UPDATE_STATUS = {
   // 422 for the same reason and with the same word, wherever a Variant is written — see
   // `PRODUCT_STATUS` above.
   "variant-options-mismatch": 422,
+  // 409 wherever a Variant is written, for the reason `VARIANT_CREATION_STATUS` gives: a
+  // combination a sibling already answers is `sku-taken`'s shape one column along (#277).
+  "variant-combination-taken": 409,
   // 422 at the same status the Product's correction answers it at, because it is one fact about
   // a `media` list and where the list was sent changes neither what is wrong nor how it is
   // fixed — `variant-options-mismatch`'s argument one field along.

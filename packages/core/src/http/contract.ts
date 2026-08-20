@@ -1552,7 +1552,7 @@ export const CreateVariantRequest = z
     }),
     options: z.array(VariantOptionValue).optional().meta({
       description:
-        "This Variant's value for each option its Product declares, by the option's name. It must answer **every** one and **only** those: a value for an option the Product never declared, or a declared option left unanswered, is refused at 422 with `variant-options-mismatch`. Left out entirely is the same as an empty list, which is what a Product declaring no options wants.",
+        "This Variant's value for each option its Product declares, by the option's name. It must answer **every** one and **only** those: a value for an option the Product never declared, or a declared option left unanswered, is refused at 422 with `variant-options-mismatch`. It must also answer them in a way no other Variant of the same Product does, or it is refused at 409 with `variant-combination-taken` — a storefront maps the combination a Shopper chose to one Variant. Left out entirely is the same as an empty list, which is what a Product declaring no options wants.",
     }),
     metadata: Metadata.optional(),
   })
@@ -1616,7 +1616,7 @@ export const CreateProductRequest = z
     }),
     options: z.array(ProductOptionDeclaration).optional().meta({
       description:
-        "The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values.",
+        "The options this Product is chosen by — Size, Colour — **in the order a storefront should offer them**. Declared here rather than at a route of their own, so a Variant naming an option its Product has not declared is not a state that exists for an instant: the options, the Variants and their values are written in one transaction. Left out, the Product is sold as one thing and its Variants carry no values — which is the one case two of them may answer nothing alike, since a Product declaring no options offers no combination to choose. Where it declares any, two Variants of this body answering them the same way is refused at 400: a storefront maps a combination to one Variant.",
     }),
     metadata: Metadata.optional(),
     variants: z.array(CreateVariantRequest).min(1),
@@ -1662,7 +1662,7 @@ export const UpdateProductRequest = z
     }),
     options: z.array(ProductOptionCorrection).optional().meta({
       description:
-        "**The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for.",
+        "**The complete list of this Product's options, in the order it should end up in** — so this is where one is renamed, where they are reordered, where one is added and where one is removed. An entry carrying an `id` is the option that already has it, and its Variants' values stay attached to it; one without is new; one this Product has that the list does not name is removed, taking every Variant's value for it with it. An `id` naming no option of this Product is refused at 400. **Adding an option leaves every Variant already on the Product with it unanswered**, which `PATCH /admin/variants/{id}` is how each one is given a value for. **Removing one is refused at 409 with `variant-combination-taken` where it would leave two Variants answering one combination**, naming the two: correct or delete either of them and send this correction again.",
     }),
     collections: z.array(CollectionMembership).optional().meta({
       description:
@@ -1705,7 +1705,7 @@ export const UpdateVariantRequest = z
     }),
     options: z.array(VariantOptionValue).optional().meta({
       description:
-        "This Variant's value for each option its Product declares, **replacing** every value it holds rather than merging into them — the rule `metadata` follows, for the reason it follows it. Named, it must answer every declared option and only those, or it is refused at 422 with `variant-options-mismatch`. Absent leaves what is stored, so a Variant left unanswered by an option added since is still free to have its SKU corrected.",
+        "This Variant's value for each option its Product declares, **replacing** every value it holds rather than merging into them — the rule `metadata` follows, for the reason it follows it. Named, it must answer every declared option and only those, or it is refused at 422 with `variant-options-mismatch`, and it must not answer them the way another Variant of the same Product does, or it is refused at 409 with `variant-combination-taken` — sending back the combination this Variant already answers is not that, since a Variant is not its own sibling. Absent leaves what is stored, so a Variant left unanswered by an option added since is still free to have its SKU corrected.",
     }),
     metadata: Metadata.optional().meta({
       description: "Replaces what is stored rather than merging into it.",
@@ -1764,6 +1764,13 @@ const CATALOG_REASONS = {
   "unsupported-currency": "unsupported-currency",
   "unknown-fulfilment-strategy": "unknown-fulfilment-strategy",
   "variant-options-mismatch": "variant-options-mismatch",
+  // The one word #277 added, and the only one on this surface that is a fact about a Variant's
+  // **siblings**: two Variants of one Product answering its options the same way is a detail
+  // payload a storefront cannot map a chosen combination through. It is one word at the two
+  // routes that write a Variant into a Product that already exists and at the Product's own
+  // correction, because it is one fact reached from three ends — a create names it twice in its
+  // own body instead, which is `invalid`, exactly as two Variants of one body naming one SKU is.
+  "variant-combination-taken": "variant-combination-taken",
   // The one word #255 added, and it is `GET /media/{key}`'s own said about the same fact from
   // the other end: `media` names an asset this Store has none of. One fact gets one word
   // (ADR-0060) — which is also why {@link MediaNotFound} carries it as a literal rather than as

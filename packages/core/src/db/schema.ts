@@ -476,6 +476,13 @@ export type ProductOptionRow = typeof productOption.$inferSelect;
  * values are written by deleting every row it has and inserting the new set, so no rename can
  * collide with a row on its way out.
  *
+ * **What it does not say is that two Variants answer differently**, and there is no index that
+ * could: the combination is one row per option, so the fact is spread over as many rows as the
+ * Product has options and no per-row constraint can see it. `catalog/options.ts` holds that rule
+ * instead — `variant-combination-taken`, at every route that writes a Variant and at the
+ * Product's own option correction — under `lockProductOptions`, which is what makes reading the
+ * siblings and writing against them one operation (#277, ADR-0018).
+ *
  * The value is `text` and Core has no opinion about it. `M`, `Medium` and `medium` are three
  * different values because a Merchant said three different things, and a normalisation here
  * would be a rule about a Store's own vocabulary in the one place it could not be relaxed.

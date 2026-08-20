@@ -27,6 +27,7 @@ import {
   setVariantMedia,
 } from "./media.ts";
 import {
+  combinationTaken,
   correctProductOptions,
   lockProductOptions,
   type ProductOption,
@@ -82,7 +83,7 @@ export type UpdateProductInput = {
 };
 
 /**
- * Correcting a Product refuses five ways, and the last three are about the state of the Store.
+ * Correcting a Product refuses six ways, and the last four are about the state of the Store.
  *
  * There is no `title-taken` and there is not going to be one: a title is what a Product is
  * called, not what identifies it, and two Products may perfectly well share one. The **handle**
@@ -103,6 +104,14 @@ export type UpdateProductInput = {
  * `collections` naming a Collection this Store has not got, refused 422 for those reasons, and
  * carrying the word `GET /admin/collections/{id}` already answers with — one fact gets one word,
  * whichever end it is asked from (ADR-0060).
+ *
+ * **`variant-combination-taken` is the sixth, and it is the only one here that is a fact about
+ * this Product's *Variants*** (#277). An `options` that removes an option two Variants differed
+ * only by would leave them both answering one combination, which is a Product a storefront
+ * cannot choose a SKU from — so the correction is refused, naming the two, rather than taken
+ * and reported. It is the word the two routes that write a Variant refuse with, because it is
+ * one fact reached from another end (ADR-0060), and the repair is the same one: correct or
+ * delete one of the pair.
  */
 export type ProductUpdate =
   | { readonly ok: true; readonly product: ProductDetail }
@@ -113,7 +122,8 @@ export type ProductUpdate =
         | "product-not-found"
         | "handle-taken"
         | "media-not-found"
-        | "collection-not-found";
+        | "collection-not-found"
+        | "variant-combination-taken";
       readonly detail: string;
     };
 
@@ -153,8 +163,14 @@ type VariantColumns = {
 };
 
 /**
- * Correcting a Variant refuses six ways, and only `media-not-found` is not a word creation
- * already answers with — because only Media is attached to a Variant that already exists.
+ * Correcting a Variant refuses seven ways, and only `media-not-found` is not a word creating
+ * one already answers with — because only Media is attached to a Variant that already exists.
+ *
+ * `variant-combination-taken` is `POST /admin/products/{id}/variants`'s own word rather than a
+ * new one (#277): a Variant corrected onto the combination a sibling answers is the same fact
+ * as one added onto it, and where a Variant is written changes neither what is wrong nor how it
+ * is fixed. A Variant re-sending the combination it already has is not refused — it is the one
+ * answering it.
  */
 export type VariantUpdate =
   | { readonly ok: true; readonly variant: Variant }
@@ -166,6 +182,7 @@ export type VariantUpdate =
         | "sku-taken"
         | "unknown-fulfilment-strategy"
         | "variant-options-mismatch"
+        | "variant-combination-taken"
         | "media-not-found";
       readonly detail: string;
     };
@@ -553,23 +570,29 @@ export async function updateVariant(
       let productId: string | undefined;
       let declared: readonly ProductOption[] | undefined;
 
-      // **The advisory lock first, then the two row locks**, which is `updateProduct`'s order
-      // and every other site's. It is taken only for a body naming `media`, because it is what
-      // makes that field's delete-and-insert one operation (`catalog/media.ts`); the row locks
-      // are taken for either list, and answer one question for both — are these two rows still
-      // there for the rows written below to reference.
-      if (shown !== undefined) await lockMediaOf(tx, variantId);
-
+      // **The advisory locks first, then the two row locks**, which is `updateProduct`'s order
+      // and every other site's. Each is taken only where the body asked for it: `media` because
+      // it is what makes that field's delete-and-insert one operation (`catalog/media.ts`), and
+      // the Product's options because a Variant's values are judged against what its *siblings*
+      // answer and then written (#277) — the same key `updateProduct` and `addVariant` take, so
+      // that the three cannot each judge against a list or a set of siblings the others are in
+      // the middle of changing. The row locks are taken for either list, and answer one question
+      // for both — are these two rows still there for the rows written below to reference.
       if (values !== undefined || shown !== undefined) {
         // `product_id` is read plainly and then both rows are held, in `lock.ts`'s order. No
         // route moves a Variant between Products, so the value cannot go stale; what the locks
-        // answer is whether the two rows are still there at all.
+        // answer is whether the two rows are still there at all. It is read **before** the
+        // advisory lock because it is what says which Product's key that is.
         const [found] = await tx
           .select({ productId: variant.productId })
           .from(variant)
           .where(eq(variant.id, variantId))
           .limit(1);
         if (!found) return noSuchVariant(variantId);
+
+        if (values !== undefined) await lockProductOptions(tx, found.productId);
+        if (shown !== undefined) await lockMediaOf(tx, variantId);
+
         if (!(await lockProduct(tx, found.productId))) return noSuchVariant(variantId);
         if (!(await lockVariant(tx, variantId))) return noSuchVariant(variantId);
 
@@ -589,6 +612,21 @@ export async function updateVariant(
         // the transaction is committed rather than unwound.
         const mismatch = variantOptionsMismatch(declared, values.value, "This Variant");
         if (mismatch) return mismatch;
+
+        // And the same second question `addVariant` asks (#277), with the one difference this
+        // route has: **this Variant is not its own sibling.** A correction that re-sends the
+        // combination it already answers is the Variant answering it, so it is passed as the
+        // one to except — without which correcting a Variant's SKU while sending its `options`
+        // unchanged, which is what the Admin's form does, would be refused against itself.
+        const taken = await combinationTaken(
+          tx,
+          productId,
+          declared,
+          values.value,
+          "This Variant",
+          variantId,
+        );
+        if (taken) return taken;
       }
 
       // **Every judgement before the first write**, which is `updateProduct`'s ordering and is

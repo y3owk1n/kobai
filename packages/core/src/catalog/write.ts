@@ -14,7 +14,10 @@ import { readStore } from "../store/read.ts";
 import { handleField, handleTaken, noHandleToPropose, proposeHandle } from "./handle.ts";
 import { lockProduct, lockVariant } from "./lock.ts";
 import {
+  combinationNamedTwice,
+  combinationTaken,
   declareProductOptions,
+  lockProductOptions,
   parseOptionDeclarations,
   parseOptionValues,
   readProductOptions,
@@ -84,11 +87,16 @@ export type CreateVariantInput = {
 };
 
 /**
- * Adding a Variant refuses in four ways, and three of them are creation's own words.
+ * Adding a Variant refuses in five ways, and three of them are creation's own words.
  *
  * The fourth is `product-not-found`, which is the whole difference between this and the
  * Variants of a create: there the Product is being made in the same transaction, and here it
  * is a row that has to still be there when this one is written.
+ *
+ * **The fifth is `variant-combination-taken`, and it is the same difference read one field
+ * along** (#277): a Variant added to a Product that already exists has *siblings*, and a
+ * combination two of them answer is one a storefront cannot map to a SKU. A create cannot make
+ * that mistake against the Store — only against its own `variants` list, which is `invalid`.
  */
 export type VariantCreation =
   | { readonly ok: true; readonly variant: Variant }
@@ -99,7 +107,8 @@ export type VariantCreation =
         | "product-not-found"
         | "sku-taken"
         | "unknown-fulfilment-strategy"
-        | "variant-options-mismatch";
+        | "variant-options-mismatch"
+        | "variant-combination-taken";
       readonly detail: string;
     };
 
@@ -190,6 +199,14 @@ export async function createProduct(
     );
     if (mismatch) return mismatch;
   }
+
+  // And no two of them answer those options the same way (#277), which is what makes the
+  // payload a storefront maps a chosen combination through a **function**. Here that is a body
+  // conflicting with itself rather than with the Store — there are no other Variants yet — so
+  // it is `invalid` at 400, exactly as `variants` naming one SKU twice is; the two routes that
+  // write a Variant into a Product that already exists answer `variant-combination-taken`.
+  const twice = combinationNamedTwice(options.value, variants.value);
+  if (twice !== undefined) return { ok: false, reason: "invalid", detail: twice };
 
   // Refused at the moment of the mistake rather than at the first Order for it. A Variant
   // pointing at a Strategy this deployment has not wired is one nothing can answer the three
@@ -318,6 +335,14 @@ export async function addVariant(
   if (!isUuid(productId)) return noSuchProduct(productId);
 
   return db.transaction(async (tx) => {
+    // **The advisory lock first, then the row lock** — `updateProduct`'s order and every other
+    // site's. It is what makes the combination this Variant answers a question with one answer:
+    // the judgement below is a read of the Product's other Variants followed by an insert of
+    // this one, so two adds landing together would each read a Product that does not yet hold
+    // the other and both would be allowed through. `lockProduct` cannot stand in for it — that
+    // lock is `for share`, and two `FOR SHARE` holders do not conflict.
+    await lockProductOptions(tx, productId);
+
     // **Held**, not merely read. The row inserted below references this Product, and one
     // deleted in between would make that a foreign-key violation and a 500 — a broken server
     // reported for what is only a Product no longer there. `lock.ts` is what the lock is and
@@ -338,6 +363,18 @@ export async function addVariant(
     // Nothing has been written, so there is nothing to unwind — the shape `createProduct` needs
     // a throw for only because a refused Variant has to take a Product with it.
     if (mismatch) return mismatch;
+
+    // And the second question about the same values, which is the one a create cannot ask: not
+    // whether they are the right options, but whether a Variant of this Product already answers
+    // them (#277). Asked here, before the insert, and under the lock above.
+    const taken = await combinationTaken(
+      tx,
+      productId,
+      declared,
+      parsed.value.options,
+      `The Variant ${JSON.stringify(parsed.value.sku)}`,
+    );
+    if (taken) return taken;
 
     const [created] = await tx
       .insert(variant)
