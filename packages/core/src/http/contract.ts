@@ -1009,6 +1009,27 @@ export const Region = z
   })
   .openapi("Region");
 
+/**
+ * A Region as everything that is *not* the Region routes reports one — what it is called and
+ * what it prices in (#292).
+ *
+ * **A second component for one noun, deliberately**, and {@link VariantIdentity} is the
+ * precedent: a Price and a resolved price name the Region they apply in, and what a reader
+ * needs there is the name and the currency rather than the Merchant's `metadata` bag repeated
+ * on every row. Publishing the whole `Region` in those places would put that bag on the store
+ * surface, where #207's split says a field reaches a browser only because somebody put it there.
+ */
+export const RegionIdentity = z
+  .object({
+    id: z.uuid(),
+    name: z.string().meta({ description: "What the Merchant calls it — `Malaysia`." }),
+    currency: z.string().meta({
+      description:
+        "The ISO 4217 code this Region prices in. A Price denominated in anything else does not apply here, and kobai converts nothing.",
+    }),
+  })
+  .openapi("RegionIdentity");
+
 /** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
 export const RegionList = z
   .object({ regions: z.array(Region).readonly(), nextCursor: NextCursor })
@@ -1082,8 +1103,8 @@ export const RegionRefusal = z
  *
  * A name, and that is the whole entity. ADR-0005 says kobai's Channel means *sales channel
  * only*, against Vendure's, which overloads the same word to mean tenant boundary: so a Channel
- * carries no scope, owns nothing, and is referenced by exactly one column — an API key's, which
- * is how a request's Channel is decided (ADR-0020).
+ * carries no scope, owns nothing, and is referenced by two columns — an API key's, which is how
+ * a request's Channel is decided (ADR-0020), and a Price's, which is what varies per Channel.
  */
 export const Channel = z
   .object({
@@ -1095,6 +1116,14 @@ export const Channel = z
     metadata: Metadata,
   })
   .openapi("Channel");
+
+/** A Channel as a Price and a resolved price name one. {@link RegionIdentity}'s argument (#292). */
+export const ChannelIdentity = z
+  .object({
+    id: z.uuid(),
+    name: z.string().meta({ description: "What the Merchant calls it — `Marketplace`." }),
+  })
+  .openapi("ChannelIdentity");
 
 /** The list, in an envelope — the items, and how to ask for what follows them (ADR-0064). */
 export const ChannelList = z
@@ -1552,6 +1581,21 @@ const CollectionFilter = z.string().optional();
 
 // ---- Catalog --------------------------------------------------------------------------
 
+/**
+ * A Price — an amount, what it is denominated in, and where it applies (ADR-0008).
+ *
+ * **`region` and `channel` are the constraint columns ADR-0008 predicted**, and `null` on either
+ * means *applies to all* rather than *applies to none* — so every Price written before #292 is
+ * the unconstrained fallback, which is what makes this additive for a Store that sells into one
+ * market. Which of several Prices a storefront is actually charged is `resolve-price`'s answer
+ * and never a row read: best match, on the Region and the Channel, in a Workflow a Project may
+ * have replaced.
+ *
+ * **A union rather than `.nullable()`** on both, for the reason `Store.defaultRegion` carries:
+ * `.nullable()` at a reference site is applied to the registered component, so `RegionIdentity`
+ * itself would be published as `object | null` and every other route naming one would promise a
+ * `null` no handler produces.
+ */
 export const Price = z
   .object({
     id: z.uuid(),
@@ -1559,6 +1603,14 @@ export const Price = z
       description: "Minor units of `currency` — 1250 is USD 12.50.",
     }),
     currency: z.string(),
+    region: z.union([RegionIdentity, z.null()]).meta({
+      description:
+        "The Region this Price applies to, or `null` for **every** Region. A Price constrained to a Region beats an unconstrained one there, and applies nowhere else.",
+    }),
+    channel: z.union([ChannelIdentity, z.null()]).meta({
+      description:
+        "The Channel this Price applies to, or `null` for **every** Channel. Which Channel a storefront is in is decided by its API key, so a Price constrained to one applies to the keys minted into it (ADR-0020).",
+    }),
     metadata: Metadata,
   })
   .openapi("Price");
@@ -2037,13 +2089,44 @@ export const SetPriceRequest = z
     amount: z.int().meta({
       description: "Minor units — 1250 for USD 12.50. Whole, and not negative.",
     }),
-    currency: z
-      .string()
-      .optional()
-      .meta({ description: "ISO 4217. Defaults to the Store's default currency." }),
+    currency: z.string().optional().meta({
+      description:
+        "ISO 4217, read case-insensitively. **Any currency this Store has enabled** — `GET /admin/store` lists them — and one it has not is refused with `unsupported-currency`, because kobai converts nothing. Defaults to the Store's default currency, which is what a Price that named none has always been denominated in; it is deliberately not the named Region's currency, so this field means one thing whatever else the body carries.",
+    }),
+    regionId: z.uuid().optional().meta({
+      description:
+        "The `id` of the Region this Price applies to — `GET /admin/regions` lists them. **Left out is every Region**, which is what every Price written before Regions existed is, and it is the fallback a Region-constrained Price beats. One this Store has not got is refused with `region-not-found`. A Price denominated in a currency this Region does not select is accepted and can never win: it is the Region that decides the currency (ADR-0074).",
+    }),
+    channelId: z.uuid().optional().meta({
+      description:
+        "The `id` of the Channel this Price applies to — `GET /admin/channels` lists them. **Left out is every Channel.** Which Channel a request is in is decided by its API key, so this is how a marketplace listing is priced apart from a storefront without either of them asking for it (ADR-0020).",
+    }),
     metadata: Metadata.optional(),
   })
   .openapi("SetPriceRequest");
+
+/**
+ * Which Region a price is resolved for — the one parameter both price routes take (#292).
+ *
+ * **Absent is the Store's default Region**, which is what keeps this additive under ADR-0060: a
+ * storefront written before this parameter existed sends nothing and is answered exactly as it
+ * was. A Region this Store has not got is refused at **400** rather than defaulted, so a
+ * storefront interpolating the wrong variable finds out (story 15).
+ *
+ * **It is not a filter**, though it is the third query parameter on this surface that is neither
+ * `limit` nor `after`: it decides *what the answer is* rather than *which rows are answered*, so
+ * `http/filtering.test.ts` names it as the one kind of query parameter its sweep is not about.
+ */
+export const PriceQuery = z.object({
+  region: z
+    .string()
+    .optional()
+    .meta({
+      param: { name: "region", in: "query" },
+      description:
+        "The `id` of the Region to price for — currency, and later tax and shipping, all follow from it. Absent is this Store's default Region, which is seeded at its first boot. One this Store has not got is refused at 400 rather than silently defaulted.",
+    }),
+});
 
 /** The Variant, and a Price of it — a plain string each, for {@link IdParam}'s reason. */
 export const VariantPriceParams = IdParam.extend({
@@ -2099,6 +2182,13 @@ const CATALOG_REASONS = {
   // gets one word — which is also why {@link CollectionRefusal} carries it rather than a second
   // spelling of its own.
   "collection-not-found": "collection-not-found",
+  // The two words #292 added, and the same argument a third and a fourth time: a Price names a
+  // Region or a Channel this Store has none of, which is the fact `GET /admin/regions/{id}` and
+  // `GET /admin/channels/{id}` already answer 404 with. One fact gets one word, and they arrive
+  // here at 422 for `collection-not-found`'s reason — the body is well formed and what refuses
+  // it is the state of the Store.
+  "region-not-found": "region-not-found",
+  "channel-not-found": "channel-not-found",
 } as const satisfies {
   [R in
     | Refused<ProductCreation>
@@ -2423,14 +2513,29 @@ export const VariantIdentity = z
   .openapi("VariantIdentity");
 
 /**
- * A resolved price, and which Steps produced it.
+ * A resolved price, which market it was resolved for, and which Steps produced it.
  *
  * `workflow.steps` is part of the contract rather than a debugging nicety: it is what
  * lets a Developer who replaced a Step *see* that theirs ran (spec story 33).
+ *
+ * **`region` and `channel` say which question was answered** (#292). A storefront that sent no
+ * `?region=` was answered for the Store's default and has no other way to learn which that was;
+ * a Merchant previewing a price needs to know it is looking at Malaysia's. The Channel is the
+ * one the presented API key is in, so this is also where a storefront finds out what its own
+ * credential is bound to — `null` is the unconstrained Channel, and it is what
+ * `GET /admin/variants/{id}/price` always answers, since a Merchant's session carries no key.
  */
 export const ResolvedPrice = z
   .object({
     variant: VariantIdentity,
+    region: RegionIdentity.meta({
+      description:
+        "The Region this price is for — what `?region=` named, or this Store's default where it named none.",
+    }),
+    channel: z.union([ChannelIdentity, z.null()]).meta({
+      description:
+        "The Channel the presented API key is in, or `null` for a key in no particular one — and always `null` on the admin preview, which presents a session rather than a key.",
+    }),
     price: z.object({ id: z.uuid(), amount: z.int(), currency: z.string() }),
     workflow: z.object({
       name: z.string(),

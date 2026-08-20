@@ -154,6 +154,35 @@ Variant. This refusal makes that state unreachable *through the API*; it does no
 impossible, since nothing stops a hand-run `DELETE` (ADR-0004's unmediated writer), and removing
 the tolerance on the strength of this decision would turn a tidy-up into a permanent failure.
 
+## The one cascade taken since, and the test that permitted it
+
+**#292 made `core_price.region_id` and `core_price.channel_id` `on delete cascade`**, so deleting
+a Region or a Channel takes the Prices constrained to it. That is this record's rule pointing the
+other way, and it is recorded here rather than only at the column because a reader arriving at
+that migration deserves to find out whether somebody thought about it.
+
+**What decided it is the test this record actually applies**, which is not "cascading is worse
+than refusing" but *the repair is one a Merchant can carry out themselves* — the sentence the
+`stock-is-reserved` section rests on. A refusal here would say "Prices apply to this Region" and
+point at rows **nothing lists**: there is no route that reads Prices by Region, and
+`DELETE /admin/variants/{id}/prices/{priceId}` needs both identifiers, so the advice would name
+no reachable control. This file says elsewhere that a refusal like that is a finding to raise
+rather than something to word around; taking the cascade is that finding answered.
+
+Two things make the cascade honest rather than merely convenient. **A Price constrained to a
+Region that no longer exists can never apply to anything again** — resolution matches on the
+identifier — so what is deleted is a row with no remaining meaning, where a Variant's last
+Variant or a held Reservation are things somebody still has. And **the third answer is worse than
+both**: `on delete set null` would leave the row applying *everywhere*, so deleting a geography
+would silently reprice every other one — a change nobody asked for, arriving through a request
+about something else, which is exactly what the `last-variant` section refuses to do.
+
+**It does not weaken the rule for the catalog**, and the boundary is the reachable repair: a
+Product, a Variant, a Role and a Collection all have routes that list and change them, so a
+refusal there names something a Merchant can act on. The day `GET /admin/prices?region=` exists,
+this cascade is worth revisiting — and that is the trigger to watch for rather than a promise to
+change it.
+
 ## Consequences
 
 - **Both reason strings are now promised in prose and nowhere else.** Until the first publish,

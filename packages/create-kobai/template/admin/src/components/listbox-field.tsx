@@ -58,7 +58,7 @@ export type ListboxOption = {
  * its own query, maps it to {@link ListboxOption}s, and passes the sentence it wants — including
  * the exceptional ones, which is the one thing `quiet` must not swallow.
  */
-export function ListboxField<T extends FieldValues>({
+export function ListboxField<T extends FieldValues, Submitted extends FieldValues = T>({
   id,
   control,
   name,
@@ -73,7 +73,17 @@ export function ListboxField<T extends FieldValues>({
   /** Unique to the **document**, not to the form — two forms on one screen would otherwise
    * point both labels at whichever trigger rendered last. */
   readonly id: string;
-  readonly control: Control<T>;
+  /**
+   * The form this field belongs to.
+   *
+   * **`Submitted` is what the form hands its `onSubmit`, and it defaults to what the fields
+   * hold** — which is every caller but one. The Price editor's schema *transforms*, turning the
+   * amount's string into a number, so its `Control` is a three-parameter one; a field that
+   * insisted on the two-parameter shape would leave that form no way to hold a listbox except
+   * a `useState` beside it, which is the thing this component exists to stop (#292). Nothing
+   * here reads the submitted shape: what a listbox holds is a field of `T`.
+   */
+  readonly control: Control<T, unknown, Submitted>;
   readonly name: Path<T>;
   /** What the field is called. Rendered `sr-only` whenever {@link quiet} is set, never dropped. */
   readonly label: string;

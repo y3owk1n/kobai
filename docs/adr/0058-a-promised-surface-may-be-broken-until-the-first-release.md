@@ -233,6 +233,38 @@ freely the licence is being spent.
   `packages/core/src/upgrade/codemods.test.ts`, which the gate's `typecheck` step runs. Each was
   watched failing against the method spelling — `TS2578: Unused '@ts-expect-error' directive` —
   before the change it pins was made.
+- **#292 — `resolve-price` grew a market: `PriceResolutionRequest`, `LoadedPrices` and
+  `ResolvedPrice` each gained a `region` and a `channel`.** Extension Point 2, and the first
+  break taken under this licence *on purpose* rather than as the cost of a change that had to
+  be made some other way. A Price now carries a nullable Region and Channel (ADR-0008's
+  predicted constraint columns), so pricing is asked *somewhere* — and a Step that could not see
+  where would be a Step that cannot implement the rule. The argument is on `PriceMarket` in
+  `packages/core/src/pricing/resolve-price.ts`; ADR-0074 is what it spends.
+
+  **The blast radius is every replaced Step in that Workflow, and the compiler reaches all of
+  it — but only because the *output* moved too.** That is the part worth writing down, because
+  it is not obvious and it decided the shape: growing an *input* alone breaks nobody. TypeScript
+  checks a function-valued parameter contravariantly, so a Step declared
+  `(input: LoadedPrices) => ResolvedPrice` still compiles when `LoadedPrices` gains a field —
+  the Step is simply handed more than it reads. A replaced `select-price` would then have gone
+  on answering as though every Shopper were in one market, silently, which is exactly the "wrong
+  prices rather than a build error" this spec's own story 20 asks to be spared. So the market
+  travels **out** as well as in: `ResolvedPrice` is what a replacement *builds*, and a missing
+  property there is `TS2739` at the Project's own build. `everythingCostsOneCent` in the
+  reference Project is the worked example and was updated in the same change — two lines to
+  hand the market back, and one decision about the currency, which it now honours although it
+  throws the amount away.
+
+  What did **not** break: an inserted `before`/`after` Step that passes the value through
+  (`@kobai/plugin-price-log`'s `record-price-resolution` is untouched), and every HTTP client —
+  `ResolvedPrice` and `Price` gained fields, which is additive in the direction ADR-0060 permits
+  in a minor. `select-price`'s refusal words are unchanged.
+
+  **No codemod, on this record's own rule and on both of its grounds.** The compiler names the
+  file and the property; and what a Project's own pricing rule should *do* with a Region — read
+  it, ignore it, refuse in it — is a question only that Project can answer, so a machine writing
+  `region: input.region` would turn the build green while leaving the decision untaken. That is
+  #117's second argument arriving intact one Workflow along.
 - **#276 — `PriceRefusal.workflow` made optional.** The promised HTTP surface, and ADR-0060's
   "making a present field optional is a break" exactly: a client narrowing `error.workflow.failed`
   off a refused price stops compiling and has to ask whether the field is there. The argument is

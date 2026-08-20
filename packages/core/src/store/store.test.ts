@@ -52,9 +52,16 @@ describe("GET /admin/store", () => {
       // with, so a Store is never in the state its own rules forbid: the default is always in
       // the set a Price may be denominated in (ADR-0074).
       currencies: [{ code: "USD" }],
-      // Seeded at boot rather than by a migration, and nothing in this harness boots — see
-      // `seed.test.ts`, where that is the subject.
-      defaultRegion: null,
+      // Seeded at boot rather than by a migration, and the harness boots as a deployment does
+      // (#292) — so this is the Region every price request that names none is answered for,
+      // named from the currency this Store prices in. `seed.test.ts` is where the seeding
+      // itself is the subject, and where a deployment that has not done it is arranged.
+      defaultRegion: {
+        id: expect.any(String),
+        name: "USD",
+        currency: "USD",
+        metadata: {},
+      },
       metadata: {},
     });
   });
@@ -96,7 +103,12 @@ describe("PATCH /admin/store", () => {
       name: "Kyle's posters",
       defaultCurrency: "USD",
       currencies: [{ code: "USD" }],
-      defaultRegion: null,
+      defaultRegion: {
+        id: expect.any(String),
+        name: "USD",
+        currency: "USD",
+        metadata: {},
+      },
       metadata: { support: "…" },
     });
     // The same bytes the read beside it answers, because a Store is one record however it is

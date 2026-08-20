@@ -28,6 +28,7 @@ import type { PlaceOrderRefusal, PlaceOrderWorkflow } from "../order/place-order
 import { type QuoteCartRefusal, quoteCart } from "../order/quote-cart.ts";
 import { type Order, readOrder, readOrderPlacedFrom } from "../order/read.ts";
 import type { PaymentProvider } from "../payment/provider.ts";
+import { marketAsked } from "../pricing/market.ts";
 import type {
   PriceResolutionRefusal,
   PriceResolutionWorkflow,
@@ -45,7 +46,9 @@ import {
   invalidRequestHook,
   json,
   PAGE_QUERY_INVALID,
+  PRICE_PARAMETERS,
   REFUSALS,
+  REGION_INVALID,
 } from "./openapi.ts";
 import {
   priceStatusFor,
@@ -254,6 +257,14 @@ const readStoreVariantRoute = createRoute({
  * nicety: it is what lets a Developer who has replaced a Step *see* that theirs ran, so the
  * extension mechanism is demonstrated rather than assumed (spec story 33).
  *
+ * **`?region=` is the one thing about the request that decides the answer, and it is optional**
+ * (#292, ADR-0074). It names the market: the Region's currency is what a Price has to be
+ * denominated in to apply at all, and the Channel comes off the presented key rather than out of
+ * the query string, so a storefront threads nothing and cannot claim a Channel it was not issued
+ * a credential for. Absent is the Store's default Region — which is what makes this additive
+ * under ADR-0060, since the seeded default selects the currency every existing Price already
+ * carried — and a Region this Store has not got is **400** rather than quietly the default.
+ *
  * **It answers for a published Product and nothing else, and the guard is here rather than in
  * the Workflow** (#276). `resolve-price` prices a Variant; it does not decide who may see one —
  * which is exactly why `GET /admin/variants/{id}/price` can preview a draft's price through the
@@ -267,14 +278,15 @@ const resolvePriceRoute = createRoute({
   path: "/variants/{id}/price",
   summary: "What a Variant costs",
   description:
-    "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.",
+    "Produced by the `resolve-price` Workflow. The response names the Steps that ran, so a Developer who replaced one can see that theirs did. **`region` decides the currency**: a Price is resolved by best match on the Region asked for and the Channel this API key is in, and a Variant with no Price denominated in that Region's currency has no price there — kobai converts nothing. Sending no `region` answers for this Store's default Region, which is exactly what this route did before the parameter existed. A Variant whose Product is not `published` is **not found** here, exactly as it is absent from `GET /store/products` and unreadable at `GET /store/variants/{id}` — a draft is invisible on this surface rather than forbidden. A Merchant previewing one asks `GET /admin/variants/{id}/price`, which runs the same Workflow.",
   security: API_KEY,
-  request: { params: contract.IdParam },
+  request: { params: contract.IdParam, query: contract.PriceQuery },
   responses: {
     200: json(
       "The resolved Price, and the Steps that produced it.",
       contract.ResolvedPrice,
     ),
+    400: REGION_INVALID,
     401: REFUSALS.noApiKey,
     404: json(
       "There is no such Variant on this surface — either none exists or its Product is not published, which are deliberately one answer and carry no `workflow`, since nothing ran — or a Step refused because it carries no Price.",
@@ -764,11 +776,24 @@ export function createStoreRoutes(deps: StoreDependencies): OpenAPIHono<StoreEnv
       return c.json(STORE_CATALOG_NOT_FOUND.variant, 404);
     }
 
+    // After the guard and before the Workflow, which is `setPrice`'s ordering and its reason:
+    // "there is no such Variant here" is the more fundamental answer, and a storefront told only
+    // that its `region` is wrong would fix that and then be told the Variant does not exist.
+    const market = await marketAsked(
+      deps.db,
+      c.req.valid("query").region,
+      c.get("apiKey").channel,
+    );
+    if (!market.ok)
+      return c.json({ error: market.detail, reason: "invalid" as const }, 400);
+
     const run = await deps.priceWorkflow.run(
-      { variantId },
+      { variantId, ...market.market },
       // The query string is the whole of it: this route takes no body, so there is no second
-      // half to merge and nothing that could arrive in both.
-      contextFor(openMetadata(new URL(c.req.url))),
+      // half to merge and nothing that could arrive in both. `region` is subtracted because
+      // this route now models it — a parameter Core reads is not part of the open half, or the
+      // openness would quietly become a schema (ADR-0013).
+      contextFor(openMetadata(new URL(c.req.url), PRICE_PARAMETERS)),
     );
 
     if (!run.ok)

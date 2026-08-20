@@ -286,10 +286,16 @@ export type QuoteRequest = components["schemas"]["QuoteRequest"];
  * by; a **Channel** is a route to market, decided by the API key a request presents rather than
  * by anything a storefront sends. Neither is a tenant boundary and neither ever will be
  * (ADR-0005).
+ *
+ * **The `…Identity` pair is how each is named everywhere else** (#292) — on a Price, and on a
+ * resolved price — carrying what a reader recognises and leaving the Merchant's `metadata`
+ * behind, exactly as {@link VariantIdentity} does for the Variant.
  */
 export type Region = components["schemas"]["Region"];
+export type RegionIdentity = components["schemas"]["RegionIdentity"];
 export type RegionList = components["schemas"]["RegionList"];
 export type Channel = components["schemas"]["Channel"];
+export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelList = components["schemas"]["ChannelList"];
 export type EnabledCurrency = components["schemas"]["EnabledCurrency"];
 export type Merchant = components["schemas"]["Merchant"];

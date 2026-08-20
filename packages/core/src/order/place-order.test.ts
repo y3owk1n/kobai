@@ -147,6 +147,8 @@ describe("a Project that replaced the pricing Step", () => {
     if (!chosen) throw new StepFailure("price-not-set", "This Variant carries no Price.");
     return {
       variant: input.variant,
+      region: input.region,
+      channel: input.channel,
       price: {
         id: chosen.id,
         amount: chosen.amount * 2,

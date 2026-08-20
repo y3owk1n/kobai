@@ -160,7 +160,10 @@ export type StoreCurrencyRow = typeof storeCurrency.$inferSelect;
  * **not** is a tenant: ADR-0005 says a Region is variation *within* one Store, so nothing
  * scopes by one and `store.test.ts`'s question is asked of this table too — `region.test.ts`
  * names what references it, so the day one becomes a scoping key the build goes red rather
- * than the retrofit going unnoticed.
+ * than the retrofit going unnoticed. Two columns point here since #292 — the Store's
+ * `default_region_id` and `core_price.region_id` — and a Price naming a Region is a
+ * *constraint on a row*, which is the opposite of a row being scoped to a Region: every Price
+ * that names none still applies everywhere.
  */
 export const region = pgTable(
   "core_region",
@@ -196,13 +199,13 @@ export type RegionRow = typeof region.$inferSelect;
  * A name and nothing else, deliberately. ADR-0005 says a Channel is a sales channel and
  * **not** a tenant boundary — the mistake Vendure's overloaded `Channel` is the known example
  * of — so this table carries no scope, no ownership and no reference to anything. What varies
- * per Channel is a *Price*, through a constraint column on `core_price`, which is spec 4's
- * next slice.
+ * per Channel is a *Price*, through `core_price.channel_id` (#292).
  *
  * **Which Channel a request is in is decided by the API key** and never threaded through a
  * request (ADR-0020): `core_api_key.channel_id` is the binding, so a storefront cannot claim to
- * be in a Channel it was not issued a credential for. That is the one foreign key onto this
- * table, and `channel.test.ts` asserts it is the only one.
+ * be in a Channel it was not issued a credential for. That and `core_price.channel_id` are the
+ * two foreign keys onto this table, and `channel.test.ts` asserts they are the only ones —
+ * neither is a scoping key, which is the thing ADR-0005 says a Channel must never become.
  */
 export const channel = pgTable(
   "core_channel",
@@ -694,9 +697,11 @@ export type VariantOptionValueRow = typeof variantOptionValue.$inferSelect;
  * across a catalog, a cart, an order history and everything reporting on them. The cost of
  * being right early is one join.
  *
- * Nothing here constrains *which* Price applies, because nothing in this slice can: Region,
- * Channel, quantity and customer group are the constraint columns that arrive with them, and
- * resolving a Price by best match is a Workflow rather than a column read.
+ * **The first two constraint columns arrived in #292**, which is the prediction above being
+ * spent rather than a change of shape: `region_id` and `channel_id` are nullable, `null` means
+ * *applies to all*, and resolving a Price is still best match inside a Workflow rather than a
+ * column read (`pricing/resolve-price.ts`). Quantity breaks and customer groups are the same
+ * shape again and are not modelled.
  */
 export const price = pgTable(
   "core_price",
@@ -716,8 +721,31 @@ export const price = pgTable(
      * two-decimal currency at about 21 million and a zero-decimal one much sooner.
      */
     amount: bigint("amount", { mode: "number" }).notNull(),
-    /** ISO 4217, e.g. `USD`. In this slice, always the Store's default. */
+    /**
+     * ISO 4217, e.g. `USD`. Any currency the Store has enabled (ADR-0074), and the Store's
+     * default for a Price that named none — which is what every Price written before #292 is.
+     */
     currency: text("currency").notNull(),
+    /**
+     * The Region this Price applies to, or `null` for **every** Region (ADR-0008, ADR-0074).
+     *
+     * **Nullable, and `null` is the ordinary value**, exactly as `core_api_key.channel_id` is:
+     * every Price written before #292 applies to all of them, which is what makes this column
+     * ADR-0038's first case rather than its three-step dance — a nullable column and a foreign
+     * key on one can refuse no row that is already there.
+     *
+     * **`cascade` rather than `restrict`, and it is the one place this table departs from
+     * ADR-0059's refuse-rather-than-cascade** — recorded in that ADR, under the heading naming
+     * this column. The test ADR-0059 actually applies is whether
+     * the repair is a control the Merchant has, and here it is not: nothing lists Prices by
+     * Region, so a `restrict` would refuse the deletion and point at rows a Merchant could only
+     * find by opening every Variant. `set null` is the worse third answer — a Price entered for
+     * Malaysia would silently become the fallback for everywhere — where a Price constrained to
+     * a Region that no longer exists is a row that can never apply to anything again.
+     */
+    regionId: uuid("region_id").references(() => region.id, { onDelete: "cascade" }),
+    /** The Channel this Price applies to, or `null` for **every** Channel. See `region_id`. */
+    channelId: uuid("channel_id").references(() => channel.id, { onDelete: "cascade" }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -726,9 +754,14 @@ export const price = pgTable(
     // Resolution reads every Price of one Variant and picks among them, so this index is
     // what makes "a row, not a column" cost a join rather than a scan.
     index("core_price_variant_idx").on(table.variantId),
-    // No unique constraint on (variant, currency): several Prices per Variant is the
-    // representable shape ADR-0008 asks for, and what distinguishes them is constraint
-    // columns this slice does not have yet.
+    // Not for a read — resolution asks by Variant and chooses in TypeScript — but for the
+    // `cascade` above: deleting a Region asks this table which rows name it, and without an
+    // index that question is a scan of every Price in the Store.
+    index("core_price_region_idx").on(table.regionId),
+    index("core_price_channel_idx").on(table.channelId),
+    // No unique constraint on (variant, currency, region, channel): several Prices matching one
+    // request is the representable shape ADR-0008 asks for, and best match is what tells them
+    // apart — with an ordering ending in `id`, so a tie resolves the same way twice (#132).
     check("core_price_amount_is_not_negative", sql`${table.amount} >= 0`),
     check("core_price_currency_is_iso4217", sql`char_length(${table.currency}) = 3`),
   ],

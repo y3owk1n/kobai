@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database, Queryable } from "../db/client.ts";
+import { joined } from "../db/join.ts";
 import {
   cursorAt,
   type Page,
@@ -8,11 +9,13 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { price, product, variant } from "../db/schema.ts";
+import { channel, price, product, region, variant } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import type { Media } from "../media/media.ts";
 import type { MediaStorage } from "../media/storage.ts";
 import { readInventoryOf, type VariantInventory } from "../reservation/inventory.ts";
+import type { ChannelIdentity } from "../store/channel.ts";
+import type { RegionIdentity } from "../store/region.ts";
 import { type Collection, inCollection, readProductCollections } from "./collection.ts";
 import { readProductMedia, readVariantMedia } from "./media.ts";
 import {
@@ -46,6 +49,17 @@ export type Price = {
   readonly amount: number;
   /** ISO 4217, upper case. */
   readonly currency: string;
+  /**
+   * The Region this Price applies to, or `null` for **every** Region (#292, ADR-0008).
+   *
+   * The Region rather than its identifier, so a list of Prices reads as one (story 9): a client
+   * that had to fetch `GET /admin/regions` to render a table of amounts would be making a second
+   * request for a name kobai already has in hand — which is the same call `Product.collections`
+   * takes one noun along.
+   */
+  readonly region: RegionIdentity | null;
+  /** The Channel this Price applies to, or `null` for **every** Channel. */
+  readonly channel: ChannelIdentity | null;
   readonly metadata: Record<string, unknown>;
 };
 
@@ -361,8 +375,15 @@ export async function readVariants(
       amount: price.amount,
       currency: price.currency,
       metadata: price.metadata,
+      // Both `left`, because an unconstrained Price is the ordinary Price and an inner join
+      // would drop every one of them — which is the same trap `readStore` reads its default
+      // Region through, one table along.
+      region: { id: region.id, name: region.name, currency: region.currency },
+      channel: { id: channel.id, name: channel.name },
     })
     .from(price)
+    .leftJoin(region, eq(region.id, price.regionId))
+    .leftJoin(channel, eq(channel.id, price.channelId))
     .where(
       inArray(
         price.variantId,
@@ -373,10 +394,16 @@ export async function readVariants(
 
   const byVariant = new Map<string, Price[]>();
   for (const row of prices) {
-    const { variantId, ...reported } = row;
+    const { variantId, region: appliesIn, channel: appliesThrough, ...reported } = row;
+    // `db/join.ts` is the reading of a left join, and why it is not `appliesIn ?? null`.
+    const applies = {
+      ...reported,
+      region: joined<RegionIdentity>(appliesIn),
+      channel: joined<ChannelIdentity>(appliesThrough),
+    };
     const existing = byVariant.get(variantId);
-    if (existing) existing.push(reported);
-    else byVariant.set(variantId, [reported]);
+    if (existing) existing.push(applies);
+    else byVariant.set(variantId, [applies]);
   }
 
   // A third query rather than a join, for the reason the second one is: a Variant that nobody

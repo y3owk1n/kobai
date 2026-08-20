@@ -47,8 +47,10 @@ import { currencyIsEnabled } from "./currency.ts";
  *
  * **A Region is not a tenant.** ADR-0005 is explicit and this is the spec most likely to be read
  * as an invitation, so nothing scopes by a Region and `region.test.ts` asks
- * `foreignKeysTargeting` what points at one — today the Store's own `default_region_id` and
- * nothing else. A scoping key arriving here reddens the build rather than shipping unnoticed.
+ * `foreignKeysTargeting` what points at one — the Store's own `default_region_id`, and since
+ * #292 `core_price.region_id`, which is a constraint on a row rather than a scope: a Price
+ * naming no Region applies in all of them. A scoping key arriving here reddens the build rather
+ * than shipping unnoticed.
  */
 
 /** The word a Region operation is refused with when there is no such Region. */
@@ -66,6 +68,21 @@ export type Region = {
   readonly name: string;
   readonly currency: string;
   readonly metadata: Record<string, unknown>;
+};
+
+/**
+ * The Region a price was asked for — what it is called and what it prices in, and nothing else.
+ *
+ * `VariantIdentity`'s shape one noun along, and there for the same reason: this travels through
+ * `resolve-price` and out to a storefront, so it carries what a Developer reading the answer
+ * recognises and leaves `metadata` — which is the Merchant's and the Project's — behind. The
+ * currency is here because it is the rule: a Price denominated in something else does not apply
+ * in this Region, and kobai converts nothing (ADR-0074).
+ */
+export type RegionIdentity = {
+  readonly id: string;
+  readonly name: string;
+  readonly currency: string;
 };
 
 export type RegionCreation =
@@ -205,10 +222,11 @@ export async function readRegion(db: Queryable, id: string): Promise<Region | un
  *
  * **A Region's currency moves and the Store's does not**, which is the asymmetry worth reading
  * twice. ADR-0065 fixes the Store's default because every unconstrained Price is denominated in
- * it; a Region selects rather than declares, so moving the selection reinterprets nothing today
- * and re-selects which Prices apply once `core_price` carries a `region_id` (spec 4's next
- * slice). ADR-0074 says as much: a Region's currency changing must not reprice a live Cart,
- * which is why a Cart will carry its currency as well as its Region.
+ * it; a Region selects rather than declares, so moving the selection **re-selects which Prices
+ * apply** rather than reinterpreting any of them — a Price denominated in the currency this
+ * Region used to select simply stops applying here (#292). ADR-0074 says as much: a Region's
+ * currency changing must not reprice a live Cart, which is why a Cart will carry its currency as
+ * well as its Region.
  */
 export async function updateRegion(
   db: Database,
@@ -250,6 +268,11 @@ export async function updateRegion(
  * shape and its reason: a `select` then a `delete` lets a concurrent `PATCH /admin/store`
  * point the Store at this Region in between, and the foreign key is the only thing that cannot
  * be raced.
+ *
+ * **Every Price constrained to this Region goes with it** (#292), which is `db/schema.ts`'s
+ * argument at the column: a Price for a Region that no longer exists could never apply to
+ * anything again, refusing would name rows nothing lists, and leaving them unconstrained would
+ * silently widen a Price a Merchant entered for one market to all of them.
  */
 export async function deleteRegion(db: Database, id: string): Promise<RegionDeletion> {
   if (!isUuid(id)) return noSuchRegion(id);

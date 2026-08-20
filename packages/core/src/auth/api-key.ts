@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
+import { joined } from "../db/join.ts";
 import {
   cursorAt,
   type Page,
@@ -9,9 +10,13 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { apiKey } from "../db/schema.ts";
+import { apiKey, channel } from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
-import { type CHANNEL_NOT_FOUND, unknownChannel } from "../store/channel.ts";
+import {
+  type CHANNEL_NOT_FOUND,
+  type ChannelIdentity,
+  unknownChannel,
+} from "../store/channel.ts";
 
 /**
  * API keys: minting one, resolving one, revoking one.
@@ -65,9 +70,9 @@ export type IssuedApiKey = {
   /**
    * Which Channel a request presenting this key is in, or `null` for unconstrained (#291).
    *
-   * Reported although nothing reads the column yet — a Price constrained by Channel is the next
-   * slice of this spec — because a key's Channel is fixed at minting and this response is the
-   * one place a Merchant is told what they minted.
+   * Reported because a key's Channel is fixed at minting and this response is the one place a
+   * Merchant is told what they minted. Since #292 it is also what decides the Price every
+   * request presenting this key resolves against.
    */
   readonly channelId: string | null;
   readonly createdAt: string;
@@ -133,6 +138,20 @@ export type AuthenticatedApiKey = {
   readonly id: string;
   readonly name: string;
   readonly kind: ApiKeyKind;
+  /**
+   * The Channel every request presenting this key is in, or `null` for a key in no particular
+   * one (#292, ADR-0005, ADR-0020).
+   *
+   * **This is the whole of how a request's Channel is decided**, which is what spares a
+   * storefront threading one through every call and stops it claiming to be in a Channel it was
+   * not issued a credential for. `resolve-price` is what reads it: a Price constrained to a
+   * Channel applies to the keys bound to it and to no others.
+   *
+   * The Channel rather than its identifier, because the name travels out to the storefront on
+   * the answer — `ResolvedPrice.channel` — and a second request to find out what one's own key
+   * is called would be one every client made.
+   */
+  readonly channel: ChannelIdentity | null;
 };
 
 export type ApiKeyLookup =
@@ -304,8 +323,12 @@ export async function resolveApiKey(
       name: apiKey.name,
       kind: apiKey.kind,
       revokedAt: apiKey.revokedAt,
+      // A `left` join, because a key in no particular Channel is the ordinary key and an inner
+      // one would answer `unknown` for it — a live credential reported as one nobody issued.
+      channel: { id: channel.id, name: channel.name },
     })
     .from(apiKey)
+    .leftJoin(channel, eq(channel.id, apiKey.channelId))
     .where(eq(apiKey.tokenHash, hashApiKey(presented)))
     .limit(1);
 
@@ -314,7 +337,13 @@ export async function resolveApiKey(
 
   return {
     ok: true,
-    apiKey: { id: row.id, name: row.name, kind: asKind(row.kind) },
+    apiKey: {
+      id: row.id,
+      name: row.name,
+      kind: asKind(row.kind),
+      // `db/join.ts` is the reading of a left join, and why it is not `row.channel ?? null`.
+      channel: joined<ChannelIdentity>(row.channel),
+    },
   };
 }
 

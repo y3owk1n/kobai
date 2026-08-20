@@ -169,6 +169,8 @@ const CATALOG_REASONS: Record<CatalogRefusal["reason"], true> = {
   "variant-combination-taken": true,
   "media-not-found": true,
   "collection-not-found": true,
+  "region-not-found": true,
+  "channel-not-found": true,
 };
 
 /**

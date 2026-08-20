@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Database } from "../db/client.ts";
 import {
   type PriceResolutionRequest,
+  type PriceResolutionWorkflow,
   priceResolutionWorkflow,
   type ResolvedPrice,
 } from "../pricing/resolve-price.ts";
@@ -1022,11 +1023,36 @@ describe("invoking another Workflow from a Step", () => {
  * the registry is the only thing standing between Core's Step and the Project's.
  */
 describe("a Project's override of an inner Workflow's Step", () => {
+  /**
+   * The market these runs ask in — a Region this deployment has never heard of, deliberately.
+   *
+   * `resolve-price` is *handed* a Region rather than looking one up: the route resolves what
+   * `?region=` named, or falls back to the Store's default, and refuses at 400 before the
+   * Workflow is entered (`pricing/market.ts`). So a Step sees a market as a value, and a test at
+   * this seam can name one — which is the property, not a shortcut. Its currency is the one
+   * `seedTestCatalog` prices in, because an unconstrained Price applies here only if it is
+   * denominated in the Region's currency.
+   */
+  const A_MARKET = {
+    region: {
+      id: "00000000-0000-4000-8000-000000000042",
+      name: "Testland",
+      currency: "USD",
+    },
+    channel: null,
+  } as const;
+
   /** A Step that ignores every Price a Merchant entered and charges the same for everything. */
   const flatRate = defineStep(
     "flat-rate",
-    (input: { readonly variant: ResolvedPrice["variant"] }): ResolvedPrice => ({
+    (input: {
+      readonly variant: ResolvedPrice["variant"];
+      readonly region: ResolvedPrice["region"];
+      readonly channel: ResolvedPrice["channel"];
+    }): ResolvedPrice => ({
       variant: input.variant,
+      region: input.region,
+      channel: input.channel,
       price: { id: "flat-rate", amount: 4200, currency: "XTS" },
     }),
   );
@@ -1052,7 +1078,7 @@ describe("a Project's override of an inner Workflow's Step", () => {
     const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
     const run = await composing.run(
-      { variantId: catalog.variantId },
+      { variantId: catalog.variantId, ...A_MARKET },
       { db: kobai.db, metadata: {}, workflows: kobai.workflows },
     );
 
@@ -1070,13 +1096,69 @@ describe("a Project's override of an inner Workflow's Step", () => {
     const catalog = await seedTestCatalog(kobai, { prices: [1250] });
 
     const run = await composing.run(
-      { variantId: catalog.variantId },
+      { variantId: catalog.variantId, ...A_MARKET },
       { db: kobai.db, metadata: {}, workflows: kobai.workflows },
     );
 
     expect(run.ok).toBe(true);
     if (!run.ok) return;
     expect(run.output.price).toMatchObject({ amount: 1250 });
+  });
+});
+
+/**
+ * **What `resolve-price` promises its slots, in types** (#292, ADR-0017).
+ *
+ * That `select-price` is given the Region and the Channel is a promise about a *declared
+ * Workflow*, and no response body can carry it: a deployment answering the right price says
+ * nothing about what a Project's own Step would be handed. So it is asserted here, where the
+ * `typecheck` step of the gate is what runs it — beside the synthetic Workflow below, and
+ * against the real declaration, because this is a promise about that one.
+ *
+ * What an override *does* with the Region is a fact about a running deployment and is asserted
+ * over HTTP, by booting with one: `pricing/a-price-in-a-region.test.ts`.
+ */
+describe("the input `resolve-price` hands its Steps", () => {
+  type Loaded = StepInput<PriceResolutionWorkflow, "select-price">;
+
+  it("carries the Region and the Channel as well as the Variant and the candidates", () => {
+    const given: Loaded = {
+      variant: { id: "…", sku: "POSTER-A2" },
+      region: { id: "…", name: "Malaysia", currency: "MYR" },
+      // `null` is the unconstrained Channel, which is what a key minted into none presents.
+      channel: null,
+      prices: [],
+    };
+
+    expect(given.region.currency).toBe("MYR");
+  });
+
+  it("rejects a replacement that produces a price without the market it was resolved for", () => {
+    const overrides: StepOverrides<PriceResolutionWorkflow> = {
+      // @ts-expect-error `select-price` gives back the Region and the Channel it was handed.
+      "select-price": defineStep("forgets-the-market", (input: Loaded) => ({
+        variant: input.variant,
+        price: { id: "…", amount: 1, currency: input.region.currency },
+      })),
+    };
+
+    expect(overrides).toBeDefined();
+  });
+
+  it("rejects an inserted Step that drops the Region on its way past", () => {
+    const before: StepsBefore<PriceResolutionWorkflow> = {
+      "select-price": [
+        // @ts-expect-error what flows into `select-price` carries the market, so what a Step
+        // before it hands on must carry it too — observation cannot quietly become mutation.
+        defineStep("drops-the-region", (input: Loaded) => ({
+          variant: input.variant,
+          channel: input.channel,
+          prices: input.prices,
+        })),
+      ],
+    };
+
+    expect(before).toBeDefined();
   });
 });
 

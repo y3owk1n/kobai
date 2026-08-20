@@ -861,9 +861,10 @@ same two Permissions. Six things about that surface are decisions rather than im
 - **A Region selects a currency the Store has enabled, at the create and at the correction
   alike** — **422 `currency-not-enabled`** otherwise, on `unknown-fulfilment-strategy`'s
   distinction. It is deliberately **not** `unsupported-currency`, the word a *Price* naming
-  another currency is refused with: there the repair is to send the Store's code, here it is to
-  enable the one you meant, and a client branching on a shared word would advise wrongly for one
-  of them.
+  a currency the Store has not enabled is refused with: the two repairs were opposite when
+  `unsupported-currency` meant *send the Store's one code* and they still are now that it means
+  *enable it or price in one you have* — there the subject is a Price and here it is a Region,
+  and a client branching on a shared word would advise wrongly for one of them.
 - **The Store carries a default Region and cannot be left without one.** `defaultRegion` is on
   both the read and the correction — **422 `region-not-found`** for one this Store has not got —
   and `DELETE /admin/regions/{id}` refuses **409 `region-in-use`** while the Store falls back to
@@ -884,7 +885,48 @@ same two Permissions. Six things about that surface are decisions rather than im
   a thing no handler produces and, under ADR-0060, a `null` a client may expect for ever.
   `Inventory` and `CartShopper` read that way in the generated client already; they are each
   referenced from one genuinely nullable place, and `Region` is the first component shared
-  between a nullable field and a list.
+  between a nullable field and a list. `Price.region`, `Price.channel` and
+  `ResolvedPrice.channel` are three more of them (#292).
+
+**A Price is constrained by a Region and a Channel, and resolution is best match** (#292,
+ADR-0008, ADR-0074). `regionId` and `channelId` are optional on
+`POST /admin/variants/{id}/prices`, `null` on the `Price` a read answers with means **applies to
+all**, and `GET /store/variants/{id}/price?region=` is where the two are spent. Six things about
+that surface are decisions rather than implementation:
+
+- **The rule is two rules in an order, and the order is the decision.** A Price not denominated
+  in the Region's currency does not apply *at all* — kobai converts nothing, ever — and only
+  then does best match run: both constraints, then the Region, then the Channel, then the
+  unconstrained fallback, with ties inside a tier broken by an ordering ending in `id` (#132).
+  So a Region selecting MYR against a Variant priced only in the Store's default answers
+  `price-not-set`, and **best match can never beat the currency rule**. Both live in
+  `select-price`, which is a Project's to replace; `load-prices` still hands over every
+  candidate, unfiltered, or the rule would be in the query where a replacement cannot reach it.
+- **`?region=` is optional and its absence is the Store's default Region**, which is what keeps
+  this additive under ADR-0060: a storefront written before the parameter existed sends nothing
+  and is answered exactly as it was, because the Region seeded at boot selects the currency
+  every existing Price is denominated in. A Region this Store has not got is **400 `invalid`**
+  rather than the default — `?collection=`'s judgement one parameter along — so a storefront
+  interpolating the wrong variable finds out (story 15). `pricing/market.ts` is the one place
+  both price routes resolve it, so they cannot disagree about what naming nothing means.
+- **The Channel comes from the API key and there is no `?channel=`** (ADR-0020).
+  `AuthenticatedApiKey` carries the Channel its key was minted into, so a storefront threads
+  nothing and cannot claim to be in one it was not issued a credential for. `GET
+  /admin/variants/{id}/price` therefore prices against **no** Channel and always will: it is
+  opened by a session, and a parameter there would let a Merchant preview a request no
+  storefront could make.
+- **`?region=` is a query parameter that is not a filter, and `filtering.test.ts` names it.**
+  That sweep reads every non-paging query parameter as a filter of a list; this one decides
+  *what the answer is* about a single record. The enumeration there is deliberate rather than a
+  rule, so the next non-filter parameter has to be argued in the same place.
+- **`ResolvedPrice` carries the market back out**, which is both a courtesy and the half of
+  #292's break to Extension Point 2 that a compiler can see — ADR-0058's register says why, and
+  the short of it is that growing a Step's *input* alone breaks nobody.
+- **Deleting a Region or a Channel takes the Prices constrained to it**, which is the one place
+  `core_price` departs from ADR-0059's refuse-rather-than-cascade. The test ADR-0059 applies is
+  whether the repair is a control the Merchant has, and nothing lists Prices by Region — a
+  refusal would name rows only findable by opening every Variant. The column's own comment in
+  `db/schema.ts` carries it, along with why `set null` is the worse third answer.
 
 **A Role is a row a Merchant can make, and one Permission administers every change to one**
 (ADR-0066, ADR-0076). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are

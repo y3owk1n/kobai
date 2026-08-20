@@ -379,6 +379,13 @@
       "when": 1787218693307,
       "tag": "0053_region_channel_and_currency_updated_at_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1787222029331,
+      "tag": "0054_ambitious_titania",
+      "breakpoints": true
     }
   ]
 }

@@ -84,6 +84,27 @@ type DescribedPaths = {
 const PAGING = ["limit", "after"];
 
 /**
+ * The query parameters that are **not filters**, by the operation that declares them (#292).
+ *
+ * A filter narrows *which rows* a list answers with, and everything in this file is about that:
+ * absent means unfiltered, an unknown value is refused rather than ignored, and the narrowing
+ * survives a page. `?region=` on the two price routes is a different kind of parameter — it
+ * decides *what the answer is* for a single record, and neither route is a list at all: there is
+ * no page to keep it across, and "absent means unfiltered" is not even a sentence about it (it
+ * means the Store's default Region, which is a value rather than the absence of one).
+ *
+ * **It is an enumeration rather than a rule, and that is deliberate.** "A parameter on a route
+ * that pages nothing" would have read this straight through without anybody thinking, and the
+ * next non-filter parameter *should* have to be argued: this file is the one place the surface
+ * asks what a query parameter is for. Both halves stay watched — an entry here that no route
+ * declares fails the sweep exactly as an unaccounted-for filter does.
+ */
+const NOT_A_FILTER = [
+  "/store/variants/{id}/price?region",
+  "/admin/variants/{id}/price?region",
+];
+
+/**
  * A deployment arranged for one entry: every row the unfiltered list holds, and which of them
  * each value should answer.
  *
@@ -455,7 +476,7 @@ describe("every filter narrows the same way", () => {
       await readFile(OPENAPI_DOCUMENT_PATH, "utf8"),
     ) as DescribedPaths;
 
-    const declared = Object.entries(described.paths)
+    const queried = Object.entries(described.paths)
       .flatMap(([path, operations]) =>
         Object.values(operations).flatMap((operation) =>
           (operation.parameters ?? [])
@@ -466,6 +487,15 @@ describe("every filter narrows the same way", () => {
         ),
       )
       .sort();
+
+    // Subtracted rather than ignored, so the enumeration is held to the description in both
+    // directions too: an entry naming a parameter no route declares leaves the two lists
+    // unequal, exactly as an unswept filter does.
+    const declared = queried.filter((one) => !NOT_A_FILTER.includes(one));
+    expect(
+      queried.filter((one) => NOT_A_FILTER.includes(one)).sort(),
+      "a parameter is named as not a filter and no route declares it",
+    ).toEqual([...NOT_A_FILTER].sort());
 
     expect(
       declared.length,

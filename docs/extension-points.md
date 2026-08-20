@@ -267,6 +267,15 @@ So "what does kobai do to resolve a price" is answered by the same object that a
 does kobai *run*". Two Steps: `load-prices` asks the database what Prices a Variant carries
 and applies no rule; `select-price` chooses among them, and *that* is the rule.
 
+**A resolution is asked in a market**, so both Steps are handed the Region the request named —
+`GET /store/variants/{id}/price?region=`, or the Store's default where it named none — and the
+Channel the presented API key was minted into, `null` for a key in no particular one. Core's
+`select-price` reads both: a Price not denominated in the Region's currency does not apply at
+all, and among those that do, the best match wins — both constraints, then the Region, then the
+Channel, then the unconstrained fallback. Your own Step is free to decide otherwise and is
+handed the same two things. **They travel out again on `ResolvedPrice`**, so a Step you replaced
+hands the market back rather than inventing one.
+
 **There are two declared Workflows today**, and the second is where the money is.
 `placeOrderWorkflow` is `place-order` — the one request that turns a Cart into an Order — and
 it declares seven slots, in this order:
@@ -325,11 +334,15 @@ that shape and each is load-bearing:
   rather than at the request that would have been priced differently. A typo in a slot name
   is not an override that silently does nothing.
 
-**A Step's signature is a promise Core can move, and it has moved once.** #117 widened
+**A Step's signature is a promise Core can move, and it has moved twice.** #117 widened
 `TaxedLines.adjustments` — the type a replaced `calculate-tax` returns — so that a tax Step
 has to state a figure for every Adjustment the Order itself carries, a delivery surcharge
 being the case it exists for. A Project that had replaced that Step stopped compiling, and no
-codemod shipped.
+codemod shipped. #292 did the same to `resolve-price`: `LoadedPrices` and `ResolvedPrice` both
+grew a `region` and a `channel`, so a replaced `select-price` is handed the market and hands it
+back. The edit is two lines — `region: input.region, channel: input.channel` — and the thing to
+decide while making it is whether your rule should read them, which is the question the break
+exists to ask.
 [ADR-0058](./adr/0058-a-promised-surface-may-be-broken-until-the-first-release.md) is the
 record: what the argument was, what such a Project does about it in one edit, the rule for
 breaking one of the five before kobai's first release, and why a break your own compiler

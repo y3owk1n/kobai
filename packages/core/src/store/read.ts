@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
 import type { Queryable } from "../db/client.ts";
+import { joined } from "../db/join.ts";
 import { region, store } from "../db/schema.ts";
 import { type EnabledCurrency, readEnabledCurrencies } from "./currency.ts";
-import type { Region } from "./region.ts";
+import type { Region, RegionIdentity } from "./region.ts";
 
 /** The Store as the API reports it. There is no identifier, because there is only one. */
 export type Store = {
@@ -71,11 +72,35 @@ export async function readStore(db: Queryable): Promise<Store | undefined> {
     name: row.name,
     defaultCurrency: row.defaultCurrency,
     currencies: await readEnabledCurrencies(db),
-    // Drizzle answers the joined columns as an object of nulls rather than as `null` when the
-    // join found nothing, so the identifier is what says whether there was a Region.
-    defaultRegion: row.region?.id === undefined ? null : (row.region as Region),
+    // `joined` is the reading of a left join, and `db/join.ts` is where the trap it avoids is
+    // written down: an unjoined row arrives as an object of nulls rather than as `null`.
+    defaultRegion: joined<Region>(row.region),
     metadata: row.metadata,
   };
+}
+
+/**
+ * The Region a request that names none is priced for — the Store's default, as an identity
+ * (#292, ADR-0074).
+ *
+ * Its own function beside {@link readDefaultCurrency} and for that one's reason: this is on the
+ * read path of every price a storefront asks for, and the caller wants the Region rather than
+ * the Store, the enabled set and the Region's `metadata` with it.
+ *
+ * `undefined` covers both ways there can be none — a database holding no Store, and a Store
+ * whose `default_region_id` is still `null` because no boot has seeded one (`store/seed.ts`).
+ * They are one answer here because they are one answer to the caller: *this deployment cannot
+ * price a request that names no Region*, and naming one is the repair either way.
+ */
+export async function readDefaultRegion(
+  db: Queryable,
+): Promise<RegionIdentity | undefined> {
+  const [row] = await db
+    .select({ id: region.id, name: region.name, currency: region.currency })
+    .from(store)
+    .innerJoin(region, eq(region.id, store.defaultRegionId))
+    .limit(1);
+  return row;
 }
 
 /**

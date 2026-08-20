@@ -224,6 +224,39 @@ async function seedMerchants(
   return created;
 }
 
+/** Regions, made the one way there is to make one. */
+async function seedRegions(
+  kobai: TestKobai,
+  merchant: TestSession,
+  count: number,
+): Promise<string[]> {
+  const created: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const response = await kobai.request("/admin/regions", {
+      method: "POST",
+      headers: { ...merchant.headers, "content-type": "application/json" },
+      // The currency this Store already prices in, because a Region selects one of the enabled
+      // set and this deployment has enabled exactly that one.
+      body: JSON.stringify({ name: `Region ${index}`, currency: "USD" }),
+    });
+    expect(response.status, `creating Region ${index}`).toBe(201);
+    created.push(((await response.json()) as { id: string }).id);
+  }
+  return created;
+}
+
+/** The Region a boot seeded, read back through the Store rather than assumed. */
+async function defaultRegionOf(kobai: TestKobai, merchant: TestSession): Promise<string> {
+  const response = await kobai.request("/admin/store", { headers: merchant.headers });
+  const store = (await response.json()) as {
+    readonly defaultRegion: { readonly id: string } | null;
+  };
+  if (!store.defaultRegion) {
+    throw new Error("This deployment has no default Region, so it never booted.");
+  }
+  return store.defaultRegion.id;
+}
+
 /** The identifier of a Role this deployment already has, read back through the list itself. */
 async function roleNamed(
   kobai: TestKobai,
@@ -631,9 +664,10 @@ async function seedThree(
     );
   }
 
-  // Two of these lists start with a row already in them — the `owner` Role a migration seeds
-  // and the first Merchant a boot does — so they get **two** more rather than three, and the
-  // one that was already there is the oldest and therefore the first of the three.
+  // Three of these lists start with a row already in them — the `owner` Role a migration seeds,
+  // the first Merchant a boot does, and since #292 the default Region a boot seeds beside it —
+  // so they get **two** more rather than three, and the one that was already there is the
+  // oldest and therefore the first of the three.
   if (list.key === "roles")
     return [
       await roleNamed(kobai, merchant, "owner"),
@@ -641,6 +675,12 @@ async function seedThree(
     ];
   if (list.key === "merchants") {
     return [merchant.merchant.id, ...(await seedMerchants(kobai, merchant, 2))];
+  }
+  if (list.key === "regions") {
+    return [
+      await defaultRegionOf(kobai, merchant),
+      ...(await seedRegions(kobai, merchant, 2)),
+    ];
   }
 
   const seeded: string[] = [];
@@ -704,19 +744,15 @@ async function seedThree(
     return seeded;
   }
 
-  // Three Regions and three Channels, which is the whole of arranging either list: both are a
-  // name — a Region carrying the currency this Store already prices in — and neither name is
-  // unique, so neither needs a mark of its own.
-  if (list.key === "regions" || list.key === "channels") {
+  // Three Channels, which is the whole of arranging that list: a Channel is a name, and a name
+  // is not unique, so it needs no mark of its own. Regions are two above, because a boot has
+  // already seeded one.
+  if (list.key === "channels") {
     for (let index = 0; index < 3; index += 1) {
       const created = await kobai.request(`${list.path}`, {
         method: "POST",
         headers: { ...merchant.headers, "content-type": "application/json" },
-        body: JSON.stringify(
-          list.key === "regions"
-            ? { name: `Region ${index}`, currency: "USD" }
-            : { name: `Channel ${index}` },
-        ),
+        body: JSON.stringify({ name: `Channel ${index}` }),
       });
       expect(created.status, `creating ${list.key} ${index}`).toBe(201);
       seeded.push(((await created.json()) as { id: string }).id);

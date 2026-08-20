@@ -43,6 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useOfferedChannels } from "@/lib/markets";
 import { PERMISSIONS, useUnavailable } from "@/lib/permissions";
 import { clearPreviewKey, readPreviewKey, writePreviewKey } from "@/lib/preview-key";
 import {
@@ -78,9 +79,6 @@ const API_KEYS = "api-keys";
  * decides otherwise, and it is the right answer for a Store with one route to market.
  */
 const NO_CHANNEL = "none";
-
-/** Its own cache key, deliberately not the Channels screen's — see `lib/store.ts`. */
-const OFFERED_CHANNELS = "offered-channels";
 
 export function ApiKeys() {
   const client = useKobaiClient();
@@ -341,14 +339,10 @@ function MintKey({
   });
 
   // The Channels a key may be bound to, read from kobai rather than written down — the same rule
-  // the Fulfilment Strategy picker follows. It does not page, which is the known gap
-  // `lib/collections.ts` names: a Store with more than a hundred Channels has some this control
-  // cannot offer, and the Channels section is where all of them are.
-  const channels = useQuery({
-    queryKey: [OFFERED_CHANNELS],
-    queryFn: async () =>
-      orThrow(await client.GET("/admin/channels", { params: { query: { limit: 100 } } })),
-  });
+  // the Fulfilment Strategy picker follows. **`lib/markets.ts` is where that read lives since
+  // #292**, when the Price editor became the second control asking the same question: two copies
+  // sharing one cache key is one entry with two definitions, which is worse than either.
+  const channels = useOfferedChannels();
 
   const mint = useMutation({
     mutationFn: async ({ name, channelId }: MintKeyValues) =>
@@ -405,7 +399,7 @@ function MintKey({
               // it is the answer most keys want and a Merchant should be able to choose it on
               // purpose. It heads the list for the same reason.
               { value: NO_CHANNEL, label: "In no particular Channel" },
-              ...(channels.data?.channels ?? []).map((channel) => ({
+              ...channels.offered.map((channel) => ({
                 value: channel.id,
                 label: channel.name,
               })),

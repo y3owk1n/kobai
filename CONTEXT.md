@@ -193,7 +193,10 @@ _Avoid_: attribute, property, facet (that is search's), specification, modifier,
 **Price**:
 An amount in a currency for a Variant, optionally constrained by Region, Channel,
 quantity, or customer group. A **row, not a column** — several may exist per Variant and
-resolution picks the best match.
+resolution picks the best match. The first two constraints exist: a Price names a Region, a
+Channel, both or neither, where **naming none means it applies to all** — and a Price that is
+not denominated in the Region's currency does not apply there at all, whatever it is
+constrained to, because kobai converts nothing.
 _Avoid_: cost (that is what the Merchant pays), rate, amount, tariff
 
 **Collection**:
