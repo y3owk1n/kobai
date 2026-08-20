@@ -76,10 +76,9 @@ async function tableOwningPackages(): Promise<TableOwningPackage[]> {
 /**
  * pnpm, spawned from `PATH`.
  *
- * AGENTS.md § Development says every Node command goes through devbox, and this obeys it
- * transitively: the suite is already running inside `devbox run`, so the child inherits the
- * same pinned toolchain. Somewhere it is not, the failure would otherwise be a bare
- * `spawn pnpm ENOENT`, which says nothing about why.
+ * The suite is running under `pnpm run test`, so the child inherits the same
+ * corepack-activated pnpm off `PATH`. Somewhere it is not, the failure would otherwise be a
+ * bare `spawn pnpm ENOENT`, which says nothing about why.
  */
 async function pnpm(args: string[], cwd: string): Promise<string> {
   try {
@@ -88,7 +87,7 @@ async function pnpm(args: string[], cwd: string): Promise<string> {
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
-        `\`pnpm ${args.join(" ")}\` could not run because pnpm is not on PATH. Run the suite through devbox — see AGENTS.md § Development.`,
+        `\`pnpm ${args.join(" ")}\` could not run because pnpm is not on PATH. Run \`corepack enable\`, then the suite through \`pnpm run test\` — see AGENTS.md § Development.`,
         { cause },
       );
     }

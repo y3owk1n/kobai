@@ -82,7 +82,7 @@ describe("whether this deployment takes payments at a bank", () => {
   it("is not, and says nothing about it, on a deployment given none of them", () => {
     // The ordinary case, and it is not a misconfiguration: this Store settles out of band
     // through `src/payments/manual.ts`, which is what a deployment gets until somebody fills
-    // these in. A complaint here would make every `devbox run up` look broken.
+    // these in. A complaint here would make every `pnpm run up` look broken.
     const { logger, errors } = loggerThatRemembers();
 
     expect(stripeConfiguration({}, logger)).toBeNull();

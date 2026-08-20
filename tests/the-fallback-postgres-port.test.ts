@@ -5,16 +5,16 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 /**
- * The two-sources-must-agree defect (#21), on the path that was not derived.
+ * The two-sources-must-agree defect (#21), on the number nothing derives.
  *
- * devbox's `init_hook` computes one port from this checkout's path and exports both
- * `POSTGRES_PORT` and `KOBAI_TEST_DATABASE_URL` from it, so the container's published port
- * and the address the harness dials come from one number and cannot drift apart
- * (AGENTS.md § The ports belong to the checkout). That is the derived path, and
- * the gate runs on it — which is exactly why the gate cannot see this.
+ * A worktree gets `POSTGRES_PORT` written into its own `.env`, and `compose.yaml` and
+ * `vitest.config.ts` both read that one value — so the container's published port and the
+ * address the harness dials come from one place and cannot drift apart (ADR-0084,
+ * AGENTS.md § The ports belong to the checkout). **That is the path the gate runs on, which
+ * is exactly why the gate cannot see what this file is about.**
  *
- * Underneath it, both files still carry a literal for a bare `docker compose` outside
- * devbox: `compose.yaml`'s `${POSTGRES_PORT:-…}` and the harness's fallback URL. Those two
+ * Underneath it, both files carry a literal for the ordinary case, where there is no `.env`
+ * at all: `compose.yaml`'s `${POSTGRES_PORT:-…}` and the harness's fallback URL. Those two
  * are the original shape #21 removed everywhere else — one number written twice, kept in
  * step by whoever remembers. Change one and the container comes up on one port while the
  * suite dials another, and neither error names the other.
@@ -26,12 +26,12 @@ import { parse as parseYaml } from "yaml";
  * **The credentials in those same two fallbacks are covered next door**, in
  * `tests/the-postgres-credentials-belong-to-dot-env.test.ts`. They were left out of this
  * file deliberately and are not the same defect wearing different clothes: the ports
- * disagree only outside devbox, because the derived path ties them, while `POSTGRES_USER`
- * and `POSTGRES_PASSWORD` used to be carried to the harness on *neither* path — a Developer
+ * disagree only where nothing has been written down, while `POSTGRES_USER` and
+ * `POSTGRES_PASSWORD` used to be carried to the harness on *no* path at all — a Developer
  * who changed them in `.env` got a container with the new ones and a suite dialling the old.
  * Two agreeing literals would not have fixed that, and would have read as though something
- * had. #63 wired them through the derived path, which is what made the literals underneath
- * worth holding together, and put that guardrail with the change that earned it.
+ * had. #63 wired them through, which is what made the literals underneath worth holding
+ * together, and put that guardrail with the change that earned it.
  */
 const repoRoot = new URL("../", import.meta.url);
 

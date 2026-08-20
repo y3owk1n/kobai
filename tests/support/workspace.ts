@@ -30,9 +30,9 @@ export type WorkspacePackage = {
  *
  * Asked once per test file rather than once per caller: three of them want it, `pnpm list`
  * is a subprocess, and a workspace does not change under a running suite. Spawned from
- * `PATH`, which obeys AGENTS.md § Development transitively — the suite is already running
- * inside `devbox run`, so the child inherits the same pinned toolchain. Somewhere it is not,
- * the failure would be a bare `spawn pnpm ENOENT`, which says nothing.
+ * `PATH`, which is where pnpm already is: the suite is running under `pnpm run test`, so the
+ * child inherits the same corepack-activated pnpm. Somewhere it is not, the failure would be
+ * a bare `spawn pnpm ENOENT`, which says nothing.
  */
 export function workspacePackages(): Promise<WorkspacePackage[]> {
   listed ??= listPackages();

@@ -1,9 +1,5 @@
 # A linked worktree seeds its own `.env`
 
-> **Decided, and being carried out under [#304](https://github.com/y3owk1n/kobai/issues/304).**
-> Until its four tickets land, the repository still works the way the records this
-> supersedes describe. This says what was decided, not what is already true.
-
 The default ports are ordinary constants — `compose.yaml` publishes
 `${POSTGRES_PORT:-55432}` and `${PORT:-3000}`, `.env` overrides them, and that is the whole
 story in a normal checkout. **When a command runs in a linked git worktree and no `.env`

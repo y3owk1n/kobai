@@ -168,7 +168,7 @@ describe("the description is generated from the routes", () => {
 
     const checkedIn = await readFile(OPENAPI_DOCUMENT_PATH, "utf8");
 
-    // Regenerate with `devbox run openapi:generate`, which rewrites this file and then the
+    // Regenerate with `pnpm run openapi:generate`, which rewrites this file and then the
     // client generated from it. A failure here is drift, which is the whole reason the
     // description is generated rather than written.
     expect(openApiJson(document)).toBe(checkedIn);
@@ -192,7 +192,7 @@ describe("the description names the release it describes", () => {
     // Deliberately the file on disk rather than `describeCore().document`, which reads the
     // same manifest and so could only ever agree with it. The artifact is the second source:
     // it moves when somebody regenerates it and at no other time, so this is the assertion
-    // that a version bump was followed by `devbox run openapi:generate` — and it names the
+    // that a version bump was followed by `pnpm run openapi:generate` — and it names the
     // two versions, where the byte comparison above reports an unreadable diff.
     //
     // `packages/client/src/schema.test.ts` is not a third check on this: openapi-typescript

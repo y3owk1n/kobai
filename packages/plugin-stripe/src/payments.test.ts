@@ -9,7 +9,7 @@ import { stripePayments } from "./payments.ts";
 /**
  * **Nothing in this file reaches Stripe**, and that is a decision rather than an
  * optimisation (ADR-0070). A real call needs a secret, is flaky, and is not reproducible, so
- * `devbox run ci` would be three things it is not. The whole of the network is one option —
+ * `pnpm run ci` would be three things it is not. The whole of the network is one option —
  * `fetch` — and the stub below is what fills it.
  *
  * The stub is a router rather than a queue: a test says what `POST /v1/refunds` answers, not

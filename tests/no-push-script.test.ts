@@ -26,7 +26,7 @@ const repoRoot = new URL("../", import.meta.url);
  * `devbox.json` used to be on it, and is not because it declares no scripts at all —
  * `tests/devbox-declares-no-commands.test.ts` holds that, which forbids the whole class
  * rather than this one command. #30's hazard, where devbox generated a `"//db:push"` key
- * into a runnable `devbox run db:push`, cannot arise in a file with no keys.
+ * into a runnable `pnpm run db:push`, cannot arise in a file with no keys.
  */
 type CommandFile = {
   path: string;

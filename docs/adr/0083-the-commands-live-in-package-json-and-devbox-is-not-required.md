@@ -1,9 +1,5 @@
 # The commands live in `package.json`, and devbox is not required
 
-> **Decided, and being carried out under [#304](https://github.com/y3owk1n/kobai/issues/304).**
-> Until its four tickets land, the repository still works the way the records this
-> supersedes describe. This says what was decided, not what is already true.
-
 Every command this repository has is a `package.json` script, run with pnpm. `devbox.json`
 keeps `nodejs@22` and the corepack line and **declares no scripts at all** — it is one
 maintainer's Node provisioner and nothing else. Nothing in the gate, in CI, in a test, in the

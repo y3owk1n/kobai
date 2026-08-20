@@ -7,9 +7,9 @@
 > up *and* who it lets in, so an address is assembled from the parts at run time and never
 > written down alongside them. So does the finding underneath it — `pg` decodes the user and
 > password with `decodeURIComponent` and the database name with `decodeURI` — now two lines
-> of Node instead of thirty of `awk`. **The change is being carried out under
-> [#304](https://github.com/y3owk1n/kobai/issues/304)**; until it lands, the hook below
-> is still what runs.
+> of Node instead of thirty of `awk`. The change landed under
+> [#304](https://github.com/y3owk1n/kobai/issues/304); the hook described below no longer
+> exists.
 
 `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` decide what the `db` service comes up
 holding **and** what every address kobai derives signs in with. `devbox.json`'s `init_hook`

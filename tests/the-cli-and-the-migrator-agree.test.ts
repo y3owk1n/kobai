@@ -108,11 +108,11 @@ const CLI_SUCCEEDED = "migrations applied successfully";
  * `@kobai/plugin-price-log`'s `drizzle.config.ts` imports `@kobai/core/migrations`, which
  * resolves through that package's `exports` to `dist` — the same path a Plugin author
  * outside this repository takes, and deliberately not the source alias `vitest.config.ts`
- * sets up. `devbox run ci` and `devbox run test` both build before the suite; a bare
+ * sets up. `pnpm run ci` and `pnpm run test` both build before the suite; a bare
  * `vitest` does not.
  */
 const BUILD_FIRST =
-  "It reads a package's drizzle.config.ts, and a Plugin's resolves @kobai/core/migrations through `exports` to dist — so the workspace must be built. Run `devbox run build`, or the whole gate with `devbox run ci`.";
+  "It reads a package's drizzle.config.ts, and a Plugin's resolves @kobai/core/migrations through `exports` to dist — so the workspace must be built. Run `pnpm run build`, or the whole gate with `pnpm run ci`.";
 
 /**
  * Every way this database's migration tracking disagrees with what the sets declare, said
@@ -154,10 +154,10 @@ function disagreements(
 /**
  * Runs the real `drizzle-kit migrate` against one database, the way a Developer would.
  *
- * Through `pnpm --filter` rather than `devbox run --`, which runs from the project root and
- * would read the root's `drizzle.config.ts` — there isn't one, and if there were it would be
- * the wrong package's (AGENTS.md § Development). `DATABASE_URL` is the one thing overridden:
- * the config reads it, and devbox exports one pointing at the shared container that this
+ * Through `pnpm --filter`, which knows where its packages are: run from the repository root
+ * this would read the root's `drizzle.config.ts` — there isn't one, and if there were it
+ * would be the wrong package's (AGENTS.md § Development). `DATABASE_URL` is the one thing
+ * overridden: the config reads it, and `.env` may carry one pointing at the shared container
  * must not touch.
  *
  * It checks that the CLI said it finished, not merely that it exited zero. Without that a

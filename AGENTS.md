@@ -32,53 +32,59 @@ Steps 1–3 assume a real issue tracker; this repo uses GitHub Issues.
 
 ## Development
 
-**Prerequisites: [devbox](https://www.jetify.com/devbox) and Docker. Nothing else.** Node and
-pnpm are not expected on your PATH — devbox provides them, and corepack activates the pnpm
-pinned in `package.json`. Run every Node command through `devbox run …` or from inside
-`devbox shell`.
+**Prerequisites: Node 22 and Docker. Nothing else.** `.node-version` holds the pin, so fnm,
+nvm, nodenv, asdf and mise all read it; `corepack enable` then activates the pnpm pinned in
+`package.json`. If you would rather not install Node globally, `devbox.json` provides exactly
+those two things and nothing else — it declares no scripts, and nothing in this repository is
+run through it.
 
-**The gate is `devbox run ci`.** It is the single command that proves the repository is
-green: install, Postgres up, lint, typecheck, build, test. Nothing is done until it passes,
-and no PR opens on a red one.
+```sh
+corepack enable        # once, on whatever Node 22 you have
+pnpm install
+pnpm run ci            # the gate
+```
+
+**The gate is `pnpm run ci`.** It is the single command that proves the repository is green:
+lint, typecheck, build, test. Nothing is done until it passes, and no PR opens on a red one.
+CI runs that one command rather than a step list of its own — a step list is a second
+definition of green that can drift from the composite you run (ADR-0083). It installs
+nothing: you install, then you run the gate.
 
 **The gate fails on every finding Biome reports, at any severity** (ADR-0039). `biome ci`
 exits *zero* on warnings by default, and Biome 2 re-tiered most of what Biome 1 called an
-error down to `warn` or `info` — so `devbox run lint` and the gate both pass
-`--error-on-warnings`, and `biome.json` lifts the 28 recommended rules that default to `info`
-up to `warn`, which no flag can do. **`devbox run lint` and the lint step of `devbox run ci`
-run the identical biome invocation**, deliberately: a gate stricter than the command you are
-told to run is a difference that shows up nowhere until CI goes red. The `lint` script opens
-with the fresh-checkout guard below and `ci` does not, because `ci` installs first; that
-prefix is what the identity assertion strips, and it strips nothing else. `devbox run format`
-is the
-forgiving one — it rewrites rather than reports, so it is where a finding gets fixed. Reach
-for it first; most findings below `error` carry a safe fix.
+error down to `warn` or `info` — so `pnpm run lint` passes `--error-on-warnings`, and
+`biome.json` lifts the 28 recommended rules that default to `info` up to `warn`, which no
+flag can do. **`pnpm run ci` reaches the `lint` script rather than repeating its flags**, so
+the two cannot drift; a gate stricter than the command you are told to run is a difference
+that shows up nowhere until CI goes red. `pnpm run format` is the forgiving one — it rewrites
+rather than reports, so it is where a finding gets fixed. Reach for it first; most findings
+below `error` carry a safe fix.
 
-Four things follow, and each has a test rather than a convention behind it:
+Three things follow, and each has a test rather than a convention behind it:
 
 - **What the gate lints is `.gitignore`'s question, not `biome.json`'s** (ADR-0068).
   `biome.json` sets `vcs.useIgnoreFile`, so a gitignored path is out of scope **at any
-  depth** — which is what `"!.devbox"` was not: it was root-anchored, so a `devbox run`
-  inside `reference/` left a nix profile manifest the gate then failed to format, naming a
-  nix store path and nothing that would lead you to `reference/` (#203). `.scratch/` was the
-  same bug with no ticket. So `files.includes` now excludes **only what git tracks** — the
-  five generated artifacts an ignore file can never carry — and
-  `tests/the-gate-lints-what-git-tracks.test.ts` fails naming any exclusion git tracks no
-  file under. **An artifact directory is one edit: add it to `.gitignore`.** Adding it here
-  too is the second, narrower answer that produced #203, and it now reddens the build.
-  **Every `.dockerignore` obeys the same rule and cannot delegate it**, Docker having no
-  `useIgnoreFile` — so a pattern naming something `.gitignore` names is written `**/`-first,
-  as `**/node_modules` always was and `.devbox`, `.env` and `.env.*` were not. That one had
-  no ticket and a worse consequence than a red gate: `COPY . .` put `reference/.devbox` and
-  any `reference/.env` into the image, and `.gitignore` is why `git status` would never have
-  shown you either. `tests/nothing-git-ignores-reaches-the-build-context.test.ts` derives it
-  from `.gitignore` for all **three** copies — the template's included, which follows only
-  through `devbox run template:generate`. **`.claude/worktrees/` is ignored for the same
-  reason and is the sharpest case**: a harness puts a whole second checkout there, and a
-  nested `biome.json` is one Biome refuses outright — so `devbox run lint` *failed*, naming
-  a directory you are not in. It is also the only entry in either ignore file with an
-  interior slash, so it is anchored at the root rather than matching at every depth, and the
-  `.dockerignore` sweep knows the difference.
+  depth** — which is what `"!.devbox"` was not: it was root-anchored, so a build run inside
+  `reference/` left a generated file the gate then failed to format, naming a path that would
+  not lead you to `reference/` (#203). `.scratch/` was the same bug with no ticket. So
+  `files.includes` now excludes **only what git tracks** — the five generated artifacts an
+  ignore file can never carry — and `tests/the-gate-lints-what-git-tracks.test.ts` fails
+  naming any exclusion git tracks no file under. **An artifact directory is one edit: add it
+  to `.gitignore`.** Adding it here too is the second, narrower answer that produced #203,
+  and it now reddens the build. **Every `.dockerignore` obeys the same rule and cannot
+  delegate it**, Docker having no `useIgnoreFile` — so a pattern naming something
+  `.gitignore` names is written `**/`-first, as `**/node_modules` always was and `.env` and
+  `.env.*` were not. That one had no ticket and a worse consequence than a red gate:
+  `COPY . .` put any `reference/.env` into the image, and `.gitignore` is why `git status`
+  would never have shown it to you.
+  `tests/nothing-git-ignores-reaches-the-build-context.test.ts` derives it from `.gitignore`
+  for both copies — the template's included, which follows only through
+  `pnpm run template:generate`. **`.claude/worktrees/` is ignored for the same reason and is
+  the sharpest case**: a harness puts a whole second checkout there, and a nested `biome.json`
+  is one Biome refuses outright — so `pnpm run lint` *failed*, naming a directory you are not
+  in. It is also the only entry in either ignore file with an interior slash, so it is
+  anchored at the root rather than matching at every depth, and the `.dockerignore` sweep
+  knows the difference.
 - **A rule below the floor is a decision.** `tests/the-lint-gate-fails-below-error.test.ts`
   asks Biome for every rule's default severity *at gate time* and fails naming any enabled
   rule that resolves below `warn`. So a Biome upgrade that demotes a rule, or adds a
@@ -89,117 +95,33 @@ Four things follow, and each has a test rather than a convention behind it:
 - **`biome.json` cannot explain itself.** A comment in it stops Biome parsing its own config:
   it walks *up* to the parent checkout's and fails with "found a nested root configuration",
   naming a directory you are not in. Every explanation lives in ADR-0039, ADR-0068 or
-  ADR-0033 instead. `devbox.json` is the opposite — HuJSON, real comments welcome, `"// …"` keys
-  never (ADR-0030).
-- **`devbox add` rewrites `devbox.json` into trailing-comma style.** `biome.json` expects
-  that, through an `overrides` entry matching `**/devbox.json` — the workspace's and the
-  reference Project's alike — so the result is an ordinary formatting difference
-  `devbox run format` repairs. Without the override it was a *parse* error, and `format`
-  cannot repair a file it cannot parse. The relaxation is deliberately not repo-wide: a
-  trailing comma in a `package.json` is a real defect, because npm requires strict JSON.
-  **Run `devbox run format` after any `devbox add`.**
+  ADR-0033 instead.
 
 | Command | What it does |
 | --- | --- |
-| `devbox run install` | `pnpm install --frozen-lockfile`. **The first command in a checkout that has never installed** — every command below that runs a binary out of `node_modules` refuses until it has, and says so. |
-| `devbox run ci` | **The gate.** Everything below, in order — it installs first, so it needs nothing run before it. |
-| `devbox run up` | Postgres and the reference Project, on this checkout's own port — it prints the URL. `/health`, Admin at `/admin-ui`. |
-| `devbox run down` | Stop them. `devbox run db:down` also drops the volume. |
-| `devbox run admin:dev` | The Admin with a reload loop, beside `devbox run dev`. See [The Admin](docs/agents/the-admin.md). |
-| `devbox run db` | Just Postgres — what the test suite needs, on this checkout's own port. |
-| `devbox run browsers` | Downloads the Chromium the Admin's browser seam drives. `ci` and `test` run it themselves. |
-| `devbox run test` | Postgres up, build, then the whole suite. |
-| `devbox run typecheck` / `lint` / `format` / `build` | One step each. |
-| `devbox run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
-| `devbox run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
-| `devbox run template:generate` | Regenerate what `create-kobai` generates, from the reference Project. |
+| `pnpm install` | **The first command in a checkout that has never installed.** There is deliberately no script by that name — one would be an npm lifecycle hook that ran during the install itself. |
+| `pnpm run ci` | **The gate.** Lint, typecheck, build, test. Install first. |
+| `pnpm run up` | Postgres and the reference Project — it prints the URL. `/health`, Admin at `/admin-ui`. |
+| `pnpm run down` | Stop them. `pnpm run db:down` also drops the volume. |
+| `pnpm run admin:dev` | The Admin with a reload loop, beside `pnpm run dev`. See [The Admin](docs/agents/the-admin.md). |
+| `pnpm run db` | Just Postgres — what the test suite needs. |
+| `pnpm run browsers` | Downloads the Chromium the Admin's browser seam drives. `ci` and `test` reach this script themselves. |
+| `pnpm run test` | Postgres up, build, then the whole suite. |
+| `pnpm run typecheck` / `lint` / `format` / `build` | One step each. |
+| `pnpm run db:generate` | Build, then generate a migration in every package whose schema changed — Core and each Plugin. |
+| `pnpm run openapi:generate` | Regenerate the OpenAPI description, then the client generated from it. |
+| `pnpm run template:generate` | Regenerate what `create-kobai` generates, from the reference Project. |
 
-**A checkout that has never installed is an ordinary state, and every command says so rather
-than working around it.** A fresh clone, a `git worktree add`, an agent's worktree: in all of
-them `node_modules` is absent, and `devbox run lint` and `devbox run format` used to fail there
-with `Command "biome" not found` — a message naming a binary, leaving the reader to work out
-that a package manager never ran, on the command this file tells you to reach for *first*
-(#133). So every script in **every** `devbox.json` in this repository that runs a binary out
-of `node_modules` opens with **`sh scripts/require-install.sh <its own name> &&`**, and the
-refusal names the command that could not run and what to run instead of it. `install` and
-`ci` carry no guard, because they *are* the install; nor do the docker-only scripts, which
-need nothing installed at all.
+**Every command lives in `package.json`, and `devbox.json` declares none** (ADR-0083). That
+is asserted rather than noted: `tests/devbox-declares-no-commands.test.ts` fails the build if
+a script appears there, which forbids the whole class rather than the one script that used to
+be forbidden by name. The list used to live in `devbox.json` — behind a tool a contributor
+had no reason to have, and baked into every Project the scaffolder generated.
 
-It is a guard rather than an install in front of each script, deliberately. Prefixing
-`pnpm install --frozen-lockfile` would make the fast commands pay for an install every time —
-and would make them **refuse whenever the lockfile is stale**, so `devbox run format`, the
-command you reach for to fix a finding, would stop working exactly while a dependency change
-is in flight. The guard costs a stat and can introduce no failure a working checkout does not
-already have. It answers "nothing has installed here", never "what is installed is current":
-a stale `node_modules` is what the gate's own `--frozen-lockfile` is for.
-
-**It is a file rather than a shell function in the `init_hook`, and that part is not a
-preference.** devbox generates one script per key and has it source the hook *only when a
-devbox shell is not already active* — the generated script guards `. .hooks.sh` on
-`__DEVBOX_SKIP_INIT_HOOK_<hash>`. An exported **variable** survives into that child shell,
-which is why the port derivation in the same hook never showed this; a shell **function** does
-not, so a guard defined there was missing from every script run the second way this section
-documents, and `devbox run lint` inside `devbox shell` died at 127 naming an internal
-function. **The hook may export variables a script reads; a script may call none of its
-functions.** `tests/a-fresh-checkout-is-told-what-to-run.test.ts` holds that, holds the
-message against a checkout with no `node_modules`, and derives from each `devbox.json` itself
-the list of scripts needing the guard — so **a new script that runs `pnpm` needs the guard,
-passing its own name**, and the sweep names it if it does not.
-
-**A Project ships a guard of its own, and there are deliberately two of them** (#139). A
-generated Project is the fresh-checkout case *by definition* — it is the only state it has
-ever been in — and its Developer has neither this repository in front of them nor
-`devbox run ci` in muscle memory, so `devbox run dev` failing with `Command "vite" not found`
-was the worse half of the same bug. `reference/scripts/require-install.sh` is that second
-copy: generated into `packages/create-kobai/template/` like everything else under
-`reference/`, packed into the tarball a Developer installs, and named by the same prefix in
-front of every script in the Project's `devbox.json` that runs pnpm. **It needed no entry in
-`adaptations.ts`** — the file is the same in both trees, which is what anything genuinely
-shared between them should be.
-
-**The two copies do the same thing and say different things, and it is the doing that is held
-identical.** kobai's refusal points at `devbox run ci` and at this section; a Project has
-neither, and has `devbox run up`, which installs nothing locally because the install happens
-inside the image. One message forced on both would have made one of them false, which is the
-failure the guard exists to remove. So each copy carries its words in exactly two shell
-variables, `fix` and `note`, and
-`tests/a-fresh-checkout-is-told-what-to-run.test.ts` compares every line of the two files that
-is neither one of those two nor a comment, and fails naming the one that differs. **What is
-held identical is the check, not the file**: each copy's header explains itself to its own
-reader, and a Developer's Project has no reason to be told about #133. A fix applied to one copy and not the other —
-the drift this ticket weighed against copying at all — is now a red build rather than an
-invisible difference, and that comparison has been watched failing against a copy whose check
-was changed alone. The same file runs all **three** copies (the third is the template's, which
-is what a Developer actually receives) against a directory with and without `node_modules`,
-and sweeps all three `devbox.json`s for the scripts that need the prefix.
-
-Four shapes were rejected, each for a reason worth keeping:
-
-- **Inline the check in each of the Project's scripts.** No second file, but six copies of a
-  one-liner inside JSON strings, and the reasoning that justifies it would live only in the
-  workspace's copy.
-- **Say it in the Project's README instead.** A README is read before the first command or
-  not at all, and this failure arrives during it.
-- **Have `create-kobai` run the install itself.** It changes what the scaffolder promises,
-  and it does nothing for the second clone of that Project — a colleague's checkout is the
-  same fresh state again.
-- **Move the two sentences into `devbox.json`'s `env` block**, so the guards could be
-  compared byte for byte. That buys a stricter comparison of the half nobody doubted by
-  moving the words a reader sees one indirection away from the file that prints them — and
-  the guard would then degrade silently, printing a message with its advice missing, whenever
-  it is run any way other than through devbox.
-
-**`devbox run -- <cmd>` runs from the project root and ignores a preceding `cd`.** So this:
+**Target a package through pnpm, which knows where its packages are:**
 
 ```sh
-cd packages/core && devbox run -- tsc -p tsconfig.json   # typechecks the ROOT project
-```
-
-silently checks the wrong thing and passes. It is a bad failure because it looks like
-success. Target a package through pnpm instead, which knows where its packages are:
-
-```sh
-devbox run -- pnpm --filter @kobai/core typecheck
+pnpm --filter @kobai/core typecheck
 ```
 
 There is deliberately **no `push` script** anywhere — not in Core, not in a Plugin, not in
@@ -207,121 +129,92 @@ the reference Project. `drizzle-kit push` diffs against the live database and si
 the tables of every package whose schema it was not given, leaving their tracking rows
 behind so the migration runner cannot repair it. See
 [ADR-0030](docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md). An
-explanation sits where the command would have been — a **real comment** in `devbox.json`, a
-`"// …"` **key** in each package's `package.json` — and `tests/no-push-script.test.ts` fails
-the build if a push script appears in either, or in a `run:` step under
-`.github/workflows/`, where no script name would give it away.
+explanation sits where the command would have been — a `"// db:push"` **key** in each
+package's `package.json`, inert because npm attaches no meaning to one — and
+`tests/no-push-script.test.ts` fails the build if a push script appears in any manifest, or
+in a `run:` step under `.github/workflows/`, where no script name would give it away.
+
+**`devbox.json` is HuJSON and takes real comments; a `"// …"` key there never was safe**,
+because devbox turned every key into a runnable script and ate the leading slashes doing it
+(#30). It declares no keys now, so the hazard is history rather than a standing rule — the
+reasoning is in ADR-0083. `biome.json` allows the trailing-comma style `devbox add` writes,
+through an `overrides` entry matching `**/devbox.json`; **run `pnpm run format` after any
+`devbox add`.** The relaxation is deliberately not repo-wide: a trailing comma in a
+`package.json` is a real defect, because npm requires strict JSON.
 
 ### The ports belong to the checkout, not to kobai
 
-**`devbox run db` publishes Postgres on a port derived from this checkout's path**, in the
-range **55000-55999** — so `docker ps` will show something like `55154`, not the `55432` the
-files fall back to. **`devbox run up` publishes the application the same way**, in
-**53000-53999**, from the same number and so with the same last three digits: `53154` beside
-`55154` is one checkout, not two unrelated stacks. Read both ranges as the port the service
-is known by with a `5` in front of it.
+**In an ordinary checkout the ports are ordinary.** `compose.yaml` publishes
+`${POSTGRES_PORT:-55432}` and `${PORT:-3000}`, `.env` overrides them, and that is the whole
+story. 55432 rather than 5432 is deliberate and has nothing to do with any of the below: a
+Developer's own Postgres should not have to move.
 
-That is not a mystery, it is the point: two checkouts of kobai (a second clone, a git
-worktree) differ by their path and nothing else, so hashing the path gives each one ports of
-its own — and lets one run `devbox run ci` while another serves `devbox run up`, with
-nothing passed by hand. A *random* port would do that too and would be worse: a path does
-not change between runs, so the container yesterday's run left behind is still findable at
-today's port.
+**A linked git worktree is the exception, and it gets a `.env` of its own** (ADR-0084). A
+harness that runs work on a branch puts a whole second checkout in one, and a gitignored
+`.env` does not travel into it — so sixteen worktrees would collide on 55432 until somebody
+wrote a file by hand, and the failure is a container belonging to another branch, already up
+and healthy on the port you wanted. So `scripts/ensure-env.ts`, chained onto `up`, `db`,
+`dev`, `test` and `ci`, copies `.env.example` to `.env` with `POSTGRES_PORT` and `PORT`
+filled in from a hash of the worktree's path — in the ranges **55000-55999** and
+**53000-53999**, sharing their last three digits so `53154` beside `55154` reads as one
+checkout in a `docker ps`. It never writes over an existing `.env`, and it does nothing at
+all anywhere else.
 
-The derivation lives in `devbox.json`'s `init_hook`, in front of every script, and it sets
-five things from the one number:
+**A worktree may therefore find `.env` already written**, which is a surprise worth
+expecting. It is yours to edit from then on, and nothing rewrites it.
 
-| Variable | What it decides |
-| --- | --- |
-| `POSTGRES_PORT` | The host port `compose.yaml` publishes the `db` service on. |
-| `PORT` | The host port it publishes the `app` service on; the port `devbox run dev` binds; and the address `devbox run admin:dev` proxies to. |
-| `KOBAI_TEST_DATABASE_URL` | The address the test harness dials (`packages/core/src/testing/database.ts`). |
-| `DATABASE_URL` | Where `devbox run dev` reaches that container from the host. |
-| `COMPOSE_PROJECT_NAME` | `kobai-<hash>` — which containers and which volume this checkout owns. |
+Four things about the arrangement are worth knowing:
 
-**One source decides all five, and that is the property worth keeping.** They used to
-default independently, so the port had to be passed twice and kept in step by whoever
-remembered; forgetting one brought the container up on one port while the suite dialled
-another, and neither error named the other (#21).
+- **It seeds a file rather than exporting variables, and that is the point.** The derivation
+  used to live in `devbox.json`'s `init_hook` and export into each script's environment, so
+  `pnpm run db` and a hand-typed `docker compose up db` in the same directory brought up two
+  different stacks. Compose reads `.env` itself, so now they agree — and the values are
+  legible: you read them rather than reasoning about a hash.
+- **Parts, never assembled URLs.** The seed writes `POSTGRES_PORT` and `PORT` and no
+  `DATABASE_URL` or `KOBAI_TEST_DATABASE_URL`. `vitest.config.ts` builds the suite's address
+  from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` and the port at run time, and
+  `scripts/dev.ts` builds the host's the same way. A written-down URL goes stale the moment
+  the password three lines above it changes, and the only symptom is an authentication
+  failure naming neither (#63).
+- **Encode against the driver, not against the RFC.** `pg` reads the user and password with
+  `decodeURIComponent` and the database name with `decodeURI`, and the second never
+  unescapes a reserved character — so an over-encoded `=` in a database name arrives as a
+  literal `%3D` and Postgres reports a database nobody named. `scripts/env.ts` is where that
+  lives, in two calls; it was thirty lines of `awk` and the finding was expensive to make.
+- **A second *clone* is not a worktree.** `~/Dev/kobai` and `~/Dev/kobai-2` both take 55432
+  and collide. That is knowingly given up — it is the collision every project has, and the
+  answer is the one every developer knows. `COMPOSE_PROJECT_NAME` is no longer derived
+  either: compose names a project after the directory's basename, and worktree basenames are
+  already distinct.
 
-**The credentials travel the same way, and the two addresses are percent-encoded** (#63,
-[ADR-0046](docs/adr/0046-the-postgres-credentials-belong-to-dot-env-too.md)). The hook reads
-`POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` out of `.env` with the same helper
-that reads the port, and builds both database addresses from them — so a password changed in
-the one file compose reads is the password the suite signs in with. It did not used to be:
-the harness was handed `kobai:kobai` whatever `.env` said, and the only symptom was an
-authentication failure naming neither file. Three things about it are easy to get wrong:
-
-- **`kobai_dotenv` is the reader, and there is one of it** — the `DATABASE_URL` line asks
-  through it too. It follows docker compose's own env-file grammar: a leading `export` is
-  stripped, `\n`/`\r`/`\t`/`\"`/`\\` are interpreted inside double quotes, single quotes are
-  raw, a bare value loses leading blanks and ends at a ` #`. Each clause was checked against
-  `docker compose config` reading the same file, which is how the first two were found at
-  all. The one piece deliberately *not* copied is compose's `${VAR}` interpolation inside a
-  value, so keep `$` out of a password. A second parser would be two answers to what `.env`
-  says.
-- **`kobai_urlencode` takes which half of the URL it is filling.** `pg` reads the user and
-  password with `decodeURIComponent` and the database name with `decodeURI`, and the second
-  never unescapes a reserved character — so an over-encoded `=` in a database name arrives
-  as a literal `%3D`. Encode against the driver, not against the RFC. It walks bytes rather
-  than lines, because a value can hold a newline and awk's record separator would eat it.
-- **The hook is sourced under `set -e`.** A line of it that returns non-zero takes down every
-  `devbox run …` with a bare exit status and no message. A checkout with no `.env` is the
-  ordinary case, so reading one that is not there must not be a failure — and
-  `tests/support/init-hook.ts` runs the hook with `set -e` for that reason.
-
-What this does **not** carry is the app container's own `DATABASE_URL`: compose assembles that
-one by substitution and has no way to encode anything, so a password containing `/`, `?` or
-`#` breaks `devbox run up` while the suite is unaffected. `.env.example` says so next to the
-variables.
-
-The project name is set for the same reason. Compose otherwise names a project after the
-checkout directory's basename, so two checkouts both called `kobai` would share a project,
-and therefore a volume, and therefore a database — a far quieter failure than a port
-collision. Carrying the whole hash rather than a port keeps that true even for two checkouts
-that happen to derive the same pair: they stay separate projects and collide loudly on the
-ports, which is the failure you want.
+An explicit value still wins, from `.env` and from the environment alike — `process.loadEnvFile`
+leaves a variable already in the environment alone, which is the precedence this repository
+has always had. Pin `POSTGRES_PORT` and every database address follows it; pin `PORT` and the
+application serves there and the Admin's dev proxy follows; pin `DATABASE_URL` and only that
+one moves.
 
 **A derived application port has to announce itself; a derived database port does not.**
 Nobody types a database port — the harness dials it and `docker ps` has it for anyone who
-wants it — but a Developer opens the application in a browser, and 3000 was the one thing
-about `devbox run up` you never had to look up. So `devbox run up` builds, prints where it
-is about to serve, and only then starts streaming logs:
+wants it — but a Developer opens the application in a browser. So `pnpm run up` builds,
+prints where it is about to serve, and only then starts streaming logs:
 
 ```
   kobai is serving on http://localhost:53154 — health at /health, the Admin at /admin-ui
 ```
 
-`devbox run dev` needs no such line: the Project logs `listening` with the port it bound, and
-`devbox run admin:dev` prints its own dev-server URL. **Inside the container the application
-is still on 3000 and always will be** — a container has a network namespace to itself, so
-only the host half of the mapping can collide — and 3000 remains what every file falls back
-to for a bare `docker compose` outside devbox (#61).
+It is printed by `scripts/serving-on.ts` rather than by the shell, because the port may live
+in `.env`, which compose reads and the shell does not — an address printed from a different
+source than the one compose publishes on would be worse than no address at all.
+`pnpm run dev` needs no such line: the Project logs `listening` with the port it bound, and
+`pnpm run admin:dev` prints its own dev-server URL. **Inside the container the application is
+still on 3000 and always will be** — a container has a network namespace to itself, so only
+the host half of the mapping can collide.
 
-**An explicit value still wins**, and from `.env` as well as from the environment, because
-`.env` is where `.env.example` sends a Developer and docker compose reads it too — a pin
-compose honoured while the harness ignored it would be this same bug in a new place. Pin
-`POSTGRES_PORT` and every database address above follows it; pin `PORT` and the application
-serves there and the Admin's dev proxy follows; pin `DATABASE_URL` and only that one moves.
-So CI can fix a port, and so can anyone who wants one they can type. The 5432 a Developer's
-own Postgres sits on is untouched either way.
-
-### Never use a `"// …"` key in `devbox.json`
-
-**devbox turns every key into a runnable script and eats the leading `//` doing it.** It
-writes `.devbox/gen/scripts/<key>.sh` through a path join, and a join collapses `//`, so
-`"//db:generate"` lands on the *real* `db:generate` script's file and whichever is written
-last wins — and `"//db:push"` creates the very `devbox run db:push` ADR-0030 says must never
-exist. It self-heals whenever another script regenerates the file, which is why one passing
-run proves nothing. Observed on devbox 0.17.5; #30 has the reproduction.
-
-`devbox.json` is **HuJSON**, so write a real `//` comment instead — it can never become a
-command, and `biome.json` already sets `json.parser.allowComments`. The `"// …"` *key* stays
-correct in a `package.json`: npm requires strict JSON, so a comment cannot go there, and npm
-attaches no meaning to the key, which leaves it inert. `tests/no-push-script.test.ts` knows
-the difference — it reads `devbox.json`'s comments rather than its keys, judges a `"// …"`
-key there as the command devbox would generate from it, and fails if any key in the file
-would generate over another one.
+What this does **not** carry is the app container's own `DATABASE_URL`: compose assembles
+that one by substitution and has no way to encode anything, so a password containing `/`, `?`
+or `#` breaks `pnpm run up` while the suite is unaffected. `.env.example` says so next to the
+variables. Keep `$` out of a password too — compose interpolates variables inside a quoted
+value, and nothing else does.
 
 ### Dependency updates
 
@@ -335,9 +228,10 @@ full; the second lives in the root `package.json`. What is durable enough to bel
   a major matches no group and so arrives as its own PR, named for the package and the
   boundary it crosses. It is not allowed to hide inside a batch — that is the failure
   the config was written against.
-- **`@types/node` is held at the major `devbox.json` provides.** Typing against a newer
+- **`@types/node` is held at the major `.node-version` names.** Typing against a newer
   Node than the one that runs means typechecking against functions that do not exist at
-  runtime. The Node pin is recorded in ADR-0031; when it moves, lift the `ignore`.
+  runtime. The pin is one of five copies of the same major, held together by
+  `tests/one-node-version.test.ts`; when it moves, lift the `ignore`.
 - **Security updates are the second mechanism, and no key in that file turns them on.**
   They are a repository setting, and they were already on throughout #69. What the file
   can do — shape them through the options that reach them, and batch them with a group
@@ -418,8 +312,8 @@ anything written against the old shape as needing a rewrite rather than a versio
 | `reference/kobai.config.ts` | The one file listing everything this Project has customised. |
 | `reference/src/db/schema.ts` | The Project's **own** tables, in its own migration set. |
 | `reference/admin/` | The **Admin**, vendored into the Project as source a Developer edits (ADR-0033). |
-| `reference/Dockerfile`, `reference/compose.yaml`, `reference/devbox.json`, `reference/scripts/` | The **Project's**, generated into what a Developer receives. |
-| `compose.yaml`, `Dockerfile`, `devbox.json` | The **workspace's** — what `devbox run ci` and `devbox run up` use. |
+| `reference/Dockerfile`, `reference/compose.yaml`, `reference/package.json` | The **Project's**, generated into what a Developer receives. It ships no devbox and no toolchain of its own (ADR-0083). |
+| `compose.yaml`, `Dockerfile`, `package.json` | The **workspace's** — what `pnpm run ci` and `pnpm run up` use. `devbox.json` is beside them and holds only the Node pin. |
 
 ### Where the rest of it is, and when to read it
 

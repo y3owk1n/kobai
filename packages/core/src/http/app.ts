@@ -136,7 +136,7 @@ export function coreVersion(): string {
  *
  * What *can* disagree is the artifact checked into `packages/core/openapi.json`, because that
  * only moves when somebody regenerates it. **A version bump is therefore one
- * `devbox run openapi:generate` away from green**, and until it is run both checks in
+ * `pnpm run openapi:generate` away from green**, and until it is run both checks in
  * `openapi.test.ts` fail: the byte comparison as a diff, and the version assertion by name.
  * `packages/client/src/schema.test.ts` is *not* one of them — `openapi-typescript` emits the
  * paths, components and operations and never the `info` block, so a regenerated client is

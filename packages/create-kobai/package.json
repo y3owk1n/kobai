@@ -23,7 +23,7 @@
     },
     "./package.json": "./package.json"
   },
-  "// files": "`template` is the Project this package generates, and it ships because there is nowhere else to get it: a Developer's machine has no `reference/` to read. It is generated from the reference Project by `devbox run template:generate` and checked in — the same arrangement `packages/core/openapi.json` has, for the same reason, and `tests/create-kobai-matches-the-reference-project.test.ts` is what keeps it honest.",
+  "// files": "`template` is the Project this package generates, and it ships because there is nowhere else to get it: a Developer's machine has no `reference/` to read. It is generated from the reference Project by `pnpm run template:generate` and checked in — the same arrangement `packages/core/openapi.json` has, for the same reason, and `tests/create-kobai-matches-the-reference-project.test.ts` is what keeps it honest.",
   "files": [
     "dist",
     "template"

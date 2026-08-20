@@ -6,9 +6,8 @@
 > devbox is one maintainer's Node provisioner, declaring no scripts — and the gate is
 > `pnpm run ci` rather than `devbox run ci`. **The pnpm-workspace and Hono clauses stand**,
 > as does the consequence that Docker is required. The title is left as written, because a
-> decision that moved is part of the record. **The change is being carried out under
-> [#304](https://github.com/y3owk1n/kobai/issues/304)**; until it lands, what is written
-> below is still what the repository does.
+> decision that moved is part of the record. The change landed under
+> [#304](https://github.com/y3owk1n/kobai/issues/304).
 
 ADR-0006 chose TypeScript on Node with a REST/OpenAPI contract, and ADR-0025 chose one
 `@kobai/core` package alongside the reference Project. Neither says what a contributor

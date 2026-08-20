@@ -124,7 +124,7 @@ follows: a test either substitutes a storage or points the shipped one at a dire
 **The browser seam is the one exception, and it is not one a test may fix.** It boots the
 *built* reference Project as its own process from `reference/` — that Project configures no
 `media` at all, which is exactly what its upload case proves — so the bytes land in
-`reference/kobai-media/`, and **nothing deletes them**: `devbox run dev` writes a Developer's own
+`reference/kobai-media/`, and **nothing deletes them**: `pnpm run dev` writes a Developer's own
 uploads to that same directory. `.gitignore` keeps it out of `git status`. What `.gitignore`
 could not do is keep it out of the template, because `projectFiles` reads no ignore file — so
 `kobai-media` is named in that walk's own skip list, and one upload in the gate no longer sweeps
@@ -580,13 +580,13 @@ both can see it.
 Until #46 it was checked by hand whenever somebody remembered, which is what a drizzle bump
 now arriving automatically made untenable.
 
-**It runs in `devbox run ci` like everything else, deliberately** (ADR-0044). It adds a few
+**It runs in `pnpm run ci` like everything else, deliberately** (ADR-0044). It adds a few
 seconds to a gate that already builds images and stands up a registry, and the gate
 already provides both things it needs — Postgres, and the `pnpm -r build` whose `dist` a
 Plugin's `drizzle.config.ts` resolves `@kobai/core/migrations` through. A guardrail behind an
 opt-in step is not a faster guardrail, it is an optional one. The one visible consequence is
 that a bare `vitest` with no build ahead of it fails on this file; the failure says so and
-names `devbox run build`.
+names `pnpm run build`.
 
 The **schema seam** covers the rest of what HTTP cannot: ADR-0004's rules are properties of
 the schema, not behaviours. Ask Postgres what it is holding, through `inspectSchema` from

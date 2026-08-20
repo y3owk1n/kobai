@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "// openapi:generate": "Regenerates src/schema.ts from @kobai/core's openapi.json. `devbox run openapi:generate` runs Core's generator first, because pnpm walks the workspace in dependency order and this package depends on Core. src/schema.ts is checked in so the client needs no generation step to build, and src/schema.test.ts fails the build if the two ever disagree.",
+    "// openapi:generate": "Regenerates src/schema.ts from @kobai/core's openapi.json. `pnpm run openapi:generate` runs Core's generator first, because pnpm walks the workspace in dependency order and this package depends on Core. src/schema.ts is checked in so the client needs no generation step to build, and src/schema.test.ts fails the build if the two ever disagree.",
     "openapi:generate": "node generate.ts",
     "// db:push": "There is deliberately no db:push script here either, and this package is the one where it would be most obviously absurd: @kobai/client owns no tables and never opens a database. The rule is the repository's rather than a per-package judgement, because the failure it prevents is not local — `drizzle-kit push` diffs a schema against the LIVE database, so running it anywhere reports success while silently dropping the tables of every package whose schema it was not given, and leaves their tracking rows behind so the migration runner believes the work is done and cannot repair it. Observed, not theorised: FINDINGS.md section E on branch prototype/drizzle-multi-migration, and docs/adr/0030-generate-and-migrate-only-never-drizzle-kit-push.md."
   },

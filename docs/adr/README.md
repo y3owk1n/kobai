@@ -108,8 +108,8 @@ New to the project? These five carry the shape of everything else:
 | [0080](./0080-a-deployment-describes-itself.md) | A deployment describes itself | Accepted — **0010's second finding**, after 0067; bounded by 0067 and gated by a new Permission |
 | [0081](./0081-the-playground-attaches-its-credential-and-omits-the-ambient-one.md) | The Playground attaches its credential, and omits the ambient one | Accepted — extends 0032 and 0055; **defers a bearer credential for `/admin`** |
 | [0082](./0082-a-detached-media-is-still-the-stores.md) | A detached Media is still the Store's, and kobai deletes no bytes | Accepted — 0059's rule reached one table out, held by a `restrict`; **declines 0078's `remove`** and says what would settle it |
-| [0083](./0083-the-commands-live-in-package-json-and-devbox-is-not-required.md) | The commands live in `package.json`, and devbox is not required | **Decided, being carried out under #304.** Supersedes two of 0031's four clauses; moves 0030's and 0039's guardrails |
-| [0084](./0084-a-linked-worktree-seeds-its-own-dot-env.md) | A linked worktree seeds its own `.env` | **Decided, being carried out under #304.** Supersedes 0046, whose one-source rule it keeps; completes 0083 |
+| [0083](./0083-the-commands-live-in-package-json-and-devbox-is-not-required.md) | The commands live in `package.json`, and devbox is not required | Accepted — **supersedes two of 0031's four clauses**; moves 0030's and 0039's guardrails |
+| [0084](./0084-a-linked-worktree-seeds-its-own-dot-env.md) | A linked worktree seeds its own `.env` | Accepted — **supersedes 0046**, whose one-source rule it keeps; completes 0083 |
 
 ## Prototypes
 
@@ -117,8 +117,8 @@ Throwaway code kept as a primary source, on branches out of main.
 
 - **`prototype/drizzle-multi-migration`** — settled ADR-0011's open risk and produced
   ADR-0030. Three packages generating, applying and evolving migrations independently
-  against one Postgres. Run it with `devbox run prototype`; the verdict is in its
-  `FINDINGS.md`.
+  against one Postgres. Check the branch out and follow its `FINDINGS.md`, which is where
+  the verdict is; there has never been a script in this repository that runs it.
 
 ## Open risks
 
@@ -167,7 +167,7 @@ jumps and cannot say why.
 
 That is what 0042 and 0043 are (#147). They were reserved by #61 and #19 — the other two of a
 round of four concurrent tickets, whose other halves produced 0041 (#25) and 0044 (#46). #61
-gave `devbox run up` a port derived from the checkout, and #19 moved a hand-rolled
+gave `pnpm run up` a port derived from the checkout, and #19 moved a hand-rolled
 `information_schema` query onto `inspectSchema`; both landed as ordinary changes that met no
 part of the three-way test above, so neither number was ever spent. Which of the two held
 which is the one thing nobody wrote down, so neither row above claims it.

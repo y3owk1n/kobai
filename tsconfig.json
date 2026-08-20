@@ -6,8 +6,8 @@
   // The root-level TypeScript that no package owns: the guardrail suite under `tests/`, and
   // the test runner's own config. `pnpm -r typecheck` reaches only the workspace packages,
   // and each of those includes just its own `src/**/*.ts`, so without this file these are
-  // the only TypeScript in the repository outside the gate. That is why `devbox run
-  // typecheck` is two commands — `pnpm -r typecheck`, then `tsc -p tsconfig.json` for this.
+  // the only TypeScript in the repository outside the gate. That is why `pnpm run typecheck`
+  // is two commands — `pnpm -r typecheck`, then `tsc -p tsconfig.json` for this.
   //
   // `*.ts` rather than `vitest.config.ts` by name, because this file exists to close a hole
   // an enumerated list opened: a root-level file no `include` happened to name. It is not

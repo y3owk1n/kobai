@@ -539,7 +539,7 @@ describe("the session cookie's attributes", () => {
 
     const cookie = await cookieFrom(kobai);
 
-    // `devbox run up` serves http://localhost. A cookie that only ever set over HTTPS
+    // `pnpm run up` serves http://localhost. A cookie that only ever set over HTTPS
     // would make signing in impossible there.
     expect(cookie).not.toContain("Secure");
   });

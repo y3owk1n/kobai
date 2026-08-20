@@ -141,10 +141,14 @@ describe("scaffolding a Project", () => {
     ]);
     expect(manifest.scripts["// db:push"]).toMatch(/0030/);
 
-    // The other mechanism, in the other file: `devbox.json` is HuJSON and takes a real
-    // comment, because devbox would turn a `"// …"` key into the very command it documents.
-    const devbox = await readFile(join(directory, "devbox.json"), "utf8");
-    expect(devbox).toMatch(/\/\/[^\n]*no db:push/);
+    // There is one file to check, and that is the change: a generated Project used to ship a
+    // `devbox.json` carrying the same explanation as a real comment, because devbox turned a
+    // `"// …"` key into the very command it documented (#30). A Project ships no devbox at
+    // all now (ADR-0083), so the manifest is the only place a command can live and the only
+    // place the absence has to be explained.
+    await expect(readFile(join(directory, "devbox.json"), "utf8")).rejects.toThrow(
+      /ENOENT/,
+    );
   });
 });
 

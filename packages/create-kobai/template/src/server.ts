@@ -27,7 +27,7 @@ import { createStripeWebhookRoute } from "./payments/stripe-webhook.ts";
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   consoleLogger.error(
-    "DATABASE_URL is not set. Copy .env.example to .env, or use `devbox run up`.",
+    "DATABASE_URL is not set. Copy .env.example to .env, or use `pnpm run up`.",
   );
   process.exit(1);
 }

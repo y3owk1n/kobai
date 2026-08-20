@@ -104,7 +104,7 @@ describe("the generated Project matches the reference Project", () => {
       // list of files is what says how far the drift spread.
       expect(
         drifted,
-        `These template files no longer match the reference Project they are generated from. Run \`devbox run template:generate\` to bring them back into step, and read the diff before committing it — a change you did not expect here is a change to what every Developer receives.`,
+        `These template files no longer match the reference Project they are generated from. Run \`pnpm run template:generate\` to bring them back into step, and read the diff before committing it — a change you did not expect here is a change to what every Developer receives.`,
       ).toEqual([]);
     },
     TIMEOUT,
@@ -115,7 +115,7 @@ describe("the generated Project matches the reference Project", () => {
     async () => {
       // The reference Project is a Project as well as the template's source, and running one
       // writes files: the `MediaStorage` Core ships puts a Merchant's uploads under the
-      // process's working directory (ADR-0078), which for `devbox run dev` and for the browser
+      // process's working directory (ADR-0078), which for `pnpm run dev` and for the browser
       // seam that boots it in the gate is `reference/` itself. So a single upload — the Admin's
       // own Media case does one every run — left a PNG here, and generation swept it into the
       // checked-in template. Both assertions above went red naming a UUID, and what a Developer
@@ -138,7 +138,7 @@ describe("the generated Project matches the reference Project", () => {
           "A run of the reference Project left this behind, and generation put it in the template.",
         ).toEqual([]);
       } finally {
-        // The file only, never the directory: `devbox run dev` writes a Developer's own
+        // The file only, never the directory: `pnpm run dev` writes a Developer's own
         // uploads here and this test has no business deleting them.
         await rm(stray, { force: true });
       }
@@ -209,7 +209,7 @@ describe("the generated Project matches the reference Project", () => {
     const generated = new Set((await expected()).map((file) => file.path));
     expect(
       everything.filter((path) => !generated.has(path)).sort(),
-      "These files are inside the template but generation does not produce them. Run `devbox run template:generate`, which rewrites the directory from scratch.",
+      "These files are inside the template but generation does not produce them. Run `pnpm run template:generate`, which rewrites the directory from scratch.",
     ).toEqual([]);
   });
 

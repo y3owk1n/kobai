@@ -24,7 +24,7 @@ import { publishedKobaiPackageDirectories } from "./support/workspace.ts";
  * Both are generated from `reference/` and checked in, and until #12 nothing ran either of
  * them: `tests/create-kobai-matches-the-reference-project.test.ts` compares their bytes with
  * the reference Project's, and the repository root's own `Dockerfile` and `compose.yaml` are
- * what `devbox run up` and the rest of the suite use. ADR-0034 recorded the gap in as many
+ * what `pnpm run up` and the rest of the suite use. ADR-0034 recorded the gap in as many
  * words — *"generated but not exercised here"* — and #11 named it its own weakest point. A
  * compose file that has never been brought up is a promise, and the first person to find out
  * it was wrong would be a Developer on their first afternoon.
@@ -118,7 +118,7 @@ secrets:
 `,
   );
 
-  // Both ports are overridden rather than inherited. `devbox run ci` exports a
+  // Both ports are overridden rather than inherited. `pnpm run ci` exports a
   // `POSTGRES_PORT` for the repository's own Postgres (#21), and a nested compose project
   // taking it would try to publish a second database on a port already in use.
   const postgresPort = await freePort();

@@ -33,7 +33,7 @@ import {
  * the client dispatches at a really-booted kobai on a real Postgres with no port and no
  * process. That means the journey is type-checked against the published surface: a path that
  * does not exist, a field that is not carried, a body shaped wrongly, all fail
- * `devbox run typecheck` rather than at runtime. ADR-0006 makes the client a deliverable, and
+ * `pnpm run typecheck` rather than at runtime. ADR-0006 makes the client a deliverable, and
  * until this file existed no Shopper journey was expressed through it at all.
  *
  * **Only the store surface, and a check rather than a convention.** After arrangement the
@@ -648,7 +648,7 @@ describe("the Shopper's half of this file reaches only the store surface", () =>
  * the *caller's* Variant type, so the Variant this resolves to is still the page's own — carrying
  * its `id`, which the Cart is then filled from. What holds it to the published surface is the
  * call site rather than this declaration: a page whose Variants stopped carrying `options`, or
- * carried them under another name, would no longer satisfy it and `devbox run typecheck` would
+ * carried them under another name, would no longer satisfy it and `pnpm run typecheck` would
  * say so.
  */
 type APickableVariant = {

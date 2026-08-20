@@ -82,7 +82,7 @@ have to stay anyway.
 Add a component with
 
 ```sh
-devbox run -- pnpm --filter kobai-reference-admin exec pnpm dlx shadcn@latest add <name>
+pnpm --filter kobai-reference-admin exec pnpm dlx shadcn@latest add <name>
 ```
 
 and move whatever it writes into `dependencies` over to `devDependencies` — the whole frontend
@@ -98,7 +98,7 @@ asset request carries the credential. Beware that `/admin` *is* a bare string pr
 `/admin-ui` — match on the path boundary, never on `startsWith` alone.
 
 **There is no CORS configuration in this repository, and adding one is a wrong turn.** One
-origin is what ADR-0010 spends the single container on. The dev loop keeps it: `devbox run
+origin is what ADR-0010 spends the single container on. The dev loop keeps it: `pnpm run
 admin:dev` is a Vite server that **proxies** `/admin`, `/store` and `/health` to the Project,
 so the browser still sees one origin while editing.
 
@@ -114,7 +114,7 @@ second is the browser seam below.
 `tests/the-admin-in-a-browser.test.ts` drives Chromium against a really-booted reference
 Project — `node dist/src/server.js` against a throwaway database, on a port the OS hands out —
 and `tests/support/admin-browser.ts` is the harness, which says in its own header how to add a
-case. `devbox run browsers` downloads the browser and `devbox run ci` and `devbox run test`
+case. `pnpm run browsers` downloads the browser and `pnpm run ci` and `pnpm run test`
 both run that themselves, for ADR-0044's reason: a guardrail behind an opt-in step is not a
 faster guardrail, it is an optional one. Seven things about it are decisions rather than
 implementation:

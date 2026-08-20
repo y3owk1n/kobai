@@ -10,7 +10,7 @@ import { CLIENT_SCHEMA_PATH, generateClientSchema } from "../generate.ts";
  * regenerated fails the build twice rather than reaching a Developer as a client that
  * quietly describes last week's API.
  *
- * Regenerate both with `devbox run openapi:generate`.
+ * Regenerate both with `pnpm run openapi:generate`.
  */
 describe("the generated client tracks the description", () => {
   it("is checked in exactly as regenerating it produces", async () => {

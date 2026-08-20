@@ -4,7 +4,7 @@ import { createServer } from "node:net";
  * A port the OS says is free, by asking it for one and letting go.
  *
  * There is a race between closing this and something else binding it, and it is the right
- * trade: a *fixed* port would make two checkouts running `devbox run ci` at once fight over
+ * trade: a *fixed* port would make two checkouts running `pnpm run ci` at once fight over
  * one registry or one container, which is the failure #21 spent a whole ticket removing for
  * Postgres. The Postgres port is derived from the checkout's path instead of being ephemeral
  * because a container outlives its run and has to be findable again; nothing here outlives

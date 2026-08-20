@@ -7,12 +7,13 @@ import { quoteIdentifier } from "../db/identifier.ts";
  * ones are created, not a test database itself. Defaults to the `db` service in
  * `compose.yaml`.
  *
- * `KOBAI_TEST_DATABASE_URL` is not something kobai's own contributors set: devbox exports
- * it in front of every script, built from the same per-checkout port and the same
- * `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` it hands `compose.yaml`, so where
- * the container comes up and who it lets in are both decided once and cannot drift apart
- * (AGENTS.md § Development). The literal below is the fallback for a suite run outside
- * devbox, and every part of it matches `compose.yaml`'s own fallbacks —
+ * `KOBAI_TEST_DATABASE_URL` is not something kobai's own contributors set: `vitest.config.ts`
+ * builds it from the same port and the same `POSTGRES_USER`, `POSTGRES_PASSWORD` and
+ * `POSTGRES_DB` that `compose.yaml` reads, so where the container comes up and who it lets in
+ * are both decided once and cannot drift apart (AGENTS.md § The ports belong to the
+ * checkout). The literal below is the fallback for a suite run outside this repository — a
+ * Project's own, under ADR-0047 — and every part of it matches `compose.yaml`'s own
+ * fallbacks —
  * `tests/the-fallback-postgres-port.test.ts` holds the port to that and
  * `tests/the-postgres-credentials-belong-to-dot-env.test.ts` the credentials.
  *
@@ -94,7 +95,7 @@ async function withMaintenanceClient<T>(
     await client.connect();
   } catch (cause) {
     throw new Error(
-      `Could not reach Postgres at ${redact(maintenanceUrl)}. The test suite needs a real one — bring it up with \`devbox run db\`, or point KOBAI_TEST_DATABASE_URL somewhere else.`,
+      `Could not reach Postgres at ${redact(maintenanceUrl)}. The test suite needs a real one — bring it up with \`pnpm run db\`, or point KOBAI_TEST_DATABASE_URL somewhere else.`,
       { cause },
     );
   }

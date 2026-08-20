@@ -687,7 +687,7 @@ rather than implementation:
 `packages/client/src/schema.ts` are both generated and both checked in.
 `packages/core/src/http/openapi.test.ts` regenerates the description and compares;
 `packages/client/src/schema.test.ts` regenerates the client and compares. Both run under
-`devbox run ci`. Regenerate with `devbox run openapi:generate` — Core first, then the client,
+`pnpm run ci`. Regenerate with `pnpm run openapi:generate` — Core first, then the client,
 because pnpm walks the workspace in dependency order.
 
 **A third check covers the one file in `@kobai/client` nothing generates** (#196).
@@ -710,7 +710,7 @@ meets the name and not this file.
 is `coreVersion()` in `http/app.ts`, read from Core's own manifest when the document is built,
 because ADR-0060 makes the surface's version the package's — one fact, not a second copy kept by
 hand. The checked-in artifact only moves when somebody regenerates it, so **bumping the version
-without running `devbox run openapi:generate` fails `openapi.test.ts` twice**: once as a byte
+without running `pnpm run openapi:generate` fails `openapi.test.ts` twice**: once as a byte
 diff, once as an assertion naming both versions. The asymmetry is the part that surprises people
 and it is verified rather than assumed — **`packages/client/src/schema.ts` does not move**,
 because `openapi-typescript` emits paths, components and operations and never the `info` block,

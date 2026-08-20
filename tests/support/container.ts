@@ -12,7 +12,7 @@ import { promisify } from "node:util";
  * and one `ls` inside the image does.
  *
  * A module rather than a detail inside one test file because two images are exercised: the
- * repository's, which `devbox run up` builds, and the one a generated Project builds for
+ * repository's, which `pnpm run up` builds, and the one a generated Project builds for
  * itself from its own Dockerfile and brings up with its own compose file.
  */
 
@@ -298,7 +298,7 @@ export async function composeUp(options: {
   /**
    * Whatever this compose file reads out of the environment — the two ports at least.
    *
-   * `POSTGRES_PORT` and `PORT` have to be *overridden* rather than inherited: `devbox run ci`
+   * `POSTGRES_PORT` and `PORT` have to be *overridden* rather than inherited: `pnpm run ci`
    * exports a `POSTGRES_PORT` of its own in front of every script (#21), and a nested compose
    * project inheriting it would try to publish this Project's Postgres on the port the
    * repository's is already on. Doing it here changes nothing about the repository's own

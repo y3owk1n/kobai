@@ -11,11 +11,11 @@ import { describe, expect, it } from "vitest";
  *
  * `biome.json`'s exclusion list used to carry `"!.devbox"`, which is **root-anchored**: it
  * excluded the workspace's own `.devbox` and nothing else. `reference/` ships a `devbox.json`
- * of its own, so `cd reference && devbox run build` — an ordinary thing to do, it is the
+ * of its own, so `cd reference && pnpm run build` — an ordinary thing to do, it is the
  * Project a maintainer boots — left a nix profile manifest that Biome then scanned, and the
  * gate went red on a generated file in a gitignored directory (#203). Nothing in the failure
- * named `reference/`, and `devbox run format` could not repair it: it rewrote the manifest,
- * which the next `devbox run` regenerated in its original form. `.scratch/` was the same bug
+ * named `reference/`, and `pnpm run format` could not repair it: it rewrote the manifest,
+ * which the next build inside that directory regenerated in its original form. `.scratch/` was the same bug
  * with no ticket — AGENTS.md hands that directory to agents as scratch space, and the gate
  * linted whatever was left there.
  *
@@ -93,7 +93,7 @@ const FIXTURE: readonly Fixture[] = [
     path: "reference/.devbox/nix/profile/default/manifest.json",
     source: FINDING_IN_JSON,
     linted: false,
-    why: "#203 itself: a nix profile manifest a `devbox run` inside `reference/` leaves behind. `.gitignore` carries `.devbox/`, which matches at any depth; the root-anchored `!.devbox` this replaced did not.",
+    why: "#203 itself: a nix profile manifest a devbox command inside `reference/` used to leave behind. `.gitignore` carries `.devbox/`, which matches at any depth; the root-anchored `!.devbox` this replaced did not.",
   },
   {
     path: ".scratch/prototype.ts",
@@ -111,7 +111,7 @@ const FIXTURE: readonly Fixture[] = [
     path: ".claude/worktrees/another-branch/biome.json",
     source: FINDING_IN_JSON,
     linted: false,
-    why: "An agent harness puts a whole second checkout here, `biome.json` and all — and a nested root configuration is one Biome refuses outright, naming a directory you are not in, so this does not merely widen the scan: it makes `devbox run lint` fail in the checkout that has one.",
+    why: "An agent harness puts a whole second checkout here, `biome.json` and all — and a nested root configuration is one Biome refuses outright, naming a directory you are not in, so this does not merely widen the scan: it makes `pnpm run lint` fail in the checkout that has one.",
   },
   {
     path: "packages/core/openapi.json",
