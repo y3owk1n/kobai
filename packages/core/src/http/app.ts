@@ -5,6 +5,7 @@ import type { SessionPolicy } from "../auth/session.ts";
 import { SESSION_COOKIE } from "../auth/session-cookie.ts";
 import type { Logger } from "../config.ts";
 import type { Database } from "../db/client.ts";
+import type { EventEmitter } from "../events/events.ts";
 import type { FulfilmentStrategies } from "../fulfilment/strategy.ts";
 import { readMediaBytes } from "../media/media.ts";
 import { MEDIA_PATH, type MediaPolicy, type MediaStorage } from "../media/storage.ts";
@@ -51,6 +52,16 @@ export type HttpDependencies = {
   readonly mediaPolicy: MediaPolicy;
   readonly migrations: MigrationStateHolder;
   readonly logger: Logger;
+  /**
+   * What this deployment announces through — the Subscribers its `kobai.config.ts` wired
+   * (ADR-0085).
+   *
+   * Threaded through for the Strategies' reason: it is a property of the instance. **A route is
+   * where an Event is emitted from**, deliberately — after the transaction that made the fact
+   * has committed, and never from inside a Workflow Step, which is what makes a Subscriber
+   * unable to undo what it hears about (ADR-0036).
+   */
+  readonly events: EventEmitter;
   /**
    * The `resolve-price` declaration this deployment runs — Core's, or the one the Project's
    * config rebuilt. Threaded through to the store surface rather than imported there.
@@ -371,6 +382,7 @@ export function createHttpApp(deps: HttpDependencies): OpenAPIHono {
       holdWindowMs: deps.holdWindowMs,
       workflows: deps.workflows,
       paymentProvider: deps.paymentProvider,
+      events: deps.events,
       coreVersion,
       describeApi: describeThisApp,
     }),

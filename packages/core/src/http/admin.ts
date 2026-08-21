@@ -78,6 +78,7 @@ import {
 import type { Database } from "../db/client.ts";
 import { DEFAULT_PAGE_LIMIT } from "../db/page.ts";
 import { describeDeployment } from "../deployment/deployment.ts";
+import type { EventEmitter } from "../events/events.ts";
 import {
   type FulfilmentStrategies,
   fulfilmentStrategyNames,
@@ -225,6 +226,16 @@ export type AdminDependencies = {
    * (ADR-0053). Reported as a boolean and never as itself — see `deployment/deployment.ts`.
    */
   readonly paymentProvider: PaymentProvider | undefined;
+  /**
+   * What this deployment announces through — the Subscribers its `kobai.config.ts` wired
+   * (ADR-0085, #322).
+   *
+   * On this surface because the one Event kobai emits today is a Merchant's: a Fulfilment being
+   * dispatched. It is emitted **here, from the route**, once `transitionFulfilment` has returned
+   * and its statement has committed — never from inside a Workflow Step, which is what makes a
+   * Subscriber unable to undo what it hears about (ADR-0036).
+   */
+  readonly events: EventEmitter;
   /**
    * The release of Core this is, asked rather than read here.
    *
@@ -2001,7 +2012,7 @@ const readOrderRoute = createRoute({
  * Four things about them are decisions rather than implementation.
  *
  * **They are action routes and not a `PATCH`.** ADR-0062 makes a `PATCH` a *correction*, and a
- * dispatch is a transition with consequences — it emits an event, once #322 builds that surface.
+ * dispatch is a transition with consequences — it emits `fulfilment-dispatched` (ADR-0085).
  * A `PATCH` accepting `state: "dispatched"` would let any state be set from any other, which is
  * every refusal below made unreachable. The verb is in the path for the same reason
  * `POST /admin/session/sign-out` is: it names what happens rather than a field to assign.
@@ -2691,13 +2702,37 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
   guarded.openapi(dispatchFulfilmentRoute, async (c) => {
     // The body is optional — a dispatch that records no tracking reference is the ordinary case
     // for a download — so an absent one is an empty request rather than a refused one.
+    const address = addressed(c.req.valid("param"));
     const moved = await transitionFulfilment(
       deps.db,
-      addressed(c.req.valid("param")),
+      address,
       "dispatched",
       c.req.valid("json") ?? {},
     );
     if (!moved.ok) return refused(c, moved, FULFILMENT_TRANSITION_STATUS);
+
+    // **The first Event kobai emits**, and it is emitted from here rather than from
+    // `transitionFulfilment` or from a Step for the reason ADR-0085 makes the load-bearing one:
+    // the statement that moved the row has committed, so there is nothing left for a Subscriber
+    // to undo. That is what makes *a Subscriber cannot change what it hears about* structural
+    // rather than a promise — a Step that emitted would be the one piece of work in an
+    // unwindable region with no compensation available (ADR-0036).
+    //
+    // Awaited, so a Subscriber's work is done before the Merchant is answered: a slow one slows
+    // this route, which is the right person to pay it and the right place for the signal to show
+    // up. It never rejects, so nothing here has to be told what to do about one that threw.
+    await deps.events.emit("fulfilment-dispatched", {
+      fulfilmentId: moved.fulfilment.id,
+      // The Order the Fulfilment is part of — the address this route was called at, which is
+      // the Order the transition just checked the Fulfilment against.
+      orderId: address.orderId,
+      // Exactly what the row now holds, which is what this request wrote or what was already
+      // there. Never the request body: a dispatch that recorded none must say `null` rather
+      // than `undefined`, and the row is the one thing that knows.
+      trackingReference: moved.fulfilment.trackingReference,
+      occurredAt: moved.occurredAt,
+    });
+
     return c.json(moved.fulfilment, 200);
   });
 

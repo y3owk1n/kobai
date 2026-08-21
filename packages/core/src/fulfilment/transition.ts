@@ -38,13 +38,31 @@ import {
  * the answer names *where the Fulfilment actually is* rather than where a read a moment earlier
  * found it.
  *
- * **Nothing is emitted.** ADR-0085 decided the events surface and #322 builds it, with a
- * dispatch as its first consumer; wiring one here ahead of that record would be exactly the
- * implicit registration ADR-0017 exists to prevent.
+ * **Nothing is emitted here, and that is a decision rather than an omission** (#322, ADR-0085).
+ * An Event is emitted by the *route*, after the statement below has committed — so what this
+ * function owes an emitter is the one fact a caller cannot read back for itself afterwards:
+ * {@link FulfilmentTransition.occurredAt}, below.
  */
 
 export type FulfilmentTransition =
-  | { readonly ok: true; readonly fulfilment: Fulfilment }
+  | {
+      readonly ok: true;
+      readonly fulfilment: Fulfilment;
+      /**
+       * When Postgres wrote the row, ISO 8601 — what a `fulfilment-dispatched` payload's
+       * `occurredAt` is (ADR-0085).
+       *
+       * Read out of the `returning` of the statement that moved it rather than from a clock
+       * consulted afterwards, because `core_set_updated_at()` is what actually decides it
+       * (ADR-0037): a `new Date()` in TypeScript would be a second, disagreeing answer to *when
+       * did this happen*, and the row is the one a Subscriber can go and read.
+       *
+       * Answered by every transition and not only by a dispatch, because it is a fact about the
+       * write rather than about which of the three asked for it — and the day `delivered` gets
+       * an Event, there is nothing here to add.
+       */
+      readonly occurredAt: string;
+    }
   | {
       readonly ok: false;
       readonly reason:
@@ -106,7 +124,7 @@ export async function transitionFulfilment(
         inArray(fulfilment.state, [...statesThatMayBecome(to)]),
       ),
     )
-    .returning({ id: fulfilment.id });
+    .returning({ id: fulfilment.id, updatedAt: fulfilment.updatedAt });
 
   if (moved) {
     // Read back through the one reader an Order's Fulfilments have, so what this answers with is
@@ -116,7 +134,9 @@ export async function transitionFulfilment(
     );
     // Unreachable: the row was just updated inside this Order. Answered rather than thrown,
     // because a 500 is a worse account of a Fulfilment somebody deleted in between than a 404.
-    return read ? { ok: true, fulfilment: read } : noSuchFulfilment();
+    return read
+      ? { ok: true, fulfilment: read, occurredAt: moved.updatedAt.toISOString() }
+      : noSuchFulfilment();
   }
 
   const [current] = await db

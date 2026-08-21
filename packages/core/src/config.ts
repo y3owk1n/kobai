@@ -1,4 +1,5 @@
 import type { SessionOptions } from "./auth/session.ts";
+import type { EventsOptions } from "./events/events.ts";
 import type { FulfilmentOptions } from "./fulfilment/strategy.ts";
 import type { MediaOptions } from "./media/storage.ts";
 import type { MigrationSet } from "./migrations/set.ts";
@@ -160,6 +161,30 @@ export type KobaiProjectConfig = {
    * bucket behind a CDN serves its own bytes and none of them pass through this process.
    */
   readonly media?: MediaOptions;
+  /**
+   * What this Project does when kobai announces something — ADR-0003's fourth Extension Point
+   * (ADR-0085).
+   *
+   * ```ts
+   * events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } }
+   * ```
+   *
+   * **Core emits and nothing else does**, so the Event names are Core's; a Plugin **offers** a
+   * Subscriber and this line is what makes it run, exactly as with a Step. Installing a package
+   * subscribes to nothing at all, which is the whole reason the mechanism is worth having: a
+   * Developer reads one file and knows what their deployment does (ADR-0017).
+   *
+   * **A subject, not a bare map**, for `session`'s and `payments`' reason — and here the
+   * candidate for the second key is already known: durable delivery would go beside
+   * `subscribers` rather than reshaping every Project's config file.
+   *
+   * Subscribers run **in the order written, one after another, awaited, and every one is
+   * called** — including the ones after a Subscriber that threw, which is logged and changes
+   * nothing about the answer the caller gets. There is no wildcard, no refusal, and **no
+   * retry**: delivery is in-process and at most once, so a Subscriber is a place to *react* and
+   * not a place to put work that must happen. kobai's events are not webhooks.
+   */
+  readonly events?: EventsOptions;
 };
 
 /**

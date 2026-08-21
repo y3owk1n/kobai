@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSION_POLICY } from "../auth/session.ts";
+import { createEventEmitter } from "../events/events.ts";
 import { CORE_FULFILMENT_STRATEGIES } from "../fulfilment/strategy.ts";
 import { filesystemMediaStorage, resolveMediaPolicy } from "../media/storage.ts";
 import { createMigrationStateHolder } from "../migrations/state.ts";
@@ -44,6 +45,11 @@ function describeCore() {
     // deployment that wired a provider serves exactly these routes and answers exactly these
     // statuses — 402 among them, whether or not anything is there to decline.
     paymentProvider: undefined,
+    // Nothing subscribes, because a description does not move with a Subscriber either: an
+    // Event is not on the wire at all (ADR-0085), so a deployment that wired one serves exactly
+    // these routes and answers exactly these statuses. Nothing below dispatches a request, so
+    // nothing is emitted.
+    events: createEventEmitter(silentLogger),
     // Core's own two, because a description does not move with a wired Strategy either: the set
     // is open (ADR-0014), so no schema here enumerates it and a deployment that wired a Plugin's
     // serves exactly these routes.

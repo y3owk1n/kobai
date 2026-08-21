@@ -11,6 +11,7 @@ import {
   type WaitForDatabaseOptions,
   waitForDatabase,
 } from "./db/readiness.ts";
+import { createEventEmitter } from "./events/events.ts";
 import { resolveFulfilmentStrategies } from "./fulfilment/strategy.ts";
 import { createHttpApp, describeHttpApp } from "./http/app.ts";
 import type { OpenApiDocument } from "./http/openapi.ts";
@@ -224,6 +225,13 @@ export function createKobai(options: KobaiOptions): Kobai {
   // lets Core ship a default at all, and `media/storage.ts` carries that argument in full.
   const mediaStorage = options.media?.storage ?? filesystemMediaStorage();
 
+  // What this deployment announces through — the Subscribers its `kobai.config.ts` wired, built
+  // once here for the Strategies' reason: a second answer to "what does this deployment
+  // subscribe to" is how a Subscriber runs in one module and not in another. A deployment that
+  // wired none gets an emitter with nothing to call, which is what "installing a package
+  // subscribes to nothing" means at run time (ADR-0085, ADR-0017).
+  const events = createEventEmitter(logger, options.events);
+
   const app = createHttpApp({
     db: database.db,
     fulfilment,
@@ -235,6 +243,7 @@ export function createKobai(options: KobaiOptions): Kobai {
     mediaPolicy,
     migrations,
     logger,
+    events,
     priceWorkflow,
     placeOrderWorkflow: placeOrder,
     workflows,

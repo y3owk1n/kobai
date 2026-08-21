@@ -120,6 +120,11 @@ export async function createTestKobai(options?: TestKobaiOptions): Promise<TestK
       // defaulted: a deployment that says nothing has Core's `physical` and `digital`, and
       // that is what almost every test in this repository should be.
       fulfilment: options?.fulfilment,
+      // The Subscribers this deployment wired, so a test can boot with one and boot without it
+      // — which is the whole of what ADR-0017 promises, one Extension Point along. Nothing is
+      // defaulted, deliberately: a deployment that says nothing subscribes to nothing, and that
+      // is what every test in this repository that is not about events should be.
+      events: options?.events,
       // The storage this instance's uploads land in, unless the test named one — which is what
       // a test whose subject is substitution does, and what one about the shipped storage does
       // to point it at a directory it can then look inside.
