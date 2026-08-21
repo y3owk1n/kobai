@@ -232,8 +232,32 @@ Order is immutable either way (ADR-0009). Six things about the surface over it a
   mixed Order shows each part separately. There is no store route that *moves* one: which parts
   have gone is a Merchant's statement about the world.
 
-**Nothing is emitted yet.** ADR-0085 decided the events surface and #322 builds it, with a
-Fulfilment being dispatched as its first consumer.
+**A dispatch is the one thing kobai emits, and the route is what emits it** (#322, ADR-0085).
+`packages/core/src/events/events.ts` is Extension Point 4 entire — the Event names, the payloads,
+the `Subscriber` type and the emitter a deployment is built with — and `docs/extension-points.md`
+is where it is written for a Developer. Five things about it belong here, because they constrain
+what a route on this surface may do:
+
+- **Core emits, and it emits from the *route*.** Not from `transitionFulfilment`, and **never
+  from inside a Workflow Step**: a Step that emitted would be the one piece of work in an
+  unwindable region with no compensation available (ADR-0036), since an Event already delivered
+  cannot be recalled. Emitting after the statement has committed is what makes *a Subscriber
+  cannot undo what emitted* structural rather than a `try`/`catch` promise, and it is why
+  `transitionFulfilment` answers `occurredAt` instead of emitting: the row's own `updated_at` is
+  the one honest answer to *when did this happen* (ADR-0037).
+- **`deps.events.emit` never rejects and is awaited.** A Subscriber that throws is caught and
+  logged; a throw must not become a 500 on a route that succeeded, and a Subscriber cannot
+  refuse — `StepFailure` has no meaning there and Core does not look for one.
+- **An Event is not on the wire.** No route declares one, no schema carries one, and
+  `packages/core/openapi.json` does not move when one is added — so a new Event is not an
+  addition to the HTTP surface, and ADR-0060's table has nothing to say about it. What it *is*
+  under is ADR-0019, from the day it ships.
+- **A payload carries the identity of what happened and the facts of the transition**, never a
+  copy of the record — a copied field is a second promise about data this surface already
+  promises (ADR-0060), and two copies of a fact drift. `orderId` is on
+  `fulfilment-dispatched` precisely so a Subscriber has a route to read the rest back through.
+- **Delivered and cancelled emit nothing**, deliberately: an Event nobody subscribes to is a
+  promise with no consumer, and adding one later is additive because there is no wildcard.
 
 **The Strategy from outside Core is `@kobai/plugin-made-to-order`**, and it is the proof
 ADR-0014 asked for rather than a feature — *if made-to-order cannot be expressed as a strategy

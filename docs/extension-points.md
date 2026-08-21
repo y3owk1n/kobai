@@ -15,7 +15,7 @@ says why the difference is real and where each one is written down.
 | 1 | **Configuration** | One file where everything your Project has changed is declared | **Proven** — `reference/kobai.config.ts`, exercised on every commit |
 | 2 | **Workflow Step override** | Replace one named Step of a declared process; watch one without owning it | **Proven** — a replaced Step changes what the API serves, under test |
 | 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Proven** — four interfaces you can supply, two of them taking an implementation that is not Core's |
-| 4 | **Events** | React to something happening, without being in the path of it | **Promised only** — nothing to attach to; no bus, no emitter, no subscriber |
+| 4 | **Events** | React to something happening, without being in the path of it | **Proven** — one Event, wired by the reference Project, and a Subscriber that throws does not undo it |
 | 5 | **Admin UI slots** | Put your own UI inside the Admin at a declared position | **Promised only** — no slot mechanism exists |
 
 ## Core's semver covers three things, and these five are one of them
@@ -169,6 +169,7 @@ import {
   madeToOrderMigrationSet,
 } from "@kobai/plugin-made-to-order";
 import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
+import { emailTheShopper } from "./src/notifications/email-the-shopper.ts";
 import { manualPaymentProvider } from "./src/payments/manual.ts";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
 
@@ -185,6 +186,7 @@ export default defineKobaiConfig({
   },
   payments: { provider: manualPaymentProvider },
   fulfilment: { strategies: { "made-to-order": madeToOrder } },
+  events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
 });
 ```
 
@@ -196,7 +198,7 @@ given Stripe's settings it takes payments a Shopper completes at their bank thro
 deployment that has misconfigured its payments is never a deployment that is down (ADR-0053,
 ADR-0070). Your Project decides that for itself; kobai asks only for an object.
 
-**Seven keys today**, and every one of them names a *subject* rather than a scalar — a key
+**Eight keys today**, and every one of them names a *subject* rather than a scalar — a key
 holding one setting is how a file gets a second top-level key the day it needs to say
 anything else about the same thing
 ([ADR-0050](./adr/0050-the-idle-window-is-a-projects-the-cap-is-cores.md)):
@@ -220,6 +222,8 @@ anything else about the same thing
   key the example above does not use. **`maxBytes` and `accept` are your ceiling and your list**,
   ten mebibytes and the five raster image types if you say nothing — see section 3, where the
   reason neither is Core's alone is argued.
+- `events` — what runs when kobai announces something, as
+  `{ subscribers: { "<event-name>": [yours] } }`. Section 4, and the newest of the eight.
 
 **Installing a Plugin does nothing.** `@kobai/plugin-price-log` above is an ordinary npm
 dependency, and adding it to `package.json` creates no table and runs no code. The two lines
@@ -768,24 +772,134 @@ connection string, not a handle. Postgres is a decision, not a driver
 So: if you need to substitute something none of the four names, there is nothing to attach
 to, and that is a gap to report rather than a mechanism to discover.
 
-## 4. Events — **promised only**
+## 4. Events — **proven**
 
-**Status: promised, and not built.** There is no event bus, no emitter, no subscription API
-and no event type anywhere in `@kobai/core`. Nothing is missing from this page — there is
-nothing yet to document.
+**Status: proven end to end.** kobai emits **one** Event today, `fulfilment-dispatched`, and
+the reference Project wires a Subscriber against it: a Merchant marks a Fulfilment dispatched
+through the Admin, and that deployment queues the notice it owes the Shopper, in its own source,
+with nothing in Core patched. A Subscriber that throws is logged and the dispatch still stands —
+asserted over HTTP by wiring one that throws, dispatching, and reading the Fulfilment back
+moved. The shape is [ADR-0085](./adr/0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md),
+decided before it was built because a payload is under semver from the day it exists.
 
-The intent is what you would expect: react to something having happened without standing in
-the path of it. Where Step override is for changing what the system *decides*, an event is
-for what you do *afterwards* — and the two are deliberately different mechanisms, because a
-subscriber that could change an outcome is a Step with worse ergonomics and no type check
-(ADR-0003).
+Where Step override is for changing what the system *decides*, an Event is for what you do
+*afterwards*. The two are deliberately different mechanisms: a Subscriber that could change an
+outcome is a Step with worse ergonomics and no type check (ADR-0003), and a Step already has a
+slot, an input type and a compensation.
 
-**Do not build on this yet, and be careful how you read the promise.** ADR-0003 commits
-kobai to stability on events *once they exist*. It does not tell you what they will look
-like, and nothing about the eventual shape can be inferred from anything currently in the
-tree. If you need to react to something today, an inserted `after` Step at the right slot is
-the honest substitute — with the honest caveat that it runs *inside* the Workflow, so it is
-in the path of the thing it is watching in a way an event would not be.
+### Wiring one
+
+```ts
+import { defineKobaiConfig, type Subscriber } from "@kobai/core";
+
+const emailTheShopper: Subscriber<"fulfilment-dispatched"> = async (dispatched) => {
+  await myMailer.enqueue(dispatched.orderId, dispatched.trackingReference);
+};
+
+export default defineKobaiConfig({
+  events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
+});
+```
+
+**A Plugin offers a Subscriber and your Project wires it**, exactly as with a Step (ADR-0017).
+Installing a package subscribes to nothing, and neither does importing one — the line above is
+what makes it run, and deleting it is how you turn it off. That is not a formality: a Subscriber
+returns nothing and decides nothing, so one that registered itself at load time would be running
+code in your deployment with no compile-time trace of it at all, and the symptom — eleven Plugins
+installed, and an upgrade that starts sending two confirmation emails — is a behaviour with no
+file to open.
+
+**Core emits, and nothing else does.** A Plugin does not emit and your Project does not emit, so
+the set of Event names is Core's the way the set of Workflow slots is. A Plugin with something to
+announce has ways to say it already: it exports a function you call, or it offers a Step you
+insert. Extension Point 4 is for reacting to what *kobai* did.
+
+### What it does, and what it deliberately cannot
+
+- **A Subscriber is handed the payload and nothing else** — no transaction, no database handle,
+  no Workflow context. Anything else it needs is something you are holding at the moment you
+  wire it, so a closure has it; a Plugin that needs configuring exports a factory, the way
+  `stripePayments` does.
+- **It cannot refuse.** `StepFailure` has no meaning here and Core does not look for one.
+  Anything a Subscriber throws is a bug: caught, logged through your deployment's `Logger`, and
+  changing nothing about the answer the caller gets. **This is not the Workflow runner's rule** —
+  there a Step refuses by throwing and compensations unwind in reverse (ADR-0036).
+- **It cannot undo what it heard about**, and that is structural rather than a promise: an Event
+  is emitted **after the transaction that made the fact has committed, and never from inside a
+  Workflow Step**, so by the time your code runs the row is written and the run that wrote it is
+  over. A Step that emitted would be the one piece of work in an unwindable region with no
+  compensation available.
+- **Its return value is never read.** It returns `void` or a `Promise<void>`.
+- **Subscribers run in the order you wrote them, one after another, awaited, and every one is
+  called** — including the ones after a Subscriber that threw, because the failure that matters
+  is not one integration being broken but one broken integration silencing the three wired after
+  it. A failed Subscriber is reported in the log and nowhere else; a storefront's response body
+  does not grow a field about whether your email integration is working.
+- **There is no wildcard.** A Subscriber names one Event, and nothing may ask for all of them.
+  That is also what makes a new Event additive: nothing starts receiving one added in a minor
+  without a line being written for it.
+
+### In-process, at most once, and no retry
+
+**kobai's events are not webhooks, and reading them as ones will burn you.** Nothing is written
+to Postgres when an Event is emitted, nothing is retried, and an Event whose process dies between
+the commit and the call is lost. Core attempts each Subscriber exactly once.
+
+The loss is smaller than it first reads, because **the fact is durable even when the Event is
+not**: a dispatched Fulfilment is a committed row with a state and a timestamp, so what can be
+lost is the notification and never the record. Three things follow for you:
+
+- **A Subscriber is a place to react, not a place to put work that must happen.** If skipping it
+  would leave a Merchant reconciling by hand — an accounting export, a stock sync a warehouse
+  acts on — write it against the row instead, or enqueue into a queue you already run and return.
+  That is a deployment owning its own reliability rather than kobai owning it for everybody.
+- **Write it to be idempotent.** In-process delivery is at most once; a durable one would be at
+  least once, and saying so now is what stops that ever becoming a break for you.
+- **A slow Subscriber slows the route that emitted.** Today that route is a Merchant's dispatch
+  on `/admin`, which is the right person to pay it.
+
+Durable delivery is a queue, and a queue is a spec nobody has written — ADR-0026's Postgres
+queue, with ADR-0057's sweeper migrated onto it. It is a later decision with its own budget, and
+ADR-0085's *Why in-process* section is the three commitments that keep the move additive.
+
+### What a payload promises
+
+```ts
+type FulfilmentDispatched = {
+  readonly fulfilmentId: string;
+  readonly orderId: string;
+  readonly trackingReference: string | null;
+  readonly occurredAt: string;
+};
+```
+
+**Plain JSON data** — strings, numbers, booleans, `null`, and nested objects of those. No
+`Date`, no entity object, no handle; timestamps are ISO 8601 strings, which is what every other
+kobai boundary already serves.
+
+**A payload is produced by Core and read by your Subscriber**, which is the direction that keeps
+this additive: Core may **add** a field and every Subscriber written against today's shape still
+compiles. What may never happen in a minor is removing a field, renaming one, widening a `string`
+to `string | null`, or keeping a field's name and changing what it means. A Subscriber is a
+function *type* rather than a method signature, so one that demands **more** than Core sends is a
+compile error rather than an `undefined` at run time — the same spelling, for the same reason, as
+`FulfilmentStrategy.answersFor`.
+
+**It carries the identity of what happened and the facts of the transition, and nothing else** —
+not a copy of the Order, not the Shopper's email, not the lines. A copied field is a second
+promise about data the HTTP surface already promises, and two copies of a fact drift; a payload
+is also read at an unknown later moment, where a copy of a record is stale by construction and an
+identifier is not. **A Subscriber that needs more reads it back through the surface it is already
+allowed to use**, which is why `orderId` is there: a Fulfilment is read *through* its Order.
+
+`trackingReference` is the opaque string recorded at dispatch, exactly as recorded — kobai parses
+nothing out of it and models no carrier — and is `null` where the dispatch recorded none.
+`occurredAt` is when the transition was committed, and every payload will carry one, because a
+Subscriber may run late and *now* is not when it happened.
+
+**Delivered and cancelled have no Event yet**, and that is deliberate: they get one on the same
+terms when something wants them, because an Event nobody subscribes to is a promise with no
+consumer.
 
 ## 5. Admin UI slots — **promised only**
 

@@ -61,6 +61,32 @@ export type { Database } from "./db/client.ts";
  */
 export type { DatabaseReadiness, WaitForDatabaseOptions } from "./db/readiness.ts";
 /**
+ * **Events** — ADR-0003's fourth Extension Point (ADR-0085).
+ *
+ * Types alone, and that is the shape of the mechanism rather than an oversight: Core emits and
+ * nothing else does, so there is nothing here to call. A Plugin exports a `Subscriber` and a
+ * Project names it in `kobai.config.ts` under the Event it is listening for; `EventsOptions` is
+ * the shape of that key, `EventName` is the closed set of names Core emits, and `KobaiEvents`
+ * is the map a `Subscriber<E>` is resolved through so that wiring against the wrong payload does
+ * not compile.
+ *
+ * `FulfilmentDispatched` is on the surface because it is what a Subscriber is handed — the one
+ * payload there is today, and the shape ADR-0019 puts under semver from the day it ships.
+ *
+ * `EventEmitter` and `createEventEmitter` are deliberately **not** here. Core is the only
+ * emitter, so a Project holding one would be a way to announce a fact kobai did not do — and a
+ * name-space two packages may both write into is the registry this Extension Point exists to be
+ * an alternative to.
+ */
+export type {
+  EventName,
+  EventSubscribers,
+  EventsOptions,
+  FulfilmentDispatched,
+  KobaiEvents,
+  Subscriber,
+} from "./events/events.ts";
+/**
  * **Fulfilment** — the Strategy interface a Plugin implements, and the entity an Order records.
  *
  * `FulfilmentStrategy` is ADR-0003's third Extension Point at its widest: a Plugin exports an

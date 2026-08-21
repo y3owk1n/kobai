@@ -696,6 +696,21 @@ is one asserts on the rejection. Time is passed by winding the row back rather t
 helpers at the foot of `auth.test.ts` are the only honest way to test a window measured in
 minutes.
 
+**`events` is one of those keys, and nothing about it is defaulted** (#322, ADR-0085). A test
+that wires a Subscriber writes the line a `kobai.config.ts` carries —
+`events: { subscribers: { "fulfilment-dispatched": [mine] } }` — and a test that says nothing
+subscribes to nothing, which is what every test in this repository that is not about events
+should be. That is the opposite call from `payments` and `media`, which the harness fills in as
+a courtesy: a Subscriber's whole promise is that *only* a wired one runs, so a harness that
+defaulted one would be arranging the thing the mechanism exists to rule out. **Ask what a
+Subscriber did with what it was handed, never count that it was called** — the rule
+`record-price-resolution.test.ts` and `payment.test.ts` already hold, one Extension Point along:
+`packages/core/src/events/events.test.ts` keeps books of the payloads and asserts them field by
+field against what the Store actually did, because a counter proves the callback ran and nothing
+about whether it was told the truth. And assert **through HTTP**, because ADR-0085 has Core emit
+from the route after the transaction has committed: a test that called an emitter directly would
+be asserting against the one arrangement in which the promise is trivially true.
+
 **Inserting a Step** sits beside `steps` rather than inside it, so replacement and
 observation are distinguishable at a glance, and a list because observing composes:
 

@@ -11,11 +11,13 @@ import {
   inspectSchema,
   seedTestCart,
   seedTestCatalog,
+  seedTestOrder,
   signInTestMerchant,
   type TestKobai,
+  type TestOrder,
 } from "@kobai/core/testing";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import config, { bank } from "../kobai.config.ts";
+import config, { bank, confirmations } from "../kobai.config.ts";
 
 /**
  * The reference Project's side of ADR-0017: a Plugin offers, and the Project wires.
@@ -526,6 +528,105 @@ describe("the Plugin this Project makes its commissions with", () => {
     await expect(response.json()).resolves.toMatchObject({
       reason: "unknown-fulfilment-strategy",
     });
+  });
+});
+
+/**
+ * **The Subscriber this Project wired** — ADR-0003's fourth Extension Point, proven rather than
+ * promised (ADR-0085, #70, #322).
+ *
+ * kobai emits, and one line of `kobai.config.ts` is what makes anything happen about it. So the
+ * pair below is the same pair the Plugin's Step gets: this Project boots with the line and with
+ * it removed, and what is asserted either way is **what the Subscriber did with what it was
+ * handed** — the notices in this deployment's own outbox, field by field — never that a callback
+ * was reached. A counter would say the same thing about a Subscriber told a lie.
+ *
+ * The arrangement goes through `/admin`, because dispatching is a Merchant's act and there is no
+ * store route that moves a Fulfilment.
+ */
+describe("the Subscriber this Project wired", () => {
+  /** An Order with one Fulfilment, and that Fulfilment as a Merchant reads it back. */
+  async function anOrderToDispatch(kobai: TestKobai) {
+    const order = await seedTestOrder(kobai);
+    const read = await kobai.request(`/admin/orders/${order.id}`, {
+      headers: order.catalog.merchant.headers,
+    });
+    expect(read.status).toBe(200);
+    const body = (await read.json()) as {
+      fulfilments: readonly { id: string; state: string }[];
+    };
+    const [only] = body.fulfilments;
+    if (!only) throw new Error("this Order has no Fulfilment");
+    return { order, fulfilmentId: only.id };
+  }
+
+  /** Marks it dispatched, exactly as the Admin does. */
+  function dispatch(
+    kobai: TestKobai,
+    order: TestOrder,
+    fulfilmentId: string,
+    trackingReference?: string,
+  ) {
+    return kobai.request(
+      `/admin/orders/${order.id}/fulfilments/${fulfilmentId}/dispatch`,
+      {
+        method: "POST",
+        headers: {
+          ...order.catalog.merchant.headers,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(
+          trackingReference === undefined ? {} : { trackingReference },
+        ),
+      },
+    );
+  }
+
+  it("queues the notice this Store owes the Shopper, carrying what kobai said", async () => {
+    await using kobai = await createTestKobai(config);
+    const { order, fulfilmentId } = await anOrderToDispatch(kobai);
+
+    const response = await dispatch(kobai, order, fulfilmentId, "RR123456789MY");
+
+    expect(response.status).toBe(200);
+    // This Project's own record of what it will tell the Shopper — an identifier it can read
+    // the Order back by, the reference the Shopper follows the parcel with, and when kobai says
+    // it left. `toEqual` on the whole notice, so a field that stopped arriving is a failure.
+    expect(confirmations.noticesFor(order.id)).toEqual([
+      {
+        fulfilmentId,
+        orderId: order.id,
+        trackingReference: "RR123456789MY",
+        occurredAt: expect.any(String),
+      },
+    ]);
+    // And that last field is a reading of the row kobai wrote rather than of a clock this
+    // Project consulted, which is the whole reason a payload carries one.
+    const [notice] = confirmations.noticesFor(order.id);
+    const [row] = await kobai.database.query<{ updated_at: Date }>(
+      "select updated_at from core_fulfilment where id = $1",
+      [fulfilmentId],
+    );
+    expect(notice?.occurredAt).toBe(new Date(row?.updated_at ?? 0).toISOString());
+  });
+
+  it("queues nothing when the same Project boots without that line", async () => {
+    // The same Project, the same imported module, the same object it makes. One entry removed
+    // from one file, and nothing subscribes: installing a package subscribes to nothing, and
+    // neither does importing one (ADR-0017).
+    await using kobai = await createTestKobai({ ...config, events: {} });
+    const { order, fulfilmentId } = await anOrderToDispatch(kobai);
+
+    const response = await dispatch(kobai, order, fulfilmentId, "RR123456789MY");
+
+    // The dispatch is untouched — a deployment that wires no Subscriber behaves exactly as one
+    // that had never heard of the Extension Point.
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      state: "dispatched",
+      trackingReference: "RR123456789MY",
+    });
+    expect(confirmations.noticesFor(order.id)).toEqual([]);
   });
 });
 
