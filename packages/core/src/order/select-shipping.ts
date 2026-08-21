@@ -99,9 +99,12 @@ export type SelectShippingRefusal =
  *
  * **A replacement of `apply-adjustments` therefore has to carry `adjustments` forward**, and
  * Core's own does. The compiler cannot make it — a Step declaring the narrower `PricedLines` as
- * its input is still assignable here — so the reference Project is what proves it: it replaces
- * that slot with `@kobai/plugin-made-to-order`'s Step, and `tests/a-storefront-buys-something.test.ts`
- * buys something physical through that deployment and asserts the carriage is on the Order.
+ * its input is still assignable there — so **the slot asks at run time**: `carriesAdjustmentsForward`
+ * in `place-order.ts` is the guard, it is carried onto a replacement rather than living in the
+ * Step, and it is where the whole argument is written (#339). Until it existed the guarantee was
+ * a coincidence — the reference Project happens to replace that slot, so
+ * `tests/a-storefront-buys-something.test.ts` would have caught it for kobai's own Project and
+ * for nobody else's.
  */
 export type ShippedLines = {
   readonly cart: CartToPlace;

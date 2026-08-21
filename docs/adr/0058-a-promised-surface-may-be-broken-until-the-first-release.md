@@ -373,6 +373,40 @@ freely the licence is being spent.
   `Extract<EventName, FulfilmentTransitionRefusal>` is `never`, over two sets that are each
   derived, so the collision cannot come back through an Event added later or a fifth state —
   which is what stops this entry being the first of three.
+- **#339 — a replaced `apply-adjustments` may no longer drop an Adjustment it was handed.**
+  Extension Point 2, and **the first break here that no compiler announces**, which is the whole
+  reason it is in the register rather than left to be discovered. #321 put what delivery costs
+  into `ShippedLines.adjustments`, one slot in front of this one, and could not make a
+  replacement pass it on: TypeScript checks a Step's `run` parameter contravariantly, so a Step
+  declaring the narrower `PricedLines` is still assignable to the slot — it compiles, answers
+  `adjustments: []`, and the Order totals correctly for the wrong figure. So the slot now carries
+  a **guard**: a postcondition on the position, which `rewireWorkflow` puts onto a replacement,
+  asserting that every Adjustment the Step was handed — matched by `code` and `amount` — is still
+  in what it returned. The argument is on `carriesAdjustmentsForward` in
+  `packages/core/src/order/place-order.ts`, where the two mechanisms it beat are argued too.
+
+  **What actually stops working is one shape, and it is one a Project could honestly have
+  written**: a Step that implements free delivery by *removing* the shipping Adjustment rather
+  than by adding a discount beside it. That is the tightening, and it is taken on ADR-0022's own
+  terms — an Adjustment is its own line and never a figure edited in place, so the Order goes on
+  saying what carriage cost and what was given back. A Project that wants a different figure for
+  carriage replaces `select-shipping`, which is the slot that decides one. **A Step that adds its
+  own Adjustments alongside is untouched**, which is every honest replacement including
+  `@kobai/plugin-made-to-order`'s.
+
+  **No codemod, and here the usual first ground does not apply**: the Project's compiler says
+  nothing, because nothing about the types moved. What says it instead is the run — as a bug
+  rather than a refusal, naming the code, the amount and the description of what went missing, so
+  an operator reading a 500 has the Adjustment in front of them. That is worse notice than a
+  compile error and better than the silence it replaces, and it is the honest cost of a
+  postcondition on values: a deployment that prices no delivery has nothing to drop, so a stale
+  Step there is met on the first Order after a Merchant prices delivery rather than never.
+
+  What did **not** break: the HTTP surface, entirely — `packages/core/openapi.json` and
+  `packages/client/src/schema.ts` are byte-identical, and `WorkflowStep.guard` is read by nothing
+  on the wire, `GET /admin/deployment` naming the three fields it publishes one by one. Nor did
+  the declaration API: `.step(step, guard)` takes the guard as an optional second argument, so
+  every existing declaration reads as it did.
 
 ## What else the licence is holding up, and where that list went
 

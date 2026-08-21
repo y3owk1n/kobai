@@ -49,8 +49,37 @@ export const STEP_ORIGINS = ["stock", "replaced", "inserted"] as const;
 export type StepOrigin = (typeof STEP_ORIGINS)[number];
 
 /**
- * One position in a Workflow: the **slot** the declaration named, the Step filling it, and
- * where that Step came from.
+ * A **slot's own postcondition** — checked on whatever fills it, after the Step has answered.
+ *
+ * The types are what a slot promises and they cannot express everything one does. A Step
+ * declaring a *narrower* input is still assignable — TypeScript accepts a function that asks for
+ * less than it is handed — so a Step written against an older shape of the input compiles, reads
+ * none of what it never heard of, and drops it out of what it returns. That is silent by
+ * construction: the value is well typed, nothing refuses, and the loss surfaces as a wrong
+ * number rather than as a failure. `place-order`'s `apply-adjustments` is the worked example
+ * (#339), and its guard is where the argument is written.
+ *
+ * Three things about what belongs here:
+ *
+ * - **It is the *slot's*, not the Step's**, which is the whole point: {@link rewireWorkflow}
+ *   carries it onto a replacement, so a Project cannot supply one, remove one or replace one
+ *   away. A check a Step could take out with it would be a check that holds only while nobody
+ *   has customised anything, which is the guarantee #339 found and rejected.
+ * - **It reads values and does nothing else.** No database, no clock, no bookkeeping: it is
+ *   asked on the way past on every run, including a quote (ADR-0077), and a guard with an effect
+ *   would be a Step nobody declared.
+ * - **It throws or it says nothing**, and what it throws is an ordinary `Error` rather than a
+ *   `StepFailure`. A guard fires when this *deployment* is wired wrongly, which is a bug and
+ *   travels as one — a refusal would tell a storefront its purchase was declined.
+ */
+export type SlotGuard<In, Out> = (input: In, output: Out) => void;
+
+/** Any slot guard at all, for the positions that hold one and cannot know their shapes. */
+export type AnySlotGuard = SlotGuard<never, never>;
+
+/**
+ * One position in a Workflow: the **slot** the declaration named, the Step filling it, where
+ * that Step came from, and whatever the slot asks of what comes out of it.
  *
  * The first two are separate because they stop being the same thing the moment a Project
  * replaces a Step (ADR-0017): the slot is what the override map is keyed by and what stays
@@ -63,6 +92,14 @@ export type WorkflowStep = {
   readonly slot: string;
   readonly step: AnyStep;
   readonly origin: StepOrigin;
+  /**
+   * What this slot asks of what filled it, beyond the types — see {@link SlotGuard}.
+   *
+   * Absent on almost every position, and absent on every **inserted** one: an inserted Step
+   * occupies a position of its own and fills no slot, so there is no slot's promise for it to
+   * be held to.
+   */
+  readonly guard?: AnySlotGuard;
 };
 
 /**
@@ -290,8 +327,14 @@ export function rewireWorkflow<In, Out, Shapes extends StepShapes>(
     // be: this line holds both what Core declared for the slot and what is going into it, and
     // one line down that difference is gone. `entry` is carried through unchanged when nothing
     // replaced it, so a slot a Project said nothing about keeps whatever it already was.
+    //
+    // **The replacement is the slot's entry with a different Step in it**, spread rather than
+    // rebuilt from two of its three fields, because everything else about a position belongs to
+    // the *slot* and has to survive the swap. `guard` is what makes that load-bearing rather
+    // than tidy (#339): a check a Project could replace away holds only until somebody
+    // customises the very slot it is about.
     rewired.push(
-      replacement ? { slot: entry.slot, step: replacement, origin: "replaced" } : entry,
+      replacement ? { ...entry, step: replacement, origin: "replaced" } : entry,
     );
     for (const step of after[entry.slot] ?? [])
       rewired.push(insertedAt(workflow.name, step, slots));
@@ -330,6 +373,13 @@ type Insertions = Readonly<Record<string, readonly AnyStep[] | undefined>>;
 export type WorkflowBuilder<In, Current, Shapes extends StepShapes> = {
   step<Name extends string, Out>(
     step: Step<Name, Current, Out>,
+    /**
+     * What this slot asks of what fills it, beyond the types — see {@link SlotGuard}. Written
+     * here rather than inside the Step because it belongs to the **position**: a replacement
+     * inherits it, which is the only way a check about a slot can survive that slot being
+     * replaced.
+     */
+    guard?: SlotGuard<Current, Out>,
   ): WorkflowBuilder<
     In,
     Out,
@@ -350,12 +400,20 @@ function builder<In, Current, Shapes extends StepShapes>(
   steps: readonly WorkflowStep[],
 ): WorkflowBuilder<In, Current, Shapes> {
   return {
-    step(step) {
+    step(step, guard) {
       // The declaration is rebuilt rather than mutated, so a builder is never half a
       // Workflow and holding on to an earlier one keeps meaning what it meant.
       return builder(name, [
         ...steps,
-        { slot: step.name, step: step as AnyStep, origin: "stock" },
+        {
+          slot: step.name,
+          step: step as AnyStep,
+          origin: "stock",
+          // The declaration's types are discharged here, as they are everywhere else a Step's
+          // shapes meet a list that cannot know them: the builder has already checked this
+          // guard against what the slot is given and what it produces.
+          guard: guard as AnySlotGuard | undefined,
+        },
       ]);
     },
 

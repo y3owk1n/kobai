@@ -14,8 +14,8 @@ import {
   type TestKobai,
   type TestSession,
 } from "../testing/index.ts";
-import { defineStep } from "../workflow/step.ts";
-import type { PricedLines } from "./place-order.ts";
+import { defineStep, type Step } from "../workflow/step.ts";
+import type { AdjustedLines, PricedLines } from "./place-order.ts";
 import { SHIPPING_ADJUSTMENT_CODE, type ShippedLines } from "./select-shipping.ts";
 
 /**
@@ -169,7 +169,11 @@ async function place(kobai: TestKobai, cart: TestCart): Promise<Response> {
  * `@kobai/core/testing`: whether a Store prices delivery at all is the thing half of these cases
  * are about, so it stays visible in the file that is about it.
  */
-async function aStoreThatDelivers(kobai: TestKobai): Promise<{
+async function aStoreThatDelivers(
+  kobai: TestKobai,
+  /** How many of the one Variant — named, for the cases whose subject is what the goods come to. */
+  { quantity = 1 }: { readonly quantity?: number } = {},
+): Promise<{
   readonly catalog: TestCatalog;
   readonly cart: TestCart;
   readonly methods: readonly ShippingOption[];
@@ -180,7 +184,7 @@ async function aStoreThatDelivers(kobai: TestKobai): Promise<{
     { name: "Standard", amount: STANDARD },
     { name: "Next day", amount: NEXT_DAY },
   ]);
-  const cart = await seedTestCart(kobai, { catalog });
+  const cart = await seedTestCart(kobai, { catalog, quantity });
   return { catalog, cart, methods };
 }
 
@@ -625,6 +629,197 @@ describe("a Project that replaced select-shipping", () => {
     const order = (await placed.json()) as Placed;
     expect(order.total).toBe(quoted.total);
     expect(order.adjustments.map((one) => one.code)).toEqual(["carriage"]);
+  });
+});
+
+/**
+ * **A Step filling `apply-adjustments` has to pass the carriage on, and the slot is what asks**
+ * (#339).
+ *
+ * The hazard is the one #321 reported rather than fixed. A Step declaring the **narrower**
+ * {@link PricedLines} is still assignable to a slot handed a {@link ShippedLines} — TypeScript
+ * accepts a function that asks for less than it is given — so a replacement written before
+ * shipping existed compiles, answers `adjustments: []`, and the Shopper's delivery charge is
+ * gone. The Order totals correctly for the wrong figure, with no error, no log line and no
+ * refusal.
+ *
+ * So the slot carries a guard of its own, and the two cases below are the pair that makes it
+ * worth having: the drop is stopped **whatever the Step declared**, and the deployment that adds
+ * its own Adjustments beside the carriage is untouched. A guard that made the honest case painful
+ * would be worse than the bug.
+ */
+describe("a Project that replaced apply-adjustments", () => {
+  /** What this Store gives free delivery over. Made up, and Core has never heard of it. */
+  const FREE_DELIVERY_OVER = 5000;
+
+  /** The code the discount below carries — the Project's to choose, like every other one. */
+  const FREE_DELIVERY_CODE = "free-delivery";
+
+  /**
+   * *Free delivery over fifty*, written the way ADR-0022 says to write it: **a discount of its
+   * own**, beside the charge it cancels, rather than the charge edited away.
+   *
+   * This is the honest replacement, and it is the reason `select-shipping` runs in front of this
+   * slot at all — the rule can *see* what delivery cost, so it is an ordinary Adjustment rather
+   * than a special case Core would have had to model. Both lines reach the Order, which is what
+   * keeps the record able to say what was charged for carriage and what was given back.
+   */
+  const freeDeliveryOverFifty = defineStep(
+    "free-delivery-over-fifty",
+    (input: ShippedLines): AdjustedLines => {
+      const goods = input.lines.reduce(
+        (sum, line) => sum + line.unitAmount * line.quantity,
+        0,
+      );
+      const carriage = input.adjustments.filter(
+        (one) => one.code === SHIPPING_ADJUSTMENT_CODE,
+      );
+
+      return {
+        cart: input.cart,
+        lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+        adjustments: [
+          // Carried forward, always — this rule adds, it does not decide what carriage cost.
+          ...input.adjustments,
+          ...(goods >= FREE_DELIVERY_OVER
+            ? carriage.map((one) => ({
+                code: FREE_DELIVERY_CODE,
+                description: "Free delivery over 50",
+                amount: -one.amount,
+              }))
+            : []),
+        ],
+      };
+    },
+  );
+
+  /**
+   * The bug, written exactly as somebody would arrive at it: against the shape this slot had
+   * before #321, so it never learned there was anything to carry forward.
+   */
+  const adjustsNothing = defineStep(
+    "adjusts-nothing",
+    (input: PricedLines): AdjustedLines => ({
+      cart: input.cart,
+      lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+      adjustments: [],
+    }),
+  );
+
+  /** The same loss, quieter: the carriage keeps its name and comes back at half the figure. */
+  const halvesTheCarriage = defineStep(
+    "halves-the-carriage",
+    (input: ShippedLines): AdjustedLines => ({
+      cart: input.cart,
+      lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+      adjustments: input.adjustments.map((one) =>
+        one.code === SHIPPING_ADJUSTMENT_CODE ? { ...one, amount: one.amount / 2 } : one,
+      ),
+    }),
+  );
+
+  /**
+   * A deployment with this slot filled by the Step given, and somewhere to keep what it logged.
+   *
+   * The message is half of what a guard is for and no response body carries it: a 500 says the
+   * deployment is broken and only the log says which Adjustment went missing. Asking the `Logger`
+   * a deployment supplied is the same move as asking a Payment Provider what it is holding.
+   */
+  const replacing = (
+    step: Step<string, ShippedLines, AdjustedLines>,
+    logged: string[],
+  ) => ({
+    logger: {
+      info: () => {},
+      error: (_message: string, fields?: Record<string, unknown>) => {
+        logged.push(String(fields?.reason));
+      },
+    },
+    workflows: { "place-order": { steps: { "apply-adjustments": step } } },
+  });
+
+  it("is stopped, naming the charge it dropped, from the quote and the placement alike", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai(replacing(adjustsNothing, logged));
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    // A bug rather than a refusal, on `inWholeMinorUnits`' distinction: the request was fine and
+    // this deployment is wired to lose a delivery charge, which is not something a storefront
+    // can act on. Reachable from the quote too, because ADR-0077 slices this same declaration —
+    // so a storefront finds out before it creates a payment for the wrong figure.
+    expect((await quote(kobai, cart)).status).toBe(500);
+
+    expect((await place(kobai, cart)).status).toBe(500);
+    // Named, and named by what it was: the code, the figure and the description a Merchant
+    // reads — enough to find the Step and to see what the Shopper was about to be under-charged.
+    expect(logged).toHaveLength(2);
+    for (const reason of logged) {
+      expect(reason).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+      expect(reason).toContain(String(STANDARD));
+      expect(reason).toContain('"Standard"');
+      expect(reason).toContain("apply-adjustments");
+      expect(reason).toContain("did not come back at all");
+    }
+    // And nothing was written, which is the half a status cannot say: the Order this deployment
+    // would have under-charged for does not exist.
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+    await expect(
+      kobai.database.query("select id from core_order_adjustment"),
+    ).resolves.toEqual([]);
+  });
+
+  it("is stopped for repricing the carriage too, and told apart from dropping it", async () => {
+    // The other half of the same promise, and the reason the message has two shapes: a Step that
+    // kept the line and halved the figure has still taken money off the Order, and reporting it
+    // as *missing* would send a reader hunting for a line that is right there. The repair is the
+    // one the case above is refused with — a discount of its own, or replace `select-shipping`.
+    const logged: string[] = [];
+    await using kobai = await createTestKobai(replacing(halvesTheCarriage, logged));
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    expect((await place(kobai, cart)).status).toBe(500);
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(`"${SHIPPING_ADJUSTMENT_CODE}" of ${STANDARD}`);
+    expect(logged[0]).toContain(`came back at ${STANDARD / 2}`);
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+  });
+
+  it("still adds its own Adjustments beside the carriage, and both reach the Order", async () => {
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": { steps: { "apply-adjustments": freeDeliveryOverFifty } },
+      },
+    });
+    // Five of them, so the goods are over the threshold and this Store's own rule fires — which
+    // is what makes the case about a replacement that *adds* rather than one that passes through.
+    const { cart, methods } = await aStoreThatDelivers(kobai, { quantity: 5 });
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    const quoted = (await (await quote(kobai, cart)).json()) as Quoted;
+
+    expect(quoted.adjustments.map((one) => [one.code, one.amount])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD],
+      [FREE_DELIVERY_CODE, -STANDARD],
+    ]);
+    // The carriage and the discount cancel, so the Shopper pays for the goods and nothing else —
+    // and the Order still says both, which is what an Adjustment being its own line buys.
+    expect(quoted.total).toBe(THE_PRICE * 5);
+
+    const placed = await place(kobai, cart);
+
+    expect(placed.status).toBe(201);
+    const order = (await placed.json()) as Placed;
+    expect(order.total).toBe(quoted.total);
+    expect(order.adjustments.map((one) => [one.code, one.amount])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD],
+      [FREE_DELIVERY_CODE, -STANDARD],
+    ]);
   });
 });
 

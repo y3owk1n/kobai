@@ -740,6 +740,21 @@ the `cause` of. Whether a compensation actually undid anything is not — ask th
 `packages/plugin-price-log/src/record-price-resolution.test.ts` does, and never settle for a
 counter that says the callback was reached.
 
+**A slot may also carry a *guard*, and that is the newest promise in this seam** (#339). It is
+an optional second argument to `.step()` — a postcondition on the **position**, checked on
+whatever fills it after the Step has answered — so it exists for the thing the types cannot ask:
+a Step declaring a *narrower* input is assignable, reads none of what it never heard of, and can
+leave it out of what it hands on. Two things about it are asserted in `workflow.test.ts` and
+neither could be seen from a response body: `rewireWorkflow` carries a guard onto a
+**replacement**, which is the whole point of it belonging to the slot; and a Step whose *output*
+a guard turned back is **compensated**, because unlike a Step that threw it did run. What a
+particular guard *means* is tested where that Workflow is — `place-order`'s one is asserted
+through HTTP in `packages/core/src/order/shipping.test.ts`, against the deployment that would
+have under-charged. **A guard's message is part of it**, and reading it means supplying the
+deployment a `Logger` of your own and asserting on what Core told it: a 500 body says only that
+the deployment is broken. That is `payments`' rule one Extension Point along — ask the thing you
+substituted what it was handed, never count that it was called.
+
 The **packaging seam** covers what none of those can, because it is not about a running
 database at all: that the `migrations/` directory each package resolves relative to its
 *built* output survives being packed, and so actually reaches a Project's `node_modules`.

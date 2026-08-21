@@ -116,6 +116,9 @@ function messageOf(cause: unknown): string {
 /** What a Step's `run` looks like once the declaration's types have been discharged. */
 type Erased = (input: unknown, context: WorkflowContext) => unknown;
 
+/** Likewise a slot's guard: the value it was given, and the value it produced. */
+type Guarding = (input: unknown, output: unknown) => void;
+
 /** Likewise a Step's compensation, together with what it is owed: the value its Step ran on. */
 type Undo = {
   /** The slot it belongs to, so a compensation that throws can be reported by position. */
@@ -228,8 +231,16 @@ export async function runSteps<Out>(
     // Each Step is given a context of its own, so a Workflow it invokes leaves what it
     // completed against *this* position and is unwound with it rather than nowhere.
     const delegated: Undo[] = [];
+    // Whether the Step itself answered. A guard rejecting what it answered is a different
+    // failure from the Step throwing, and the difference is exactly what unwinds — see below.
+    let answered = false;
     try {
       value = await (entry.step.run as Erased)(given, composing(context, delegated));
+      answered = true;
+      // The slot's own postcondition, asked of whatever filled it and never of the Step that
+      // was declared here — see `WorkflowStep.guard`. It reads the value on the way past, so a
+      // quote (ADR-0077) is held to the same promise a placement is.
+      (entry.guard as Guarding | undefined)?.(given, value);
     } catch (cause) {
       // Unwound before the answer is composed, and before a bug is allowed to travel: what
       // the caller is told is a different question from whether the Store is left consistent,
@@ -238,7 +249,17 @@ export async function runSteps<Out>(
       // The Workflows this Step invoked before it stopped completed, so they unwind too — a
       // Step that failed has no compensation of its own to run, and the work it delegated
       // would otherwise be the one kind nothing ever reaches.
-      const uncompensated = await unwind([...undo, ...delegated]);
+      //
+      // **A Step whose *output* the slot's guard rejected did complete**, so its own
+      // compensation is among these. That is ADR-0036's exhaustiveness rather than an
+      // exception to the line above: the Step ran, it may have written something, and the run
+      // is failing after it — a guard that left a Step's work standing would be a new way to
+      // leak exactly what compensation exists to take back.
+      const uncompensated = await unwind([
+        ...undo,
+        ...delegated,
+        ...(answered ? ownUndo(entry, given, context) : []),
+      ]);
 
       // Only a refusal is an answer. Anything else is a bug in a Step, and a bug must not be
       // dressed up as a decision the Workflow made — it keeps travelling, and surfaces as
@@ -264,13 +285,13 @@ export async function runSteps<Out>(
     ran.push({ step: entry.slot, implementation: entry.step.name });
     // The failing Step is not among these: it did not complete, so there is nothing of its
     // to undo, and calling its compensation would be asking it to unwind work it never did.
+    // A Step the slot's *guard* turned back is the one that did complete, and the `catch`
+    // above is where it goes on.
     //
     // What this Step delegated goes on first, so unwinding — which reads this backwards —
     // reaches the Step's own compensation before it reaches the Workflows the Step invoked.
     // The nesting is what decides the order: a Step sits outside what it called.
-    undo.push(...delegated);
-    const compensate = entry.step.compensate as Undo["compensate"] | undefined;
-    if (compensate) undo.push({ slot: entry.slot, compensate, input: given, context });
+    undo.push(...delegated, ...ownUndo(entry, given, context));
   }
 
   // Nothing is unwound on the way out of a run that succeeded — but a nested one hands what
@@ -279,6 +300,24 @@ export async function runSteps<Out>(
   outer?.push(...undo);
 
   return { ok: true, output: value as Out, steps: ran };
+}
+
+/**
+ * What one completed Step leaves for the unwinding — its own compensation, or nothing.
+ *
+ * A function rather than two lines inline because it is now needed in two places, and the two
+ * must not drift: a Step that ran and then had its output rejected by the slot's guard is
+ * unwound from the `catch`, and one that ran and was accepted is carried to the end of the
+ * run. Both hand the compensation **the very value its `run` was given** (ADR-0036), which is
+ * the identity a Step's own bookkeeping rests on.
+ */
+function ownUndo(
+  entry: WorkflowStep,
+  input: unknown,
+  context: WorkflowContext,
+): readonly Undo[] {
+  const compensate = entry.step.compensate as Undo["compensate"] | undefined;
+  return compensate ? [{ slot: entry.slot, compensate, input, context }] : [];
 }
 
 /**
