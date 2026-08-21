@@ -1,19 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
-
-  // Node, and corepack to activate the pnpm pinned in `package.json`. That is the whole of
-  // what this file is for (ADR-0083): it exists because one maintainer does not install Node
-  // globally, and a contributor who has never heard of devbox needs nothing here.
-  //
-  // **It declares no scripts, and that is asserted rather than noted** —
-  // `tests/devbox-declares-no-commands.test.ts` fails the build if any appear. kobai's
-  // commands are `package.json`'s, so there is one list; a second one here would be the drift
-  // the arrangement is meant to remove, and forbidding the whole class is stronger than
-  // forbidding the one script that used to be forbidden by name.
-  //
-  // `nodejs@22` is a fourth copy of the Node pin, held to `.node-version`, `engines` and both
-  // Dockerfiles by `tests/one-node-version.test.ts`.
-  "packages": ["nodejs@22"],
+  "packages": [
+    "nodejs@22",
+    "vtsls@0.3.0",
+    "tailwindcss-language-server@0.14.29",
+    "docker-language-server@0.20.1"
+  ],
   "env": {
     "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
   },
