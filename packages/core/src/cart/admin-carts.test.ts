@@ -31,6 +31,13 @@ import {
  * stock from a Shopper who may be mid-payment; the sweeper already releases on expiry.
  */
 
+/** Where a Shopper said their parcel goes — no part of it is guessable from a Cart. */
+const SHOPPERS_ADDRESS = {
+  country: "MY",
+  lines: ["12 Jalan Ampang", "Kuala Lumpur"],
+  postalCode: "50450",
+} as const;
+
 describe("a Merchant sees the Carts the Store is holding", () => {
   it("lists them, with the identifier that is the authority to act on one", async () => {
     await using kobai = await createTestKobai();
@@ -52,10 +59,8 @@ describe("a Merchant sees the Carts the Store is holding", () => {
           // question a Merchant scanning held Carts has (#293).
           currency: "USD",
           region: { id: expect.any(String), name: "USD", currency: "USD" },
-          // On the list as well, and for the list's own reason: a Merchant looking for the
-          // Cart a Shopper is asking about is looking at where it goes (#319).
-          address: null,
-          // And how it is to get there, which is the other half of the same question (#321).
+          // How it is to get there, on the list as well as on the Cart (#321) — while *where*
+          // it goes is answered by the Cart alone, which is its own case below (#337).
           shippingMethod: null,
           metadata: {},
           expiresAt: expect.any(String),
@@ -234,6 +239,55 @@ describe("a Merchant opens one Cart", () => {
       await expect(response.json(), id).resolves.toMatchObject({
         reason: "cart-not-found",
       });
+    }
+  });
+});
+
+/**
+ * **The Cart a Merchant opens answers where it goes, and the list does not** (#337). The argument
+ * is on `Cart` in `http/contract.ts`, where the shape is; what belongs here is why the assertion
+ * is shaped the way it is.
+ *
+ * It is about the **payload** rather than about a key. A field taken off one shape comes back
+ * under another name, or nested inside something else, and a test naming `address` would pass
+ * through all of that — so the sweep is over the bytes a Merchant actually receives, and it
+ * asserts the Cart is in the page first, or an empty list would satisfy it (ADR-0049's trap).
+ * The country code is the one part not swept: two letters collide with anything.
+ *
+ * **The other half of this promise is a compile error**, in `packages/client/src/client.test.ts`:
+ * a client reading `carts[0].address` off `@kobai/client` no longer builds. That one was watched
+ * failing — `TS2578: Unused '@ts-expect-error' directive`, against a `CartSummary` with the field
+ * put back — because an assertion nobody has seen fail is not yet known to be able to.
+ */
+describe("the list is bulk, and a Shopper's address is not in it", () => {
+  it("answers the Address on the Cart a Merchant opens and on no row of the list", async () => {
+    await using kobai = await createTestKobai();
+    const cart = await seedTestCart(kobai);
+    const stated = await kobai.request(`/store/carts/${cart.id}`, {
+      method: "PATCH",
+      headers: { ...cart.apiKey.headers, "content-type": "application/json" },
+      body: JSON.stringify({ address: SHOPPERS_ADDRESS }),
+    });
+    expect(stated.status, "saying where the Cart goes").toBe(200);
+    const { headers } = cart.catalog.merchant;
+
+    const opened = await kobai.request(`/admin/carts/${cart.id}`, { headers });
+    const listed = await kobai.request("/admin/carts", { headers });
+
+    // The Cart a Merchant opened answers it in full…
+    expect(opened.status).toBe(200);
+    await expect(opened.json()).resolves.toMatchObject({
+      address: { ...SHOPPERS_ADDRESS, region: null },
+    });
+
+    // …and the page of Carts answers none of it, under any name and at any depth.
+    expect(listed.status).toBe(200);
+    const page = await listed.text();
+    const [row] = (JSON.parse(page) as { carts: Record<string, unknown>[] }).carts;
+    // The Cart really is in the page, or the sweep below would be looking at nothing.
+    expect(row).toMatchObject({ id: cart.id });
+    for (const part of [...SHOPPERS_ADDRESS.lines, SHOPPERS_ADDRESS.postalCode]) {
+      expect(page, `the list answered "${part}"`).not.toContain(part);
     }
   });
 });

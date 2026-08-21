@@ -305,6 +305,35 @@ freely the licence is being spent.
   `PlaceOrderRefusal.workflow` was already optional for the same reason one door along, which is
   what makes this the shape both now have rather than a second one. The blast radius is one
   narrowing on the two price routes; `packages/client/src/client.test.ts` carries it and says so.
+- **#337 — `CartSummary.address` removed, and answered by `Cart` alone.** The promised HTTP
+  surface, and ADR-0060's "removing a field a response carries is a break" exactly: `GET
+  /admin/carts` stops answering the Shopper's delivery Address, which a client reading
+  `carts[i].address` off `@kobai/client` no longer compiles against. The argument is written on
+  `Cart` in `packages/core/src/http/contract.ts` and on `Cart.address` in
+  `packages/core/src/cart/read.ts`, and the short of it is that the field arrived in #319 on the
+  shared shape rather than on the detail, so a Permission carved out to grant *seeing the baskets
+  without the books* (ADR-0071) was answering every Shopper's home address by the pageful. It is
+  the first break here taken because a field was **too widely answered** rather than because a
+  type had to move: nothing became unreachable — a Merchant opens the Cart, and a placed one is
+  behind `order:read` — and what changed is that bulk personal data is no longer the default.
+  **`OrderSummary` had already made this call** for the Order's snapshot, on the other premise —
+  a destination is prose and a list of Orders is numbers, money and days — so this is the shape
+  both summaries have rather than a second one.
+
+  Pinned by `@ts-expect-error` in `packages/client/src/client.test.ts`, which the gate's
+  `typecheck` step runs, and watched failing against a `CartSummary` with the field put back:
+  `TS2578: Unused '@ts-expect-error' directive`. `packages/core/src/cart/admin-carts.test.ts`
+  carries the runtime half, and sweeps the **bytes** of the page rather than naming a key,
+  because a field taken off one shape comes back under another name.
+
+  What did **not** break: every store-surface route, since all of them answer `Cart`; `GET
+  /admin/carts/{id}`, for the same reason; and `Order.address`, which is a snapshot and untouched.
+  The `Address` component stays in the description and in `@kobai/client`, so no name left the
+  API — its position in `components` moved, which is serialisation and unpromised.
+
+  **No codemod**, on this record's own rule: the Project's own compiler names the file and the
+  property, and there is no edit a machine could make that would not be a guess at which Cart a
+  screen meant to open.
 
 ## What else the licence is holding up, and where that list went
 

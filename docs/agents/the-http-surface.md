@@ -1101,8 +1101,22 @@ else** (#319, ADR-0072, ADR-0009). `address` is on `POST /store/carts` and on
 it off, an object replaces the whole of it — and `Cart.address` and `Order.address` are the two
 shapes that come back. It sits behind the Cart's own identifier and no credential of a Shopper's
 (ADR-0020), and there is **no new Permission**: a Merchant reads it through the Order, which
-`order:read` already covers. Six things about it are decisions rather than implementation:
+`order:read` already covers, and through the Cart they open. Seven things about it are decisions
+rather than implementation:
 
+- **It is on `Cart` and deliberately not on `CartSummary`, so `GET /admin/carts` does not carry
+  it** (#337). It shipped on both, which made a page of Carts a page of home addresses answered to
+  the narrowest read this surface has — and `cart:read` is a Permission of its own precisely so a
+  deployment can grant *seeing the baskets* without granting the books (ADR-0071, ADR-0009).
+  Nothing became unreachable: a Merchant opens the Cart, and a placed one is behind `order:read`.
+  **Which fields a response carries is promised** (ADR-0060), so this narrowing was free only
+  before the first publish (ADR-0058, where it is in the register) and putting it back on the
+  summary means reopening the argument rather than widening a shape. The assertion in
+  `cart/admin-carts.test.ts` sweeps the **bytes** of the page for what a Shopper wrote rather than
+  naming a key, because a field taken off one shape comes back under another name, and
+  `packages/client/src/client.test.ts` pins the removal at the client's own build. **`Order.address`
+  had already taken this call** on a different premise — a destination is prose and a list of
+  Orders is numbers, money and days — so this is the shape both have rather than a second one.
 - **Structural, and the whole of what "structural" means here is four fields.** A two-letter
   country code, at least one line, an optional postal code, and an optional `regionId`. There is
   no `city`, no `state`, no recipient and no telephone number, because named parts would be kobai

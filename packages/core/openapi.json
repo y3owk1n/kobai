@@ -2679,17 +2679,6 @@
             ],
             "description": "Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region."
           },
-          "address": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Address"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going."
-          },
           "shippingMethod": {
             "anyOf": [
               {
@@ -2733,7 +2722,6 @@
           "shopper",
           "currency",
           "region",
-          "address",
           "shippingMethod",
           "metadata",
           "expiresAt",
@@ -2741,6 +2729,74 @@
           "placed",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "CartState": {
+        "type": "string",
+        "enum": [
+          "live",
+          "expired",
+          "spent"
+        ],
+        "description": "Narrow to Carts in one state. `live` is holding stock and can still be placed, `expired` ran out of time, and `spent` has already become an Order. The three partition the list, so omitting this answers all of them."
+      },
+      "Cart": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CartSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "lineItems": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CartLineItem"
+                }
+              },
+              "address": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Address"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going. It is answered by the Cart a Merchant opens and not by `GET /admin/carts`, which is a page of them."
+              }
+            },
+            "required": [
+              "lineItems",
+              "address"
+            ]
+          }
+        ]
+      },
+      "CartLineItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/VariantIdentity"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
+          }
+        },
+        "required": [
+          "id",
+          "variant",
+          "quantity",
+          "metadata"
         ]
       },
       "Address": {
@@ -2781,62 +2837,6 @@
           "lines",
           "postalCode",
           "region"
-        ]
-      },
-      "CartState": {
-        "type": "string",
-        "enum": [
-          "live",
-          "expired",
-          "spent"
-        ],
-        "description": "Narrow to Carts in one state. `live` is holding stock and can still be placed, `expired` ran out of time, and `spent` has already become an Order. The three partition the list, so omitting this answers all of them."
-      },
-      "Cart": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/CartSummary"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "lineItems": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/CartLineItem"
-                }
-              }
-            },
-            "required": [
-              "lineItems"
-            ]
-          }
-        ]
-      },
-      "CartLineItem": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "variant": {
-            "$ref": "#/components/schemas/VariantIdentity"
-          },
-          "quantity": {
-            "type": "integer"
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": {},
-            "description": "Unindexed, untyped JSON owned by the Merchant and the Project."
-          }
-        },
-        "required": [
-          "id",
-          "variant",
-          "quantity",
-          "metadata"
         ]
       },
       "CartRefusal": {
