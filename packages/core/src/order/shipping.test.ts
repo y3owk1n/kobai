@@ -16,7 +16,15 @@ import {
   type TestSession,
 } from "../testing/index.ts";
 import { defineStep, type Step } from "../workflow/step.ts";
-import type { AdjustedLines, PricedLines, TaxedLines } from "./place-order.ts";
+import {
+  type AdjustedLines,
+  oneCurrency,
+  orderTotalOf,
+  type PaidOrder,
+  type PricedLines,
+  type ReservedLines,
+  type TaxedLines,
+} from "./place-order.ts";
 import { SHIPPING_ADJUSTMENT_CODE, type ShippedLines } from "./select-shipping.ts";
 
 /**
@@ -951,6 +959,164 @@ describe("a Project that replaced calculate-tax", () => {
     ]);
     // 1250 of goods and 125 of tax on them; 500 of carriage and 50 of tax on that.
     expect(order.total).toBe(1925);
+  });
+});
+
+/**
+ * **The two slots that *act* carry the guard too, and there the quote cannot help** (#339).
+ *
+ * `hold-reservations` and `take-payment` are handed the Order's Adjustments — already taxed by
+ * now — and each returns a value of its own: `ReservedLines` and `PaidOrder` are both
+ * `TaxedLines &` extensions, so `adjustments: []` satisfies either and a replacement that
+ * rebuilds the value rather than spreading it drops the carriage exactly as the two slots in
+ * front of it could. Nothing about these types says otherwise, and neither does the compiler.
+ *
+ * **What is different here is the notice, not the loss.** ADR-0077 slices the declaration before
+ * `hold-reservations`, so a quote never reaches either slot: a storefront is told the right
+ * figure and the placement then fails. That is asserted below rather than glossed, because it is
+ * the honest limit of a postcondition at a position the quote does not run.
+ *
+ * **And `take-payment` is the sharpest of the four.** Its own input is what the total is computed
+ * from, so a Step there charges the Shopper for the carriage and hands back a value without it —
+ * money taken for a figure `capture-order` would then not record. The guard stops the run before
+ * the Order exists; giving the money back is the replacement Step\'s own compensation, because a
+ * replacement brings its own (ADR-0036).
+ */
+describe("a Project that replaced a slot after the quote", () => {
+  /** What a Step at either position needs to say about money, for the cases that get that far. */
+  const anInvoice = (input: ReservedLines, reference: string) => ({
+    provider: "on-account",
+    reference,
+    amount: orderTotalOf(input),
+    currency: oneCurrency(input.lines),
+    // Arranged rather than taken, which is what an invoice is — and the flag `TakenPayment`
+    // grew for exactly this kind of provider.
+    received: false,
+  });
+
+  /**
+   * The bug at `hold-reservations`: a deployment whose stock lives elsewhere, so the Step claims
+   * nothing — and builds its answer from the fields it knew about rather than from what it was
+   * handed.
+   */
+  const holdsNothingAndRebuildsTheValue = defineStep(
+    "holds-nothing-and-rebuilds-the-value",
+    (input: TaxedLines): ReservedLines => ({
+      cart: input.cart,
+      lines: input.lines,
+      adjustments: [],
+      reservations: [],
+    }),
+  );
+
+  /** The honest one at the same slot: claims nothing, and hands on everything it was given. */
+  const holdsNothingAndHandsItOn = defineStep(
+    "holds-nothing-and-hands-it-on",
+    (input: TaxedLines): ReservedLines => ({ ...input, reservations: [] }),
+  );
+
+  /** The bug at `take-payment`: bills the full total, then answers without what it billed for. */
+  const chargesAndRebuildsTheValue = defineStep(
+    "charges-and-rebuilds-the-value",
+    (input: ReservedLines): PaidOrder => ({
+      cart: input.cart,
+      lines: input.lines,
+      adjustments: [],
+      reservations: input.reservations,
+      payment: anInvoice(input, "invoice-that-billed-for-carriage"),
+    }),
+  );
+
+  /** The honest one at the same slot: a Store that invoices rather than charging a card. */
+  const takesItOnAccount = defineStep(
+    "takes-it-on-account",
+    (input: ReservedLines): PaidOrder => ({
+      ...input,
+      payment: anInvoice(input, "invoice-0001"),
+    }),
+  );
+
+  it("is stopped at hold-reservations, after a quote that could not have caught it", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai({
+      logger: collectingReasons(logged),
+      workflows: {
+        "place-order": {
+          steps: { "hold-reservations": holdsNothingAndRebuildsTheValue },
+        },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    // **The quote is fine**, and that is the limit rather than an oversight: ADR-0077 stops the
+    // slice at the first slot that acts, so nothing before the placement runs this Step at all.
+    const quoted = await quote(kobai, cart);
+    expect(quoted.status).toBe(200);
+    expect(((await quoted.json()) as Quoted).total).toBe(THE_PRICE + STANDARD);
+
+    expect((await place(kobai, cart)).status).toBe(500);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+    expect(logged[0]).toContain(String(STANDARD));
+    expect(logged[0]).toContain("hold-reservations");
+    expect(logged[0]).toContain("did not come back at all");
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+  });
+
+  it("is stopped at take-payment, which had already billed for what it dropped", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai({
+      logger: collectingReasons(logged),
+      workflows: {
+        "place-order": { steps: { "take-payment": chargesAndRebuildsTheValue } },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    expect((await place(kobai, cart)).status).toBe(500);
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+    expect(logged[0]).toContain("take-payment");
+    expect(logged[0]).toContain("did not come back at all");
+    // No Order and no payment row — the write is one transaction, so the money this Step says it
+    // took is recorded nowhere, which is the state its own compensation exists to repair.
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+    await expect(kobai.database.query("select id from core_payment")).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("leaves an honest replacement of either slot placing an Order, carriage and all", async () => {
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": {
+          steps: {
+            "hold-reservations": holdsNothingAndHandsItOn,
+            "take-payment": takesItOnAccount,
+          },
+        },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    const placed = await place(kobai, cart);
+
+    expect(placed.status).toBe(201);
+    const order = (await placed.json()) as Placed;
+    // Both replaced at once, on purpose: the guard is at each position, so a Project that owns
+    // the whole back half of the Workflow is the case that would notice a guard that only
+    // tolerated one honest Step at a time.
+    expect(order.adjustments.map((one) => [one.code, one.amount])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD],
+    ]);
+    expect(order.total).toBe(THE_PRICE + STANDARD);
   });
 });
 

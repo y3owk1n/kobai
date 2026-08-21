@@ -106,10 +106,11 @@ export type SelectShippingRefusal =
  * `tests/a-storefront-buys-something.test.ts` would have caught it for kobai's own Project and
  * for nobody else's.
  *
- * **`calculate-tax` carries the same guard one slot further on**, because this list travels
- * through that position too and a Step there returns a list of its own. Its return type asks
- * every Adjustment it gets back for a tax and cannot ask it for any Adjustments at all, so it
- * refuses the untaxed pass-through and never the drop.
+ * **Every slot after it carries the same guard**, because this list travels through all of them
+ * and each returns a value of its own — `calculate-tax`, `hold-reservations` and `take-payment`
+ * alike. `calculate-tax`'s return type asks every Adjustment it gets back for a tax and cannot
+ * ask it for any Adjustments at all, so it refuses the untaxed pass-through and never the drop;
+ * the last two are past the quote, so the placement is where a deployment finds out.
  */
 export type ShippedLines = {
   readonly cart: CartToPlace;
