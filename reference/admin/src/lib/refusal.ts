@@ -274,6 +274,7 @@ const CART_REASONS: Record<CartRefusal["reason"], true> = {
   "region-not-found": true,
   "cart-is-denominated": true,
   "variant-not-priced-in-region": true,
+  "shipping-method-not-found": true,
 };
 
 /** Which Cart refusal this was, for a screen with something better to say than the prose. */
@@ -366,6 +367,7 @@ const REGION_REASONS: Record<RegionRefusal["reason"], true> = {
   "region-not-found": true,
   "currency-not-enabled": true,
   "region-in-use": true,
+  "shipping-method-not-found": true,
 };
 
 /** Which Region refusal this was, for a screen with something better to say than the prose. */

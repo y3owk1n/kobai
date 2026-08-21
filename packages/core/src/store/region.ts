@@ -22,6 +22,15 @@ import {
   text,
 } from "../patch.ts";
 import { currencyIsEnabled } from "./currency.ts";
+import {
+  parseShippingMethods,
+  readShippingMethods,
+  readShippingMethodsOf,
+  type SHIPPING_METHOD_NOT_FOUND,
+  type ShippingMethod,
+  setShippingMethods,
+  shippingMethodsThisRegionHasNot,
+} from "./shipping-method.ts";
 
 /**
  * Regions: making one, reading them, renaming one, moving one onto another currency, removing
@@ -68,6 +77,16 @@ export type Region = {
   readonly id: string;
   readonly name: string;
   readonly currency: string;
+  /**
+   * The named, flat-rated ways this Store delivers into this Region, in the Merchant's own
+   * order (#321).
+   *
+   * Nested rather than a list route of its own, which is `store/shipping-method.ts`'s decision
+   * and where the argument lives. Empty for a Region this Store prices no delivery into, which
+   * is every Region until somebody says otherwise — and a Cart there is then offered nothing and
+   * charged nothing.
+   */
+  readonly shippingMethods: readonly ShippingMethod[];
   readonly metadata: Record<string, unknown>;
 };
 
@@ -90,7 +109,10 @@ export type RegionCreation =
   | { readonly ok: true; readonly region: Region }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | typeof CURRENCY_NOT_ENABLED;
+      readonly reason:
+        | "invalid"
+        | typeof CURRENCY_NOT_ENABLED
+        | typeof SHIPPING_METHOD_NOT_FOUND;
       readonly detail: string;
     };
 
@@ -98,7 +120,11 @@ export type RegionUpdate =
   | { readonly ok: true; readonly region: Region }
   | {
       readonly ok: false;
-      readonly reason: "invalid" | typeof REGION_NOT_FOUND | typeof CURRENCY_NOT_ENABLED;
+      readonly reason:
+        | "invalid"
+        | typeof REGION_NOT_FOUND
+        | typeof CURRENCY_NOT_ENABLED
+        | typeof SHIPPING_METHOD_NOT_FOUND;
       readonly detail: string;
     };
 
@@ -123,6 +149,17 @@ export type RegionDeletion =
 export type CreateRegionInput = {
   readonly name?: unknown;
   readonly currency?: unknown;
+  /**
+   * The whole list of the ways this Store delivers into this Region, or absent for none
+   * (#321).
+   *
+   * On the create as well as on the correction, on `collections`' argument rather than
+   * `media`'s: nothing has to be uploaded first and nothing else can make one, so a Region and
+   * what it costs to deliver there is one request. Absent and empty are the same fact at a
+   * create — a Region prices no delivery until somebody says so — and two facts at a correction,
+   * where absent means *leave it* (ADR-0062).
+   */
+  readonly shippingMethods?: unknown;
   readonly metadata?: unknown;
 };
 
@@ -161,16 +198,49 @@ export async function createRegion(
     );
   }
 
+  // Structural, and before anything is written: a `shippingMethods` that will not parse is a
+  // request about a Region that must not half-create one.
+  const methods =
+    input.shippingMethods === undefined
+      ? undefined
+      : parseShippingMethods(input.shippingMethods);
+  if (methods !== undefined && !methods.ok) return methods;
+
   if (!(await currencyIsEnabled(db, currency))) return currencyNotEnabled(currency);
 
-  const [created] = await db
-    .insert(region)
-    .values({ name, currency, metadata })
-    .returning(REPORTED);
-  // Unreachable — an `insert … returning` of one row answers with one row — and typed rather
-  // than asserted away.
-  if (!created) throw new Error("unreachable: creating a Region answered no row");
-  return { ok: true, region: created };
+  // **Every refusal before the first write, and this one is asked outside the transaction
+  // entirely.** A refusal handed back out of one *commits* it, so a `shippingMethods` judged
+  // after the Region had been inserted would answer 422 over a Region it had just made — which
+  // is `collection-not-found`'s rule at a second table. It is asked against `null`, because the
+  // Region does not exist yet: a create carries no method, so every `id` is a stranger, and that
+  // is the honest answer rather than a shortcut.
+  if (methods !== undefined) {
+    const refused = await shippingMethodsThisRegionHasNot(db, null, methods.value);
+    if (refused) return refused;
+  }
+
+  // **In a transaction, because the rates are more rows.** A Region written without the methods
+  // the same request asked for, or methods written against a Region that was never created, are
+  // both states nothing in kobai can repair — the same reason `createCart` writes its Address
+  // inside one.
+  return db.transaction(async (tx): Promise<RegionCreation> => {
+    const [created] = await tx
+      .insert(region)
+      .values({ name, currency, metadata })
+      .returning(REPORTED);
+    // Unreachable — an `insert … returning` of one row answers with one row — and typed rather
+    // than asserted away.
+    if (!created) throw new Error("unreachable: creating a Region answered no row");
+
+    // It refuses nothing: the one thing it could have said was asked above, and nothing else can
+    // reach this Region's rates until this transaction commits.
+    if (methods !== undefined) await setShippingMethods(tx, created.id, methods.value);
+
+    return {
+      ok: true,
+      region: { ...created, shippingMethods: await readShippingMethods(tx, created.id) },
+    };
+  });
 }
 
 /**
@@ -190,6 +260,14 @@ export async function listRegions(
 
   const { rows: found, nextCursor } = takePage(rows, page);
 
+  // One query for the whole page rather than one per Region, which is the only thing nesting a
+  // list inside a paged list costs: `readShippingMethodsOf` reads them all by `region_id` and
+  // hands back what each one carries.
+  const methods = await readShippingMethodsOf(
+    db,
+    found.map((row) => row.id),
+  );
+
   // Field by field rather than by spread, so the column the cursor is cut from cannot reach a
   // response by being forgotten about.
   return {
@@ -197,6 +275,7 @@ export async function listRegions(
       id: row.id,
       name: row.name,
       currency: row.currency,
+      shippingMethods: methods.get(row.id) ?? [],
       metadata: row.metadata,
     })),
     nextCursor,
@@ -211,6 +290,32 @@ export async function readRegion(db: Queryable, id: string): Promise<Region | un
   if (!isUuid(id)) return undefined;
 
   const [row] = await db.select(REPORTED).from(region).where(eq(region.id, id)).limit(1);
+  if (!row) return undefined;
+
+  return { ...row, shippingMethods: await readShippingMethods(db, row.id) };
+}
+
+/**
+ * One Region as **three columns**, or `undefined` where there is no such Region.
+ *
+ * {@link readRegion}'s answer costs a second statement since #321, because a Region carries its
+ * shipping methods — and the callers that resolve a *market* want none of them: pricing a
+ * Variant, denominating a Cart and judging a `?region=` each need what a Region is called and
+ * what it prices in, and that is one query on paths a storefront hits on every product page.
+ * Nothing is duplicated by having two readers, because {@link RegionIdentity} is already the
+ * shape those callers hand to `resolve-price`.
+ */
+export async function readRegionIdentity(
+  db: Queryable,
+  id: string,
+): Promise<RegionIdentity | undefined> {
+  if (!isUuid(id)) return undefined;
+
+  const [row] = await db
+    .select({ id: region.id, name: region.name, currency: region.currency })
+    .from(region)
+    .where(eq(region.id, id))
+    .limit(1);
   return row;
 }
 
@@ -228,6 +333,12 @@ export async function readRegion(db: Queryable, id: string): Promise<Region | un
  * Region used to select simply stops applying here (#292). ADR-0074 says as much: a Region's
  * currency changing must not reprice a live Cart, which is why a Cart will carry its currency as
  * well as its Region.
+ *
+ * **And rewrites the ways this Store delivers into it** (#321). `shippingMethods` is the whole
+ * list, so adding, renaming, repricing, reordering and removing a rate are one request — the
+ * bargain a Product's `options` take, and `store/shipping-method.ts` is where it is argued. A
+ * rate moved is a rate whose `id` stayed the same, which is what keeps a Shopper mid-checkout on
+ * the method they chose.
  */
 export async function updateRegion(
   db: Database,
@@ -238,10 +349,18 @@ export async function updateRegion(
   if (!usable.ok) return usable;
 
   const changes = usable.changes;
+  const methods =
+    input.shippingMethods === undefined
+      ? undefined
+      : parseShippingMethods(input.shippingMethods);
+  if (methods !== undefined && !methods.ok) return methods;
+
   // Asked here rather than inside `readRegionInput`, which `createRegion` shares: there an
   // empty result is a missing `name` rather than a no-op, and it is answered as one.
-  if (Object.keys(changes).length === 0) {
-    return changesNothing("a `name`, a `currency`, a `metadata`, or any of them");
+  if (Object.keys(changes).length === 0 && methods === undefined) {
+    return changesNothing(
+      "a `name`, a `currency`, a `shippingMethods`, a `metadata`, or any of them",
+    );
   }
 
   if (!isUuid(id)) return noSuchRegion(id);
@@ -253,13 +372,52 @@ export async function updateRegion(
     return currencyNotEnabled(changes.currency);
   }
 
-  const [updated] = await db
-    .update(region)
-    .set(changes)
-    .where(eq(region.id, id))
-    .returning(REPORTED);
-  if (!updated) return noSuchRegion(id);
-  return { ok: true, region: updated };
+  // **In a transaction, because the rates are more rows** — `createRegion`'s reason, and the
+  // sharper half of it here: a `shippingMethods` refused after the Region's own columns had been
+  // written would answer 422 over a Region that really had been renamed.
+  return db.transaction(async (tx): Promise<RegionUpdate> => {
+    // **Read first and `for update`**, which does two things. It answers *is there such a
+    // Region* before anything is written; and it serialises two corrections of one Region, which
+    // the rates below need and the columns do not — `setShippingMethods` reconciles against what
+    // this Region already carries, and a `select` over *other rows* locks none of them, so two
+    // Merchants editing one Region's list at the same instant would each write against a list
+    // the other had already changed and one rate would go missing with nothing saying so. It is
+    // `cart/write.ts`'s `mutate` at a second table.
+    const [found] = await tx
+      .select({ id: region.id })
+      .from(region)
+      .where(eq(region.id, id))
+      .limit(1)
+      .for("update");
+    if (!found) return noSuchRegion(id);
+
+    // Every refusal before the first write, which is why this is asked here rather than left to
+    // the write: a refusal handed back out of a transaction **commits** it, so a
+    // `shippingMethods` judged after a rename had been written would answer 422 over a Region
+    // that really was renamed.
+    if (methods !== undefined) {
+      const refused = await shippingMethodsThisRegionHasNot(tx, id, methods.value);
+      if (refused) return refused;
+      await setShippingMethods(tx, id, methods.value);
+    }
+
+    // `set({})` is not a statement Drizzle will write, so a body naming only `shippingMethods`
+    // reads the row it has already found rather than updating it.
+    const [updated] =
+      Object.keys(changes).length === 0
+        ? await tx.select(REPORTED).from(region).where(eq(region.id, id)).limit(1)
+        : await tx
+            .update(region)
+            .set(changes)
+            .where(eq(region.id, id))
+            .returning(REPORTED);
+    if (!updated) return noSuchRegion(id);
+
+    return {
+      ok: true,
+      region: { ...updated, shippingMethods: await readShippingMethods(tx, id) },
+    };
+  });
 }
 
 /**

@@ -146,6 +146,9 @@ describe("the reference Project's configuration", () => {
         id: expect.any(String),
         name: "MYR",
         currency: "MYR",
+        // This Project prices no delivery, and that is a Merchant's decision rather than a
+        // Project's: a boot has nothing to say what carriage costs from (#321).
+        shippingMethods: [],
         metadata: {},
       },
       metadata: {},

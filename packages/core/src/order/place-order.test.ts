@@ -55,6 +55,7 @@ describe("the declaration", () => {
       steps: [
         { slot: "load-cart" },
         { slot: "price-lines" },
+        { slot: "select-shipping" },
         { slot: "apply-adjustments" },
         { slot: "calculate-tax" },
         { slot: "hold-reservations" },
@@ -111,6 +112,30 @@ describe("the declaration", () => {
     expect(slots.indexOf("apply-adjustments")).toBeLessThan(
       slots.indexOf("calculate-tax"),
     );
+  });
+
+  /**
+   * Carriage is decided before anything adjusts or taxes it, which is the same argument one
+   * slot earlier (#321).
+   *
+   * **It is arithmetic rather than ordering taste, twice over.** Carriage is taxed in most
+   * jurisdictions and the charge is an Order-level Adjustment (ADR-0022) — the only kind that
+   * carries its own tax, because it belongs to no line — so it has to exist before
+   * `calculate-tax` runs or a replaced tax Step would be handed nothing to tax. And putting it
+   * in front of `apply-adjustments` rather than between that Step and the tax is what lets a
+   * deployment's own Adjustment rule *see* the delivery charge: *free delivery over fifty* is
+   * then an ordinary discount rather than a special case kobai would have had to model.
+   *
+   * The two `toBeLessThan`s are the assertion, in the shape the two above it already use: the
+   * slot order is the only place the runner obeys either fact.
+   */
+  it("decides what delivery costs before it adjusts or taxes it, because carriage is taxed", () => {
+    const slots = placeOrderWorkflow.steps.map((step) => step.slot);
+
+    expect(slots.indexOf("select-shipping")).toBeLessThan(
+      slots.indexOf("apply-adjustments"),
+    );
+    expect(slots.indexOf("select-shipping")).toBeLessThan(slots.indexOf("calculate-tax"));
   });
 
   /**
@@ -246,6 +271,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
         steps: [
           { step: "load-cart", implementation: "load-cart" },
           { step: "price-lines", implementation: "everything-is-a-penny" },
+          { step: "select-shipping", implementation: "select-shipping" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "calculate-tax" },
           { step: "hold-reservations", implementation: "hold-reservations" },
@@ -288,6 +314,7 @@ describe("a Project that replaced a Step of place-order itself", () => {
         steps: [
           { step: "load-cart" },
           { step: "price-lines" },
+          { step: "select-shipping" },
           { step: "apply-adjustments" },
           { step: "calculate-tax" },
           { step: "hold-reservations" },
@@ -439,6 +466,34 @@ describe("Adjustments on an Order", () => {
  * none, and that a Project replacing the slot is what charges some.
  */
 describe("the tax Step", () => {
+  /**
+   * **A replacement that leaves the carriage untaxed does not compile** (#321, #117).
+   *
+   * `calculate-tax` still returns zero — making it non-zero is spec 7 — but the shipping
+   * Adjustment carries its own tax figure from the day it ships, and this is what makes that a
+   * guarantee rather than a hope: an Order-level Adjustment is the only kind with a tax of its
+   * own, because it belongs to no line, so a tax Step that passed `apply-adjustments`' list
+   * straight through would be silently declining to tax the one thing that needs it.
+   *
+   * A type-level assertion, and the `typecheck` step of the gate is what runs it: what fails
+   * here is the *build*, not this case, so the `@ts-expect-error` is the assertion and the
+   * `expect` below it is only there to spend the value.
+   */
+  it("refuses a replacement that hands the Order's Adjustments on without taxing them", () => {
+    const untaxed = defineStep(
+      "leaves-the-carriage-untaxed",
+      (input: AdjustedLines): TaxedLines => ({
+        cart: input.cart,
+        lines: input.lines.map((line) => ({ ...line, tax: 0 })),
+        // @ts-expect-error every Adjustment on a `TaxedLines` states its own tax, and these
+        // are the ones `apply-adjustments` produced, which do not.
+        adjustments: input.adjustments,
+      }),
+    );
+
+    expect(untaxed).toBeDefined();
+  });
+
   it("charges none, and says so on the snapshot", async () => {
     await using kobai = await createTestKobai();
 
@@ -481,6 +536,7 @@ describe("the tax Step", () => {
         steps: [
           { step: "load-cart", implementation: "load-cart" },
           { step: "price-lines", implementation: "price-lines" },
+          { step: "select-shipping", implementation: "select-shipping" },
           { step: "apply-adjustments", implementation: "apply-adjustments" },
           { step: "calculate-tax", implementation: "ten-per-cent" },
           { step: "hold-reservations", implementation: "hold-reservations" },

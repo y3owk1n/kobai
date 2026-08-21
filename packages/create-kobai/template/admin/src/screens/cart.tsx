@@ -277,6 +277,7 @@ function isNoSuchCart(thrown: unknown): boolean {
     case "region-not-found":
     case "cart-is-denominated":
     case "variant-not-priced-in-region":
+    case "shipping-method-not-found":
       // Every one of these is a refusal a **write** meets, and this Admin makes none: the Cart
       // surface it can reach is read-only (ADR-0071). If one ever arrives here it is a fact
       // about kobai rather than about the address, so it is reported as itself.

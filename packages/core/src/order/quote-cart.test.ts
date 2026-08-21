@@ -9,7 +9,12 @@ import {
   type TestKobai,
 } from "../testing/index.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
-import type { AdjustedLines, PricedLines, TaxedLines } from "./place-order.ts";
+import type {
+  AdjustedLines,
+  PricedLines,
+  ShippedLines,
+  TaxedLines,
+} from "./place-order.ts";
 
 /**
  * **What a Cart comes to, asked before anything is bought** — `POST /store/carts/{id}/quote`
@@ -135,6 +140,7 @@ describe("quoting a Cart", () => {
     expect(answered.workflow.steps.map((step) => step.step)).toEqual([
       "load-cart",
       "price-lines",
+      "select-shipping",
       "apply-adjustments",
       "calculate-tax",
     ]);
@@ -301,6 +307,7 @@ describe("a Project that replaced the pricing Steps", () => {
     expect(answered.workflow.steps).toEqual([
       { step: "load-cart", implementation: "load-cart" },
       { step: "price-lines", implementation: "price-lines" },
+      { step: "select-shipping", implementation: "select-shipping" },
       { step: "apply-adjustments", implementation: "handling-and-a-voucher" },
       { step: "calculate-tax", implementation: "ten-percent" },
     ]);
@@ -345,6 +352,7 @@ describe("a Project that replaced the pricing Steps", () => {
       "load-cart",
       "price-lines",
       "round-up-to-the-nearest-pound",
+      "select-shipping",
       "apply-adjustments",
       "calculate-tax",
     ]);
@@ -484,7 +492,7 @@ describe("a quote refused", () => {
         "place-order": {
           before: {
             "apply-adjustments": [
-              defineStep("no-quotes-today", (_priced: PricedLines): PricedLines => {
+              defineStep("no-quotes-today", (_shipped: ShippedLines): ShippedLines => {
                 throw new StepFailure("closed-for-stocktake", "Ask again tomorrow.");
               }),
             ],

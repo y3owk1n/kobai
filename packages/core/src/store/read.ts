@@ -4,6 +4,7 @@ import { joined } from "../db/join.ts";
 import { region, store } from "../db/schema.ts";
 import { type EnabledCurrency, readEnabledCurrencies } from "./currency.ts";
 import type { Region, RegionIdentity } from "./region.ts";
+import { readShippingMethods } from "./shipping-method.ts";
 
 /** The Store as the API reports it. There is no identifier, because there is only one. */
 export type Store = {
@@ -68,13 +69,24 @@ export async function readStore(db: Queryable): Promise<Store | undefined> {
     .limit(1);
   if (!row) return undefined;
 
+  // `joined` is the reading of a left join, and `db/join.ts` is where the trap it avoids is
+  // written down: an unjoined row arrives as an object of nulls rather than as `null`.
+  const defaultRegion = joined<Omit<Region, "shippingMethods">>(row.region);
+
   return {
     name: row.name,
     defaultCurrency: row.defaultCurrency,
     currencies: await readEnabledCurrencies(db),
-    // `joined` is the reading of a left join, and `db/join.ts` is where the trap it avoids is
-    // written down: an unjoined row arrives as an object of nulls rather than as `null`.
-    defaultRegion: joined<Region>(row.region),
+    // A third statement, and for `currencies`' reason: a Region carries its shipping methods
+    // (#321), which are rows, so a join here would repeat the Store per rate. Skipped entirely
+    // for a Store with no default Region, which is a deployment no boot has seeded.
+    defaultRegion:
+      defaultRegion === null
+        ? null
+        : {
+            ...defaultRegion,
+            shippingMethods: await readShippingMethods(db, defaultRegion.id),
+          },
     metadata: row.metadata,
   };
 }

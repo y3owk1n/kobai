@@ -149,6 +149,17 @@ list of payment methods: which methods a Shopper is offered follows from the cur
 provider, and kobai models no payment methods at all (ADR-0074).
 _Avoid_: market, locale, country, zone
 
+**Shipping method**:
+A named, flat-rated way this Store delivers into one **Region** — `Standard`, `Next day`. The
+rate is denominated in the currency that Region selects and carries no code of its own, because
+kobai converts nothing. A Shopper chooses one for their Cart out of what
+`GET /store/carts/{id}/shipping-options` offers, and what it costs becomes an **Adjustment on
+the Order** at Capture rather than a total of its own (ADR-0022): the books then show what was
+carriage and what was goods, the charge is taxed like anything else, and a refund needs no case
+for it. A Region with none prices no delivery, and a Cart bought there is charged nothing to
+deliver.
+_Avoid_: shipping rate as a synonym for the method, carrier, service level, delivery option
+
 ## Catalog
 
 **Product**:

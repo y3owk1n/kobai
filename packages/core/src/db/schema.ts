@@ -159,16 +159,16 @@ export type StoreCurrencyRow = typeof storeCurrency.$inferSelect;
  * somebody defines a geography, which is wrong for a single-country Store that wants two
  * currencies.
  *
- * **A name, a currency, and nothing else yet.** Tax treatment is spec 7 and shipping methods
- * are spec 5, and both hang off this row when they arrive; `metadata` is ADR-0004's escape
- * hatch, here for the reason every principal entity carries one. What it is emphatically
- * **not** is a tenant: ADR-0005 says a Region is variation *within* one Store, so nothing
- * scopes by one and `store.test.ts`'s question is asked of this table too — `region.test.ts`
- * names what references it, so the day one becomes a scoping key the build goes red rather
- * than the retrofit going unnoticed. Two columns point here since #292 — the Store's
- * `default_region_id` and `core_price.region_id` — and a Price naming a Region is a
- * *constraint on a row*, which is the opposite of a row being scoped to a Region: every Price
- * that names none still applies everywhere.
+ * **A name, a currency, and the shipping methods that deliver into it.** {@link shippingMethod}
+ * is the half spec 5 owed and #321 built; tax treatment is spec 7 and hangs off this row when it
+ * arrives. `metadata` is ADR-0004's escape hatch, here for the reason every principal entity
+ * carries one. What it is emphatically **not** is a tenant: ADR-0005 says a Region is variation
+ * *within* one Store, so nothing scopes by one and `store.test.ts`'s question is asked of this
+ * table too — `region.test.ts` names what references it, so the day one becomes a scoping key
+ * the build goes red rather than the retrofit going unnoticed. Every column pointing here is a
+ * *constraint on a row* rather than a scope: a Price naming a Region still applies everywhere
+ * when it names none, and a shipping method naming one **is** the fact that this is what
+ * delivery costs there.
  */
 export const region = pgTable(
   "core_region",
@@ -197,6 +197,73 @@ export const region = pgTable(
 );
 
 export type RegionRow = typeof region.$inferSelect;
+
+/**
+ * A **shipping method** — a named way of delivering into one Region, at a flat rate (#321,
+ * ADR-0005, ADR-0074).
+ *
+ * The smallest honest implementation of shipping, and the place ADR-0005 already puts it: a
+ * Region is where geography is modelled, so what it costs to deliver there hangs off the Region
+ * rather than off the Store or off a Variant. `core_region`'s own comment has said so since
+ * #291 — *"shipping methods are spec 5, and both hang off this row when they arrive"*.
+ *
+ * **The rate is denominated in the Region's currency and carries no currency column**, which is
+ * the one thing to hold when this table grows. A Region selects exactly one currency
+ * (ADR-0074), a Cart in that Region is stamped in it, and kobai converts nothing — so a code
+ * here would be a second answer to what this method costs in, able to disagree with the Region
+ * it belongs to. Moving a Region onto another currency therefore reinterprets its rates rather
+ * than converting them, which is the same trade `core_price` makes from the other side and is
+ * why the Admin says so at the currency picker.
+ *
+ * **`region_id` is not a scoping key**, and this is the third row-level constraint on this
+ * schema that has to say so out loud — `core_price.region_id` and `core_cart.region_id` are the
+ * others. Nothing is *narrowed* by a Region: this row **is** a fact about one geography, the way
+ * a Price constrained to a Region is a fact about one Price, and `region.test.ts` names the key
+ * so the day a `region_id` appears somewhere it would be a scope the build goes red.
+ *
+ * `cascade`, unlike everything else pointing at a Region: a delivery rate for a geography this
+ * Store no longer sells into is a row with no remaining meaning, which is exactly
+ * `core_price.region_id`'s judgement and not `core_address.region_id`'s — deleting a Region does
+ * not move a street, but it does retire the price of getting there.
+ */
+export const shippingMethod = pgTable(
+  "core_shipping_method",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    regionId: uuid("region_id")
+      .notNull()
+      .references(() => region.id, { onDelete: "cascade" }),
+    /** What the Merchant calls it — `Standard`, `Next day`. Not unique; two are two methods. */
+    name: text("name").notNull(),
+    /**
+     * The flat rate, in minor units of the Region's currency — 500 is MYR 5.00.
+     *
+     * **Never negative**, unlike an Adjustment's signed amount: a delivery that paid the Shopper
+     * is not a shipping method, it is a discount, and ADR-0022 already has a shape for one. Zero
+     * is free delivery and is the point of allowing it.
+     */
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    /**
+     * Where this one sits in the list the Merchant declared, within its Region.
+     *
+     * Stored for `core_order_adjustment.position`'s reason one noun along: the whole list is
+     * written in one request, so `created_at` cannot tell one from another after a reorder, and
+     * a storefront offering a Shopper a choice renders them in the order a Merchant put them in.
+     */
+    position: bigint("position", { mode: "number" }).notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Every read of these is by Region — the Region's own payload, the options a Cart is
+    // offered, and the rate `select-shipping` charges.
+    index("core_shipping_method_region_idx").on(table.regionId),
+    check("core_shipping_method_amount_is_not_negative", sql`${table.amount} >= 0`),
+  ],
+);
+
+export type ShippingMethodRow = typeof shippingMethod.$inferSelect;
 
 /**
  * A **Channel** — a route to market this Store sells through (ADR-0005).
@@ -1280,6 +1347,35 @@ export const cart = pgTable(
      * the Address from the Cart entirely — cannot rewrite where a past parcel went.
      */
     addressId: uuid("address_id").references(() => address.id, { onDelete: "set null" }),
+    /**
+     * The shipping method the Shopper chose, or `null` for a Cart nobody has chosen one for
+     * (#321).
+     *
+     * **Nullable, and it is the honest value in three different situations rather than one.** A
+     * Cart of downloads has nothing to ship; a Cart in a Region this Store has defined no rates
+     * for has nothing to choose from; and a Cart whose Shopper has not reached the delivery step
+     * has not chosen yet. Requiring one would make every Store that does not price delivery
+     * unable to sell a physical thing at all, which is the state kobai has been in until now —
+     * so `select-shipping` charges what was chosen and charges nothing where nothing was.
+     *
+     * It also needs none of ADR-0038's three steps for the ordinary reason: a nullable column is
+     * safe to add at any size, and a foreign key on one can refuse no row already there, since
+     * every one of them holds `null` (`core_reservation.cart_id` is the precedent).
+     *
+     * **`set null`, and the two ways it fires are both right.** Deleting a shipping method — or
+     * the Region that carries it, which cascades — leaves the Cart whole and the Shopper choosing
+     * again, where `restrict` would make a Merchant's rate undeletable while a stranger held a
+     * basket and `cascade` would delete somebody's basket to tidy up a rate. **Moving a Cart to
+     * another Region clears it too**, in `cart/write.ts` rather than here: a method belongs to
+     * one Region, so the one chosen in the old market is not on offer in the new one.
+     *
+     * **An Order does not read through this.** What was charged is an Order-level Adjustment
+     * written at Capture (ADR-0022), so deleting the method afterwards cannot rewrite what a
+     * Shopper paid — ADR-0009's argument, in the shape the Address already has one door along.
+     */
+    shippingMethodId: uuid("shipping_method_id").references(() => shippingMethod.id, {
+      onDelete: "set null",
+    }),
     /** The Shopper reference's key. Null for a guest, which is the ordinary case (ADR-0020). */
     shopperEmail: text("shopper_email"),
     /** The Shopper's identity in whatever system the storefront actually authenticates against. */

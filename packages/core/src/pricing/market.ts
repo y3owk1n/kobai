@@ -1,7 +1,7 @@
 import type { Queryable } from "../db/client.ts";
 import type { ChannelIdentity } from "../store/channel.ts";
 import { readDefaultRegion } from "../store/read.ts";
-import { readRegion } from "../store/region.ts";
+import { readRegionIdentity } from "../store/region.ts";
 import type { PriceMarket } from "./resolve-price.ts";
 
 /**
@@ -55,7 +55,7 @@ export async function marketAsked(
     return { ok: true, market: { region: fallback, channel } };
   }
 
-  const named = await readRegion(db, asked);
+  const named = await readRegionIdentity(db, asked);
   if (!named) {
     return {
       ok: false,
@@ -115,7 +115,7 @@ export async function marketOfCart(
   const region =
     asked.regionId === null
       ? await readDefaultRegion(db)
-      : await readRegion(db, asked.regionId);
+      : await readRegionIdentity(db, asked.regionId);
   if (!region) return undefined;
 
   return {

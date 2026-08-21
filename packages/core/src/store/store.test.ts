@@ -60,6 +60,9 @@ describe("GET /admin/store", () => {
         id: expect.any(String),
         name: "USD",
         currency: "USD",
+        // A Region carries the ways this Store delivers into it (#321), and a seeded one prices
+        // no delivery: what carriage costs is a Merchant's to say.
+        shippingMethods: [],
         metadata: {},
       },
       metadata: {},
@@ -107,6 +110,9 @@ describe("PATCH /admin/store", () => {
         id: expect.any(String),
         name: "USD",
         currency: "USD",
+        // A Region carries the ways this Store delivers into it (#321), and a seeded one prices
+        // no delivery: what carriage costs is a Merchant's to say.
+        shippingMethods: [],
         metadata: {},
       },
       metadata: { support: "…" },

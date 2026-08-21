@@ -4,7 +4,7 @@ import {
   type Adjustment,
   defineStep,
   type PricedLine,
-  type PricedLines,
+  type ShippedLines,
   StepFailure,
 } from "@kobai/core";
 import { inArray } from "drizzle-orm";
@@ -112,12 +112,12 @@ export const LEAD_TIME_SURCHARGE_CODE = "lead-time-surcharge";
  * this Step in twice, and Core unwinds in reverse, so each compensation takes back the rows its
  * own `run` put on top.
  */
-const written = new WeakMap<PricedLines, string[][]>();
+const written = new WeakMap<ShippedLines, string[][]>();
 
 export const leadTimeSurcharge = defineStep(
   "lead-time-surcharge",
 
-  async (input: PricedLines, context): Promise<AdjustedLines> => {
+  async (input: ShippedLines, context): Promise<AdjustedLines> => {
     const requested = requestedLeadTimeDays(context.metadata);
     // Nobody is in a hurry, which is every Cart in every Store that does not send this key —
     // so this Step costs such a Cart one comparison and leaves it exactly as Core's own
@@ -165,7 +165,12 @@ export const leadTimeSurcharge = defineStep(
       written.set(input, stack);
     }
 
-    return { cart: input.cart, lines, adjustments: [] };
+    // **The carriage, carried forward** (#321). `select-shipping` runs a slot ahead of this one
+    // and puts what it costs to deliver this Cart in `adjustments`; a replacement of this slot
+    // that answered `[]` would drop a Shopper's delivery charge in silence, because the compiler
+    // cannot ask for it. A Lead Time belongs to the line that has one, so this Step adds nothing
+    // of its own here.
+    return { cart: input.cart, lines, adjustments: input.adjustments };
   },
 
   async (input, context) => {
@@ -188,11 +193,12 @@ export const leadTimeSurcharge = defineStep(
  * than a gap: a Lead Time belongs to the line that has one, so a Return for that line refunds
  * the hurry along with the goods (ADR-0022).
  */
-function unadjusted(input: PricedLines): AdjustedLines {
+function unadjusted(input: ShippedLines): AdjustedLines {
   return {
     cart: input.cart,
     lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
-    adjustments: [],
+    // Whatever `select-shipping` decided, untouched — see the return above.
+    adjustments: input.adjustments,
   };
 }
 

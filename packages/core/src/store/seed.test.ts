@@ -76,6 +76,9 @@ describe("seeding the default Region", () => {
       id: expect.any(String),
       name: "USD",
       currency: "USD",
+      // A seeded Region prices no delivery: what carriage costs is a Merchant's to say, and a
+      // boot has nothing to say it from (#321).
+      shippingMethods: [],
       metadata: {},
     });
     // It is a Region like any other: the list is where a Merchant meets it.

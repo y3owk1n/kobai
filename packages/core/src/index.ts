@@ -155,6 +155,7 @@ export type {
   PricedLine,
   PricedLines,
   ReservedLines,
+  ShippedLines,
   TakenPayment,
   TaxedAdjustment,
   TaxedLine,
@@ -190,6 +191,22 @@ export type {
   OrderShopper,
   Payment,
 } from "./order/read.ts";
+export type { SelectShippingRefusal } from "./order/select-shipping.ts";
+/**
+ * `select-shipping`, for `place-order`'s reason (#321): a Project replacing the slot needs the
+ * Step to measure its own against, and the two words Core's refuses with so that a replacement
+ * can answer them where they still apply.
+ *
+ * {@link SHIPPING_ADJUSTMENT_CODE} is on the surface because it is what a *reader* of an Order
+ * recognises the carriage by — kobai defines no other Adjustment code, so this is the one thing
+ * about the shape a client can rely on (ADR-0060).
+ */
+export {
+  SHIPPING_ADDRESS_REQUIRED,
+  SHIPPING_ADJUSTMENT_CODE,
+  SHIPPING_METHOD_REQUIRED,
+  selectShipping,
+} from "./order/select-shipping.ts";
 /**
  * The interface Core defines and implements nowhere (ADR-0053) — Extension Point 3's second, and
  * the first whose only implementations come from outside kobai.
@@ -250,6 +267,7 @@ export type { Region } from "./store/region.ts";
  * for its own boot.
  */
 export type { DefaultRegionSeed, SeededRegion } from "./store/seed.ts";
+export type { ShippingMethod, ShippingOption } from "./store/shipping-method.ts";
 /**
  * The background sweep (`sweep.ts`): what a Project starts at boot, and what one run of it did.
  *

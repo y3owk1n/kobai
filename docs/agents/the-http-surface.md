@@ -1112,6 +1112,71 @@ shapes that come back. It sits behind the Cart's own identifier and no credentia
   so the day it becomes a scoping key the build goes red rather than the retrofit going unnoticed,
   and `region.test.ts`'s own sweep now names the two new keys onto `core_region`.
 
+**A Region carries flat shipping rates, and what delivery costs is an Adjustment on the Order**
+(#321, ADR-0005, ADR-0022, ADR-0074). `shippingMethods` is a field of the Region — read by
+`GET /admin/regions` and `GET /admin/regions/{id}` behind `store:read`, written **whole** by
+`POST /admin/regions` and `PATCH /admin/regions/{id}` behind `store:write` — and there is
+deliberately **no new Permission**: shipping is the Store's own configuration, which is the call
+#291 took for currencies, Regions and Channels. Eight things about it are decisions rather than
+implementation:
+
+- **The charge is an Order-level Adjustment and never a `shipping_total` column**, and that is
+  the load-bearing one. An Order-level Adjustment already carries **its own tax** — the only kind
+  that does, because it belongs to no line — which is exactly what carriage needs, and refunds
+  already know what an Adjustment is. A column would have needed a special case in tax, in
+  refunds and in every place money is totted up, forever; `orderTotalOf` is untouched, and an
+  Order's total is still the sum of its lines and its Adjustments.
+  `order/shipping.test.ts` asks Postgres for **anything that looks like a delivery total** on
+  `core_order`, rather than for the one column name somebody might reach for first — which is
+  `a-fulfilment-moves.test.ts`'s sweep one noun along.
+- **`select-shipping` sits between `price-lines` and `apply-adjustments`**, and the position is
+  arithmetic twice over: carriage is taxed, so it has to exist before `calculate-tax`; and being
+  in front of `apply-adjustments` is what lets a deployment's own Adjustment rule *see* it, so
+  *free delivery over fifty* is an ordinary discount rather than a case Core would have to model.
+  `place-order.test.ts` asserts both, beside the ordering assertions already there.
+- **A replaced `apply-adjustments` has to carry `adjustments` forward, and the compiler cannot
+  ask for it.** A Step declaring the narrower `PricedLines` as its input is still assignable to
+  the slot, so one answering `adjustments: []` would drop a Shopper's delivery charge in silence.
+  What holds it is the reference Project, which replaces that very slot with
+  `@kobai/plugin-made-to-order`'s Step: the journey buys something physical through that
+  deployment. **A replaced `calculate-tax` is different and *is* held by the compiler** — every
+  Adjustment on a `TaxedLines` states its own tax, so one that passed the list through does not
+  build, and `place-order.test.ts` pins that with a `@ts-expect-error`.
+- **Charging nothing has three causes and only one of them is a refusal.** Nothing in the Cart
+  ships — the filter is `line.fulfilment.requiresShipping`, and it lives where
+  `inventoryProvider.claimsFor` puts the equivalent decision for Inventory; or this Store prices
+  no delivery into the Cart's Region, which is where **every** Region starts and is what keeps a
+  deployment that never configures shipping able to sell a physical thing; or the Shopper has
+  chosen nothing, which is **422 `shipping-method-required`**, because an Order that shipped for
+  free is a Merchant paying for carriage. A Cart that requires shipping and carries no Address is
+  **422 `shipping-address-required`**, asked first because a Shopper who has not said where it
+  goes cannot usefully choose between two rates.
+- **Both refusals are reachable from the quote as well as from the placement**, by construction:
+  ADR-0077 slices the deployment's own declaration before `hold-reservations`, so a slot in front
+  of `apply-adjustments` is inside the quote. A storefront meets them before a Shopper is sent to
+  a bank rather than after, and `order/shipping.test.ts` asserts the quoted figure and the charged
+  figure against **one** Cart rather than two.
+- **`GET /store/carts/{id}/shipping-options` is a Cart's route and not a Region's.** What a Cart
+  may be shipped by depends on its Region **and** on whether anything in it ships at all, and the
+  second is a fact about what a Shopper put in it rather than about the Store — which a list of
+  one Region's rates could not have answered. It is opened by a
+  **publishable** key on the quote's argument, and it answers **200 with an empty list** for a
+  Cart nothing in which ships: *there is nothing to choose* is an answer rather than a failure.
+  **It does not run `select-shipping`**, because that Step is what charges and what refuses —
+  so a deployment that replaced it is answered the Region's flat rates here regardless, which is
+  a **known limit** rather than a promise and is written down at the route.
+- **`shippingMethodId` on `PATCH /store/carts/{id}` is three-valued, exactly as `address` is**,
+  and a method belonging to any other Region is **422 `shipping-method-not-found`** — the word
+  the Region routes answer for the same fact, because one fact gets one word whichever end asks
+  it. **Moving a Cart to another Region unchooses it**, because a rate is denominated in the
+  currency the Region that carries it selects.
+- **The list is the whole fact on the way in**, so adding, renaming, repricing, reordering and
+  removing a rate are one request — `options`' bargain one noun along, and identity on the wire
+  is what makes a rename a rename rather than a removal that takes every Cart's choice with it.
+  There is no list route over `core_shipping_method`, so ADR-0064's cursor and the filtering
+  convention have nothing here to attach to; `core_shipping_method.region_id` is a **constraint
+  on a row** rather than a scope, and `region.test.ts` names the key.
+
 **A Role is a row a Merchant can make, and one Permission administers every change to one**
 (ADR-0066, ADR-0076). `POST`/`GET`/`PATCH`/`DELETE /admin/roles` and `GET /admin/merchants` are
 #173's six, and `PATCH /admin/merchants/{id}` is #202's seventh.

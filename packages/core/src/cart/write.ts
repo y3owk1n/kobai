@@ -18,7 +18,16 @@ import { changesFrom, changesNothing, openData } from "../patch.ts";
 import type { PriceMarket } from "../pricing/resolve-price.ts";
 import { liveHoldOfCart, lockCartHold } from "../reservation/reservation.ts";
 import { readDefaultCurrency, readDefaultRegion } from "../store/read.ts";
-import { REGION_NOT_FOUND, type Region, readRegion } from "../store/region.ts";
+import {
+  REGION_NOT_FOUND,
+  type RegionIdentity,
+  readRegionIdentity,
+} from "../store/region.ts";
+import {
+  readShippingMethodOf,
+  SHIPPING_METHOD_NOT_FOUND,
+  shippingRegionOf,
+} from "../store/shipping-method.ts";
 import { type Cart, cartHasBeenPlaced, cartHasExpired, readCart } from "./read.ts";
 
 /**
@@ -92,7 +101,8 @@ export type CartRefusal =
   | "variant-not-priced"
   | typeof REGION_NOT_FOUND
   | typeof CART_IS_DENOMINATED
-  | typeof VARIANT_NOT_PRICED_IN_REGION;
+  | typeof VARIANT_NOT_PRICED_IN_REGION
+  | typeof SHIPPING_METHOD_NOT_FOUND;
 
 /**
  * The word a Region switch is refused with while something is already denominated against this
@@ -180,6 +190,20 @@ export type CartInput = {
    * already states about a named `metadata`.
    */
   readonly address?: unknown;
+  /**
+   * The way this Cart is to be delivered — **three-valued, exactly as `address` is** (#321).
+   *
+   * Absent leaves whatever the Cart has chosen alone, `null` unchooses, and an identifier
+   * chooses one of the methods its Region carries.
+   * `GET /store/carts/{id}/shipping-options` is what lists them, and a method belonging to any
+   * other Region is refused — a rate is denominated in the Region that carries it.
+   *
+   * **It is on the correction and not on the create**, which is `media`'s absence rather than
+   * `collections`': the options a Cart may be delivered by depend on what is in it and on where
+   * it is going, so nothing could honestly be chosen at the moment a Cart is started and empty.
+   * Adding it later is additive under ADR-0060.
+   */
+  readonly shippingMethodId?: unknown;
 };
 
 /**
@@ -306,7 +330,7 @@ async function addressFallsIn(
   // raises inside Postgres, and an unhandled raise is a 500 about something that is not there.
   if (!isUuid(parsed.regionId)) return noSuchAddressRegion(parsed.regionId);
 
-  const named = await readRegion(tx, parsed.regionId);
+  const named = await readRegionIdentity(tx, parsed.regionId);
   return named === undefined
     ? noSuchAddressRegion(parsed.regionId)
     : { ok: true, regionId: named.id };
@@ -427,10 +451,11 @@ async function namedRegion(
   db: Queryable,
   regionId: string,
 ): Promise<
-  { readonly ok: true; readonly region: Region } | CartRefused<typeof REGION_NOT_FOUND>
+  | { readonly ok: true; readonly region: RegionIdentity }
+  | CartRefused<typeof REGION_NOT_FOUND>
 > {
   if (!isUuid(regionId)) return noSuchRegion(regionId);
-  const named = await readRegion(db, regionId);
+  const named = await readRegionIdentity(db, regionId);
   return named === undefined ? noSuchRegion(regionId) : { ok: true, region: named };
 }
 
@@ -465,6 +490,7 @@ export async function updateCart(
     | typeof REGION_NOT_FOUND
     | typeof CART_IS_DENOMINATED
     | typeof VARIANT_NOT_PRICED_IN_REGION
+    | typeof SHIPPING_METHOD_NOT_FOUND
     | NotChangeable
   >
 > {
@@ -480,10 +506,11 @@ export async function updateCart(
     input.shopper === undefined &&
     input.metadata === undefined &&
     input.regionId === undefined &&
-    input.address === undefined
+    input.address === undefined &&
+    input.shippingMethodId === undefined
   ) {
     return changesNothing(
-      "a `shopper`, a `metadata`, a `regionId`, an `address`, or several of them",
+      "a `shopper`, a `metadata`, a `regionId`, an `address`, a `shippingMethodId`, or several of them",
     );
   }
 
@@ -494,6 +521,7 @@ export async function updateCart(
     | typeof REGION_NOT_FOUND
     | typeof CART_IS_DENOMINATED
     | typeof VARIANT_NOT_PRICED_IN_REGION
+    | typeof SHIPPING_METHOD_NOT_FOUND
   >(db, cartId, async (tx) => {
     // Only what the caller named, so a request about `metadata` alone does not quietly blank
     // the Shopper off the Cart — which is what makes `shopper` three-valued above.
@@ -540,6 +568,12 @@ export async function updateCart(
       }
     }
 
+    // Where this Cart will be bought once this request has been applied — the Region it is
+    // switching to, or `undefined` for one it is not moving. Both the choice of a delivery
+    // method and the unchoosing of one are decided against *that*, because a rate belongs to
+    // exactly one Region.
+    let switchingTo: string | undefined;
+
     if (parsed.value.regionId !== undefined) {
       // Inside the transaction that holds this Cart's row `for update`, so a line added while
       // the switch is being judged is either already in the check below or waiting behind it —
@@ -552,6 +586,33 @@ export async function updateCart(
       // The stamp is taken here and nowhere else: from this moment the Cart's own column is
       // what denominates it, and the Region's currency moving does not reach it.
       changes.currency = switched.currency;
+      switchingTo = switched.regionId;
+
+      // **A switch unchooses the delivery method** (#321), because a rate belongs to one
+      // Region: the one chosen in the old market is not on offer in the new one, and carrying
+      // it over would charge a figure denominated in a currency this Cart is no longer in.
+      // Overridden a few lines down by a body that also names a `shippingMethodId`, which is
+      // how a storefront moves a Cart and rechooses in one request.
+      changes.shippingMethodId = null;
+    }
+
+    if (parsed.value.shippingMethodId === null) {
+      changes.shippingMethodId = null;
+    } else if (parsed.value.shippingMethodId !== undefined) {
+      // **Of the Region this Cart will be in**, which is what makes a rate from anywhere else
+      // `shipping-method-not-found` rather than a charge in the wrong currency. A Cart that
+      // names no Region at all — one started before kobai recorded any — can choose nothing,
+      // and is told the same thing for the same reason.
+      const regionId = await shippingRegionOf(
+        tx,
+        switchingTo ?? (await regionOfCart(tx, cartId)),
+      );
+      const method =
+        regionId === null
+          ? undefined
+          : await readShippingMethodOf(tx, regionId, parsed.value.shippingMethodId);
+      if (!method) return noSuchShippingMethod(parsed.value.shippingMethodId);
+      changes.shippingMethodId = method.id;
     }
 
     // Past every refusal, so the writes below are the whole of what this request does.
@@ -942,6 +1003,8 @@ type ParsedCartInput = {
   readonly regionId?: string;
   /** The Address named — three-valued like `shopper`, because a Cart may carry none. */
   readonly address?: ParsedAddress | null;
+  /** The delivery method named — three-valued too, because a Cart may have chosen none. */
+  readonly shippingMethodId?: string | null;
 };
 
 /** Named apart from `read.ts`'s `CartShopper`: this is what a caller sent, not what is stored. */
@@ -970,6 +1033,7 @@ function parseCartInput(input: CartInput, keyKind: ApiKeyKind): ParsedCart {
     metadata?: Record<string, unknown>;
     regionId?: string;
     address?: ParsedAddress | null;
+    shippingMethodId?: string | null;
   } = {};
 
   if (input.shopper === null) {
@@ -1037,6 +1101,18 @@ function parseCartInput(input: CartInput, keyKind: ApiKeyKind): ParsedCart {
     value.address = parsed.value;
   }
 
+  if (input.shippingMethodId === null) {
+    value.shippingMethodId = null;
+  } else if (input.shippingMethodId !== undefined) {
+    const chosen = trimmed(input.shippingMethodId);
+    if (chosen === undefined) {
+      return invalid(
+        "`shippingMethodId` must name one of the ways this Cart may be delivered — `GET /store/carts/{id}/shipping-options` lists them — or be `null` to unchoose.",
+      );
+    }
+    value.shippingMethodId = chosen;
+  }
+
   return { ok: true, value };
 }
 
@@ -1087,6 +1163,47 @@ function noSuchRegion(regionId: string): CartRefused<typeof REGION_NOT_FOUND> {
     ok: false,
     reason: REGION_NOT_FOUND,
     detail: `No Region ${JSON.stringify(regionId)} exists. \`regionId\` names the Region this Cart is bought in — it decides what the Cart is denominated in and what its lines are priced at — and \`GET /admin/regions\` lists the ones this Store has.`,
+  };
+}
+
+/**
+ * The Region this Cart names, read under the lock `mutate` is already holding.
+ *
+ * `null` for a Cart that names none, which is one started before kobai recorded a Region or one
+ * whose Region has since been deleted. **`shippingRegionOf` is what turns that into the rates
+ * that apply** — the Store's default — because that is what such a Cart is *priced* for, and a
+ * Cart offered a method it could then not choose would be one nothing could place.
+ */
+async function regionOfCart(tx: Transaction, cartId: string): Promise<string | null> {
+  const [row] = await tx
+    .select({ regionId: cart.regionId })
+    .from(cart)
+    .where(eq(cart.id, cartId))
+    .limit(1);
+  // Unreachable: `mutate` found and locked this row a statement ago.
+  if (!row) throw new Error("A locked Cart could not be read back.");
+  return row.regionId;
+}
+
+/**
+ * A `shippingMethodId` naming no method this Cart's Region carries.
+ *
+ * **The same word `PATCH /admin/regions/{id}` answers**, because it is one fact — this Store has
+ * no such shipping method — reached from the other end, and one fact gets one word whichever end
+ * asks it (ADR-0060). It is **422** for `region-not-found`'s reason on this surface: a body
+ * naming a record the Store has not got, rather than a query parameter the endpoint could not
+ * use.
+ *
+ * **One answer for a method that does not exist and one belonging to another Region**, because
+ * they are one mistake: this field takes a method *this Cart may be delivered by*, and neither
+ * is one. Telling them apart would also let a storefront enumerate the rates of markets it is
+ * not in.
+ */
+function noSuchShippingMethod(id: string): CartRefused<typeof SHIPPING_METHOD_NOT_FOUND> {
+  return {
+    ok: false,
+    reason: SHIPPING_METHOD_NOT_FOUND,
+    detail: `${JSON.stringify(id)} is not a way this Cart may be delivered. A shipping method belongs to the Region the Cart is being bought in — \`GET /store/carts/{id}/shipping-options\` lists the ones on offer — and \`null\` unchooses whichever one was picked.`,
   };
 }
 

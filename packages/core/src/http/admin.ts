@@ -1574,13 +1574,19 @@ const deleteCollectionRoute = createRoute({
  * `currency-not-enabled` at 422 when it has not — the body is well formed and what refuses it
  * is the state of the Store, which is `unknown-fulfilment-strategy`'s distinction. Enabling one
  * is `currencies` on `PATCH /admin/store`.
+ *
+ * **A Region carries the ways this Store delivers into it** (#321), as `shippingMethods` on the
+ * read and as the whole list on both writes. There is no route of its own over them and
+ * deliberately none: they are the Store's configuration behind the same two Permissions, and a
+ * plural route over a table a Merchant can insert into would have had to page (ADR-0064) for a
+ * handful of rows a Region already reports.
  */
 const createRegionRoute = createRoute({
   method: "post",
   path: "/regions",
   summary: "Create a Region",
   description:
-    "A name and the currency it prices in, which has to be one this Store has enabled — `GET /admin/store` lists them. Names are **not** unique: a Region is addressed by its identifier everywhere. Nothing about tax or shipping is here yet; both hang off this row when they arrive.",
+    "A name, the currency it prices in — which has to be one this Store has enabled, `GET /admin/store` lists them — and, optionally, the ways this Store delivers into it. Names are **not** unique: a Region is addressed by its identifier everywhere. Nothing about tax is here yet; it hangs off this row when it arrives.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
   request: {
@@ -1598,7 +1604,7 @@ const createRegionRoute = createRoute({
     401: REFUSALS.noSession,
     403: REFUSALS.forbidden,
     422: json(
-      "Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency.",
+      "Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency — or `shipping-method-not-found`, a `shippingMethods` entry naming an `id`, which a Region being created cannot have.",
       contract.RegionRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1628,7 +1634,8 @@ const readRegionRoute = createRoute({
   method: "get",
   path: "/regions/{id}",
   summary: "Read a Region",
-  description: "One Region — its name, and the currency it prices in.",
+  description:
+    "One Region — its name, the currency it prices in, and the ways this Store delivers into it.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeRead)] as const,
   request: { params: contract.IdParam },
@@ -1647,7 +1654,7 @@ const updateRegionRoute = createRoute({
   path: "/regions/{id}",
   summary: "Change a Region",
   description:
-    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. **A Region's currency may move**, unlike the Store's: a Region *selects* one of the currencies this Store has enabled, so moving the selection changes which Prices apply here rather than what any amount means.",
+    "Changes only what is named; a field left out is left alone, and a named `metadata` replaces what is stored rather than merging into it. A body naming nothing this route would change is refused at 400. **A Region's currency may move**, unlike the Store's: a Region *selects* one of the currencies this Store has enabled, so moving the selection changes which Prices apply here rather than what any amount means. **`shippingMethods` is the whole list**, so a rate is added, renamed, repriced, reordered and removed here — an entry carrying an `id` is the method that already has it, and a Cart that chose it keeps its choice.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
   request: {
@@ -1667,7 +1674,7 @@ const updateRegionRoute = createRoute({
     403: REFUSALS.forbidden,
     404: json("No such Region exists.", contract.RegionRefusal),
     422: json(
-      "Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency.",
+      "Well formed, and still refused: `currency-not-enabled`, this Store has not enabled that currency, or `shipping-method-not-found`, a `shippingMethods` entry names an `id` this Region has not got.",
       contract.RegionRefusal,
     ),
     500: REFUSALS.serverError,
@@ -1689,7 +1696,7 @@ const deleteRegionRoute = createRoute({
   path: "/regions/{id}",
   summary: "Delete a Region",
   description:
-    "Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again. **Every Price entered for this Region goes with it**, because a Price naming a Region that no longer exists could never apply again; `GET /admin/prices?region=` is where to read them before deleting. Prices that name no Region are untouched and go on applying everywhere.",
+    "Refused while this is the Store's default Region: `region-in-use`. Point the Store at another one — `defaultRegion` on `PATCH /admin/store` — and send this again. **Every shipping method and every Price entered for this Region goes with it**, because a Price naming a Region that no longer exists could never apply again; `GET /admin/prices?region=` is where to read them before deleting. Prices that name no Region are untouched and go on applying everywhere.",
   security: MERCHANT_SESSION,
   middleware: [requirePermission(PERMISSIONS.storeWrite)] as const,
   request: { params: contract.IdParam },
@@ -2922,13 +2929,21 @@ const API_KEY_STATUS = {
 const REGION_STATUS = {
   invalid: 400,
   "currency-not-enabled": 422,
+  // Reachable at a create as well as at a correction, and only one way: a `shippingMethods`
+  // entry naming an `id` at a create names a method a Region written a statement ago cannot
+  // have (#321).
+  "shipping-method-not-found": 422,
 } as const satisfies Record<Exclude<RegionCreation, { ok: true }>["reason"], 400 | 422>;
 
-/** Correcting one: the body, the address, or a currency this Store has not enabled. */
+/**
+ * Correcting one: the body, the address, a currency this Store has not enabled, or a rate this
+ * Region has not got.
+ */
 const REGION_UPDATE_STATUS = {
   invalid: 400,
   "region-not-found": 404,
   "currency-not-enabled": 422,
+  "shipping-method-not-found": 422,
 } as const satisfies Record<
   Exclude<RegionUpdate, { ok: true }>["reason"],
   400 | 404 | 422

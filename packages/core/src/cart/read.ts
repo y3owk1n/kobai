@@ -16,9 +16,18 @@ import {
   rowsAfter,
   takePage,
 } from "../db/page.ts";
-import { address, cart, cartLineItem, order, region, variant } from "../db/schema.ts";
+import {
+  address,
+  cart,
+  cartLineItem,
+  order,
+  region,
+  shippingMethod,
+  variant,
+} from "../db/schema.ts";
 import { isUuid } from "../db/uuid.ts";
 import type { RegionIdentity } from "../store/region.ts";
+import type { ShippingOption } from "../store/shipping-method.ts";
 
 /**
  * Reading a Cart.
@@ -166,6 +175,20 @@ export type CartSummary = {
    * asking about is looking at where it goes.
    */
   readonly address: Address | null;
+  /**
+   * The way this Cart is to be delivered — what the Shopper chose out of
+   * `GET /store/carts/{id}/shipping-options` — or `null` where they have chosen nothing (#321).
+   *
+   * **Live, not a snapshot**, exactly as {@link CartSummary.address} is: what is *charged* is an
+   * Order-level Adjustment written at Capture (ADR-0022), so a Merchant repricing or deleting
+   * the method afterwards cannot rewrite what a Shopper paid.
+   *
+   * `null` is the ordinary state of most Carts and means three different things — nothing in
+   * this Cart ships, this Store prices no delivery into its Region, or the Shopper has not got
+   * that far — which is why it is `select-shipping` that decides what any of them costs rather
+   * than this field.
+   */
+  readonly shippingMethod: ShippingOption | null;
   readonly metadata: Record<string, unknown>;
   readonly expiresAt: string;
   /**
@@ -256,6 +279,13 @@ export async function listCarts(
       currency: cart.currency,
       region: { id: region.id, name: region.name, currency: region.currency },
       ...addressColumns,
+      // The three a storefront may see, and not the `metadata` beside them: this shape is
+      // answered on a publishable key, and #207's split is what keeps a Merchant's bag off it.
+      shippingMethod: {
+        id: shippingMethod.id,
+        name: shippingMethod.name,
+        amount: shippingMethod.amount,
+      },
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
@@ -272,6 +302,9 @@ export async function listCarts(
     // name no Region — or name one that has since been deleted, which clears the reference.
     .leftJoin(address, eq(address.id, cart.addressId))
     .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
+    // `left` again: most Carts have chosen no delivery method, and one whose method a Merchant
+    // deleted has had the reference cleared rather than the Cart made unreadable.
+    .leftJoin(shippingMethod, eq(shippingMethod.id, cart.shippingMethodId))
     .where(and(rowsAfter(page, cart.createdAt, cart.id), inState(page.state)))
     // `id` breaks the tie, so two Carts started in the same instant come back in one stable
     // order rather than in whichever order Postgres happened to read them — and so that a
@@ -288,6 +321,7 @@ export async function listCarts(
       currency: row.currency,
       region: joined<RegionIdentity>(row.region),
       address: addressOf(row),
+      shippingMethod: joined<ShippingOption>(row.shippingMethod),
       metadata: row.metadata,
       expiresAt: row.expiresAt.toISOString(),
       expired: row.expired,
@@ -324,6 +358,13 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
       currency: cart.currency,
       region: { id: region.id, name: region.name, currency: region.currency },
       ...addressColumns,
+      // The three a storefront may see, and not the `metadata` beside them: this shape is
+      // answered on a publishable key, and #207's split is what keeps a Merchant's bag off it.
+      shippingMethod: {
+        id: shippingMethod.id,
+        name: shippingMethod.name,
+        amount: shippingMethod.amount,
+      },
       metadata: cart.metadata,
       expiresAt: cart.expiresAt,
       expired: cartHasExpired,
@@ -336,6 +377,8 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
     .leftJoin(region, eq(region.id, cart.regionId))
     .leftJoin(address, eq(address.id, cart.addressId))
     .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
+    // `left`, for the list's reason: a Cart that has chosen no delivery method still reads.
+    .leftJoin(shippingMethod, eq(shippingMethod.id, cart.shippingMethodId))
     .where(eq(cart.id, id))
     .limit(1);
   if (!row) return undefined;
@@ -363,6 +406,7 @@ export async function readCart(db: Queryable, id: string): Promise<Cart | undefi
     // selection as an object of nulls rather than as `null` — see `db/join.ts`.
     region: joined<RegionIdentity>(row.region),
     address: addressOf(row),
+    shippingMethod: joined<ShippingOption>(row.shippingMethod),
     lineItems: lines.map((line) => ({
       id: line.id,
       variant: { id: line.variantId, sku: line.sku },
