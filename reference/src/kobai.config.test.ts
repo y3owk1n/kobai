@@ -17,7 +17,7 @@ import {
   type TestOrder,
 } from "@kobai/core/testing";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import config, { bank, confirmations } from "../kobai.config.ts";
+import config, { bank, confirmations, dispatches } from "../kobai.config.ts";
 
 /**
  * The reference Project's side of ADR-0017: a Plugin offers, and the Project wires.
@@ -532,6 +532,45 @@ describe("the Plugin this Project makes its commissions with", () => {
 });
 
 /**
+ * The arrangement the two Subscriber describes below share.
+ *
+ * It goes through `/admin`, because dispatching is a Merchant's act and there is no store route
+ * that moves a Fulfilment.
+ */
+
+/** An Order with one Fulfilment, and that Fulfilment as a Merchant reads it back. */
+async function anOrderToDispatch(kobai: TestKobai) {
+  const order = await seedTestOrder(kobai);
+  const read = await kobai.request(`/admin/orders/${order.id}`, {
+    headers: order.catalog.merchant.headers,
+  });
+  expect(read.status).toBe(200);
+  const body = (await read.json()) as {
+    fulfilments: readonly { id: string; state: string }[];
+  };
+  const [only] = body.fulfilments;
+  if (!only) throw new Error("this Order has no Fulfilment");
+  return { order, fulfilmentId: only.id };
+}
+
+/** Marks it dispatched, exactly as the Admin does. */
+function dispatch(
+  kobai: TestKobai,
+  order: TestOrder,
+  fulfilmentId: string,
+  trackingReference?: string,
+) {
+  return kobai.request(`/admin/orders/${order.id}/fulfilments/${fulfilmentId}/dispatch`, {
+    method: "POST",
+    headers: {
+      ...order.catalog.merchant.headers,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(trackingReference === undefined ? {} : { trackingReference }),
+  });
+}
+
+/**
  * **The Subscriber this Project wired** — ADR-0003's fourth Extension Point, proven rather than
  * promised (ADR-0085, #70, #322).
  *
@@ -540,48 +579,8 @@ describe("the Plugin this Project makes its commissions with", () => {
  * it removed, and what is asserted either way is **what the Subscriber did with what it was
  * handed** — the notices in this deployment's own outbox, field by field — never that a callback
  * was reached. A counter would say the same thing about a Subscriber told a lie.
- *
- * The arrangement goes through `/admin`, because dispatching is a Merchant's act and there is no
- * store route that moves a Fulfilment.
  */
 describe("the Subscriber this Project wired", () => {
-  /** An Order with one Fulfilment, and that Fulfilment as a Merchant reads it back. */
-  async function anOrderToDispatch(kobai: TestKobai) {
-    const order = await seedTestOrder(kobai);
-    const read = await kobai.request(`/admin/orders/${order.id}`, {
-      headers: order.catalog.merchant.headers,
-    });
-    expect(read.status).toBe(200);
-    const body = (await read.json()) as {
-      fulfilments: readonly { id: string; state: string }[];
-    };
-    const [only] = body.fulfilments;
-    if (!only) throw new Error("this Order has no Fulfilment");
-    return { order, fulfilmentId: only.id };
-  }
-
-  /** Marks it dispatched, exactly as the Admin does. */
-  function dispatch(
-    kobai: TestKobai,
-    order: TestOrder,
-    fulfilmentId: string,
-    trackingReference?: string,
-  ) {
-    return kobai.request(
-      `/admin/orders/${order.id}/fulfilments/${fulfilmentId}/dispatch`,
-      {
-        method: "POST",
-        headers: {
-          ...order.catalog.merchant.headers,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(
-          trackingReference === undefined ? {} : { trackingReference },
-        ),
-      },
-    );
-  }
-
   it("queues the notice this Store owes the Shopper, carrying what kobai said", async () => {
     await using kobai = await createTestKobai(config);
     const { order, fulfilmentId } = await anOrderToDispatch(kobai);
@@ -627,6 +626,91 @@ describe("the Subscriber this Project wired", () => {
       trackingReference: "RR123456789MY",
     });
     expect(confirmations.noticesFor(order.id)).toEqual([]);
+  });
+});
+
+/**
+ * **The Subscriber this Project did not write, and chose to run anyway** (#323).
+ *
+ * `@kobai/plugin-price-log` offers `dispatchLog` beside the Step it already offered, and this is
+ * the pair above told a second time from the other end: there the Subscriber was this Project's
+ * own source, here it arrives in a **package**. Nothing about installing that package subscribes
+ * to anything, and nothing about importing it does either — the line in `kobai.config.ts` is the
+ * whole of it, which is the claim ADR-0017 exists to make and the one an events surface could
+ * most easily have broken.
+ *
+ * It is deliberately the same shape as the Step's own pair a few describes above: booted with
+ * the line, and booted with it taken out. What is asserted either way is **what the Plugin's
+ * Subscriber did with what it was handed** — the entries in the log this Project holds, field by
+ * field — never that a callback was reached.
+ */
+describe("the Subscriber this Project wired from a Plugin", () => {
+  it("logs the dispatch to the Plugin's own log, carrying what kobai said", async () => {
+    await using kobai = await createTestKobai(config);
+    const { order, fulfilmentId } = await anOrderToDispatch(kobai);
+
+    const response = await dispatch(kobai, order, fulfilmentId, "RR123456789MY");
+
+    expect(response.status).toBe(200);
+    const [row] = await kobai.database.query<{ updated_at: Date }>(
+      "select updated_at from core_fulfilment where id = $1",
+      [fulfilmentId],
+    );
+    // The whole entry, held to the same standard as the outbox's notice above — including
+    // `occurredAt` being a reading of the row kobai wrote rather than of a clock this process
+    // consulted, which is the whole reason a payload carries one.
+    expect(dispatches.entriesFor(order.id)).toEqual([
+      {
+        fulfilmentId,
+        orderId: order.id,
+        trackingReference: "RR123456789MY",
+        occurredAt: new Date(row?.updated_at ?? 0).toISOString(),
+      },
+    ]);
+  });
+
+  it("runs beside this Project's own Subscriber, both told the same thing", async () => {
+    // Two Subscribers on one Event, one from a package and one from this Project's own source,
+    // and neither has heard of the other. A list is what a Project writes when it wants two
+    // things to happen, and the order it writes them in is the order they run in (ADR-0085).
+    await using kobai = await createTestKobai(config);
+    const { order, fulfilmentId } = await anOrderToDispatch(kobai);
+
+    expect((await dispatch(kobai, order, fulfilmentId, "RR987654321MY")).status).toBe(
+      200,
+    );
+
+    const [notice] = confirmations.noticesFor(order.id);
+    const [entry] = dispatches.entriesFor(order.id);
+    expect(notice).toEqual({
+      fulfilmentId,
+      orderId: order.id,
+      trackingReference: "RR987654321MY",
+      occurredAt: expect.any(String),
+    });
+    // The same fact, told twice, and told the same both times — which is what a payload being
+    // produced by Core and read by whoever was wired has to mean.
+    expect(entry).toEqual(notice);
+  });
+
+  it("logs nothing when the same Project boots without that line", async () => {
+    // The same Project, the same installed Plugin, the same wired tables. One entry removed
+    // from one file, and the Subscriber that was offered stays offered (ADR-0017).
+    await using kobai = await createTestKobai({
+      ...config,
+      events: {
+        subscribers: { "fulfilment-dispatched": [confirmations.tellTheShopper] },
+      },
+    });
+    const { order, fulfilmentId } = await anOrderToDispatch(kobai);
+
+    const response = await dispatch(kobai, order, fulfilmentId, "RR123456789MY");
+
+    // This Project's own Subscriber still ran, so what is asserted below is the Plugin's
+    // absence rather than a deployment that wired nobody at all.
+    expect(response.status).toBe(200);
+    expect(confirmations.noticesFor(order.id)).toHaveLength(1);
+    expect(dispatches.entriesFor(order.id)).toEqual([]);
   });
 });
 

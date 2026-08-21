@@ -4,7 +4,11 @@ import {
   madeToOrder,
   madeToOrderMigrationSet,
 } from "@kobai/plugin-made-to-order";
-import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
+import {
+  dispatchLog,
+  priceLogMigrationSet,
+  recordPriceResolution,
+} from "@kobai/plugin-price-log";
 import { stripeMigrationSet, stripePayments } from "@kobai/plugin-stripe";
 import { projectMigrationSet } from "./src/migration-set.ts";
 import { confirmationOutbox } from "./src/notifications/dispatch-notice.ts";
@@ -46,6 +50,21 @@ export const bank =
 export const confirmations = confirmationOutbox();
 
 /**
+ * **The same Extension Point, filled from a package rather than from this Project's own source**
+ * (ADR-0017, ADR-0085, #323).
+ *
+ * `@kobai/plugin-price-log` offers a Subscriber beside the Step it already offered, and this is
+ * where this deployment decides to run it. Installing that Plugin subscribed to nothing;
+ * importing it above subscribes to nothing either. The line in `events` below is the whole of
+ * what makes it hear anything, and it is the only place in this Project a reader has to look to
+ * know that it does.
+ *
+ * Exported for `confirmations`' reason: the log wired below and the log anything else in this
+ * Project reads have to be the *same object*.
+ */
+export const dispatches = dispatchLog();
+
+/**
  * Everything this Project has customised, in one file.
  *
  * A Developer should be able to read this and know what their deployment does differently from
@@ -53,7 +72,8 @@ export const confirmations = confirmationOutbox();
  * Core's price-resolution Workflow is somebody else's now, one Step a Plugin offers watches what
  * that Workflow decided, this Project supplies the Payment Provider — because kobai ships none —
  * this Store makes some of what it sells to order, which takes a Fulfilment Strategy and a
- * Step from a second Plugin, and this Store tells a Shopper when their parcel leaves.
+ * Step from a second Plugin, and this Store tells a Shopper when their parcel leaves and lets a
+ * Plugin note that it left.
  *
  * They are not all the same *kind* of customisation, and the distinctions are worth reading for:
  *
@@ -211,18 +231,30 @@ export default defineKobaiConfig({
    * with no route replaced, no Step inserted and nothing in Core patched. That is story 22 of
    * #211, and it is the difference between an events surface and a promise of one.
    *
-   * **Take this line out and nothing subscribes.** The module above is still imported, the
-   * object it makes still exists, and kobai still emits — into a deployment that wired nobody,
+   * **Take either name out and that one stops hearing.** The modules are still imported, the
+   * objects they make still exist, and kobai still emits — into a deployment that wired nobody,
    * which behaves exactly as one that had never heard of the Extension Point (ADR-0017). That
    * is the same claim `migrationSets` and `fulfilment` make, and it is asserted the same way in
    * `src/kobai.config.test.ts`.
    *
+   * **Two of them, and where they come from is the point** (#323). The first is this Project's
+   * own source. The second is a Subscriber `@kobai/plugin-price-log` **offers** — the same
+   * Plugin whose Step is wired above, offering into the other half of the surface — and
+   * installing that package subscribed to nothing. A list rather than one, because a deployment
+   * may want two things to happen and the order it writes them in is the order they run in;
+   * neither has heard of the other, and a Plugin that had registered itself at load time would
+   * have arbitrated that order for this Project instead of leaving it here to read.
+   *
    * **A Subscriber is not a Step, and reading them side by side is the point.** A Step above
-   * decides something and can refuse; this runs afterwards, is handed the payload and nothing
-   * else, cannot refuse, is never retried, and one that threw would be logged and would change
-   * nothing about what the Merchant was told. It is a place to *react* and not a place to put
-   * work that must happen — kobai's events are in-process and at most once, which is why what
-   * this one does is queue and return.
+   * decides something and can refuse; these run afterwards, are handed the payload and nothing
+   * else, cannot refuse, are never retried, and one that threw would be logged and would change
+   * nothing about what the Merchant was told — nor would it stop the other being called. They
+   * are a place to *react* and not a place to put work that must happen — kobai's events are
+   * in-process and at most once, which is why what these do is queue, or note, and return.
    */
-  events: { subscribers: { "fulfilment-dispatched": [confirmations.tellTheShopper] } },
+  events: {
+    subscribers: {
+      "fulfilment-dispatched": [confirmations.tellTheShopper, dispatches.logTheDispatch],
+    },
+  },
 });
