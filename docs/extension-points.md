@@ -15,7 +15,7 @@ says why the difference is real and where each one is written down.
 | 1 | **Configuration** | One file where everything your Project has changed is declared | **Proven** — `reference/kobai.config.ts`, exercised on every commit |
 | 2 | **Workflow Step override** | Replace one named Step of a declared process; watch one without owning it | **Proven** — a replaced Step changes what the API serves, under test |
 | 3 | **Dependency substitution behind named interfaces** | Hand Core your implementation of something it named | **Proven** — four interfaces you can supply, two of them taking an implementation that is not Core's |
-| 4 | **Events** | React to something happening, without being in the path of it | **Proven** — one Event, wired by the reference Project, and a Subscriber that throws does not undo it |
+| 4 | **Events** | React to something happening, without being in the path of it | **Proven** — one Event, two Subscribers wired by the reference Project, one of them a Plugin's, and a Subscriber that throws does not undo it |
 | 5 | **Admin UI slots** | Put your own UI inside the Admin at a declared position | **Promised only** — no slot mechanism exists |
 
 ## Core's semver covers three things, and these five are one of them
@@ -168,10 +168,16 @@ import {
   madeToOrder,
   madeToOrderMigrationSet,
 } from "@kobai/plugin-made-to-order";
-import { priceLogMigrationSet, recordPriceResolution } from "@kobai/plugin-price-log";
+import {
+  dispatchLog,
+  priceLogMigrationSet,
+  recordPriceResolution,
+} from "@kobai/plugin-price-log";
 import { emailTheShopper } from "./src/notifications/email-the-shopper.ts";
 import { manualPaymentProvider } from "./src/payments/manual.ts";
 import { everythingCostsOneCent } from "./src/pricing/everything-costs-one-cent.ts";
+
+const dispatches = dispatchLog();
 
 export default defineKobaiConfig({
   migrationSets: [priceLogMigrationSet, madeToOrderMigrationSet],
@@ -186,7 +192,11 @@ export default defineKobaiConfig({
   },
   payments: { provider: manualPaymentProvider },
   fulfilment: { strategies: { "made-to-order": madeToOrder } },
-  events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
+  events: {
+    subscribers: {
+      "fulfilment-dispatched": [emailTheShopper, dispatches.logTheDispatch],
+    },
+  },
 });
 ```
 
@@ -226,11 +236,12 @@ anything else about the same thing
   `{ subscribers: { "<event-name>": [yours] } }`. Section 4, and the newest of the eight.
 
 **Installing a Plugin does nothing.** `@kobai/plugin-price-log` above is an ordinary npm
-dependency, and adding it to `package.json` creates no table and runs no code. The two lines
-naming it here are what make it real; delete them and it is still installed, still
-importable, and still inert. `@kobai/plugin-made-to-order` is the same story with three lines
-instead of two — a migration set, a Step, and a Fulfilment Strategy — and neither Plugin has
-heard of the other. A Plugin *offers*, and your Project *wires*
+dependency, and adding it to `package.json` creates no table, runs no code and subscribes to
+nothing. The three lines naming it here are what make it real — a migration set, a Step, and a
+Subscriber, one per half of the extension surface it can reach — and deleting any of them leaves
+that half installed, importable and inert. `@kobai/plugin-made-to-order` is the same story again
+with three lines of its own — a migration set, a Step, and a Fulfilment Strategy — and neither
+Plugin has heard of the other. A Plugin *offers*, and your Project *wires*
 ([ADR-0017](./adr/0017-plugins-offer-steps-and-the-project-wires-them.md)). That costs a few
 lines and buys you a debuggable upgrade: when a version bump changes behaviour, the list of
 things that could have caused it is in one file rather than distributed across eleven
@@ -774,12 +785,14 @@ to, and that is a gap to report rather than a mechanism to discover.
 
 ## 4. Events — **proven**
 
-**Status: proven end to end.** kobai emits **one** Event today, `fulfilment-dispatched`, and
-the reference Project wires a Subscriber against it: a Merchant marks a Fulfilment dispatched
-through the Admin, and that deployment queues the notice it owes the Shopper, in its own source,
-with nothing in Core patched. A Subscriber that throws is logged and the dispatch still stands —
-asserted over HTTP by wiring one that throws, dispatching, and reading the Fulfilment back
-moved. The shape is [ADR-0085](./adr/0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md),
+**Status: proven end to end, from both of the places a Subscriber can come from.** kobai emits
+**one** Event today, `fulfilment-dispatched`, and the reference Project wires **two** Subscribers
+against it: a Merchant marks a Fulfilment dispatched through the Admin, and that deployment
+queues the notice it owes the Shopper, in its own source, while a Plugin's Subscriber notes that
+the parcel left — with nothing in Core patched either time. A Subscriber that throws is logged and
+the dispatch still stands — asserted over HTTP by wiring one that throws, dispatching, and reading
+the Fulfilment back moved. The shape is
+[ADR-0085](./adr/0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md),
 decided before it was built because a payload is under semver from the day it exists.
 
 Where Step override is for changing what the system *decides*, an Event is for what you do
@@ -801,13 +814,63 @@ export default defineKobaiConfig({
 });
 ```
 
+A list, because a deployment may want two things to happen — and one of them need not be yours to
+write, which is the next section.
+
+### Offering one from a Plugin
+
 **A Plugin offers a Subscriber and your Project wires it**, exactly as with a Step (ADR-0017).
-Installing a package subscribes to nothing, and neither does importing one — the line above is
-what makes it run, and deleting it is how you turn it off. That is not a formality: a Subscriber
-returns nothing and decides nothing, so one that registered itself at load time would be running
-code in your deployment with no compile-time trace of it at all, and the symptom — eleven Plugins
-installed, and an upgrade that starts sending two confirmation emails — is a behaviour with no
-file to open.
+Installing a package subscribes to nothing, and neither does importing one — the line in your
+config is what makes it run, and deleting it is how you turn it off.
+
+That is not a formality, and it is a **stronger** rule here than it is for a Step. A replaced
+Step at least has to satisfy the slot's input and output, so a Plugin that installed one by being
+installed would still be constrained by your compiler. A Subscriber returns nothing and decides
+nothing, so one that registered itself at load time would be running code in your deployment with
+no compile-time trace of it at all — and the symptom, when eleven Plugins are installed and an
+upgrade starts sending two confirmation emails, is a behaviour with no file to open. Load order
+arbitrating which of them runs first is the second half of the same failure, and the list you
+write is what takes that decision back.
+
+`@kobai/plugin-price-log` is the worked example, and it is the same Plugin whose Step section 2
+points at — one package reaching both halves of the surface, so the difference between them is
+readable side by side:
+
+```ts
+import { defineKobaiConfig } from "@kobai/core";
+import {
+  dispatchLog,
+  priceLogMigrationSet,
+  recordPriceResolution,
+} from "@kobai/plugin-price-log";
+
+// Exported, so the rest of your Project reads back the *same* log rather than another one —
+// `dispatches.entriesFor(orderId)` is what it heard.
+export const dispatches = dispatchLog();
+
+export default defineKobaiConfig({
+  migrationSets: [priceLogMigrationSet],                                  // its table
+  workflows: { "resolve-price": { after: { "select-price": [recordPriceResolution] } } },
+  events: { subscribers: { "fulfilment-dispatched": [dispatches.logTheDispatch] } },
+});
+```
+
+Three lines, three decisions, and each one is separately deletable: take out the middle one and
+its Step stops recording prices while its Subscriber goes on noting dispatches. The reference
+Project wires all three and its own tests boot it both ways round, which is what makes this a
+demonstration rather than a claim.
+
+Two things to notice in that snippet, because they are what offering a Subscriber looks like in
+general:
+
+- **It is a factory, not a bare function.** A Subscriber is handed the payload and nothing else,
+  so anything a Plugin needs in order to be useful — a client, a queue, somewhere to put what it
+  heard — has to come from **you**, at the moment you wire it. `stripePayments({ secretKey })`
+  is the same shape one Extension Point along.
+- **What it did is something you can ask it**, rather than something you take on trust. That is
+  worth insisting on when you evaluate a Plugin's Subscriber, and it is the rule kobai's own tests
+  hold: *the callback ran* and *this log knows the parcel left, with this reference, at this
+  moment* are two different facts.
 
 **Core emits, and nothing else does.** A Plugin does not emit and your Project does not emit, so
 the set of Event names is Core's the way the set of Workflow slots is. A Plugin with something to
