@@ -630,8 +630,9 @@ describe("compensating a Workflow that failed", () => {
  * *narrower* input is assignable, because TypeScript accepts a function that asks for less than
  * it is handed — so a Step written against an older shape compiles, never reads the field it
  * never heard of, and leaves it out of what it hands on. `place-order`'s `apply-adjustments` is
- * the case that paid for this and is where the argument is written; what belongs here is the
- * mechanism, and its two promises are the ones no HTTP response can carry.
+ * the case that paid for this, and `calculate-tax` is the second position the same guard now
+ * holds; that is where the argument is written. What belongs here is the mechanism, and its two
+ * promises are the ones no HTTP response can carry.
  *
  * **It belongs to the slot rather than to the Step**, which is the whole point: a check a Project
  * could take out along with the Step it was attached to would hold only until somebody replaced

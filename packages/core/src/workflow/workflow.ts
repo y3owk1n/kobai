@@ -56,8 +56,9 @@ export type StepOrigin = (typeof STEP_ORIGINS)[number];
  * less than it is handed — so a Step written against an older shape of the input compiles, reads
  * none of what it never heard of, and drops it out of what it returns. That is silent by
  * construction: the value is well typed, nothing refuses, and the loss surfaces as a wrong
- * number rather than as a failure. `place-order`'s `apply-adjustments` is the worked example
- * (#339), and its guard is where the argument is written.
+ * number rather than as a failure. `place-order`'s `apply-adjustments` and `calculate-tax` are
+ * the worked examples (#339) — one guard, declared at both positions — and it is where the
+ * argument is written.
  *
  * Three things about what belongs here:
  *

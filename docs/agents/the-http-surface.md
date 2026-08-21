@@ -1189,27 +1189,35 @@ implementation:
   in front of `apply-adjustments` is what lets a deployment's own Adjustment rule *see* it, so
   *free delivery over fifty* is an ordinary discount rather than a case Core would have to model.
   `place-order.test.ts` asserts both, beside the ordering assertions already there.
-- **A replaced `apply-adjustments` has to carry `adjustments` forward, and the *slot* is what
-  asks** (#339). The compiler cannot: a Step declaring the narrower `PricedLines` as its input is
-  still assignable to the slot, so one answering `adjustments: []` compiles, totals correctly for
-  the wrong figure, and drops a Shopper's delivery charge with no error and no refusal. Until
-  #339 what held it was a coincidence — the reference Project replaces that very slot, so the
-  journey would have caught it for kobai's own deployment and for no Developer's. What holds it
-  now is **a guard on the position**: `WorkflowStep.guard` is a postcondition the declaration
-  carries, `rewireWorkflow` puts it onto a replacement, and `carriesAdjustmentsForward` in
-  `place-order.ts` is the one Core declares — every Adjustment the Step was handed, matched by
-  `code` and `amount`, is still in what it returned, or the run stops as a **bug** naming what
-  went missing. Three things follow. **The honest replacement is untouched**: adding Adjustments
-  beside what you were given is what a replacement is for, and *free delivery over fifty* is a
-  discount line rather than the charge edited away, which is ADR-0022 either way. **Taking one
-  away is now refused**, deliberately — a different figure for carriage means replacing
-  `select-shipping`, which is the slot that decides one. And **a deployment that prices no
-  delivery has nothing to drop**, so a stale Step there is caught on the first Order after a
-  Merchant prices delivery rather than never. **A replaced `calculate-tax` is guarded by the
-  compiler instead, and only against the other half** — every Adjustment on a `TaxedLines` states
-  its own tax, so one that passed the list through does not build, and `place-order.test.ts` pins
-  that with a `@ts-expect-error`; a type cannot ask for a list to be non-empty, so that slot
-  carries no guard against dropping.
+- **A replaced `apply-adjustments` or `calculate-tax` has to carry `adjustments` forward, and the
+  *slot* is what asks** (#339). The compiler cannot, at either. A Step declaring the narrower
+  `PricedLines` as its input is still assignable to `apply-adjustments`, so one answering
+  `adjustments: []` compiles, totals correctly for the wrong figure, and drops a Shopper's
+  delivery charge with no error and no refusal. Until #339 what held it was a coincidence — the
+  reference Project replaces that very slot, so the journey would have caught it for kobai's own
+  deployment and for no Developer's. What holds it now is **a guard on the position**:
+  `WorkflowStep.guard` is a postcondition the declaration carries, `rewireWorkflow` puts it onto
+  a replacement, and `carriesAdjustmentsForward` in `place-order.ts` is the one Core declares —
+  every Adjustment the Step was handed, matched by `code` and `amount`, is still in what it
+  returned, or the run stops as a **bug** naming what went missing and which slot lost it. Three
+  things follow. **The honest replacement is untouched**: adding Adjustments beside what you were
+  given is what a replacement is for, and *free delivery over fifty* is a discount line rather
+  than the charge edited away, which is ADR-0022 either way. **Taking one away is now refused**,
+  deliberately — a different figure for carriage means replacing `select-shipping`, which is the
+  slot that decides one. And **a deployment that prices no delivery has nothing to drop**, so a
+  stale Step there is caught on the first Order after a Merchant prices delivery rather than
+  never.
+- **`calculate-tax` carries the same guard, and its return type was never a substitute for one.**
+  Every Adjustment on a `TaxedLines` states its own tax, so a Step that passed the list through
+  *untaxed* does not build, and `place-order.test.ts` pins that with a `@ts-expect-error`. That
+  refuses one mistake and is silent about the adjacent one: a type cannot ask for a list to be
+  non-empty, so `adjustments: []` compiles there too and loses the carriage exactly as it would
+  one slot earlier. Both slots therefore carry the guard, with the same matching and different
+  advice — `apply-adjustments` is told to add beside what it was given, `calculate-tax` to state
+  a figure for each, `0` included. `order/shipping.test.ts` asserts the drop and the honest
+  replacement at both. **An inserted `after` Step at either position is still not held to it**,
+  which is #347: a guard belongs to a slot, and whether one should also belong to a position is
+  the decision that ticket is for.
 - **Charging nothing has three causes and only one of them is a refusal.** Nothing in the Cart
   ships — the filter is `line.fulfilment.requiresShipping`, and it lives where
   `inventoryProvider.claimsFor` puts the equivalent decision for Inventory; or this Store prices

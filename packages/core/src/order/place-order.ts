@@ -24,7 +24,7 @@ import {
 import type { ChannelIdentity } from "../store/channel.ts";
 import { runWorkflow } from "../workflow/run.ts";
 import { defineStep, StepFailure } from "../workflow/step.ts";
-import { defineWorkflow } from "../workflow/workflow.ts";
+import { defineWorkflow, type SlotGuard } from "../workflow/workflow.ts";
 import {
   type CartLineToPlace,
   type CartToPlace,
@@ -73,11 +73,13 @@ import {
  *   rates the Cart's Region carries; a Project replaces the slot to quote real carrier rates.
  * - **`apply-adjustments`** attaches discounts and surcharges as their own lines (ADR-0022).
  *   Core's own implementation attaches none; the slot is where a Plugin's or a Project's rule
- *   goes. It is the one slot here that carries a guard of its own — whatever fills it has to
- *   hand on the Adjustments it was given, and {@link carriesAdjustmentsForward} is where that is
- *   argued (#339).
+ *   goes. It is one of the two slots here that carry a guard — whatever fills it has to hand on
+ *   the Adjustments it was given, and {@link carriesAdjustmentsForward} is where that is argued
+ *   (#339).
  * - **`calculate-tax`** works out the tax on each line, and Core's own implementation returns
- *   **zero** — see {@link calculateTax}.
+ *   **zero** — see {@link calculateTax}. It is the other slot carrying that guard, for the same
+ *   reason and against the same loss: it too is handed the Order's Adjustments and returns a list
+ *   of its own.
  * - **`hold-reservations`** claims everything scarce in the Cart, atomically, and **its
  *   compensation releases** — see {@link holdReservations}. A Cart of lines whose Strategies
  *   consume nothing scarce claims nothing at all.
@@ -258,9 +260,15 @@ export type TaxedLines = {
    * The Order's own, each now carrying its tax — which is why this is not simply what
    * `apply-adjustments` handed over.
    *
-   * A replaced `calculate-tax` has to state one for every Adjustment here, and the compiler is
-   * what asks: a tax Step that silently left the carriage untaxed is exactly the bug this slot
-   * exists to make impossible.
+   * A replaced `calculate-tax` has to state a figure for every Adjustment it puts here, and the
+   * compiler is what asks: a tax Step that passed `apply-adjustments`' list straight through,
+   * leaving the carriage untaxed, does not build.
+   *
+   * **What this type cannot ask is that there be any**, and the difference is the whole of #339:
+   * `[]` satisfies `readonly TaxedAdjustment[]` as happily as a full list does, so a Step that
+   * returns no Adjustments at all states a tax for every one of them vacuously and drops the
+   * carriage in silence. That is the slot's guard's question rather than this type's — see
+   * {@link carriesAdjustmentsForward}.
    */
   readonly adjustments: readonly TaxedAdjustment[];
 };
@@ -438,19 +446,41 @@ export const applyAdjustments = defineStep(
 );
 
 /**
+ * The half of a slot's value this guard is about: the Order's own Adjustments, whatever else
+ * travels beside them.
+ *
+ * Named as the *little* it needs rather than as one of the types that satisfy it, and that is
+ * what lets one guard hold two slots. {@link ShippedLines}, {@link AdjustedLines} and
+ * {@link TaxedLines} are all assignable to it — a `readonly TaxedAdjustment[]` is a
+ * `readonly Adjustment[]`, an Adjustment carrying a tax still being an Adjustment — so the guard
+ * reads `code` and `amount` on either side of either slot and knows nothing else about the value.
+ */
+type CarriesAdjustments = { readonly adjustments: readonly Adjustment[] };
+
+/**
  * **The slot's own postcondition: every Adjustment a Step was handed is still in what it
  * returned** (#339, ADR-0022).
  *
- * The hazard is `select-shipping`'s output meeting a Step written against something narrower. A
- * replacement declaring {@link PricedLines} is assignable here — TypeScript accepts a function
- * that asks for less than it is handed — so a Step written before shipping existed, or written
- * against an example that predates it, compiles cleanly, answers `adjustments: []`, and the
- * carriage the Shopper agreed to pay simply is not on the Order. The total is correct arithmetic
- * over the wrong figures: no error, no log line, no refusal.
+ * The hazard is `select-shipping`'s output meeting a Step that rebuilds the value without it. A
+ * replacement of `apply-adjustments` declaring the narrower {@link PricedLines} is assignable —
+ * TypeScript accepts a function that asks for less than it is handed — so a Step written before
+ * shipping existed, or written against an example that predates it, compiles cleanly, answers
+ * `adjustments: []`, and the carriage the Shopper agreed to pay simply is not on the Order. The
+ * total is correct arithmetic over the wrong figures: no error, no log line, no refusal.
+ *
+ * **Two slots carry it, because two slots have the hazard.** `calculate-tax` is handed the same
+ * list one position later and returns a list of its own, and its return type asks the wrong
+ * question to stop this: {@link TaxedLines} makes every Adjustment state its own `tax`, which
+ * refuses a Step passing the list through *untaxed* and says nothing at all about a Step passing
+ * back **none**, since `[]` satisfies any element type. That is the same missing delivery charge
+ * one slot along, and it was open until this guard was given the second position. Both are
+ * asserted through HTTP in `shipping.test.ts`.
  *
  * It is a **guard on the slot** rather than a shape, which is what makes it survive the thing it
  * is about — {@link rewireWorkflow} carries it onto a replacement, so a Project cannot supply
- * one, remove one, or replace it away with the Step it belongs to. Two other mechanisms were
+ * one, remove one, or replace it away with the Step it belongs to. A factory rather than a guard
+ * outright because two slots declare it and each names itself in what it throws; the check is one
+ * body, and what a call decides is only which position it speaks for. Two other mechanisms were
  * weighed and each lost for its own reason:
  *
  * - **A nominal marker on the input** — brand {@link ShippedLines} so that {@link PricedLines}
@@ -459,21 +489,22 @@ export const applyAdjustments = defineStep(
  *   `adjustments: []` is the same missing delivery charge one keystroke along, and it would
  *   still compile. A guarantee about how a Step is written rather than about what reaches the
  *   Order is the kind #339 was raised to stop taking.
- * - **A required acknowledgement in the output** — `calculate-tax`'s shape, where every
- *   Adjustment on a {@link TaxedLines} states its own tax so a Step cannot pass the list
- *   through untouched. It is the right mechanism for the question it answers and the wrong one
- *   for this: it can compel a Step to *say something about* each Adjustment it carries and
- *   cannot compel it to carry any, because an empty list satisfies any element type. It would
- *   cost every honest replacement a field, break the promised shape this slot returns (ADR-0019,
- *   ADR-0058), and leave the hole open.
+ * - **A required acknowledgement in the output** — {@link TaxedLines}' own shape, generalised to
+ *   both slots. It is the right mechanism for the question it answers and the wrong one for
+ *   this, and `calculate-tax` is the standing proof rather than an argument: that shape has been
+ *   in the type since #117 and the drop went through it anyway. It can compel a Step to *say
+ *   something about* each Adjustment it carries and cannot compel it to carry any. It would also
+ *   cost every honest replacement a field and break the promised shape `apply-adjustments`
+ *   returns (ADR-0019, ADR-0058).
  *
  * **The honest replacement is untouched, which was the requirement.** A Step adds its own
- * Adjustments beside what it was given and is asked for nothing else; it may reorder them, and
- * it may rewrite a `description`. What it may not do is make one cheaper or make one vanish —
- * and that is a tightening taken on purpose, because ADR-0022 has an Adjustment be **its own
- * line and never a figure edited in place**. *Free delivery over fifty* is a discount beside the
- * charge, which is exactly what `select-shipping` running in front of this slot is for; a
- * deployment that wants a different figure for carriage replaces the slot that decides one.
+ * Adjustments beside what it was given, or states a tax for each, and is asked for nothing else;
+ * it may reorder them, and it may rewrite a `description`. What it may not do is make one cheaper
+ * or make one vanish — and that is a tightening taken on purpose, because ADR-0022 has an
+ * Adjustment be **its own line and never a figure edited in place**. *Free delivery over fifty*
+ * is a discount beside the charge, which is exactly what `select-shipping` running in front of
+ * both slots is for; a deployment that wants a different figure for carriage replaces the slot
+ * that decides one.
  *
  * Three limits worth knowing. It matches by `code` and `amount`, counting duplicates, so it is
  * blind to a Step that swaps two Adjustments carrying identical figures — which changes nothing
@@ -481,25 +512,50 @@ export const applyAdjustments = defineStep(
  * written against the old shape goes unnoticed there until the day a Merchant prices delivery, at
  * which point the first physical Order fails loudly instead of quietly costing the Store its
  * carriage; that is the honest cost of asking about values rather than about types. And **it is
- * the slot's, so an inserted Step is not held to it**: an `after` Step at this position takes and
- * gives {@link AdjustedLines}, and one that rebuilt that value rather than passing it through
- * could drop the same Adjustment one config key along. That is a narrower door than the one this
- * closes — insertion is documented as observation and a Step there has to have decided to rebuild
- * — and closing it is a separate decision about whether a guard belongs to a position or to a
- * slot.
+ * the slot's, so an inserted Step is not held to it**: an `after` Step at either position takes
+ * and gives the value the slot produced, and one that rebuilt it rather than passing it through
+ * could drop the same Adjustment one config key along. That is a narrower door than the two this
+ * closes — insertion is documented as observation and a Step there has to have decided to
+ * rebuild — and closing it is a separate decision about whether a guard belongs to a position or
+ * to a slot, which is **#347** rather than anything settled here.
  *
  * It travels as a **bug** rather than a refusal, on {@link inWholeMinorUnits}' distinction: the
  * request was fine, and what is wrong is that this deployment is wired to lose money — which is
  * not something a storefront can act on.
+ *
+ * @param slot The position being held, which is what the message names: a reader is looking for
+ * the key in their own config, and after a replacement that is the only name the two share.
+ * @param repair What a Step filling *this* slot should have done instead. The loss is one thing
+ * at both positions and the fix is not — one adds beside what it was given, the other states a
+ * figure for it — so the advice belongs to the slot rather than to the guard.
  */
-function carriesAdjustmentsForward(input: ShippedLines, output: AdjustedLines): void {
-  const missing = notHandedOn(input.adjustments, output.adjustments);
-  if (missing.length === 0) return;
+function carriesAdjustmentsForward(
+  slot: string,
+  repair: string,
+): SlotGuard<CarriesAdjustments, CarriesAdjustments> {
+  return (input, output) => {
+    const missing = notHandedOn(input.adjustments, output.adjustments);
+    if (missing.length === 0) return;
 
-  throw new Error(
-    `A Step of this deployment filling \`apply-adjustments\` did not hand on every Adjustment it was given (#339): ${missing.join("; ")}. \`select-shipping\` puts what it costs to deliver this Cart into \`adjustments\` one slot earlier (#321), so every entry on that value is part of what the Shopper is being charged, and losing one takes money off the Order silently. A Step filling this slot adds its own beside what it was given — \`[...input.adjustments, mine]\` — and never in place of it. To charge less for delivery, add a discount of your own: an Adjustment is its own line and never a figure edited away (ADR-0022). To charge a different figure for it, replace \`select-shipping\`, which is the slot that decides one.`,
-  );
+    throw new Error(
+      `A Step of this deployment filling \`${slot}\` did not hand on every Adjustment it was given (#339): ${missing.join("; ")}. \`select-shipping\` puts what it costs to deliver this Cart into \`adjustments\` before either slot that adjusts or taxes it (#321), so every entry on that value is part of what the Shopper is being charged, and losing one takes money off the Order silently. ${repair}`,
+    );
+  };
 }
+
+/** What a Step filling `apply-adjustments` should have done — see {@link carriesAdjustmentsForward}. */
+const ADDS_ITS_OWN_BESIDE =
+  "A Step filling this slot adds its own beside what it was given — `[...input.adjustments, mine]` — and never in place of it. To charge less for delivery, add a discount of your own: an Adjustment is its own line and never a figure edited away (ADR-0022). To charge a different figure for it, replace `select-shipping`, which is the slot that decides one.";
+
+/**
+ * What a Step filling `calculate-tax` should have done — see {@link carriesAdjustmentsForward}.
+ *
+ * It sends a reader somewhere else for the repair the neighbour's message offers directly, and
+ * that is the point: this slot decides what is *taxed* and never what is *charged*, so a Step
+ * here that wanted the carriage gone was reaching for the wrong position entirely.
+ */
+const STATES_A_TAX_FOR_EACH =
+  "A Step filling this slot states a tax for every Adjustment it was given — `input.adjustments.map((one) => ({ ...one, tax: mine }))` — and never leaves one out: an Adjustment this deployment does not tax is `tax: 0`, which is what Core's own answers, and is not the same as no Adjustment at all. This slot decides what is taxed and never what is charged, so if what you wanted was to charge less for delivery, add a discount in `apply-adjustments`; and if you wanted a different figure for it, replace `select-shipping`, which is the slot that decides one (ADR-0022).";
 
 /**
  * The Adjustments the second list does not account for, each said as a person would need to hear
@@ -567,6 +623,12 @@ function describeAdjustment(adjustment: Adjustment): string {
  * **The Order's own Adjustments are taxed here too, and separately** (#117). A delivery surcharge
  * is on no line, so no line's tax can carry it; each one gets its own figure, and Core's is zero
  * for the same reason every other figure here is.
+ *
+ * **And every one of them has to still be here afterwards**, which is the slot's own guard rather
+ * than its return type: {@link TaxedLines} asks a Step to state a tax for each Adjustment it
+ * returns and cannot ask it to return any, so a replacement answering `adjustments: []` compiles
+ * and takes the carriage off the Order. See {@link carriesAdjustmentsForward}, which
+ * `apply-adjustments` carries for the same loss one slot earlier (#339).
  */
 export const calculateTax = defineStep(
   "calculate-tax",
@@ -1150,10 +1212,15 @@ export const placeOrderWorkflow = defineWorkflow<PlaceOrderRequest>("place-order
   .step(loadCart)
   .step(priceLines)
   .step(selectShipping)
-  // The one slot in this Workflow that carries a guard, and it is the slot rather than the Step
-  // that carries it — so a Project's replacement is held to it too (#339).
-  .step(applyAdjustments, carriesAdjustmentsForward)
-  .step(calculateTax)
+  // The two slots in this Workflow that carry a guard, and it is the slot rather than the Step
+  // that carries it — so a Project's replacement is held to it too (#339). Both are handed the
+  // Order's Adjustments and both return a list of their own, which is the whole of what makes
+  // dropping one possible; the guard is the same and only the repair it advises differs.
+  .step(
+    applyAdjustments,
+    carriesAdjustmentsForward("apply-adjustments", ADDS_ITS_OWN_BESIDE),
+  )
+  .step(calculateTax, carriesAdjustmentsForward("calculate-tax", STATES_A_TAX_FOR_EACH))
   .step(holdReservations)
   .step(takePayment)
   .step(captureOrder)

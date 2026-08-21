@@ -301,7 +301,7 @@ it declares eight slots, in this order:
 | `price-lines` | Invokes `resolve-price` for each line, in that market | — |
 | `select-shipping` | Turns what it costs to deliver this Cart into an Adjustment on the Order. Core's offers the flat rates the Cart's Region carries | — |
 | `apply-adjustments` | Attaches discounts and surcharges as their own lines — **Core attaches none**, and whatever fills it has to hand on the Adjustments it was given | — |
-| `calculate-tax` | Works out the tax per line, and on each Adjustment the Order itself carries. Core's returns zero; tax is its own spec | — |
+| `calculate-tax` | Works out the tax per line, and on each Adjustment the Order itself carries. Core's returns zero; tax is its own spec — and whatever fills it has to hand on the Adjustments it was given, exactly as the slot before it does | — |
 | `hold-reservations` | Claims everything scarce, atomically | Release |
 | `take-payment` | Asks your Payment Provider for what the Order comes to | Refund |
 | `capture-order` | Consumes those Reservations and writes the immutable Order, in one transaction | none — the point of no return |
@@ -359,18 +359,23 @@ that shape and each is load-bearing:
 - **Naming a slot the Workflow does not declare fails loudly**, when the config is applied
   rather than at the request that would have been priced differently. A typo in a slot name
   is not an override that silently does nothing.
-- **One slot asks something of your Step that its types cannot**, and it is the only one today.
-  `place-order`'s `apply-adjustments` is handed the Adjustments the slots before it produced —
-  the carriage `select-shipping` worked out — and **every one of them has to be in what your
-  Step returns**, matched by `code` and `amount`. The compiler cannot ask: a Step declaring the
-  narrower `PricedLines` as its input is still assignable, so one answering `adjustments: []`
-  would compile, total correctly for the wrong figure, and drop a Shopper's delivery charge with
-  no error and no refusal (#339). Dropping one now stops the placement as a bug, naming what went
-  missing. Adding your own beside them — `[...input.adjustments, mine]` — is exactly what the
-  slot is for and is asked for nothing extra; and *free delivery over fifty* is a discount line
-  of your own beside the charge rather than the charge deleted, which is what an Adjustment being
-  its own line means (ADR-0022). If you want a different figure for carriage, replace
-  `select-shipping`, which is the slot that decides one.
+- **Two slots ask something of your Step that its types cannot**, and they are the only ones
+  today. `place-order`'s `apply-adjustments` and `calculate-tax` are each handed the Adjustments
+  the slots before them produced — the carriage `select-shipping` worked out — and **every one of
+  them has to be in what your Step returns**, matched by `code` and `amount`. The compiler cannot
+  ask, at either. A Step declaring the narrower `PricedLines` as its input is still assignable to
+  `apply-adjustments`, so one answering `adjustments: []` would compile, total correctly for the
+  wrong figure, and drop a Shopper's delivery charge with no error and no refusal (#339). And
+  `calculate-tax`'s return type does make every Adjustment state its own tax, which refuses a
+  Step handing the list on *untaxed* — but it cannot ask for a list to be non-empty, so
+  `adjustments: []` compiles there too and loses the same charge. Dropping one now stops the
+  placement as a bug, naming what went missing and which slot lost it. Adding your own beside
+  them — `[...input.adjustments, mine]` — is exactly what `apply-adjustments` is for; stating a
+  tax for each — `input.adjustments.map((one) => ({ ...one, tax: mine }))`, and `0` where you tax
+  none — is exactly what `calculate-tax` is for; neither is asked for anything extra. *Free
+  delivery over fifty* is a discount line of your own beside the charge rather than the charge
+  deleted, which is what an Adjustment being its own line means (ADR-0022). If you want a
+  different figure for carriage, replace `select-shipping`, which is the slot that decides one.
 
 **A Step's signature is a promise Core can move, and it has moved twice.** #117 widened
 `TaxedLines.adjustments` — the type a replaced `calculate-tax` returns — so that a tax Step

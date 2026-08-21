@@ -748,12 +748,13 @@ leave it out of what it hands on. Two things about it are asserted in `workflow.
 neither could be seen from a response body: `rewireWorkflow` carries a guard onto a
 **replacement**, which is the whole point of it belonging to the slot; and a Step whose *output*
 a guard turned back is **compensated**, because unlike a Step that threw it did run. What a
-particular guard *means* is tested where that Workflow is — `place-order`'s one is asserted
-through HTTP in `packages/core/src/order/shipping.test.ts`, against the deployment that would
-have under-charged. **A guard's message is part of it**, and reading it means supplying the
-deployment a `Logger` of your own and asserting on what Core told it: a 500 body says only that
-the deployment is broken. That is `payments`' rule one Extension Point along — ask the thing you
-substituted what it was handed, never count that it was called.
+particular guard *means* is tested where that Workflow is — `place-order`'s two, on
+`apply-adjustments` and on `calculate-tax`, are asserted through HTTP in
+`packages/core/src/order/shipping.test.ts`, against the deployment that would have under-charged.
+**A guard's message is part of it**, and reading it means supplying the deployment a `Logger` of
+your own and asserting on what Core told it: a 500 body says only that the deployment is broken.
+That is `payments`' rule one Extension Point along — ask the thing you substituted what it was
+handed, never count that it was called.
 
 The **packaging seam** covers what none of those can, because it is not about a running
 database at all: that the `migrations/` directory each package resolves relative to its

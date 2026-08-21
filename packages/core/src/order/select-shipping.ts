@@ -105,6 +105,11 @@ export type SelectShippingRefusal =
  * a coincidence — the reference Project happens to replace that slot, so
  * `tests/a-storefront-buys-something.test.ts` would have caught it for kobai's own Project and
  * for nobody else's.
+ *
+ * **`calculate-tax` carries the same guard one slot further on**, because this list travels
+ * through that position too and a Step there returns a list of its own. Its return type asks
+ * every Adjustment it gets back for a tax and cannot ask it for any Adjustments at all, so it
+ * refuses the untaxed pass-through and never the drop.
  */
 export type ShippedLines = {
   readonly cart: CartToPlace;

@@ -475,6 +475,14 @@ describe("the tax Step", () => {
    * own, because it belongs to no line, so a tax Step that passed `apply-adjustments`' list
    * straight through would be silently declining to tax the one thing that needs it.
    *
+   * **This is the *untaxed* mistake and not the *dropped* one**, and the distinction is why this
+   * case is not the guarantee it was once read as (#339). The compiler refuses
+   * `adjustments: input.adjustments` because each element is missing its `tax`; it has nothing to
+   * say about `adjustments: []`, which satisfies `readonly TaxedAdjustment[]` trivially and takes
+   * the carriage off the Order. The slot's guard is what refuses that one, and
+   * `order/shipping.test.ts` is where it is asserted — the two are adjacent mistakes and both are
+   * worth holding.
+   *
    * A type-level assertion, and the `typecheck` step of the gate is what runs it: what fails
    * here is the *build*, not this case, so the `@ts-expect-error` is the assertion and the
    * `expect` below it is only there to spend the value.
