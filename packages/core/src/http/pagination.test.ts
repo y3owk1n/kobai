@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../db/page.ts";
 import {
@@ -60,6 +62,12 @@ type Paged<Item> = {
  * `/store/products` and `/admin/products` page the same rows and are two entries, not one. They
  * are two *lists* — two shapes behind two gates, and two cursor names — and the sweep at the
  * foot of this file is what holds that apart: each one's cursor must be refused by the other.
+ *
+ * **The order of the entries means nothing**, and since #328 that is a property rather than a
+ * hope: the three cases that are about one particular list name it through {@link listIn}, so an
+ * entry may be added here or moved without retargeting any of them. Taking away a list some case
+ * names is the one thing that is not free, and it fails loudly — that path leaves `List["path"]`
+ * and the lookup for it stops compiling, which is the answer wanted.
  */
 const LISTS = [
   { path: "/admin/products", key: "products", credential: "session" },
@@ -72,15 +80,73 @@ const LISTS = [
   { path: "/admin/collections", key: "collections", credential: "session" },
   { path: "/admin/regions", key: "regions", credential: "session" },
   { path: "/admin/channels", key: "channels", credential: "session" },
-  // **Appended rather than inserted**, like the two above it: two cases below reach for
-  // `LISTS[0]` and `LISTS[1]` by position — the Product list and the Order list, which are the
-  // two whose *contents* those cases are about — so a list spliced in above them would move
-  // what they read while going on agreeing with itself.
   { path: "/admin/prices", key: "prices", credential: "session" },
   { path: "/store/products", key: "products", credential: "apiKey" },
 ] as const;
 
 type List = (typeof LISTS)[number];
+
+/**
+ * The entry {@link LISTS} holds for a path — how a case that is about **one** list says which.
+ *
+ * Three cases below are about a particular list rather than about all of them, and each reached
+ * into the table by position until #328: the default page size, a page fetched across a
+ * concurrent insert, and a cursor whose row was deleted. Nothing failed when the table moved.
+ * With `/admin/products` and `/store/products` exchanged, all three went on passing and two of
+ * them were quietly exercising the **store** surface instead of the Merchant's — measured, not
+ * inferred, by logging the paths they fetched.
+ *
+ * That matters more here than in an ordinary test, because this table is what makes ADR-0064's
+ * contract uniform: a list is meant to join it and inherit every sweep in the file, so an entry
+ * that silently retargets a case weakens the suite while looking like it strengthened it.
+ *
+ * The `path` argument is {@link LISTS}' own union of paths, so one this table has not got is a
+ * compile error rather than a lookup that finds nothing. The throw covers what the types cannot
+ * see, since they are read off the table: a path taken back *out* of it.
+ *
+ * **It takes the table rather than closing over it**, so the first case below can offer it a
+ * reordered copy — which is the whole demonstration that position decides nothing here.
+ */
+function listIn(table: readonly List[], path: List["path"]): List {
+  const found = table.find((list) => list.path === path);
+  if (!found) throw new Error(`${path} is not one of the lists this file sweeps`);
+  return found;
+}
+
+/** The Merchant's Product list, and the Order list — the two whose contents a case is about. */
+const PRODUCT_LIST = listIn(LISTS, "/admin/products");
+const ORDER_LIST = listIn(LISTS, "/admin/orders");
+
+/**
+ * Reaching into {@link LISTS} by position, in the three spellings it actually gets written in.
+ *
+ * The patterns are written as regular expressions and the offence is **never spelled out**, so
+ * this file can describe what it forbids in words — which is why every paragraph here says "by
+ * position" instead. They are matched against the whole file, comments and string literals
+ * included, on `an-unavailable-control-can-still-be-reached.test.ts`' rule: blanking them would
+ * mean a second TypeScript reader in this repository whose failure mode is to lose its place and
+ * pass a file it never finished, and a guardrail may not fail open. The price is this paragraph.
+ *
+ * **What it can see is the table named on the line, and that is the whole of it.** A copy taken
+ * first — `const table = LISTS`, then a position out of `table` — is the same defect and is
+ * invisible to a text search, so the rule above is still yours to have read; this catches the way
+ * it actually gets written, which #310 is the worked example of. The one thing that *does* see a
+ * positional reach wherever it is written is the case beside this one, which asks {@link listIn}
+ * itself for the same subjects out of a table in another order.
+ *
+ * One more thing it cannot tell apart, and it caught this very paragraph while being written: a
+ * `typeof` of this table indexed by `number`, written without the parentheses the `List` alias
+ * above uses, is legitimate and is named here anyway. It fails closed, the repair is the spelling
+ * that alias already has, and that is why it gets a sentence rather than an exemption.
+ */
+const NOT_BY_POSITION: readonly { readonly name: string; readonly found: RegExp }[] = [
+  { name: "a subscript", found: /\bLISTS\[/ },
+  { name: "`at`", found: /\bLISTS\.at\(/ },
+  { name: "a destructure", found: /\]\s*=\s*LISTS\b/ },
+];
+
+/** This file, named from its own URL so a rename cannot leave a stale name in a failure. */
+const THIS_FILE = basename(fileURLToPath(import.meta.url));
 
 /**
  * The headers a list is read with, minted on demand from the one Merchant a deployment has.
@@ -390,6 +456,71 @@ describe("every list route pages, and pages the same way", () => {
   );
 });
 
+describe("a case about one list names the list it means", () => {
+  /**
+   * The three cases that follow are each about a particular list, and this is what says a table
+   * they do not control cannot decide which (#328).
+   *
+   * It offers {@link listIn} a table in another order and asks for the same paths back. That is
+   * the property in one line — the lookup is about the path and not about where the entry sits —
+   * and it fails the moment the selection goes back to being a position, because a position in a
+   * reordered table names something else.
+   *
+   * **Watched failing before it was trusted**, against a {@link listIn} rewritten to answer the
+   * table's first entry for the Product list: it reported `/store/products` where
+   * `/admin/products` was asked for, which is precisely the substitution #328 measured.
+   */
+  it("reads the same subject out of a table in another order", () => {
+    const reordered = [...LISTS].reverse();
+
+    // The arrangement rather than the subject: a "reordering" that left the two entries where
+    // they were would satisfy everything below without having asked it anything.
+    expect(reordered.indexOf(PRODUCT_LIST)).not.toBe(LISTS.indexOf(PRODUCT_LIST));
+    expect(reordered.indexOf(ORDER_LIST)).not.toBe(LISTS.indexOf(ORDER_LIST));
+
+    // Every entry rather than only the two, because what is being asserted is about the lookup
+    // and not about the two lists that happen to use it today — and identity rather than
+    // equality, since two entries of this table could otherwise be told apart by nothing.
+    for (const list of LISTS) {
+      expect(listIn(reordered, list.path), list.path).toBe(list);
+    }
+  });
+
+  /**
+   * What forbids the thing #328 removed, since the case above only says the lookup is honest and
+   * nothing in it stops the next case reaching into the table by position again.
+   *
+   * A scan of this file's own text, in the shape `tests/a-storefront-buys-something.test.ts`
+   * already uses for a rule that governs one file: the rule lives beside what it governs rather
+   * than in a scanner that reads a whole tree. What it can and cannot see is
+   * {@link NOT_BY_POSITION}'s subject and is written out there rather than here.
+   *
+   * **Watched failing before it was trusted, once per spelling.** Against the default-page-size
+   * case put back the way #310 found it, and again with the same reach written through `at`, and
+   * again with the first entry destructured off the table beside the two constants above. Each
+   * run named the line and which spelling it was, and an emptiness assertion nobody has seen fail
+   * is not yet known to be able to.
+   */
+  it("selects no list by its position in the table", async () => {
+    const source = await readFile(new URL(import.meta.url), "utf8");
+
+    // The arrangement, so a scan that had lost its own file cannot report the rule as held.
+    expect(source).toContain("const LISTS = [");
+
+    // One offence per line per spelling, and the line is what a reader has to go and edit.
+    const offences = source
+      .split("\n")
+      .flatMap((text, line) =>
+        NOT_BY_POSITION.filter((shape) => shape.found.test(text)).map(
+          (shape) =>
+            `${THIS_FILE}:${line + 1} reaches into the table by position, as ${shape.name} — name the list instead`,
+        ),
+      );
+
+    expect(offences).toEqual([]);
+  });
+});
+
 describe("the default page size", () => {
   it("is what a caller who names no limit gets, and there is more behind it", async () => {
     await using kobai = await createTestKobai();
@@ -398,7 +529,7 @@ describe("the default page size", () => {
     // from "everything there is" — the assertion this file would otherwise not be making.
     await seedProducts(kobai, merchant, DEFAULT_PAGE_LIMIT + 1);
 
-    const page = await fetchPage(kobai, LISTS[0], opener(kobai, merchant));
+    const page = await fetchPage(kobai, PRODUCT_LIST, opener(kobai, merchant));
 
     expect(page.items).toHaveLength(DEFAULT_PAGE_LIMIT);
     expect(page.nextCursor).toEqual(expect.any(String));
@@ -437,7 +568,7 @@ describe("a page fetched across a concurrent insert", () => {
       seeded.push((await seedTestOrder(kobai, { catalog })).id);
     }
 
-    const first = await fetchPage(kobai, LISTS[1], open, "?limit=2");
+    const first = await fetchPage(kobai, ORDER_LIST, open, "?limit=2");
     expect(first.items.map((one) => one.id)).toEqual([seeded[4], seeded[3]]);
 
     // The busy hour, in one line: a Shopper places an Order while the Merchant is reading.
@@ -448,7 +579,7 @@ describe("a page fetched across a concurrent insert", () => {
     while (cursor !== undefined) {
       const next = await fetchPage(
         kobai,
-        LISTS[1],
+        ORDER_LIST,
         open,
         `?limit=2&after=${encodeURIComponent(cursor)}`,
       );
@@ -473,7 +604,7 @@ describe("paging is stable when the row a cursor names is deleted", () => {
     const open = opener(kobai, merchant);
     const seeded = await seedProducts(kobai, merchant, 3);
 
-    const first = await fetchPage(kobai, LISTS[0], open, "?limit=2");
+    const first = await fetchPage(kobai, PRODUCT_LIST, open, "?limit=2");
     expect(first.items.map((one) => one.id)).toEqual([seeded[2], seeded[1]]);
 
     // The row the cursor was cut from, gone. A cursor that named a row by identifier and looked
@@ -488,7 +619,7 @@ describe("paging is stable when the row a cursor names is deleted", () => {
 
     const rest = await fetchPage(
       kobai,
-      LISTS[0],
+      PRODUCT_LIST,
       open,
       `?limit=2&after=${encodeURIComponent(first.nextCursor ?? "")}`,
     );
