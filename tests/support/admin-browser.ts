@@ -211,7 +211,13 @@ export type AdminSeam = {
    */
   merchantOnARole(permissions: readonly string[]): Promise<MerchantOnARole>;
 
-  /** One call against the public API, as the seeded Merchant. */
+  /**
+   * One call against the public API, as the seeded Merchant.
+   *
+   * The body is JSON unless it is a `FormData`, which is handed on untouched — `POST
+   * /admin/media` is the one route on this surface that is multipart (#254), and a case that
+   * wants images arranged has no other way to make one.
+   */
   api<T>(method: string, path: string, body?: unknown): Promise<T>;
   /**
    * A Product with one Variant, created through the API — and a Price on it when asked.
@@ -367,13 +373,29 @@ export async function startAdminSeam(): Promise<AdminSeam> {
   };
 
   const api = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+    /**
+     * What actually goes on the wire, and the one place this seam is not JSON.
+     *
+     * `POST /admin/media` takes a multipart body (#254), so a `FormData` is handed to `fetch`
+     * untouched — and the `content-type` is then **deliberately absent**, because only `fetch`
+     * can write the boundary that goes with it. A header set here would name a boundary nobody
+     * used and the upload would be refused as malformed.
+     */
+    const sent =
+      body instanceof FormData
+        ? body
+        : body === undefined
+          ? undefined
+          : JSON.stringify(body);
+
     const response = await fetch(new URL(path, origin), {
       method,
       headers: {
         cookie: await arrangingCookie(),
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        // A string body is the JSON one; a `FormData` types itself.
+        ...(typeof sent === "string" ? { "content-type": "application/json" } : {}),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: sent,
     });
     if (!response.ok) {
       throw new Error(

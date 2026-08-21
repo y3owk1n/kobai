@@ -8,6 +8,7 @@ import { ListboxField } from "@/components/listbox-field";
 import { Problem } from "@/components/problem";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { A_PAGE, everyPage } from "@/lib/pages";
 import { orThrow } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
@@ -90,10 +91,10 @@ export function MediaAttachments({
   // Every Media this screen knows anything about: what is attached, and what the library
   // answered. A row appended a moment ago is in the second and not the first.
   const known = new Map<string, Media>(
-    [...attached, ...(library.data?.media ?? [])].map((one) => [one.id, one]),
+    [...attached, ...(library.data ?? [])].map((one) => [one.id, one]),
   );
   const alreadyOn = new Set(rows.fields.map((row) => row.mediaId));
-  const offered = (library.data?.media ?? [])
+  const offered = (library.data ?? [])
     .filter((one) => !alreadyOn.has(one.id))
     .map((one) => ({ value: one.id, label: labelFor(one) }));
 
@@ -199,7 +200,7 @@ export function MediaAttachments({
             description={
               library.isError
                 ? "This Store's Media could not be read, so there is nothing to choose from. Reload the page."
-                : "Upload images in the Media section first — this picker offers the most recent hundred."
+                : "Upload images in the Media section first — this picker offers them newest first."
             }
           />
           <Button
@@ -254,13 +255,22 @@ function labelFor(one: Media): string {
 }
 
 /**
- * This Store's Media, for the picker to offer.
+ * This Store's Media, for the picker to offer — all of it, however many pages that is (#327).
  *
- * **The most recent hundred**, which is `MAX_PAGE_LIMIT` and the most one request may ask for
- * (ADR-0064). It is deliberately not paged here: a pager inside a card would put a second cursor
- * in an address that already locates a Product, and every one of the several of these on a
- * Product screen would fight over it. A Store with more than a hundred images and an old one to
- * attach is a gap this screen has, and it is written down rather than papered over.
+ * **It follows kobai's cursor to the end**, through `lib/pages.ts`, which is the walk
+ * `lib/markets.ts` and `lib/collections.ts` take. It used to ask for the most recent hundred and
+ * stop, on the grounds that *a pager inside a card would put a second cursor in an address that
+ * already locates a Product* — which is true of a pager and no objection at all to this. Reading
+ * page after page puts nothing in the address, draws no Next button, and gives this component
+ * one list and one pending state whatever it took to fill; nothing on this screen can tell the
+ * difference, which is exactly the point. What the old gap cost was an image that exists and
+ * cannot be attached, looking identical to an image that was never uploaded.
+ *
+ * **It is a read in this component rather than a module in `lib/`**, deliberately: one caller is
+ * not a module (`components/listbox-field.tsx`'s extract-on-the-second rule), and this list is
+ * asked for by exactly this component however many of it a Product screen renders. The day a
+ * second thing asks kobai what Media this Store has, this moves to `lib/media.ts` and reports its
+ * failure the way `lib/collections.ts` does.
  *
  * One query key for every copy of this component on the screen, so the several of them are one
  * request and one cache entry.
@@ -271,7 +281,14 @@ function useMediaLibrary() {
   return useQuery({
     queryKey: [MEDIA_LIBRARY],
     queryFn: async () =>
-      orThrow(await client.GET("/admin/media", { params: { query: { limit: 100 } } })),
+      everyPage(async (after) => {
+        const answered = orThrow(
+          await client.GET("/admin/media", {
+            params: { query: { limit: A_PAGE, after } },
+          }),
+        );
+        return { rows: answered.media, nextCursor: answered.nextCursor };
+      }),
   });
 }
 

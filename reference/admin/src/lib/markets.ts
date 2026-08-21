@@ -1,5 +1,6 @@
 import type { Channel, Region } from "@kobai/client";
 import { useQuery } from "@tanstack/react-query";
+import { A_PAGE, everyPage } from "@/lib/pages";
 import { orThrow, problemOf } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
@@ -15,43 +16,12 @@ import { useKobaiClient } from "@/lib/session";
  * **Two hooks in one module rather than two modules**, because a Price is constrained by the
  * pair: every control that offers one offers the other in the same fieldset, and splitting them
  * would put the shared decisions below in whichever file was opened first.
+ *
+ * **Both follow kobai's cursor to the end, and `lib/pages.ts` is how** (#310, #327). This module
+ * wrote that walk and kept it until there was a second and third caller for it; the bound it
+ * runs under, and the argument for truncating at that bound rather than failing, moved there
+ * with it.
  */
-
-/**
- * How many are asked for at a time — kobai's own ceiling, so a Store with few of either is one
- * request (`MAX_PAGE_LIMIT`, promised under ADR-0064).
- *
- * A number above it is **refused** rather than reduced, so this is the largest page there is
- * and asking for more would be a 400 rather than a longer answer.
- */
-const A_PAGE = 100;
-
-/**
- * How many pages are followed, and it is a bound rather than a ceiling on the Store (#310).
- *
- * **These reads used to stop at the first page**, so a deployment past a hundred Regions had
- * some it could not constrain a Price to from any screen — silently, since a picker missing its
- * last rows looks exactly like a picker. They follow the cursor now, which is the only way
- * there is to reach the rest (ADR-0064 gives up the page number on purpose), and a filled
- * picker is what a Merchant gets.
- *
- * The loop is bounded for the reason every cursor walk in this repository is bounded: a cursor
- * that never advanced would spin here rather than fail, and a tab that never settles is a worse
- * failure than a short list. Two thousand of either is far past the point at which a picker is
- * the wrong control — **a Store with that many markets wants a screen with a search box, not a
- * longer listbox** — so reaching this bound is a finding about the control rather than a limit
- * to raise.
- *
- * **At the bound it truncates rather than failing, and that is the one uncomfortable choice
- * here.** It is the defect this ticket fixed, surviving one order of magnitude up: a picker
- * missing its oldest rows looks exactly like a picker. Throwing instead would say *something* —
- * the field would report a failed read and go dead — but it would take the Store screen's
- * Default Region card with it, so a Store past the bound could not set a default Region **at
- * all**, which is a capability lost to protect against a list being incomplete. A usable
- * picker missing its two-thousand-and-first row is the lesser failure, and the sentence above
- * is where the choice is recorded rather than left to be rediscovered.
- */
-const OFFERED_PAGES = 20;
 
 /** Its own cache keys, deliberately not those of the screens that page these lists. */
 const OFFERED_REGIONS = "offered-regions";
@@ -77,40 +47,6 @@ export type OfferedMarkets<T> = {
   readonly isPending: boolean;
   readonly error: unknown;
 };
-
-/**
- * One page of a list, as this module reads one — the rows, and where the next page starts.
- *
- * A shape of its own so that {@link everyPage} can be written once for the two lists: what
- * differs between them is the path and what the envelope calls its rows, and neither is
- * something a loop over cursors should have to know.
- */
-type PageOf<Row> = {
-  readonly rows: readonly Row[];
-  readonly nextCursor?: string;
-};
-
-/**
- * Every row of a list, followed page by page to the end (ADR-0064).
- *
- * **`nextCursor`'s absence is the only end-of-list signal there is**, and a short page is not
- * one — so this stops on the missing cursor rather than on a page smaller than it asked for.
- */
-async function everyPage<Row>(
-  read: (after: string | undefined) => Promise<PageOf<Row>>,
-): Promise<Row[]> {
-  const found: Row[] = [];
-  let after: string | undefined;
-
-  for (let page = 0; page < OFFERED_PAGES; page += 1) {
-    const answered = await read(after);
-    found.push(...answered.rows);
-    if (answered.nextCursor === undefined) return found;
-    after = answered.nextCursor;
-  }
-
-  return found;
-}
 
 export function useOfferedRegions(): OfferedMarkets<Region> {
   const client = useKobaiClient();

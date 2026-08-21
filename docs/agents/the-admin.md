@@ -144,6 +144,24 @@ implementation:
   read 4.1:1 against a threshold of 4.5, on colours that pass everywhere once they have settled.
   An animation that repeats for ever is skipped rather than waited on, or the boot gate — whose
   only content is a `Spinner` — would hang instead of being audited.
+  **One violation is known, reported and deliberately not worked around** (#327). A `Select`
+  popup open on the **Product** screen fails `aria-hidden-focus` at *serious*, naming a Base UI
+  focus guard — a `span` carrying `aria-hidden="true"` and `tabindex="0"`, the sentinel every
+  focus trap is built out of. `FocusGuard` is `@internal` and hard-codes both attributes, no prop
+  on any part of `Select` reaches it, and `@base-ui/react` 1.7.0 is both what is installed and
+  what is `latest` — so there is nothing to configure and nothing to bump to, and stripping
+  `aria-hidden` off a sentinel by hand would buy a green scanner with a real screen-reader
+  defect. **Whether axe judges the guards at all is positional**, which is the part worth
+  carrying: a `Select`'s fixed full-viewport backdrop has a `clip-path` hole over its **trigger**,
+  and axe calls a modal open only when one such element sits under all five of its sample points
+  — so a trigger lying under one of them turns `incomplete` into a violation, and one sitting
+  clear of them reports nothing at all. **So every case that opens a picker shuts it before
+  auditing**, through one helper that carries the measurements, and that is the one exception to
+  *an overlay is a screen* above: an open-popup audit over a `Select` is a check on where a card
+  sits, and would go red on a layout change that broke nothing. Turning the rule off for one
+  audit, asserting the violation as expected, or editing focus behaviour in a vendored component
+  are each worse than reporting it, and are the three answers ruled out. **Nothing is filed for
+  it**: this paragraph and that helper are the record.
 - **The keyboard assertions are not padding, because a scanner sees none of them.** Reaching a
   control is `tabTo`/`keyboardTo`, which press a key until the control has focus and fail
   naming where the keyboard got to instead — `Tab` walks the page, `ArrowDown` walks an open
@@ -242,12 +260,17 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   Product has two sizes. Three things about it are decisions. Its `mediaId` is under that name
   and not `id`, for exactly the reason the Options card's `optionId` is. Its picker is a
   `ListboxField` over `GET /admin/media` — a set kobai names, so it is read from kobai — and it
-  asks for `limit=100` and **does not page**: a pager inside a card would put a second cursor in
-  an address that already locates a Product, and the several copies on the screen would fight
-  over it, so a Store with more than a hundred images and an old one to attach is a **known gap**
-  rather than something this hides. And **the card says that Remove detaches rather than
-  deletes**, because a Merchant who thinks otherwise will not press it and one who is wrong about
-  it has lost a photograph (ADR-0082).
+  **follows the cursor to the end through `lib/pages.ts`** (#327). It used to ask for `limit=100`
+  and stop, on the argument that *a pager inside a card would put a second cursor in an address
+  that already locates a Product, and the several copies on the screen would fight over it* —
+  which is true of a **pager** and no objection whatever to the **read**. Reading page after page
+  puts nothing in the address and draws no Next button; the component still gets one list and one
+  pending state, and nothing on the screen can tell. What the confusion cost was an image that
+  exists and cannot be attached, looking exactly like an image nobody uploaded. **It is a read in
+  the component rather than a module in `lib/`**, on the extract-on-the-second rule: one caller is
+  not a module, however many times a Product screen renders it. And **the card says that Remove
+  detaches rather than deletes**, because a Merchant who thinks otherwise will not press it and
+  one who is wrong about it has lost a photograph (ADR-0082).
 - **The Media screen is the one form in this Admin that is not JSON, and it is the one that
   does not use react-hook-form** (#254). A file input's value is a `FileList` the browser owns
   and nothing may set, so `reset()` cannot clear it and the controlled value every other field
@@ -483,14 +506,18 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   extract-on-the-second rule the two components above already carry: `lib/collections.ts` is that
   set for Collections (#256), read by the Products list's second filter and by
   `components/collections-field.tsx`, and it reports *whether kobai has answered* beside the list
-  because every caller needs to tell "the Store has none" from "nobody has asked yet". It asks
-  for a hundred and **does not page**, which is `components/media-attachments.tsx`'s known gap
-  arriving one noun along, and it is written down there rather than here for that reason.
+  because every caller needs to tell "the Store has none" from "nobody has asked yet". It follows
+  the cursor to the end like the rest, through `lib/pages.ts` (#327), and the *worse* of the two
+  things it used to cost is worth knowing because no picker shows it: the Products list judges
+  `?collection=` against the set this hook read, so a Collection past the first page was not
+  merely absent from the filter — an address naming one was answered with **No such Collection**,
+  a screen telling a Merchant that something they are looking at does not exist.
   **The picker over that set is one component too** (#280): the Product screen's Collections card
   and the New Product form ask a Merchant the same question, because `collections` is on
   `POST /admin/products` as well as on the correction — so the checkboxes, the skeleton and the
-  hundred-and-first Collection offered anyway live in `components/collections-field.tsx`, and it
-  takes `control` and `name` like `permissions-field.tsx` rather than a value and a callback. Two
+  Collection the read did not carry offered anyway live in `components/collections-field.tsx`,
+  and it takes `control` and `name` like `permissions-field.tsx` rather than a value and a
+  callback. Two
   things stay the callers': what a Store with **no** Collections is told, which is a sentence on
   the card and nothing at all on the create form — a Merchant filling one in did not come looking
   for Collections — and, at a create, that `collection-not-found` is now a refusal that form can
@@ -505,22 +532,29 @@ list grows with every screen, and a count in prose is the tax ADR-0049 removed f
   happened to agree at a hundred, which is exactly why nothing pointed at it. **A screen that
   wants a set this module owns calls the hook**, and a `useQuery` in a screen whose key another
   file also spells is the shape to go looking for.
-  **That module follows kobai's cursor to the end since #310, and it is the one of these hooks
-  that does.** A limit of a hundred with no paging is a picker that offers a *prefix* of the
-  answer — indistinguishable from a complete one, which is why the gap survived two tickets that
-  touched the file — so a deployment past a hundred Regions had markets it could not price for
-  and could not make its default. It reads page after page until `nextCursor` is absent, which
-  is the only end-of-list signal there is (ADR-0064), under a **bounded** loop for the reason
-  every cursor walk in this repository is bounded: a cursor that never advanced would spin
-  rather than fail, and a tab that never settles is worse than a short list. Reaching that bound
-  is a finding about the control — **a Store with thousands of markets wants a screen with a
-  search box rather than a longer listbox** — not a limit to raise.
-  **`lib/collections.ts` and `components/media-attachments.tsx` still stop at a hundred**, and
-  that stays a known gap rather than an oversight: this ticket's criterion was the market
-  pickers, and the same fix is available to both the day one is asked for.
+  **Every one of these reads follows kobai's cursor to the end, and `lib/pages.ts` is the one
+  definition of how** (#310, #327). A limit of a hundred with no paging is a control that offers a
+  *prefix* of the answer — indistinguishable from a complete one, which is why the gap survived
+  two tickets that touched `lib/markets.ts` and two more that touched the other two. It reads page
+  after page until `nextCursor` is absent, which is the only end-of-list signal there is
+  (ADR-0064), under a **bounded** loop for the reason every cursor walk in this repository is
+  bounded: a cursor that never advanced would spin rather than fail, and a tab that never settles
+  is worse than a short list. **At the bound it truncates rather than failing**, and the constant
+  is where that trade-off is argued — throwing would take the whole control away from a Store past
+  the bound rather than the tail of a list. Reaching it is a finding about the control — **a Store
+  with thousands of anything wants a screen with a search box rather than a longer listbox** — not
+  a limit to raise.
+  **The module was extracted on the second and third caller and not before** (#327): #310 wrote
+  the walk inside `lib/markets.ts`, and the two reads left behind were recorded here as a known
+  gap on an argument that turned out to be about a **pager** rather than about a read — see the
+  Media list above, which is where that confusion is unpicked. A cursor followed inside a hook
+  puts nothing in an address.
   `tests/the-admin-in-a-browser.test.ts` is where the paging is held, in the file's **last**
-  case — it arranges a hundred and one of each, which is an arrangement no case after it should
-  inherit — and it was watched failing against a read that stopped at one page.
+  `describe` — it arranges a hundred and one Regions, Channels, Collections and images, which is
+  an arrangement no case after it should inherit — and every one of its assertions was watched
+  failing against a read that stopped at one page. That is also the one place this seam arranges
+  over multipart: `seam.api` hands a `FormData` to `fetch` untouched, because `POST /admin/media`
+  is the one route here that is not JSON and a case wanting images has no other way to make one.
   Three things about the Price editor are decisions rather
   than implementation. **The currency follows the chosen Region as a suggestion and never as a
   rule**: a Price denominated in something that Region does not select is a row kobai accepts

@@ -4662,26 +4662,30 @@ describe("Merchants, Roles and the Store", () => {
 });
 
 /**
- * **A picker over a set kobai names offers all of it, however many pages that is** (#310).
+ * **A control over a set kobai names offers all of it, however many pages that is** (#310, #327).
  *
  * `lib/markets.ts` asked kobai for one page and stopped, so a deployment past a hundred Regions
  * had some it could not constrain a Price to and could not make its default — silently, because
- * a picker missing its oldest rows looks exactly like a picker. It follows the cursor to the end
- * now, and **nothing smaller than a browser can say so**: the loop is in the Admin, the route
- * was answering correctly the whole time, and what went wrong was a control quietly offering a
- * prefix of the answer.
+ * a picker missing its oldest rows looks exactly like a picker. `lib/collections.ts` and
+ * `components/media-attachments.tsx` were the same defect on two more sets, and each cost
+ * something a Merchant would report as kobai having lost a row: past a hundred Collections a
+ * Product could not be put into one that exists, and past a hundred images one that exists could
+ * not be attached to anything. They all follow the cursor to the end now, through `lib/pages.ts`,
+ * and **nothing smaller than a browser can say so**: the loop is in the Admin, every route was
+ * answering correctly the whole time, and what went wrong was a control quietly offering a prefix
+ * of the answer.
  *
- * **Watched failing before it was trusted**, against a build whose read stopped after one page:
- * the picker drew a hundred Regions and the hundred-and-first was not among them, which is
- * exactly what a Merchant met.
+ * **Watched failing before it was trusted**, against a build whose reads stopped after one page:
+ * each control drew a hundred rows and the hundred-and-first was not among them, which is exactly
+ * what a Merchant met.
  *
- * It is the last thing in this file on purpose. Arranging it leaves two hundred rows in a
+ * It is the last thing in this file on purpose. Arranging it leaves several hundred rows in a
  * deployment every other case shares, and a case that ran after it would be looking through
  * somebody else's arrangement.
  */
-describe("a Store with more markets than one page holds", () => {
+describe("a Store with more of a set than one page holds", () => {
   /**
-   * How many of each are made — one more than the page `lib/markets.ts` asks kobai for.
+   * How many of each are made — one more than the page `lib/pages.ts` asks kobai for.
    *
    * The **first** one made is what the assertions name: a hundred newer rows sit above it, so it
    * is the first row of the second page and is offered only if the cursor was followed. It is
@@ -4694,23 +4698,105 @@ describe("a Store with more markets than one page holds", () => {
   /** Marks this case's rows apart from the handful the cases above left behind. */
   const OVERFLOW = `Overflow ${Date.now()}`;
 
-  /** Makes that many, and answers the first — the one a picker that stopped would not offer. */
-  async function fill(kind: "regions" | "channels", currency?: string): Promise<string> {
-    const made: string[] = [];
-    for (let index = 0; index < PAST_ONE_PAGE; index += 1) {
-      const name = `${OVERFLOW} ${kind} ${index}`;
-      await seam.api("POST", `/admin/${kind}`, currency ? { name, currency } : { name });
-      made.push(name);
-    }
-    const first = made[0];
-    if (first === undefined) throw new Error("unreachable: rows were made");
-    return first;
+  /**
+   * Makes {@link PAST_ONE_PAGE} of something, and answers what the **first** of them is called.
+   *
+   * The name is what every assertion here reaches for, and the first one made is the one that
+   * matters: these lists answer newest first, so it is the first row of the second page and is on
+   * screen only if the cursor was followed. One loop rather than one per set, because the four
+   * differ in nothing but what a row is called and the request that makes one.
+   */
+  async function fill(
+    named: (index: number) => string,
+    make: (name: string) => Promise<unknown>,
+  ): Promise<string> {
+    for (let index = 0; index < PAST_ONE_PAGE; index += 1) await make(named(index));
+    return named(0);
+  }
+
+  /** A market, which is a `name` and — for a Region — the currency it selects. */
+  const fillMarkets = async (kind: "regions" | "channels", currency?: string) =>
+    fill(
+      (index) => `${OVERFLOW} ${kind} ${index}`,
+      async (name) =>
+        seam.api("POST", `/admin/${kind}`, currency ? { name, currency } : { name }),
+    );
+
+  const fillCollections = async () =>
+    fill(
+      (index) => `${OVERFLOW} collection ${index}`,
+      async (title) => seam.api("POST", "/admin/collections", { title }),
+    );
+
+  /**
+   * An image, whose **bytes are a byte** — deliberately, and this is the one place in this file
+   * where that is the right answer.
+   *
+   * Nothing here renders one: the picker lists filenames, and a Media becomes an `<img>` only
+   * once it is attached. So a hundred and one real PNGs would be a hundred and one deflate calls
+   * spent on pixels no assertion looks at, and the Media screen's own case — where a *decoded*
+   * image is the subject — is what builds a whole file. kobai judges the declared content type
+   * rather than the bytes, so `image/png` is what makes these acceptable, and an empty part is
+   * the only thing it would have refused.
+   */
+  const fillMedia = async () =>
+    fill(
+      (index) => `${OVERFLOW} media ${index}.png`,
+      async (filename) => {
+        const body = new FormData();
+        body.set("file", new Blob([Uint8Array.of(0)], { type: "image/png" }), filename);
+        return seam.api("POST", "/admin/media", body);
+      },
+    );
+
+  /**
+   * Shuts the open `Select` popup, then audits the screen under it.
+   *
+   * **This is the one place the reason lives, and every audit in this `describe` comes through
+   * it.** Elsewhere in this file an overlay is a screen and is audited *open* — the command
+   * palette is — so a picker treated differently has to earn it. It does, and the argument is
+   * measured rather than reasoned from the source, which is the mistake #326 exists to record.
+   *
+   * **What an open picker reports is where it sits, not whether the screen is sound.** Every
+   * `Select` in this Admin mounts Base UI's focus guards while its popup is open — `span`
+   * elements carrying `aria-hidden="true"` and `tabindex="0"`, which is the sentinel every focus
+   * trap is built out of and which `axe-core` cannot tell from a mistake. Whether axe *judges*
+   * them is positional: a `Select` also renders a fixed, full-viewport backdrop whose `clip-path`
+   * cuts a hole over its own **trigger**, and axe calls a modal open only when one such element
+   * lies under **all five** of its sample points — at 1280x720, (160,90), (1120,90), (640,360),
+   * (160,630) and (1120,630). With a modal detected the rule is left `incomplete` and reports
+   * nothing; with the trigger under a sample point the backdrop drops out of that one stack, no
+   * modal is found, and the same guards become a *serious* `aria-hidden-focus` violation.
+   * Measured on the two screens this file drives: the Product screen's picker sits at y 344-376,
+   * the centre point falls in its hole, and the backdrop is in `[t, t, f, t, t]` of the stacks;
+   * the Store screen's sits at y 554-586 and its backdrop is in all five. **So an open-popup
+   * audit here is a check on the y-coordinate of a card**, and it would go red on a layout change
+   * that broke nothing.
+   *
+   * **There is no fix to take instead, and that was established before anything was tried.**
+   * `@base-ui/react`'s `FocusGuard` hard-codes both attributes and is `@internal`; no prop on
+   * `Select.Root`, `Select.Portal`, `Select.Positioner` or `Select.Popup` reaches it, and the
+   * guards exist at all because `SelectPopup` hard-codes `modal: false` for its
+   * `FloatingFocusManager`. 1.7.0 is both what is installed and what is `latest`, so there is
+   * nothing to bump to. Stripping `aria-hidden` off a sentinel by hand would buy a green scanner
+   * with a real screen-reader defect, and turning the rule off for one audit or asserting the
+   * violation as expected are each worse than saying this out loud. `docs/agents/the-admin.md`
+   * carries the same record for a reader who is not in this file.
+   *
+   * **If a case here ever goes red on `aria-hidden-focus`, this is how to tell which one you
+   * have found.** If the target names `[data-base-ui-focus-guard]`, it is the defect above and
+   * something opened a popup that this helper did not close — not a regression in what the case
+   * asserts. Any other target is new, and is worth the ticket this one was judged not to be.
+   */
+  async function auditWithThePopupClosed(page: Page, where: string): Promise<void> {
+    await page.keyboard.press("Escape");
+    await auditAccessibility(page, where);
   }
 
   it("offers a Region and a Channel that a hundred newer ones sit above", async () => {
     const store = await theStore();
-    const oldestRegion = await fill("regions", store.defaultCurrency);
-    const oldestChannel = await fill("channels");
+    const oldestRegion = await fillMarkets("regions", store.defaultCurrency);
+    const oldestChannel = await fillMarkets("channels");
 
     // The Store's own Default Region card, one of the three controls over this set.
     const settings = await seam.signedIn("/settings");
@@ -4729,18 +4815,19 @@ describe("a Store with more markets than one page holds", () => {
       .poll(() => settings.getByRole("option").count())
       .toBeGreaterThan(PAST_ONE_PAGE - 1);
 
-    // **Audited with the popup closed, deliberately, and the reason is a finding rather than a
-    // convenience.** A `Select` popup holding more options than fit scrolls, and the element
-    // that scrolls is the popup rather than the focusable list inside it — which axe reports as
-    // `scrollable-region-focusable`, at *serious*. That is a property of `ui/select.tsx` and a
-    // long list, not of anything this ticket changed: a Store with a hundred Regions drew the
-    // same popup before these reads followed the cursor, and no case had ever opened one.
-    // Fixing it means moving the overflow onto `Select.List` in a vendored component every
-    // picker in this Admin composes, which is a change to argue on its own — and #300 already
-    // says a list too long to look through wants `combobox-field.tsx` instead. So the screen is
-    // audited, the violation is named here, and neither is quietly dropped.
-    await settings.keyboard.press("Escape");
-    await auditAccessibility(settings, "the Store screen offering every Region");
+    // **The popup closes first, and the reason is at `auditWithThePopupClosed` — it is not the
+    // one this line used to give.** That was a claim that a `Select` popup holding more options
+    // than fit scrolls and that axe reports the scroller as `scrollable-region-focusable`, read
+    // off `ui/select.tsx`'s classes and never measured. It is **false** twice over:
+    // `SelectContent` passes `alignItemWithTrigger`, so Base UI puts `max-height: 100%;
+    // overflow: hidden auto` inline on `Select.List` — at 1280x720 with 101 options the popup
+    // measures 545/545 and does not scroll while the list measures 2864/545 and does — and axe
+    // exempts it either way, its matcher skipping a combobox popup, which `Select.List` is by
+    // `role="listbox"` and the trigger's `aria-controls`. #326 measured that across six
+    // viewports, three ways of opening and five timings, found nothing on the very commit the
+    // claim came from, and closed it as not reproducible. The record is kept here because a
+    // disproved claim that merely disappears gets rediscovered.
+    await auditWithThePopupClosed(settings, "the Store screen offering every Region");
 
     // And the Channel picker, which is the same hook one noun along: the two were extracted into
     // one module because a Price is constrained by the pair, and a fix applied to one of them
@@ -4754,7 +4841,67 @@ describe("a Store with more markets than one page holds", () => {
       keys.getByRole("option", { name: oldestChannel, exact: true }),
       "a Channel older than a hundred others, in the picker",
     );
-    await keys.keyboard.press("Escape");
-    await auditAccessibility(keys, "the API keys screen offering every Channel");
+    await auditWithThePopupClosed(keys, "the API keys screen offering every Channel");
+  });
+
+  it("offers a Collection and an image that a hundred newer ones sit above", async () => {
+    const oldestCollection = await fillCollections();
+    const oldestImage = await fillMedia();
+    const product = await seam.createProduct({ title: `${OVERFLOW} product` });
+
+    // **The half a Merchant would call kobai losing a row.** `collections` on
+    // `PATCH /admin/products/{id}` is the whole set the Product should now be in, so a
+    // Collection this card never drew is one the Product can never be put into — and the card
+    // draws exactly what `lib/collections.ts` read.
+    const screen = await seam.signedIn(`/products/${product.id}`);
+    await shows(
+      screen.getByRole("checkbox", { name: oldestCollection, exact: true }),
+      "a Collection older than a hundred others, on the Product's Collections card",
+    );
+
+    // The Images card's picker — the Product's own, which is the first of them: a Variant card
+    // renders one each, and the Product's is above them all.
+    const images = screen.getByRole("combobox", { name: "An image to attach" }).first();
+    await shows(images, "the Images card's picker");
+    await images.click();
+    await shows(
+      screen.getByRole("option", { name: oldestImage, exact: true }),
+      "an image older than a hundred others, in the picker",
+    );
+
+    // **This screen is where the defect at `auditWithThePopupClosed` was found, and #327's
+    // second criterion is what it got: reported, not worked around.** Its picker is the one
+    // whose trigger lies under a sample point, so leaving the popup open here does not merely
+    // risk a red build — it *is* one, naming a Base UI focus guard at *serious*. Two things
+    // about it are this case's own rather than the helper's. It is **not** the
+    // `scrollable-region-focusable` claim #326 measured out of existence, which the case above
+    // still carries the record of. And it is nothing to do with a long list or with these reads:
+    // it reproduces on a Product screen holding **three** images, and identically against the
+    // admin source as it stood before this change — a Product screen with a live Images picker
+    // has been openable since #255, and until this ticket filled one no case had ever opened it.
+    await auditWithThePopupClosed(
+      screen,
+      "the Product screen offering every Collection and image",
+    );
+
+    // And the second control over the Collections, which fails differently and worse: the
+    // Products list judges `?collection=` against the set it read, so a Collection past the
+    // first page was not merely missing from the nav — an address naming one was answered with
+    // **No such Collection**, a screen telling a Merchant that something they are looking at
+    // does not exist.
+    const list = await seam.signedIn("/products");
+    await shows(
+      list.getByRole("link", { name: oldestCollection, exact: true }),
+      "a Collection older than a hundred others, in the Products list's filter",
+    );
+    await list.getByRole("link", { name: oldestCollection, exact: true }).click();
+    await hides(
+      list.getByText("No such Collection"),
+      "the refusal a Collection the Admin had not read used to be met with",
+    );
+    await auditAccessibility(
+      list,
+      "the Products list narrowed to a Collection past one page",
+    );
   });
 });

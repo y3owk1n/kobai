@@ -1,5 +1,6 @@
 import type { Collection } from "@kobai/client";
 import { useQuery } from "@tanstack/react-query";
+import { A_PAGE, everyPage } from "@/lib/pages";
 import { orThrow } from "@/lib/refusal";
 import { useKobaiClient } from "@/lib/session";
 
@@ -17,19 +18,16 @@ import { useKobaiClient } from "@/lib/session";
  * That is the same rule the Fulfilment Strategy field follows: the Admin may hold what kobai's
  * *types* close — the three Product statuses — and must ask about what a deployment decides. A
  * Collection is a row a Merchant made.
- */
-
-/**
- * How many are offered, and the gap that comes with it.
  *
- * **It does not page.** A cursor inside a card would sit in an address that already locates a
- * Product, and a second one above the Products table would fight with the one that list already
- * puts there — the gap `components/media-attachments.tsx` takes for the same reason. So a Store
- * with more than a hundred Collections has some it cannot reach from either control: that is a
- * **known gap** rather than something this hides, and the way to those is the Collections
- * section, which pages properly.
+ * **It follows kobai's cursor to the end, through `lib/pages.ts`** (#327). It used to ask for a
+ * hundred and stop, which was written down as a known gap on the grounds that *a cursor inside a
+ * card would sit in an address that already locates a Product* — true of a pager, and no
+ * objection whatever to the read: following the cursor here puts nothing in an address and draws
+ * no Next button, and a caller still gets one list and one pending state. What the gap actually
+ * cost is what makes it worth naming: past a hundred Collections a Product could not be put into
+ * one that exists, and the Products list answered `?collection=` with **No such Collection** —
+ * a screen telling a Merchant that a Collection they are looking at does not exist.
  */
-export const OFFERED_COLLECTIONS = 100;
 
 /**
  * Its own cache key, deliberately not the Collections screen's.
@@ -49,6 +47,10 @@ export type OfferedCollections = {
    * is empty for want of an answer rather than because the Store has none — so a control that
    * judged an address against it would call every perfectly good Collection unknown for the
    * length of a round trip, and permanently if the read failed.
+   *
+   * **It is still one answer although the read may be several requests**, which is what makes
+   * following the cursor invisible to every caller: a page that failed half way through throws,
+   * so the query is a failure rather than a truncated list nobody was told about.
    */
   readonly read: boolean;
   readonly pending: boolean;
@@ -61,15 +63,18 @@ export function useOfferedCollections(): OfferedCollections {
   const query = useQuery({
     queryKey: [OFFERED],
     queryFn: async () =>
-      orThrow(
-        await client.GET("/admin/collections", {
-          params: { query: { limit: OFFERED_COLLECTIONS } },
-        }),
-      ),
+      everyPage(async (after) => {
+        const answered = orThrow(
+          await client.GET("/admin/collections", {
+            params: { query: { limit: A_PAGE, after } },
+          }),
+        );
+        return { rows: answered.collections, nextCursor: answered.nextCursor };
+      }),
   });
 
   return {
-    collections: query.data?.collections ?? [],
+    collections: query.data ?? [],
     read: query.isSuccess,
     pending: query.isPending,
     error: query.isError ? query.error : null,
