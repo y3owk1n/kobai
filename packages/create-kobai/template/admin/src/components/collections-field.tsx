@@ -36,7 +36,8 @@ import { problemOf } from "@/lib/refusal";
  *
  * **The set is read from kobai, never written down here** (ADR-0063), through
  * `lib/collections.ts` — the same hook the Products list's filter reads, so the three ask one
- * question in one place and inherit the same known gap about the hundred-and-first Collection.
+ * question in one place, and each of them followed kobai's cursor to the end the day that hook
+ * did (#327).
  */
 export function CollectionsField<T extends FieldValues, TTransformed = T>({
   idPrefix,
@@ -66,9 +67,10 @@ export function CollectionsField<T extends FieldValues, TTransformed = T>({
    * Collections to draw a row for beyond the ones kobai offered — the ones this Product is
    * already in that the offered list did not carry.
    *
-   * That is `PermissionsField`'s rule about a word Core has never heard of, arriving here as the
-   * hundred-and-first Collection: a picker that quietly dropped one would take the Product out
-   * of it on the next save, which is data loss spelled as a form. A Product being *created* is
+   * That is `PermissionsField`'s rule about a word Core has never heard of, arriving here as a
+   * Collection the offered list did not carry — one made since it was read, or one past the bound
+   * `lib/pages.ts` follows the cursor to: a picker that quietly dropped one would take the Product
+   * out of it on the next save, which is data loss spelled as a form. A Product being *created* is
    * in nothing yet and passes none, which is the same walk with an empty list.
    */
   readonly alsoOffer?: readonly Collection[];

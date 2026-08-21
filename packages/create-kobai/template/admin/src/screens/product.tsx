@@ -629,8 +629,8 @@ function ProductMedia({
  * holds, the request that changes it, and the sentence below about what Remove does. The set of
  * Collections to choose from is read from kobai and never written down, through
  * `lib/collections.ts`, which the Products list's own filter reads from too — so the three ask
- * one question in one place and inherit the same known gap about the hundred-and-first
- * Collection.
+ * one question in one place, and each of them followed kobai's cursor to the end the day that
+ * hook did (#327).
  *
  * **Removing a Collection here takes this Product out of it and deletes nothing** — not the
  * Collection, and not the other Products in it. That sentence is in the card because a Merchant
@@ -686,9 +686,9 @@ function ProductCollections({
             idPrefix="product-collection"
             control={form.control}
             name="collections"
-            // The ones kobai did not offer and this Product is nevertheless in — the
-            // hundred-and-first Collection, which a card that dropped it would take this
-            // Product out of on the next save.
+            // The ones kobai did not offer and this Product is nevertheless in — one made
+            // since the list was read, or one past the bound `lib/pages.ts` follows the cursor
+            // to — which a card that dropped it would take this Product out of on the next save.
             alsoOffer={collections}
             whenNone={
               <p className="text-muted-foreground text-sm">
