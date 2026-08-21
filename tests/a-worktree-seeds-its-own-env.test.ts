@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { ensureEnv, fill } from "../scripts/ensure-env.ts";
 import { derivePorts } from "../scripts/ports.ts";
+import { removeAll } from "./support/removal.ts";
 
 /**
  * A linked worktree gets a `.env` of its own, once, and nothing else does (ADR-0084).
@@ -30,9 +31,11 @@ const EXAMPLE = [
 
 const made: string[] = [];
 
-afterAll(() => {
-  for (const path of made) rmSync(path, { recursive: true, force: true });
-});
+// Through `removeAll` rather than a `for` loop of `rmSync`, because most of what is made
+// here is a git repository this file committed into — see that module for what is still
+// writing in one, and why abandoning the rest at the first path that throws was half the bug
+// (#313).
+afterAll(() => removeAll(made));
 
 const git = (cwd: string, ...argv: string[]) =>
   execFileSync("git", argv, { cwd, stdio: ["ignore", "ignore", "ignore"] });
