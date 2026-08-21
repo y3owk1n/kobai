@@ -49,7 +49,7 @@ export type FulfilmentTransition =
       readonly ok: true;
       readonly fulfilment: Fulfilment;
       /**
-       * When Postgres wrote the row, ISO 8601 — what a `fulfilment-dispatched` payload's
+       * When Postgres wrote the row, ISO 8601 — what a `fulfilment-was-dispatched` payload's
        * `occurredAt` is (ADR-0085).
        *
        * Read out of the `returning` of the statement that moved it rather than from a clock

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Logger } from "../config.ts";
+import type { FulfilmentTransitionRefusal } from "../fulfilment/lifecycle.ts";
 import {
   createTestKobai,
   MIXED_ORDER_PHYSICAL_SKU,
@@ -8,7 +9,12 @@ import {
   type TestKobai,
   type TestOrder,
 } from "../testing/index.ts";
-import type { EventSubscribers, FulfilmentDispatched, Subscriber } from "./events.ts";
+import type {
+  EventName,
+  EventSubscribers,
+  FulfilmentDispatched,
+  Subscriber,
+} from "./events.ts";
 
 /**
  * **The events surface** — Core emits, the Project wires a Subscriber, and delivery is
@@ -30,7 +36,7 @@ import type { EventSubscribers, FulfilmentDispatched, Subscriber } from "./event
 /** A Subscriber that keeps the payloads it was handed, and the book they go in. */
 function recording(): {
   readonly heard: FulfilmentDispatched[];
-  readonly subscriber: Subscriber<"fulfilment-dispatched">;
+  readonly subscriber: Subscriber<"fulfilment-was-dispatched">;
 } {
   const heard: FulfilmentDispatched[] = [];
   return { heard, subscriber: (payload) => void heard.push(payload) };
@@ -111,7 +117,9 @@ describe("dispatching a Fulfilment", () => {
   it("hands a wired Subscriber what moved, the Order it is part of, the reference and when", async () => {
     const emailTheShopper = recording();
     await using kobai = await createTestKobai({
-      events: { subscribers: { "fulfilment-dispatched": [emailTheShopper.subscriber] } },
+      events: {
+        subscribers: { "fulfilment-was-dispatched": [emailTheShopper.subscriber] },
+      },
     });
     const order = await seedTestOrder(kobai);
     const pending = await theFulfilment(kobai, order);
@@ -136,7 +144,9 @@ describe("dispatching a Fulfilment", () => {
   it("says `null` where the dispatch recorded no reference", async () => {
     const emailTheShopper = recording();
     await using kobai = await createTestKobai({
-      events: { subscribers: { "fulfilment-dispatched": [emailTheShopper.subscriber] } },
+      events: {
+        subscribers: { "fulfilment-was-dispatched": [emailTheShopper.subscriber] },
+      },
     });
     const order = await seedTestOrder(kobai);
     const pending = await theFulfilment(kobai, order);
@@ -151,7 +161,9 @@ describe("dispatching a Fulfilment", () => {
   it("announces the part that moved and not the rest of the Order", async () => {
     const emailTheShopper = recording();
     await using kobai = await createTestKobai({
-      events: { subscribers: { "fulfilment-dispatched": [emailTheShopper.subscriber] } },
+      events: {
+        subscribers: { "fulfilment-was-dispatched": [emailTheShopper.subscriber] },
+      },
     });
     // Two Fulfilments on independent timelines — the arrangement that makes "which one moved"
     // a question with a wrong answer available (ADR-0014).
@@ -172,7 +184,9 @@ describe("dispatching a Fulfilment", () => {
   it("announces nothing when the move was refused", async () => {
     const emailTheShopper = recording();
     await using kobai = await createTestKobai({
-      events: { subscribers: { "fulfilment-dispatched": [emailTheShopper.subscriber] } },
+      events: {
+        subscribers: { "fulfilment-was-dispatched": [emailTheShopper.subscriber] },
+      },
     });
     const order = await seedTestOrder(kobai);
     const pending = await theFulfilment(kobai, order);
@@ -197,7 +211,9 @@ describe("dispatching a Fulfilment", () => {
   it("announces nothing for a delivery or a cancellation, which have no Event yet", async () => {
     const emailTheShopper = recording();
     await using kobai = await createTestKobai({
-      events: { subscribers: { "fulfilment-dispatched": [emailTheShopper.subscriber] } },
+      events: {
+        subscribers: { "fulfilment-was-dispatched": [emailTheShopper.subscriber] },
+      },
     });
     const order = await seedTestOrder(kobai);
     const pending = await theFulfilment(kobai, order);
@@ -222,7 +238,7 @@ describe("several Subscribers on one Event", () => {
     // independent facts — and each entry says which Subscriber wrote it and what it was handed.
     const order: string[] = [];
     /** Yields to the event loop before writing, so a run that did not await would interleave. */
-    const slow = (name: string): Subscriber<"fulfilment-dispatched"> => {
+    const slow = (name: string): Subscriber<"fulfilment-was-dispatched"> => {
       return async (payload) => {
         await new Promise((resolve) => setImmediate(resolve));
         order.push(`${name}:${payload.fulfilmentId}`);
@@ -231,7 +247,7 @@ describe("several Subscribers on one Event", () => {
     await using kobai = await createTestKobai({
       events: {
         subscribers: {
-          "fulfilment-dispatched": [slow("first"), slow("second"), slow("third")],
+          "fulfilment-was-dispatched": [slow("first"), slow("second"), slow("third")],
         },
       },
     });
@@ -253,7 +269,7 @@ describe("several Subscribers on one Event", () => {
   it("calls the ones after a Subscriber that threw, and reports the failure in the log", async () => {
     const before = recording();
     const after = recording();
-    const broken: Subscriber<"fulfilment-dispatched"> = () => {
+    const broken: Subscriber<"fulfilment-was-dispatched"> = () => {
       throw new Error("the mail server is down");
     };
     const log = recordingLogger();
@@ -261,7 +277,7 @@ describe("several Subscribers on one Event", () => {
       logger: log.logger,
       events: {
         subscribers: {
-          "fulfilment-dispatched": [before.subscriber, broken, after.subscriber],
+          "fulfilment-was-dispatched": [before.subscriber, broken, after.subscriber],
         },
       },
     });
@@ -284,7 +300,7 @@ describe("several Subscribers on one Event", () => {
       {
         message: "a subscriber failed",
         fields: {
-          event: "fulfilment-dispatched",
+          event: "fulfilment-was-dispatched",
           position: 1,
           of: 3,
           reason: "the mail server is down",
@@ -297,7 +313,7 @@ describe("several Subscribers on one Event", () => {
     // A `Logger` is a Project's (ADR-0003), so it is somebody else's code in the one place that
     // exists to contain somebody else's code throwing. If reporting a broken Subscriber could
     // itself escape, the guarantee would fail in exactly the case it was written for.
-    const broken: Subscriber<"fulfilment-dispatched"> = () => {
+    const broken: Subscriber<"fulfilment-was-dispatched"> = () => {
       throw new Error("the mail server is down");
     };
     const after = recording();
@@ -309,7 +325,7 @@ describe("several Subscribers on one Event", () => {
         },
       },
       events: {
-        subscribers: { "fulfilment-dispatched": [broken, after.subscriber] },
+        subscribers: { "fulfilment-was-dispatched": [broken, after.subscriber] },
       },
     });
     const placed = await seedTestOrder(kobai);
@@ -337,10 +353,10 @@ describe("when a Subscriber runs", () => {
     // Wired before there is a kobai to read back through, and filled in once there is —
     // which is the only order available, since a Subscriber goes into the config a boot is
     // built from. What is wired is a real Subscriber throughout; only what it does is late.
-    let readItBack: Subscriber<"fulfilment-dispatched"> = () => {};
+    let readItBack: Subscriber<"fulfilment-was-dispatched"> = () => {};
     await using kobai = await createTestKobai({
       events: {
-        subscribers: { "fulfilment-dispatched": [(payload) => readItBack(payload)] },
+        subscribers: { "fulfilment-was-dispatched": [(payload) => readItBack(payload)] },
       },
     });
     const placed = await seedTestOrder(kobai);
@@ -360,12 +376,12 @@ describe("when a Subscriber runs", () => {
 
 describe("a Subscriber that throws", () => {
   it("does not undo the dispatch, and the Merchant reads the Fulfilment back moved", async () => {
-    const broken: Subscriber<"fulfilment-dispatched"> = () => {
+    const broken: Subscriber<"fulfilment-was-dispatched"> = () => {
       throw new Error("the mail server is down");
     };
     await using kobai = await createTestKobai({
       logger: { info: () => {}, error: () => {} },
-      events: { subscribers: { "fulfilment-dispatched": [broken] } },
+      events: { subscribers: { "fulfilment-was-dispatched": [broken] } },
     });
     const placed = await seedTestOrder(kobai);
     const pending = await theFulfilment(kobai, placed);
@@ -398,7 +414,7 @@ describe("a Subscriber that throws", () => {
  */
 describe("what a Subscriber may be declared as", () => {
   it("accepts one that reads less than Core sends, which is what makes a field additive", () => {
-    const onlyTheOrder: Subscriber<"fulfilment-dispatched"> = (dispatched: {
+    const onlyTheOrder: Subscriber<"fulfilment-was-dispatched"> = (dispatched: {
       readonly orderId: string;
     }) => void dispatched.orderId;
 
@@ -407,7 +423,7 @@ describe("what a Subscriber may be declared as", () => {
 
   it("rejects one that demands more than Core sends", () => {
     const wantsAnEmail: EventSubscribers = {
-      "fulfilment-dispatched": [
+      "fulfilment-was-dispatched": [
         // @ts-expect-error a payload carries the identity of what happened and the facts of the
         // transition, never a copy of the record it concerns — so there is no Shopper here.
         (dispatched: { readonly shopperEmail: string }) => void dispatched.shopperEmail,
@@ -419,12 +435,40 @@ describe("what a Subscriber may be declared as", () => {
 
   it("rejects one wired against an Event kobai does not emit", () => {
     const guessing: EventSubscribers = {
-      // @ts-expect-error the set of Event names is Core's, and `fulfilment-delivered` is not in
-      // it: delivered gets an Event on the same terms when something wants one.
-      "fulfilment-delivered": [() => {}],
+      // @ts-expect-error the set of Event names is Core's, and `fulfilment-was-delivered` is
+      // not in it: delivered gets an Event on the same terms when something wants one, under
+      // that name (#338).
+      "fulfilment-was-delivered": [() => {}],
     };
 
     expect(guessing).toBeDefined();
+  });
+});
+
+/**
+ * The rule #338 settled, asserted where the names are declared rather than left to be noticed.
+ *
+ * An Event announces that a Fulfilment **just moved**; a `fulfilment-…` refusal names the state
+ * one is **already in** and so will not move from (`fulfilment/lifecycle.ts`, ADR-0060). They
+ * are opposite facts and they must not be one word. Both sets are **derived** — `EventName` from
+ * `KobaiEvents`, `FulfilmentTransitionRefusal` from the state union — so this covers the Events
+ * delivered and cancelled will get, and the word a fifth state would bring, rather than only the
+ * one pair that collided.
+ *
+ * **Watched failing against the name #322 shipped**, which is the whole of what makes it an
+ * assertion rather than a decoration: `error TS2322: Type '"fulfilment-dispatched"[]' is not
+ * assignable to type 'never[]'`, naming the spelling.
+ */
+describe("what an Event may be named", () => {
+  it("shares no spelling with the word a Fulfilment refuses a move with", () => {
+    // `never` is the whole assertion: a spelling in both sets makes the right-hand side a
+    // literal, and a literal does not go into `never[]`. The gate's `typecheck` step runs it.
+    const spelledBothWays: never[] = [] as Extract<
+      EventName,
+      FulfilmentTransitionRefusal
+    >[];
+
+    expect(spelledBothWays).toEqual([]);
   });
 });
 

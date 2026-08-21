@@ -226,10 +226,15 @@ export default defineKobaiConfig({
    *
    * kobai emits a fact about something it did; this line is what makes anything happen about it.
    * A Merchant marks a Fulfilment dispatched through the Admin, kobai announces
-   * `fulfilment-dispatched` once that transition has committed, and this Store queues the notice
-   * it owes the Shopper — in `src/notifications/dispatch-notice.ts`, this Project's own source,
-   * with no route replaced, no Step inserted and nothing in Core patched. That is story 22 of
-   * #211, and it is the difference between an events surface and a promise of one.
+   * `fulfilment-was-dispatched` once that transition has committed, and this Store queues the
+   * notice it owes the Shopper — in `src/notifications/dispatch-notice.ts`, this Project's own
+   * source, with no route replaced, no Step inserted and nothing in Core patched. That is story
+   * 22 of #211, and it is the difference between an events surface and a promise of one.
+   *
+   * **The Event says `was` and the refusal beside it does not**, which is a rule rather than
+   * this one name (#338): `fulfilment-dispatched` is the word a Merchant is refused a *second*
+   * dispatch with, meaning this one has already gone, so an Event announcing that one just did
+   * cannot be spelled the same. ADR-0085's amendment is the argument.
    *
    * **Take either name out and that one stops hearing.** The modules are still imported, the
    * objects they make still exist, and kobai still emits — into a deployment that wired nobody,
@@ -254,7 +259,10 @@ export default defineKobaiConfig({
    */
   events: {
     subscribers: {
-      "fulfilment-dispatched": [confirmations.tellTheShopper, dispatches.logTheDispatch],
+      "fulfilment-was-dispatched": [
+        confirmations.tellTheShopper,
+        dispatches.logTheDispatch,
+      ],
     },
   },
 });

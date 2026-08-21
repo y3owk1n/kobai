@@ -2012,7 +2012,7 @@ const readOrderRoute = createRoute({
  * Four things about them are decisions rather than implementation.
  *
  * **They are action routes and not a `PATCH`.** ADR-0062 makes a `PATCH` a *correction*, and a
- * dispatch is a transition with consequences — it emits `fulfilment-dispatched` (ADR-0085).
+ * dispatch is a transition with consequences — it emits `fulfilment-was-dispatched` (ADR-0085).
  * A `PATCH` accepting `state: "dispatched"` would let any state be set from any other, which is
  * every refusal below made unreachable. The verb is in the path for the same reason
  * `POST /admin/session/sign-out` is: it names what happens rather than a field to assign.
@@ -2721,7 +2721,7 @@ export function createAdminRoutes(deps: AdminDependencies): OpenAPIHono<AdminEnv
     // Awaited, so a Subscriber's work is done before the Merchant is answered: a slow one slows
     // this route, which is the right person to pay it and the right place for the signal to show
     // up. It never rejects, so nothing here has to be told what to do about one that threw.
-    await deps.events.emit("fulfilment-dispatched", {
+    await deps.events.emit("fulfilment-was-dispatched", {
       fulfilmentId: moved.fulfilment.id,
       // The Order the Fulfilment is part of — the address this route was called at, which is
       // the Order the transition just checked the Fulfilment against.

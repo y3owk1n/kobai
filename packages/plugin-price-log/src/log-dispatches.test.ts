@@ -86,7 +86,7 @@ function dispatch(
  */
 function alsoWired(): {
   readonly heard: FulfilmentDispatched[];
-  readonly subscriber: Subscriber<"fulfilment-dispatched">;
+  readonly subscriber: Subscriber<"fulfilment-was-dispatched">;
 } {
   const heard: FulfilmentDispatched[] = [];
   return { heard, subscriber: (payload) => void heard.push(payload) };
@@ -111,7 +111,7 @@ describe("a Plugin that offers a Subscriber", () => {
       // Plugin's Subscriber run.
       events: {
         subscribers: {
-          "fulfilment-dispatched": [kobaiSaid.subscriber, log.logTheDispatch],
+          "fulfilment-was-dispatched": [kobaiSaid.subscriber, log.logTheDispatch],
         },
       },
     });
@@ -141,7 +141,7 @@ describe("a Plugin that offers a Subscriber", () => {
     const log = dispatchLog();
     await using kobai = await createTestKobai({
       ...WIRED_TABLES,
-      events: { subscribers: { "fulfilment-dispatched": [log.logTheDispatch] } },
+      events: { subscribers: { "fulfilment-was-dispatched": [log.logTheDispatch] } },
     });
     const { order, fulfilmentId } = await anOrderToDispatch(kobai);
 
@@ -186,7 +186,7 @@ describe("a Plugin that offers a Subscriber", () => {
       ...WIRED_TABLES,
       events: {
         subscribers: {
-          "fulfilment-dispatched": [
+          "fulfilment-was-dispatched": [
             log.logTheDispatch,
             kobaiSaid.subscriber,
             log.logTheDispatch,
@@ -220,7 +220,7 @@ describe("a Plugin that offers a Subscriber", () => {
     const log = dispatchLog();
     await using kobai = await createTestKobai({
       ...WIRED_TABLES,
-      events: { subscribers: { "fulfilment-dispatched": [log.logTheDispatch] } },
+      events: { subscribers: { "fulfilment-was-dispatched": [log.logTheDispatch] } },
     });
     const first = await anOrderToDispatch(kobai);
     const second = await anOrderToDispatch(kobai, first.order.catalog);
@@ -248,7 +248,7 @@ describe("a Plugin that offers a Subscriber", () => {
     const unwired = dispatchLog();
     await using kobai = await createTestKobai({
       ...WIRED_TABLES,
-      events: { subscribers: { "fulfilment-dispatched": [wired.logTheDispatch] } },
+      events: { subscribers: { "fulfilment-was-dispatched": [wired.logTheDispatch] } },
     });
     const { order, fulfilmentId } = await anOrderToDispatch(kobai);
 

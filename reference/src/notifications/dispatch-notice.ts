@@ -54,12 +54,12 @@ export type DispatchNotice = {
  */
 export type ConfirmationOutbox = {
   /**
-   * What this deployment wires against `fulfilment-dispatched`.
+   * What this deployment wires against `fulfilment-was-dispatched`.
    *
    * A property holding a function rather than a method, so that a mistake about what kobai
    * sends is a compile error here rather than an `undefined` in a Shopper's confirmation.
    */
-  readonly tellTheShopper: Subscriber<"fulfilment-dispatched">;
+  readonly tellTheShopper: Subscriber<"fulfilment-was-dispatched">;
   /**
    * The notices queued for one Order, oldest first.
    *

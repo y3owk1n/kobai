@@ -9,7 +9,7 @@ import type { Logger } from "../config.ts";
  *
  * ```ts
  * // kobai.config.ts
- * events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
+ * events: { subscribers: { "fulfilment-was-dispatched": [emailTheShopper] } },
  * ```
  *
  * Everything below is ADR-0085's decision rather than this module's. What is worth having in
@@ -116,17 +116,24 @@ export type FulfilmentDispatched = {
  * A new Event is **additive**: with no wildcard to subscribe to everything, nothing starts
  * receiving an Event added in a minor without a line being written for it.
  *
- * **`fulfilment-dispatched` is spelled the same as a refusal `reason`, and they are opposite
- * facts.** `FULFILMENT_REFUSALS.dispatched` in `fulfilment/lifecycle.ts` is the word a Merchant
- * is refused a move *with*, meaning **this one has already gone**; this is the announcement that
- * one just did. Both are named by ADR-0060's and ADR-0085's own rule — subject then state — and
- * both are promised for ever, so neither may be renamed to relieve the collision. They never
- * meet: one is a string in a refusal body a client branches on, the other a key in a config file
- * a Developer writes, and nothing reads a value of one where the other is expected. It is
- * written down here because reading them side by side is otherwise confusing.
+ * **An Event announcing a transition says `was`, and that is a rule rather than this one name**
+ * (#338, ADR-0085's amendment). `fulfilment-dispatched` is already taken, by
+ * `FULFILMENT_REFUSALS.dispatched` in `fulfilment/lifecycle.ts` — the word a Merchant is refused
+ * a move *with*, meaning **this one has already gone** — where this is the announcement that one
+ * just did. Two opposite facts under one spelling. The refusals are the four states, derived
+ * from the state union so the set cannot be short of a case, so it is the Event that moved: an
+ * Event names the **transition** in the past tense and a refusal names the **state**, which is
+ * what the two are. It generalises, which is the reason it was taken as a rule — delivered and
+ * cancelled would each have collided the same way, and will be `fulfilment-was-delivered` and
+ * `fulfilment-was-cancelled` when something wants them.
+ *
+ * **This costs nothing today and could not be done later.** An Event name is promised from the
+ * day it ships (ADR-0019); nothing is published, so ADR-0058's licence is what pays for it, and
+ * the break is registered there. `events.test.ts` holds the two sets apart from here on, by
+ * deriving both rather than by naming a word.
  */
 export type KobaiEvents = {
-  readonly "fulfilment-dispatched": FulfilmentDispatched;
+  readonly "fulfilment-was-dispatched": FulfilmentDispatched;
 };
 
 /** The name of an Event kobai emits. Core's set, closed, and there is no wildcard. */
@@ -136,7 +143,7 @@ export type EventName = keyof KobaiEvents;
  * What runs when an Event is emitted — a Plugin **offers** one and a Project **wires** it.
  *
  * ```ts
- * const emailTheShopper: Subscriber<"fulfilment-dispatched"> = async (dispatched) => {
+ * const emailTheShopper: Subscriber<"fulfilment-was-dispatched"> = async (dispatched) => {
  *   await mailer.send(dispatched.orderId, dispatched.trackingReference);
  * };
  * ```
@@ -177,7 +184,7 @@ export type EventSubscribers = {
  * What a Project says about events in `kobai.config.ts` — a subject, not a bare map (ADR-0050).
  *
  * ```ts
- * events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
+ * events: { subscribers: { "fulfilment-was-dispatched": [emailTheShopper] } },
  * ```
  *
  * Nested so that the day kobai has something else to say about events — durable delivery is the

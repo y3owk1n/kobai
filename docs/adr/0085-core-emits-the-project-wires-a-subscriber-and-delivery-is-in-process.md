@@ -1,5 +1,13 @@
 # Core emits, the Project wires a subscriber, and delivery is in-process
 
+> **Amended below (#338): the first Event is `fulfilment-was-dispatched`.** This record named it
+> `fulfilment-dispatched`, which is also the `reason` a Merchant is refused a *second* dispatch
+> with — two opposite facts under one spelling. Everything else here stands, the naming rule
+> included; what the amendment adds is the clause that keeps an announcement and a state apart.
+> **The name is corrected in place wherever this record writes it**, with the old one struck
+> beside it, so nothing below can be copied wrong;
+> [Amendment: an Event says `was`](#amendment-an-event-says-was-338) is the argument.
+
 Events are one of [ADR-0003](./0003-the-extension-surface-and-what-we-promise.md)'s five Extension
 Points — the fourth, as `docs/extension-points.md` numbers them, since that ADR names five and
 numbers none — and the one that has never existed in any form: #13's audit found no bus, no
@@ -21,15 +29,18 @@ to settle its shape.
 
   ```ts
   // kobai.config.ts
-  events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
+  events: { subscribers: { "fulfilment-was-dispatched": [emailTheShopper] } },
   ```
 
-  A subject rather than a bare map (ADR-0050), so that the day kobai has something else to say
-  about events — durable delivery, below, is the obvious candidate — it is a key beside
-  `subscribers` rather than a reshape of every Project's config file.
-- **Names are kebab-case and flat** — `fulfilment-dispatched`, subject then what happened. kobai
-  already names Workflows, Steps and refusal `reason`s that way, and a dotted
-  `fulfilment.dispatched` would invent a hierarchy the registry does not have.
+  The name is #338's; the shape is this clause's subject and is unchanged. A subject rather than
+  a bare map (ADR-0050), so that the day kobai has something else to say about events — durable
+  delivery, below, is the obvious candidate — it is a key beside `subscribers` rather than a
+  reshape of every Project's config file.
+- **Names are kebab-case and flat** — ~~`fulfilment-dispatched`~~ `fulfilment-was-dispatched`
+  (**amended by #338**), subject then what happened. kobai already names Workflows, Steps and
+  refusal `reason`s that way, and a dotted `fulfilment.dispatched` would invent a hierarchy the
+  registry does not have. Flat and kebab-case stand whole; what the amendment adds is that an
+  Event announcing a transition says `was`.
 - **There is no wildcard.** A Subscriber names one Event. Nothing may ask for all of them.
 - **An Event is emitted after the transaction that made the fact has committed, and never from
   inside a Workflow Step.**
@@ -180,7 +191,10 @@ removing one it does not is a major version.
 to subscribe to everything, nothing starts receiving an Event added in a minor without a line
 being written for it.
 
-## The first event: `fulfilment-dispatched`
+## The first event: `fulfilment-was-dispatched`
+
+*Named ~~`fulfilment-dispatched`~~ until #338 — the amendment below is why. The payload, and
+every argument about it in this section, is unchanged.*
 
 #211 commits to the first consumer, and #320 builds the lifecycle it belongs to — a Fulfilment
 moves dispatched, delivered or cancelled, per Fulfilment and never on the Order. **Dispatch is the
@@ -212,6 +226,81 @@ copied here.
 Delivered and cancelled get Events on the same terms when something wants them. They are not
 added speculatively — an Event nobody subscribes to is a promise with no consumer, which is what
 ADR-0003 exists to prevent.
+
+## Amendment: an Event says `was` (#338)
+
+**Raised as #338 and built there, one ticket after the surface shipped in #322.** This section is
+the operative text for what an Event is called, and the clauses above that name it are corrected
+in place with the old name struck. Nothing else in this record moves — not the naming rule it
+amends, not the payload, not the delivery guarantee.
+
+**What this record said:** the first Event is `fulfilment-dispatched`, kebab-case and flat,
+subject then what happened.
+
+**What it says now:** it is **`fulfilment-was-dispatched`**, and the rule that produced it is
+that **an Event announcing a transition names the transition in the past tense, with `was`**.
+Kebab-case and flat is unchanged, and so is subject-first. Delivered and cancelled, when
+something wants them, are `fulfilment-was-delivered` and `fulfilment-was-cancelled`.
+
+**Why the first name did not survive.** `fulfilment-dispatched` is also
+`FULFILMENT_REFUSALS.dispatched` in `packages/core/src/fulfilment/lifecycle.ts` — the `reason` a
+Merchant is refused a move *with*, meaning **this one has already gone** — and the two are
+opposite facts. This record and #320 each followed the same subject-then-state rule and arrived
+one ticket apart, so nothing was in a position to notice. **They never collide mechanically**:
+one is a string in a refusal body a client branches on, the other a key in `kobai.config.ts`, and
+no compiler or runtime is confused by either. What collides is what a person reads — in a log
+line, in a doc that shows both, in a Developer's memory of which one they were told about.
+
+**Why the Event is the side that moved.** The refusal set satisfies
+``Record<FulfilmentState, `fulfilment-${FulfilmentState}`>``, so the four words are *derived*
+from the state union and the set is exhaustive by construction rather than by care. It is also
+promised HTTP surface (ADR-0060), with a generated description and a generated client behind it,
+where an Event is a name in a config file. And the two sets are naming two different things once
+the difference is seen: a refusal names the **state** a Fulfilment is in, an Event names the
+**transition** it just made, so the tense is the honest distinction rather than a disambiguating
+suffix.
+
+**Why it is a rule and not one string.** The collision is systematic rather than a coincidence of
+one word: three of the four refusals name a state a Fulfilment *moves into*, so each would get an
+Event on this record's own terms, and every one of them would have collided identically. A rename
+that fixed `dispatched` alone would have left the same ticket to be written twice more.
+
+**What it cost, and why it had to be now.** An Event name is under ADR-0019 from the day it
+ships, and this one shipped in #322. Nothing is published, so
+[ADR-0058](./0058-a-promised-surface-may-be-broken-until-the-first-release.md)'s licence is what
+pays for it and the break is registered there. **The wire did not move**: an Event is not on the
+HTTP surface, so `packages/core/openapi.json` and `@kobai/client` are byte-identical across this
+change, and the four refusal words are exactly where they were.
+
+**What holds it from here on.** `packages/core/src/events/events.test.ts` asserts that
+`Extract<EventName, FulfilmentTransitionRefusal>` is `never`, which the gate's `typecheck` step
+runs. Both sides are derived — the Events from `KobaiEvents`, the words from the state union — so
+a fifth state, or an Event added under a state's name, reddens the build naming the spelling.
+The rule is written on `KobaiEvents` as well, where somebody about to add an Event will read it.
+
+**The payload's *type* keeps its name, and that is the boundary rather than an oversight.**
+`FulfilmentDispatched` is what a Subscriber annotates with, and nothing on the refusal side is
+called that — the type there is `FulfilmentTransitionRefusal` — so there is no second collision
+to end. The guard above is over the strings a Project **writes**, which is where the confusion
+was; renaming an exported type as well would be a second break on this record's promised surface
+bought with nothing but symmetry.
+
+Two other answers were available and are recorded because the argument for this one is only as
+good as its rivals:
+
+- **Rename the refusals instead**, to `fulfilment-is-${FulfilmentState}`. This does *not* loosen
+  the derivation — the template stays a template — and it arguably reads better, since the
+  refusal really does mean *it is already dispatched*, and it would have left the Events with the
+  names every events surface gives them. Rejected on cost, which is the only place the two sides
+  differ: four promised `reason` strings, a regenerated description and client, and the Admin's
+  own refusal map and Order screen — against one Event name and no generated artifact at all.
+  Both are free under ADR-0058 today and neither is free after the first publish; the cheaper one
+  buys the same separation.
+- **Leave them and record the collision on both sides**, which is what #322 did on `KobaiEvents`
+  and is a legitimate answer for something that never collides mechanically. Rejected because the
+  note is a permanent cost paid by every reader in exchange for a rename that is free exactly
+  once, and because the note would have had to be written twice more as delivered and cancelled
+  got Events.
 
 ## Considered options
 

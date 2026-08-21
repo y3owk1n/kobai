@@ -208,7 +208,10 @@ Order is immutable either way (ADR-0009). Six things about the surface over it a
   gets. Two 404s beside them, because there are two addresses. **409 rather than 422**, on
   `cart-placed`'s distinction: the record is already somewhere this move cannot be made from, and
   *somebody got there first* is the ordinary way a Merchant meets it — 422 is for a body refused by
-  how the Store is *configured*, and there is no configuration here to fix.
+  how the Store is *configured*, and there is no configuration here to fix. **These four words
+  name a state and never an announcement**, which is the other half of the Event naming rule
+  below: `fulfilment-dispatched` is a refusal and `fulfilment-was-dispatched` is the Event, and
+  the day a fifth state brings a fifth word it must not be an Event's (#338).
 - **The check and the write are one statement**, ADR-0018's shape reached from an ordinary
   direction. The `where` names the states the move is legal from, derived from the same table the
   refusals are, so two Merchants dispatching one Fulfilment at once produce one 200 and one
@@ -235,7 +238,7 @@ Order is immutable either way (ADR-0009). Six things about the surface over it a
 **A dispatch is the one thing kobai emits, and the route is what emits it** (#322, ADR-0085).
 `packages/core/src/events/events.ts` is Extension Point 4 entire — the Event names, the payloads,
 the `Subscriber` type and the emitter a deployment is built with — and `docs/extension-points.md`
-is where it is written for a Developer. Five things about it belong here, because they constrain
+is where it is written for a Developer. Six things about it belong here, because they constrain
 what a route on this surface may do:
 
 - **Core emits, and it emits from the *route*.** Not from `transitionFulfilment`, and **never
@@ -255,9 +258,18 @@ what a route on this surface may do:
 - **A payload carries the identity of what happened and the facts of the transition**, never a
   copy of the record — a copied field is a second promise about data this surface already
   promises (ADR-0060), and two copies of a fact drift. `orderId` is on
-  `fulfilment-dispatched` precisely so a Subscriber has a route to read the rest back through.
+  `fulfilment-was-dispatched` precisely so a Subscriber has a route to read the rest back through.
 - **Delivered and cancelled emit nothing**, deliberately: an Event nobody subscribes to is a
   promise with no consumer, and adding one later is additive because there is no wildcard.
+- **An Event announcing a transition says `was`, and that is this surface's constraint on a
+  name** (#338, ADR-0085's amendment). `fulfilment-was-dispatched` rather than
+  `fulfilment-dispatched`, because that spelling is already a **refusal** — the word above,
+  meaning *this one has already gone*, where the Event means *one just did*. The refusals are the
+  four states and are derived from the state union, so it is the Event that gets the tense. The
+  rule is held rather than remembered: `events.test.ts` asserts
+  `Extract<EventName, FulfilmentTransitionRefusal>` is `never`, over two derived sets, so an
+  Event added under a state's word reddens `typecheck`. **Adding an Event for delivered or
+  cancelled therefore names it `fulfilment-was-delivered` or `fulfilment-was-cancelled`.**
 
 **The Strategy from outside Core is `@kobai/plugin-made-to-order`**, and it is the proof
 ADR-0014 asked for rather than a feature — *if made-to-order cannot be expressed as a strategy

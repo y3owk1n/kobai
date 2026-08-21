@@ -699,7 +699,7 @@ describe("the Subscriber this Project wired from a Plugin", () => {
     await using kobai = await createTestKobai({
       ...config,
       events: {
-        subscribers: { "fulfilment-dispatched": [confirmations.tellTheShopper] },
+        subscribers: { "fulfilment-was-dispatched": [confirmations.tellTheShopper] },
       },
     });
     const { order, fulfilmentId } = await anOrderToDispatch(kobai);
