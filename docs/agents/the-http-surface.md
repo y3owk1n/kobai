@@ -879,7 +879,12 @@ says take an `after`, so a list route added without an entry reddens the build r
 quietly opting out of every sweep in the file — so a new list added there inherits the whole
 contract rather than a copy of it — including the pass that offers **every** list's cursor to
 **every** other list and expects all of them to refuse, which is what makes a duplicate name a
-red build rather than two lists quietly reading each other's pages. Its last case is the one
+red build rather than two lists quietly reading each other's pages. **Where in that table an
+entry goes decides nothing**, so a list may be appended, inserted or moved: the three cases that
+are about one particular list name it rather than reaching into the table, and that file holds
+itself to it (#328). It did not, and the failure was silent — with the two Product lists
+exchanged, three cases went on passing while two of them exercised the store surface instead of
+the Merchant's. Its last case is the one
 that matters and the one nothing
 else can see — a page fetched across a concurrent insert — and it was watched failing against
 an offset implementation first, which is the discipline the two race tests already use.
