@@ -194,7 +194,7 @@ export default defineKobaiConfig({
   fulfilment: { strategies: { "made-to-order": madeToOrder } },
   events: {
     subscribers: {
-      "fulfilment-dispatched": [emailTheShopper, dispatches.logTheDispatch],
+      "fulfilment-was-dispatched": [emailTheShopper, dispatches.logTheDispatch],
     },
   },
 });
@@ -786,14 +786,21 @@ to, and that is a gap to report rather than a mechanism to discover.
 ## 4. Events — **proven**
 
 **Status: proven end to end, from both of the places a Subscriber can come from.** kobai emits
-**one** Event today, `fulfilment-dispatched`, and the reference Project wires **two** Subscribers
-against it: a Merchant marks a Fulfilment dispatched through the Admin, and that deployment
-queues the notice it owes the Shopper, in its own source, while a Plugin's Subscriber notes that
-the parcel left — with nothing in Core patched either time. A Subscriber that throws is logged and
-the dispatch still stands — asserted over HTTP by wiring one that throws, dispatching, and reading
-the Fulfilment back moved. The shape is
+**one** Event today, `fulfilment-was-dispatched`, and the reference Project wires **two**
+Subscribers against it: a Merchant marks a Fulfilment dispatched through the Admin, and that
+deployment queues the notice it owes the Shopper, in its own source, while a Plugin's Subscriber
+notes that the parcel left — with nothing in Core patched either time. A Subscriber that throws
+is logged and the dispatch still stands — asserted over HTTP by wiring one that throws,
+dispatching, and reading the Fulfilment back moved. The shape is
 [ADR-0085](./adr/0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md),
 decided before it was built because a payload is under semver from the day it exists.
+
+**An Event says `was`, and the tense is doing real work.** `fulfilment-was-dispatched` announces
+that one **just did**; `fulfilment-dispatched` is a refusal `reason` you may already have met on
+the HTTP surface, and it means the opposite — *this one has already gone, so it will not move
+again*. They are two spellings apart on purpose (#338), and the rule generalises: an Event about
+a Fulfilment moving names the transition in the past tense, so delivered and cancelled will be
+`fulfilment-was-delivered` and `fulfilment-was-cancelled` on the day something wants them.
 
 Where Step override is for changing what the system *decides*, an Event is for what you do
 *afterwards*. The two are deliberately different mechanisms: a Subscriber that could change an
@@ -805,12 +812,12 @@ slot, an input type and a compensation.
 ```ts
 import { defineKobaiConfig, type Subscriber } from "@kobai/core";
 
-const emailTheShopper: Subscriber<"fulfilment-dispatched"> = async (dispatched) => {
+const emailTheShopper: Subscriber<"fulfilment-was-dispatched"> = async (dispatched) => {
   await myMailer.enqueue(dispatched.orderId, dispatched.trackingReference);
 };
 
 export default defineKobaiConfig({
-  events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } },
+  events: { subscribers: { "fulfilment-was-dispatched": [emailTheShopper] } },
 });
 ```
 
@@ -851,7 +858,7 @@ export const dispatches = dispatchLog();
 export default defineKobaiConfig({
   migrationSets: [priceLogMigrationSet],                                  // its table
   workflows: { "resolve-price": { after: { "select-price": [recordPriceResolution] } } },
-  events: { subscribers: { "fulfilment-dispatched": [dispatches.logTheDispatch] } },
+  events: { subscribers: { "fulfilment-was-dispatched": [dispatches.logTheDispatch] } },
 });
 ```
 

@@ -698,7 +698,7 @@ minutes.
 
 **`events` is one of those keys, and nothing about it is defaulted** (#322, ADR-0085). A test
 that wires a Subscriber writes the line a `kobai.config.ts` carries —
-`events: { subscribers: { "fulfilment-dispatched": [mine] } }` — and a test that says nothing
+`events: { subscribers: { "fulfilment-was-dispatched": [mine] } }` — and a test that says nothing
 subscribes to nothing, which is what every test in this repository that is not about events
 should be. That is the opposite call from `payments` and `media`, which the harness fills in as
 a courtesy: a Subscriber's whole promise is that *only* a wired one runs, so a harness that

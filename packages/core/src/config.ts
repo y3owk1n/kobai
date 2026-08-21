@@ -166,7 +166,7 @@ export type KobaiProjectConfig = {
    * (ADR-0085).
    *
    * ```ts
-   * events: { subscribers: { "fulfilment-dispatched": [emailTheShopper] } }
+   * events: { subscribers: { "fulfilment-was-dispatched": [emailTheShopper] } }
    * ```
    *
    * **Core emits and nothing else does**, so the Event names are Core's; a Plugin **offers** a

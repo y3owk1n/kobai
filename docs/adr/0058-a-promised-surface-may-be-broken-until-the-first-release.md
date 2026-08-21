@@ -334,6 +334,45 @@ freely the licence is being spent.
   **No codemod**, on this record's own rule: the Project's own compiler names the file and the
   property, and there is no edit a machine could make that would not be a guess at which Cart a
   screen meant to open.
+- **#338 — the Event `fulfilment-dispatched` renamed to `fulfilment-was-dispatched`.** Extension
+  Point 4, and the **first break to it** — events shipped one ticket earlier, in #322. An Event
+  name is what a Project writes in `kobai.config.ts` and what a Plugin's `Subscriber<…>` names,
+  so it is under ADR-0019 from the day it exists; renaming one is exactly the break this licence
+  pays for. The argument is on `KobaiEvents` in `packages/core/src/events/events.ts` and in
+  [ADR-0085](./0085-core-emits-the-project-wires-a-subscriber-and-delivery-is-in-process.md)'s
+  amendment, and the short of it is that the old name was *also* the `reason` a Merchant is
+  refused a second dispatch with — two opposite facts under one spelling, systematically, since
+  delivered and cancelled would each have collided the same way.
+
+  **This one has a compile error at both ends, which is unusually good for a renamed key.** A
+  Project that wired a Subscriber fails on the config object, and this was watched at the
+  reference Project's own build rather than reasoned about:
+
+  ```
+  kobai.config.ts(262,7): error TS2353: Object literal may only specify known properties,
+  and '"fulfilment-dispatched"' does not exist in type 'EventSubscribers'.
+  ```
+
+  A Project holding a `Subscriber<"fulfilment-dispatched">` fails a second time, on the type
+  argument, which is `EventName`'s closed set.
+
+  **No codemod**, on this record's own rule — and this is the entry where that rule had to be
+  *checked* rather than applied, because the rule names "a renamed configuration key" as the
+  codemod-shaped class and this is one. What puts a key in that class is a Project's build
+  staying green while meaning something else, and nothing here stays green: `EventSubscribers`
+  is a mapped type over a closed union with no index signature, so an unknown key is an excess
+  property rather than an ignored one. The compiler names the file, the line and the key, and
+  the edit it is asking for is a one-word rename with no decision inside it.
+
+  What did **not** break: the HTTP surface, entirely. An Event is not on the wire — no route
+  declares one and no schema carries one — so `packages/core/openapi.json` and
+  `packages/client/src/schema.ts` are byte-identical across this change, and the four
+  `fulfilment-…` refusal `reason`s are exactly where they were, still derived from the state
+  union. **And the break is spent on a guard rather than on one name**:
+  `packages/core/src/events/events.test.ts` asserts that
+  `Extract<EventName, FulfilmentTransitionRefusal>` is `never`, over two sets that are each
+  derived, so the collision cannot come back through an Event added later or a fifth state —
+  which is what stops this entry being the first of three.
 
 ## What else the licence is holding up, and where that list went
 

@@ -11,7 +11,7 @@ import type { FulfilmentDispatched, Subscriber } from "@kobai/core";
  * const dispatches = dispatchLog();
  *
  * export default defineKobaiConfig({
- *   events: { subscribers: { "fulfilment-dispatched": [dispatches.logTheDispatch] } },
+ *   events: { subscribers: { "fulfilment-was-dispatched": [dispatches.logTheDispatch] } },
  * });
  * ```
  *
@@ -74,13 +74,13 @@ export type DispatchLogEntry = {
  */
 export type DispatchLog = {
   /**
-   * What a Project wires against `fulfilment-dispatched`.
+   * What a Project wires against `fulfilment-was-dispatched`.
    *
    * A property holding a function rather than a method, so that a mistake about what kobai sends
    * is a compile error where it is wired rather than an `undefined` at run time — the spelling
    * every interface kobai asks somebody else to implement uses, and for the same reason.
    */
-  readonly logTheDispatch: Subscriber<"fulfilment-dispatched">;
+  readonly logTheDispatch: Subscriber<"fulfilment-was-dispatched">;
   /**
    * What this log holds for one Order, oldest first.
    *
