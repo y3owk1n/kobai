@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   POSTGRES_RANGE,
   portsFor,
 } from "../scripts/ports.ts";
+import { removeAll } from "./support/removal.ts";
 
 /**
  * Which checkouts get ports of their own, and which get the ordinary ones.
@@ -32,9 +33,11 @@ const ANOTHER_CHECKOUT = "/checkouts/kobai-worktree";
 
 const made: string[] = [];
 
-afterAll(() => {
-  for (const path of made) rmSync(path, { recursive: true, force: true });
-});
+// Through `removeAll` rather than a `for` loop of `rmSync`, because most of what is made
+// here is a git repository this file committed into — see that module for what is still
+// writing in one, and why abandoning the rest at the first path that throws was half the bug
+// (#313).
+afterAll(() => removeAll(made));
 
 /** A real git repository on disk, and optionally a linked worktree of it. */
 function aRepository(): string {

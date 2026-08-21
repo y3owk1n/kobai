@@ -148,8 +148,39 @@ export async function startLocalRegistry(
     exited = { code };
   });
 
+  /**
+   * Stops the registry and removes what it was reading, **in that order**.
+   *
+   * `kill` only *asks*: it returns as soon as the signal is delivered, so removing `storage`
+   * on the next line took `config.yaml`, `htpasswd` and the package storage out from under a
+   * process that was still shutting down — a directory being swept while its owner still has
+   * it open, which is the `ENOTEMPTY`/`EBUSY` family (#313). **That gap was watched rather
+   * than argued**: against the two-line version this replaces, `close()` returned in about a
+   * millisecond with the process still alive and its storage already gone; it now returns in
+   * about six, with the process reaped first.
+   *
+   * Retrying the removal would only paper over it. The writer `removeAll` retries around is a
+   * *detached* `git maintenance` no caller was ever handed; this one is a child of this
+   * process, so the answer is to wait for it — the same wait `bootProject`'s `stop` in
+   * `./project.ts` does, differing in the one detail below.
+   *
+   * **The `exited` flag rather than `child.exitCode`.** A process killed by a signal reports
+   * `exitCode: null` for as long as it is dead, so a guard on that would fall through and
+   * await an `exit` that has already been emitted — waiting forever. The flag is set by the
+   * handler above whichever way the process went, and nothing can slip between reading it and
+   * subscribing, because `exit` is emitted asynchronously and both lines run in one turn.
+   *
+   * **Nothing here can hang on a registry that ignores the signal**: verdaccio installs its
+   * `SIGTERM` handler only under `VERDACCIO_HANDLE_KILL_SIGNALS`, which nothing in this
+   * repository sets, so the signal keeps its default disposition. The removal below is left a
+   * plain `rm` for the same reason the wait replaced a retry: with the process reaped there is
+   * nothing left holding the directory open.
+   */
   const close = async () => {
-    if (exited === undefined) child.kill();
+    if (exited === undefined) {
+      child.kill();
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
     await rm(storage, { recursive: true, force: true });
   };
 
