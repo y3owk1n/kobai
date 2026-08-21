@@ -287,6 +287,23 @@ describe("what the generated types refuse", () => {
     expect(read).toBeDefined();
   });
 
+  it("rejects the Shopper's address on a row of the Cart list, because a page is not a Cart", () => {
+    const read = async () => {
+      const { data } = await client.GET("/admin/carts");
+
+      // #337, and the reason it is pinned here rather than only argued: the Address arrived
+      // on the shape the list and the detail share, so a page of Carts was a page of home
+      // addresses answered to the narrowest read this surface has (ADR-0071). It belongs to
+      // the Cart a Merchant opens, and this line is what fails the build if it comes back to
+      // `CartSummary` — a removal from a promised response being a break either way
+      // (ADR-0060), and free only until the first publish (ADR-0058).
+      // @ts-expect-error a `CartSummary` has no `address`; the Cart a Merchant opens does.
+      return data?.carts[0]?.address;
+    };
+
+    expect(read).toBeDefined();
+  });
+
   it("rejects a request body of the wrong shape", () => {
     const write = async () =>
       client.POST("/admin/products", {

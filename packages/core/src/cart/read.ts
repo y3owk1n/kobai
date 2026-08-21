@@ -163,23 +163,10 @@ export type CartSummary = {
    */
   readonly region: RegionIdentity | null;
   /**
-   * Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said (#319,
-   * ADR-0072).
-   *
-   * **Live, not a snapshot** — the same asymmetry {@link CartLineItem.variant} carries. An Order
-   * holds a copy taken at Capture, so correcting this one afterwards changes nothing about where
-   * a past parcel went (ADR-0009).
-   *
-   * On the summary as well as on the detail, because it is a fact about the Cart rather than
-   * about what is in it — a Merchant looking down a list of Carts for the one a Shopper is
-   * asking about is looking at where it goes.
-   */
-  readonly address: Address | null;
-  /**
    * The way this Cart is to be delivered — what the Shopper chose out of
    * `GET /store/carts/{id}/shipping-options` — or `null` where they have chosen nothing (#321).
    *
-   * **Live, not a snapshot**, exactly as {@link CartSummary.address} is: what is *charged* is an
+   * **Live, not a snapshot**, exactly as {@link Cart.address} is: what is *charged* is an
    * Order-level Adjustment written at Capture (ADR-0022), so a Merchant repricing or deleting
    * the method afterwards cannot rewrite what a Shopper paid.
    *
@@ -217,6 +204,24 @@ export type CartSummary = {
 export type Cart = CartSummary & {
   /** In the order the lines were first added — a total order, so it never varies. */
   readonly lineItems: readonly CartLineItem[];
+  /**
+   * Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said (#319,
+   * ADR-0072).
+   *
+   * **Live, not a snapshot** — the same asymmetry {@link CartLineItem.variant} carries. An Order
+   * holds a copy taken at Capture, so correcting this one afterwards changes nothing about where
+   * a past parcel went (ADR-0009).
+   *
+   * **On the Cart a Merchant opens, and deliberately not on {@link CartSummary}** (#337) — the
+   * call `OrderSummary` had already taken for the Order's copy, reached here from the other
+   * premise: a list is bulk where a detail is one record, and this was the first personal-data
+   * field that arrived by the pageful. The argument is written out once, on `Cart` in
+   * `http/contract.ts`, because what it spends is the promised **wire**; do not restate it here.
+   *
+   * **Putting it back means reopening that, not merely widening a shape.** Do not add it to
+   * {@link CartSummary} for a Merchant screen; a screen has the Cart's identifier and can open it.
+   */
+  readonly address: Address | null;
 };
 
 /**
@@ -266,6 +271,9 @@ function inState(state: CartState | undefined): SQL | undefined {
  * what is in it. The filter is applied in the same statement as the page, so a filtered page
  * that comes back short is still a page — `nextCursor` is what says whether there is more, and
  * this is the first list where that distinction does any work.
+ *
+ * **And without the Shopper's delivery Address**, which is the one omission here that is not
+ * about size — see {@link Cart.address} (#337).
  */
 export async function listCarts(
   db: Queryable,
@@ -278,7 +286,9 @@ export async function listCarts(
       shopperExternalId: cart.shopperExternalId,
       currency: cart.currency,
       region: { id: region.id, name: region.name, currency: region.currency },
-      ...addressColumns,
+      // **No Address**, and it is a decision rather than a column nobody got round to selecting
+      // — {@link Cart.address} is where the argument is. The joins it needed are gone with it.
+      //
       // The three a storefront may see, and not the `metadata` beside them: this shape is
       // answered on a publishable key, and #207's split is what keeps a Merchant's bag off it.
       shippingMethod: {
@@ -298,10 +308,6 @@ export async function listCarts(
     // `left`, because a Cart started before Regions existed names none — an inner join would
     // drop exactly those rows out of the Merchant's list rather than reporting them.
     .leftJoin(region, eq(region.id, cart.regionId))
-    // `left` for the same reason twice over: most Carts carry no Address, and an Address may
-    // name no Region — or name one that has since been deleted, which clears the reference.
-    .leftJoin(address, eq(address.id, cart.addressId))
-    .leftJoin(addressRegion, eq(addressRegion.id, address.regionId))
     // `left` again: most Carts have chosen no delivery method, and one whose method a Merchant
     // deleted has had the reference cleared rather than the Cart made unreadable.
     .leftJoin(shippingMethod, eq(shippingMethod.id, cart.shippingMethodId))
@@ -320,7 +326,6 @@ export async function listCarts(
       shopper: shopperOf(row),
       currency: row.currency,
       region: joined<RegionIdentity>(row.region),
-      address: addressOf(row),
       shippingMethod: joined<ShippingOption>(row.shippingMethod),
       metadata: row.metadata,
       expiresAt: row.expiresAt.toISOString(),

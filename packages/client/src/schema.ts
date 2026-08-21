@@ -5049,8 +5049,6 @@ export interface components {
       currency: string;
       /** @description Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region. */
       region: components["schemas"]["RegionIdentity"] | null;
-      /** @description Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going. */
-      address: components["schemas"]["Address"] | null;
       /** @description How this Cart is to be delivered — what the Shopper chose out of `GET /store/carts/{id}/shipping-options` — or `null` where nothing has been chosen, which means any of *nothing in it ships*, *this Store prices no delivery into its Region* and *the Shopper has not got that far*. **Live, not a snapshot**: what is charged becomes an Adjustment on the Order at Capture, so repricing or deleting the method afterwards cannot rewrite what was paid. Moving the Cart to another Region unchooses it, because a rate belongs to one Region. */
       shippingMethod: components["schemas"]["ShippingOption"] | null;
       /** @description Unindexed, untyped JSON owned by the Merchant and the Project. */
@@ -5071,24 +5069,16 @@ export interface components {
       /** Format: date-time */
       updatedAt: string;
     };
-    Address: {
-      /** @description ISO 3166-1 alpha-2 — `MY`, `SG`, `GB`. Upper-cased on the way in. kobai holds no table of countries and refuses no code it has never heard of; what it will not take is a country that is not a code, because shipping and tax are both worked out from one. */
-      country: string;
-      /** @description The address as it should be read, in that order — at least one. Write the lines the way the destination country writes them; kobai models no `city` and no `state`, because no two countries agree on those. */
-      lines: string[];
-      /** @description `null` where none was given, which is an ordinary Address: several countries have no postal code at all, so kobai requires none and validates the format of none. */
-      postalCode: string | null;
-      /** @description Which of the Store's Regions this Address falls in. `null` for an Address that named none — and for one whose Region has since been deleted, which clears the reference and leaves the destination whole. */
-      region: components["schemas"]["RegionIdentity"] | null;
-    };
     /**
      * @description Narrow to Carts in one state. `live` is holding stock and can still be placed, `expired` ran out of time, and `spent` has already become an Order. The three partition the list, so omitting this answers all of them.
      * @enum {string}
      */
     CartState: "live" | "expired" | "spent";
-    Cart: components["schemas"]["CartSummary"] & {
+    Cart: components["schemas"]["CartSummary"] & ({
       lineItems: components["schemas"]["CartLineItem"][];
-    };
+      /** @description Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going. It is answered by the Cart a Merchant opens and not by `GET /admin/carts`, which is a page of them. */
+      address: components["schemas"]["Address"] | null;
+    });
     CartLineItem: {
       /** Format: uuid */
       id: string;
@@ -5098,6 +5088,16 @@ export interface components {
       metadata: {
         [key: string]: unknown;
       };
+    };
+    Address: {
+      /** @description ISO 3166-1 alpha-2 — `MY`, `SG`, `GB`. Upper-cased on the way in. kobai holds no table of countries and refuses no code it has never heard of; what it will not take is a country that is not a code, because shipping and tax are both worked out from one. */
+      country: string;
+      /** @description The address as it should be read, in that order — at least one. Write the lines the way the destination country writes them; kobai models no `city` and no `state`, because no two countries agree on those. */
+      lines: string[];
+      /** @description `null` where none was given, which is an ordinary Address: several countries have no postal code at all, so kobai requires none and validates the format of none. */
+      postalCode: string | null;
+      /** @description Which of the Store's Regions this Address falls in. `null` for an Address that named none — and for one whose Region has since been deleted, which clears the reference and leaves the destination whole. */
+      region: components["schemas"]["RegionIdentity"] | null;
     };
     CartRefusal: {
       /** @description What went wrong, in prose. */

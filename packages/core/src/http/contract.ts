@@ -2875,11 +2875,15 @@ export const CartLineItem = z
   .openapi("CartLineItem");
 
 /**
- * A Cart as the **Merchant's list** reports it — everything but what is in it.
+ * A Cart as the **Merchant's list** reports it — everything but what is in it, and where it goes.
  *
  * The split {@link Cart} makes with this is `OrderSummary`'s, for the same reason: a list is not
  * a detail view, and a Merchant scanning what is being held wants whose Cart it is, what has
  * become of it and when it lapses rather than every line of every Cart at once.
+ *
+ * **The delivery Address is the one field held back for a second reason** — see
+ * {@link Cart}, which is the shape that carries it (#337). A field added here is answered for
+ * every Cart in the Store at once, to the narrowest read this surface has.
  */
 export const CartSummary = z
   .object({
@@ -2904,11 +2908,6 @@ export const CartSummary = z
     region: z.union([RegionIdentity, z.null()]).meta({
       description:
         "Where this Cart is being bought — the Region its lines are priced in. `null` only for a Cart started before kobai recorded one, which is priced for the Store's default Region.",
-    }),
-    // A union, for `Store.defaultRegion`'s reason.
-    address: z.union([Address, z.null()]).meta({
-      description:
-        "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going.",
     }),
     // A union, for `Store.defaultRegion`'s reason — and `ShippingOption` rather than
     // `ShippingMethod`, because this shape is answered on a publishable key (#207).
@@ -2946,9 +2945,29 @@ export const CartSummary = z
  * (ADR-0077). That is a different thing from a field here, and the rule above is what decides
  * it: an answer to a question carries a time and stands behind itself, and a number on this
  * shape would do neither.
+ *
+ * **The delivery Address is here rather than on {@link CartSummary}, and that is a decision**
+ * (#337). It arrived on both, so `GET /admin/carts` answered every Shopper's home address to
+ * anybody holding `cart:read` — the Permission ADR-0071 carved out so a deployment could grant
+ * *seeing the baskets* without granting the books. Nothing became unreachable: a Merchant opens
+ * the Cart, and every placed Order carries a snapshot behind `order:read`. What changed is that
+ * it no longer arrives by the pageful. Which fields a response carries is promised (ADR-0060),
+ * so narrowing it later would have been a break and narrowing it before the first publish was
+ * free (ADR-0058, where it is in the register) — **putting it back on the summary means reopening
+ * that argument.**
+ *
+ * **`Order.address` had already made this call**, on the other premise: a destination is several
+ * lines of prose and a list of Orders is numbers, money and days. So this is the shape both
+ * summaries have rather than a second one, and `packages/client/src/client.test.ts` fails to
+ * compile if the field returns to {@link CartSummary}.
  */
 export const Cart = CartSummary.extend({
   lineItems: z.array(CartLineItem).readonly(),
+  // A union, for `Store.defaultRegion`'s reason.
+  address: z.union([Address, z.null()]).meta({
+    description:
+      "Where what is in this Cart is to be delivered, or `null` for a Cart nobody has said. **Live, not a snapshot** — an Order holds a copy taken at Capture, so correcting this afterwards does not rewrite where a past parcel went (ADR-0009). Nothing makes it mandatory: a Cart with none reads and quotes, and it places unless something in it is to be shipped and this Store prices delivery where it is going. It is answered by the Cart a Merchant opens and not by `GET /admin/carts`, which is a page of them.",
+  }),
 }).openapi("Cart");
 
 /** The list, in an envelope — the same shape, and the same reason, as `OrderList`. */
