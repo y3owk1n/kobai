@@ -310,6 +310,26 @@ as a decision — and a deliberately *unset* **`minimumReleaseAge`**, whose 48-h
 must never exceed the `cooldown` in `.github/dependabot.yml`, or Dependabot proposes bumps
 pnpm then refuses to install.
 
+**Both halves of that are asserted rather than noted** (#340).
+`tests/the-pinned-pnpm-can-read-every-setting.test.ts` fails if *any* `package.json` carries
+a `pnpm` key — forbidding the class rather than listing what must not be there — and if a
+pinned pnpm is older than the oldest one that reads a setting `pnpm-workspace.yaml`
+declares. The floor is **derived from the settings declared rather than chosen**, and each
+version records where it came from, so **a new setting means recording its floor** or the
+build goes red.
+
+**What no test can reach is the binary that is actually running.** pnpm ≤9.6 predates
+`manage-package-manager-versions`, so it ignores `packageManager` rather than
+self-correcting — and by the time a test runs, the install it would have caught has already
+happened. A `preinstall` refusal is the only thing that could, and it is rejected for the
+reason this file rejects an `install` script: an npm lifecycle hook runs *during* the
+install it is trying to govern. So **reach pnpm through corepack in this directory**, not
+through whatever is on `PATH`; an older one installs successfully, puts #69's overrides
+back, enables every install script and rewrites the lockfile with a diff that reads as
+format churn. CI and the workspace `Dockerfile` are safe because they pass
+`--frozen-lockfile`; the Project Dockerfiles install unfrozen on purpose and are safe
+because the image runs `corepack enable`. A contributor's own machine has neither guard.
+
 Taking an override rests on a reachability argument, and **an argument that a package is
 unreachable expires when the code changes** — so it is written down with the day it
 expires, next to the override in `pnpm-workspace.yaml` rather than only in a pull request.

@@ -1,3 +1,17 @@
+# **pnpm 9 cannot see this file at all, which is why `package.json` pins pnpm 11.** It reads
+# neither the `allowBuilds` allowlist nor the `overrides` below from here, and it predates
+# `manage-package-manager-versions`, so it ignores `packageManager` too: the pin exists and
+# the old binary cannot read it either.
+#
+# What is lost is not cosmetic. An install on such a binary succeeds, having put back both
+# of #69's security overrides — the advisories no Dependabot PR can move, because their
+# parents never do — and having enabled every dependency's install script. See #340, and
+# `tests/the-pinned-pnpm-can-read-every-setting.test.ts`, which fails if a pinned pnpm drops
+# below the oldest one that reads a setting declared here, if a setting arrives whose floor
+# nobody recorded, or if one reappears under a `pnpm` key in a `package.json`. That test
+# cannot reach the case above — by the time it runs the install has happened — so this
+# paragraph is the part aimed at you rather than at the build.
+
 packages:
   - packages/*
   - reference
