@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Logger } from "../config.ts";
 import {
   createTestApiKey,
   createTestKobai,
@@ -14,8 +15,16 @@ import {
   type TestKobai,
   type TestSession,
 } from "../testing/index.ts";
-import { defineStep } from "../workflow/step.ts";
-import type { PricedLines } from "./place-order.ts";
+import { defineStep, type Step } from "../workflow/step.ts";
+import {
+  type AdjustedLines,
+  oneCurrency,
+  orderTotalOf,
+  type PaidOrder,
+  type PricedLines,
+  type ReservedLines,
+  type TaxedLines,
+} from "./place-order.ts";
 import { SHIPPING_ADJUSTMENT_CODE, type ShippedLines } from "./select-shipping.ts";
 
 /**
@@ -169,7 +178,11 @@ async function place(kobai: TestKobai, cart: TestCart): Promise<Response> {
  * `@kobai/core/testing`: whether a Store prices delivery at all is the thing half of these cases
  * are about, so it stays visible in the file that is about it.
  */
-async function aStoreThatDelivers(kobai: TestKobai): Promise<{
+async function aStoreThatDelivers(
+  kobai: TestKobai,
+  /** How many of the one Variant — named, for the cases whose subject is what the goods come to. */
+  { quantity = 1 }: { readonly quantity?: number } = {},
+): Promise<{
   readonly catalog: TestCatalog;
   readonly cart: TestCart;
   readonly methods: readonly ShippingOption[];
@@ -180,7 +193,7 @@ async function aStoreThatDelivers(kobai: TestKobai): Promise<{
     { name: "Standard", amount: STANDARD },
     { name: "Next day", amount: NEXT_DAY },
   ]);
-  const cart = await seedTestCart(kobai, { catalog });
+  const cart = await seedTestCart(kobai, { catalog, quantity });
   return { catalog, cart, methods };
 }
 
@@ -625,6 +638,485 @@ describe("a Project that replaced select-shipping", () => {
     const order = (await placed.json()) as Placed;
     expect(order.total).toBe(quoted.total);
     expect(order.adjustments.map((one) => one.code)).toEqual(["carriage"]);
+  });
+});
+
+/**
+ * A `Logger` that keeps every reason Core reported, so a guard's message can be read back.
+ *
+ * The message is half of what a guard is for and no response body carries it: a 500 says the
+ * deployment is broken and only the log says which Adjustment went missing. Asking the `Logger`
+ * a deployment supplied is the same move as asking a Payment Provider what it is holding.
+ *
+ * Shared by the two `describe`s below, because both slots now carry the same guard and reading
+ * what it said is the same act at either of them.
+ */
+const collectingReasons = (logged: string[]): Logger => ({
+  info: () => {},
+  error: (_message, fields) => {
+    logged.push(String(fields?.reason));
+  },
+});
+
+/**
+ * **A Step filling `apply-adjustments` has to pass the carriage on, and the slot is what asks**
+ * (#339).
+ *
+ * The hazard is the one #321 reported rather than fixed. A Step declaring the **narrower**
+ * {@link PricedLines} is still assignable to a slot handed a {@link ShippedLines} — TypeScript
+ * accepts a function that asks for less than it is given — so a replacement written before
+ * shipping existed compiles, answers `adjustments: []`, and the Shopper's delivery charge is
+ * gone. The Order totals correctly for the wrong figure, with no error, no log line and no
+ * refusal.
+ *
+ * So the slot carries a guard of its own, and the two cases below are the pair that makes it
+ * worth having: the drop is stopped **whatever the Step declared**, and the deployment that adds
+ * its own Adjustments beside the carriage is untouched. A guard that made the honest case painful
+ * would be worse than the bug.
+ */
+describe("a Project that replaced apply-adjustments", () => {
+  /** What this Store gives free delivery over. Made up, and Core has never heard of it. */
+  const FREE_DELIVERY_OVER = 5000;
+
+  /** The code the discount below carries — the Project's to choose, like every other one. */
+  const FREE_DELIVERY_CODE = "free-delivery";
+
+  /**
+   * *Free delivery over fifty*, written the way ADR-0022 says to write it: **a discount of its
+   * own**, beside the charge it cancels, rather than the charge edited away.
+   *
+   * This is the honest replacement, and it is the reason `select-shipping` runs in front of this
+   * slot at all — the rule can *see* what delivery cost, so it is an ordinary Adjustment rather
+   * than a special case Core would have had to model. Both lines reach the Order, which is what
+   * keeps the record able to say what was charged for carriage and what was given back.
+   */
+  const freeDeliveryOverFifty = defineStep(
+    "free-delivery-over-fifty",
+    (input: ShippedLines): AdjustedLines => {
+      const goods = input.lines.reduce(
+        (sum, line) => sum + line.unitAmount * line.quantity,
+        0,
+      );
+      const carriage = input.adjustments.filter(
+        (one) => one.code === SHIPPING_ADJUSTMENT_CODE,
+      );
+
+      return {
+        cart: input.cart,
+        lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+        adjustments: [
+          // Carried forward, always — this rule adds, it does not decide what carriage cost.
+          ...input.adjustments,
+          ...(goods >= FREE_DELIVERY_OVER
+            ? carriage.map((one) => ({
+                code: FREE_DELIVERY_CODE,
+                description: "Free delivery over 50",
+                amount: -one.amount,
+              }))
+            : []),
+        ],
+      };
+    },
+  );
+
+  /**
+   * The bug, written exactly as somebody would arrive at it: against the shape this slot had
+   * before #321, so it never learned there was anything to carry forward.
+   */
+  const adjustsNothing = defineStep(
+    "adjusts-nothing",
+    (input: PricedLines): AdjustedLines => ({
+      cart: input.cart,
+      lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+      adjustments: [],
+    }),
+  );
+
+  /** The same loss, quieter: the carriage keeps its name and comes back at half the figure. */
+  const halvesTheCarriage = defineStep(
+    "halves-the-carriage",
+    (input: ShippedLines): AdjustedLines => ({
+      cart: input.cart,
+      lines: input.lines.map((line) => ({ ...line, adjustments: [] })),
+      adjustments: input.adjustments.map((one) =>
+        one.code === SHIPPING_ADJUSTMENT_CODE ? { ...one, amount: one.amount / 2 } : one,
+      ),
+    }),
+  );
+
+  /** A deployment with this slot filled by the Step given, and somewhere to keep what it logged. */
+  const replacing = (
+    step: Step<string, ShippedLines, AdjustedLines>,
+    logged: string[],
+  ) => ({
+    logger: collectingReasons(logged),
+    workflows: { "place-order": { steps: { "apply-adjustments": step } } },
+  });
+
+  it("is stopped, naming the charge it dropped, from the quote and the placement alike", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai(replacing(adjustsNothing, logged));
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    // A bug rather than a refusal, on `inWholeMinorUnits`' distinction: the request was fine and
+    // this deployment is wired to lose a delivery charge, which is not something a storefront
+    // can act on. Reachable from the quote too, because ADR-0077 slices this same declaration —
+    // so a storefront finds out before it creates a payment for the wrong figure.
+    expect((await quote(kobai, cart)).status).toBe(500);
+
+    expect((await place(kobai, cart)).status).toBe(500);
+    // Named, and named by what it was: the code, the figure and the description a Merchant
+    // reads — enough to find the Step and to see what the Shopper was about to be under-charged.
+    expect(logged).toHaveLength(2);
+    for (const reason of logged) {
+      expect(reason).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+      expect(reason).toContain(String(STANDARD));
+      expect(reason).toContain('"Standard"');
+      expect(reason).toContain("apply-adjustments");
+      expect(reason).toContain("did not come back at all");
+    }
+    // And nothing was written, which is the half a status cannot say: the Order this deployment
+    // would have under-charged for does not exist.
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+    await expect(
+      kobai.database.query("select id from core_order_adjustment"),
+    ).resolves.toEqual([]);
+  });
+
+  it("is stopped for repricing the carriage too, and told apart from dropping it", async () => {
+    // The other half of the same promise, and the reason the message has two shapes: a Step that
+    // kept the line and halved the figure has still taken money off the Order, and reporting it
+    // as *missing* would send a reader hunting for a line that is right there. The repair is the
+    // one the case above is refused with — a discount of its own, or replace `select-shipping`.
+    const logged: string[] = [];
+    await using kobai = await createTestKobai(replacing(halvesTheCarriage, logged));
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    expect((await place(kobai, cart)).status).toBe(500);
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(`"${SHIPPING_ADJUSTMENT_CODE}" of ${STANDARD}`);
+    expect(logged[0]).toContain(`came back at ${STANDARD / 2}`);
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+  });
+
+  it("still adds its own Adjustments beside the carriage, and both reach the Order", async () => {
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": { steps: { "apply-adjustments": freeDeliveryOverFifty } },
+      },
+    });
+    // Five of them, so the goods are over the threshold and this Store's own rule fires — which
+    // is what makes the case about a replacement that *adds* rather than one that passes through.
+    const { cart, methods } = await aStoreThatDelivers(kobai, { quantity: 5 });
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    const quoted = (await (await quote(kobai, cart)).json()) as Quoted;
+
+    expect(quoted.adjustments.map((one) => [one.code, one.amount])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD],
+      [FREE_DELIVERY_CODE, -STANDARD],
+    ]);
+    // The carriage and the discount cancel, so the Shopper pays for the goods and nothing else —
+    // and the Order still says both, which is what an Adjustment being its own line buys.
+    expect(quoted.total).toBe(THE_PRICE * 5);
+
+    const placed = await place(kobai, cart);
+
+    expect(placed.status).toBe(201);
+    const order = (await placed.json()) as Placed;
+    expect(order.total).toBe(quoted.total);
+    expect(order.adjustments.map((one) => [one.code, one.amount])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD],
+      [FREE_DELIVERY_CODE, -STANDARD],
+    ]);
+  });
+});
+
+/**
+ * **A Step filling `calculate-tax` has to pass the carriage on too, and the same guard asks**
+ * (#339).
+ *
+ * The neighbour's hazard one slot along, and it was open until this was written. `TaxedLines`
+ * makes every Adjustment state its own `tax`, which stops a Step handing the list through
+ * *untaxed* — `place-order.test.ts` pins that with a `@ts-expect-error`, and it is a different
+ * mistake from this one. What a type cannot ask is for a list to be **non-empty**: `[]` satisfies
+ * `readonly TaxedAdjustment[]` trivially, so a replacement answering `adjustments: []` compiles,
+ * and the Shopper's delivery charge is off the Order exactly as it was at `apply-adjustments`
+ * before the guard existed. The Order totals correctly for the wrong figure.
+ *
+ * So this slot carries the same postcondition, and the pair below is the pair above one slot
+ * along: the drop is stopped whatever the Step declared, and the Step that taxes every
+ * Adjustment honestly is untouched.
+ */
+describe("a Project that replaced calculate-tax", () => {
+  /**
+   * The bug, written the way somebody arrives at it: a rule that taxes **lines**, because lines
+   * are what tax is about, and rebuilds the value without the Order's own Adjustments.
+   *
+   * Every `TaxedAdjustment` it returns does state its own tax — vacuously, because it returns
+   * none. That is precisely the gap the return type leaves open.
+   */
+  const taxesTheLinesAndForgetsTheOrder = defineStep(
+    "taxes-the-lines-and-forgets-the-order",
+    (input: AdjustedLines): TaxedLines => ({
+      cart: input.cart,
+      lines: input.lines.map((line) => ({ ...line, tax: 0 })),
+      adjustments: [],
+    }),
+  );
+
+  /**
+   * The honest replacement: a made-up ten per cent, stated for the carriage as well as the lines.
+   *
+   * Core has no jurisdiction and never will, which is why this is a slot rather than a tax table
+   * — and taxing an Order-level Adjustment is the case that field exists for (#117), a delivery
+   * surcharge belonging to no line whose tax could carry it.
+   *
+   * `place-order.test.ts` has a Step of this shape already, and this one is not it: that case
+   * hands the carriage to itself through a replaced `apply-adjustments`, so it says nothing about
+   * the guard. This Adjustment comes from **Core's own `select-shipping`**, through a Store that
+   * really prices delivery, so what it shows is that the guard accepts an honest Step rather than
+   * only that the arithmetic adds up. A guard nobody has watched accept is as untested as one
+   * nobody has watched refuse.
+   */
+  const taxesTheCarriageToo = defineStep(
+    "taxes-the-carriage-too",
+    (input: AdjustedLines): TaxedLines => ({
+      cart: input.cart,
+      lines: input.lines.map((line) => ({
+        ...line,
+        tax: Math.round(line.unitAmount * line.quantity * 0.1),
+      })),
+      adjustments: input.adjustments.map((one) => ({
+        ...one,
+        tax: Math.round(one.amount * 0.1),
+      })),
+    }),
+  );
+
+  /** A deployment with this slot filled by the Step given, and somewhere to keep what it logged. */
+  const replacing = (
+    step: Step<string, AdjustedLines, TaxedLines>,
+    logged: string[],
+  ) => ({
+    logger: collectingReasons(logged),
+    workflows: { "place-order": { steps: { "calculate-tax": step } } },
+  });
+
+  it("is stopped for dropping the carriage, which its return type could not refuse", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai(
+      replacing(taxesTheLinesAndForgetsTheOrder, logged),
+    );
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    // A bug rather than a refusal, and reachable from the quote as well: ADR-0077 slices this
+    // same declaration, and `calculate-tax` is inside the slice — so a storefront finds out
+    // before it sends a Shopper to a bank for a figure missing the delivery charge.
+    expect((await quote(kobai, cart)).status).toBe(500);
+
+    expect((await place(kobai, cart)).status).toBe(500);
+    expect(logged).toHaveLength(2);
+    for (const reason of logged) {
+      expect(reason).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+      expect(reason).toContain(String(STANDARD));
+      expect(reason).toContain('"Standard"');
+      // The slot, not the Step: what a reader needs is the position to look at in their config.
+      expect(reason).toContain("calculate-tax");
+      expect(reason).toContain("did not come back at all");
+    }
+    // And nothing was written, which is the half a status cannot say.
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+    await expect(
+      kobai.database.query("select id from core_order_adjustment"),
+    ).resolves.toEqual([]);
+  });
+
+  it("still taxes the carriage it was given, and the Order carries both figures", async () => {
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": { steps: { "calculate-tax": taxesTheCarriageToo } },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    const placed = await place(kobai, cart);
+
+    expect(placed.status).toBe(201);
+    const order = (await placed.json()) as Placed;
+    expect(order.adjustments.map((one) => [one.code, one.amount, one.tax])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD, STANDARD / 10],
+    ]);
+    // 1250 of goods and 125 of tax on them; 500 of carriage and 50 of tax on that.
+    expect(order.total).toBe(1925);
+  });
+});
+
+/**
+ * **The two slots that *act* carry the guard too, and there the quote cannot help** (#339).
+ *
+ * `hold-reservations` and `take-payment` are handed the Order's Adjustments — already taxed by
+ * now — and each returns a value of its own: `ReservedLines` and `PaidOrder` are both
+ * `TaxedLines &` extensions, so `adjustments: []` satisfies either and a replacement that
+ * rebuilds the value rather than spreading it drops the carriage exactly as the two slots in
+ * front of it could. Nothing about these types says otherwise, and neither does the compiler.
+ *
+ * **What is different here is the notice, not the loss.** ADR-0077 slices the declaration before
+ * `hold-reservations`, so a quote never reaches either slot: a storefront is told the right
+ * figure and the placement then fails. That is asserted below rather than glossed, because it is
+ * the honest limit of a postcondition at a position the quote does not run.
+ *
+ * **And `take-payment` is the sharpest of the four.** Its own input is what the total is computed
+ * from, so a Step there charges the Shopper for the carriage and hands back a value without it —
+ * money taken for a figure `capture-order` would then not record. The guard stops the run before
+ * the Order exists; giving the money back is the replacement Step\'s own compensation, because a
+ * replacement brings its own (ADR-0036).
+ */
+describe("a Project that replaced a slot after the quote", () => {
+  /** What a Step at either position needs to say about money, for the cases that get that far. */
+  const anInvoice = (input: ReservedLines, reference: string) => ({
+    provider: "on-account",
+    reference,
+    amount: orderTotalOf(input),
+    currency: oneCurrency(input.lines),
+    // Arranged rather than taken, which is what an invoice is — and the flag `TakenPayment`
+    // grew for exactly this kind of provider.
+    received: false,
+  });
+
+  /**
+   * The bug at `hold-reservations`: a deployment whose stock lives elsewhere, so the Step claims
+   * nothing — and builds its answer from the fields it knew about rather than from what it was
+   * handed.
+   */
+  const holdsNothingAndRebuildsTheValue = defineStep(
+    "holds-nothing-and-rebuilds-the-value",
+    (input: TaxedLines): ReservedLines => ({
+      cart: input.cart,
+      lines: input.lines,
+      adjustments: [],
+      reservations: [],
+    }),
+  );
+
+  /** The honest one at the same slot: claims nothing, and hands on everything it was given. */
+  const holdsNothingAndHandsItOn = defineStep(
+    "holds-nothing-and-hands-it-on",
+    (input: TaxedLines): ReservedLines => ({ ...input, reservations: [] }),
+  );
+
+  /** The bug at `take-payment`: bills the full total, then answers without what it billed for. */
+  const chargesAndRebuildsTheValue = defineStep(
+    "charges-and-rebuilds-the-value",
+    (input: ReservedLines): PaidOrder => ({
+      cart: input.cart,
+      lines: input.lines,
+      adjustments: [],
+      reservations: input.reservations,
+      payment: anInvoice(input, "invoice-that-billed-for-carriage"),
+    }),
+  );
+
+  /** The honest one at the same slot: a Store that invoices rather than charging a card. */
+  const takesItOnAccount = defineStep(
+    "takes-it-on-account",
+    (input: ReservedLines): PaidOrder => ({
+      ...input,
+      payment: anInvoice(input, "invoice-0001"),
+    }),
+  );
+
+  it("is stopped at hold-reservations, after a quote that could not have caught it", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai({
+      logger: collectingReasons(logged),
+      workflows: {
+        "place-order": {
+          steps: { "hold-reservations": holdsNothingAndRebuildsTheValue },
+        },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    // **The quote is fine**, and that is the limit rather than an oversight: ADR-0077 stops the
+    // slice at the first slot that acts, so nothing before the placement runs this Step at all.
+    const quoted = await quote(kobai, cart);
+    expect(quoted.status).toBe(200);
+    expect(((await quoted.json()) as Quoted).total).toBe(THE_PRICE + STANDARD);
+
+    expect((await place(kobai, cart)).status).toBe(500);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+    expect(logged[0]).toContain(String(STANDARD));
+    expect(logged[0]).toContain("hold-reservations");
+    expect(logged[0]).toContain("did not come back at all");
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+  });
+
+  it("is stopped at take-payment, which had already billed for what it dropped", async () => {
+    const logged: string[] = [];
+    await using kobai = await createTestKobai({
+      logger: collectingReasons(logged),
+      workflows: {
+        "place-order": { steps: { "take-payment": chargesAndRebuildsTheValue } },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    expect((await place(kobai, cart)).status).toBe(500);
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(`"${SHIPPING_ADJUSTMENT_CODE}"`);
+    expect(logged[0]).toContain("take-payment");
+    expect(logged[0]).toContain("did not come back at all");
+    // No Order and no payment row — the write is one transaction, so the money this Step says it
+    // took is recorded nowhere, which is the state its own compensation exists to repair.
+    await expect(kobai.database.query("select id from core_order")).resolves.toEqual([]);
+    await expect(kobai.database.query("select id from core_payment")).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("leaves an honest replacement of either slot placing an Order, carriage and all", async () => {
+    await using kobai = await createTestKobai({
+      workflows: {
+        "place-order": {
+          steps: {
+            "hold-reservations": holdsNothingAndHandsItOn,
+            "take-payment": takesItOnAccount,
+          },
+        },
+      },
+    });
+    const { cart, methods } = await aStoreThatDelivers(kobai);
+    const standard = methods.find((one) => one.name === "Standard");
+    await tell(kobai, cart, { address: AN_ADDRESS, shippingMethodId: standard?.id });
+
+    const placed = await place(kobai, cart);
+
+    expect(placed.status).toBe(201);
+    const order = (await placed.json()) as Placed;
+    // Both replaced at once, on purpose: the guard is at each position, so a Project that owns
+    // the whole back half of the Workflow is the case that would notice a guard that only
+    // tolerated one honest Step at a time.
+    expect(order.adjustments.map((one) => [one.code, one.amount])).toEqual([
+      [SHIPPING_ADJUSTMENT_CODE, STANDARD],
+    ]);
+    expect(order.total).toBe(THE_PRICE + STANDARD);
   });
 });
 

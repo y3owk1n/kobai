@@ -1189,14 +1189,41 @@ implementation:
   in front of `apply-adjustments` is what lets a deployment's own Adjustment rule *see* it, so
   *free delivery over fifty* is an ordinary discount rather than a case Core would have to model.
   `place-order.test.ts` asserts both, beside the ordering assertions already there.
-- **A replaced `apply-adjustments` has to carry `adjustments` forward, and the compiler cannot
-  ask for it.** A Step declaring the narrower `PricedLines` as its input is still assignable to
-  the slot, so one answering `adjustments: []` would drop a Shopper's delivery charge in silence.
-  What holds it is the reference Project, which replaces that very slot with
-  `@kobai/plugin-made-to-order`'s Step: the journey buys something physical through that
-  deployment. **A replaced `calculate-tax` is different and *is* held by the compiler** — every
-  Adjustment on a `TaxedLines` states its own tax, so one that passed the list through does not
-  build, and `place-order.test.ts` pins that with a `@ts-expect-error`.
+- **A replaced `apply-adjustments`, `calculate-tax`, `hold-reservations` or `take-payment` has to
+  carry `adjustments` forward, and the *slot* is what asks** (#339). The compiler cannot, at either. A Step declaring the narrower
+  `PricedLines` as its input is still assignable to `apply-adjustments`, so one answering
+  `adjustments: []` compiles, totals correctly for the wrong figure, and drops a Shopper's
+  delivery charge with no error and no refusal. Until #339 what held it was a coincidence — the
+  reference Project replaces that very slot, so the journey would have caught it for kobai's own
+  deployment and for no Developer's. What holds it now is **a guard on the position**:
+  `WorkflowStep.guard` is a postcondition the declaration carries, `rewireWorkflow` puts it onto
+  a replacement, and `carriesAdjustmentsForward` in `place-order.ts` is the one Core declares —
+  every Adjustment the Step was handed, matched by `code` and `amount`, is still in what it
+  returned, or the run stops as a **bug** naming what went missing and which slot lost it. Three
+  things follow. **The honest replacement is untouched**: adding Adjustments beside what you were
+  given is what a replacement is for, and *free delivery over fifty* is a discount line rather
+  than the charge edited away, which is ADR-0022 either way. **Taking one away is now refused**,
+  deliberately — a different figure for carriage means replacing `select-shipping`, which is the
+  slot that decides one. And **a deployment that prices no delivery has nothing to drop**, so a
+  stale Step there is caught on the first Order after a Merchant prices delivery rather than
+  never.
+- **All four slots between `select-shipping` and Capture carry that guard**, and
+  `calculate-tax`'s return type was never a substitute for one. Every Adjustment on a `TaxedLines`
+  states its own tax, so a Step that passed the list through *untaxed* does not build, and
+  `place-order.test.ts` pins that with a `@ts-expect-error`. That refuses one mistake and is
+  silent about the adjacent one: a type cannot ask for a list to be non-empty, so
+  `adjustments: []` compiles there too. `hold-reservations` and `take-payment` are the same again
+  — `ReservedLines` and `PaidOrder` are `TaxedLines &` extensions — so a Step at either that
+  rebuilds its answer instead of spreading what it was handed loses the charge after the tax, and
+  at `take-payment` after the money has been asked for, since what that slot charges is computed
+  from its own input. The matching is identical at all four; only the name reported and the repair
+  advised differ. `order/shipping.test.ts` asserts the drop and an honest replacement at each.
+  **The last two are past the quote** — ADR-0077 slices before `hold-reservations` — so a
+  storefront is quoted the right figure and the placement is where a wrongly wired deployment
+  finds out; that limit is asserted rather than glossed. **An inserted `after` Step at any of the
+  four is still not held to it**, which is #347 and is a different question rather than a fifth
+  slot: `(slotInput, slotOutput)` means nothing for a Step that sees the same type on both sides
+  and fills no slot.
 - **Charging nothing has three causes and only one of them is a refusal.** Nothing in the Cart
   ships — the filter is `line.fulfilment.requiresShipping`, and it lives where
   `inventoryProvider.claimsFor` puts the equivalent decision for Inventory; or this Store prices

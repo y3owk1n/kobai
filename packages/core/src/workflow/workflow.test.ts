@@ -624,6 +624,93 @@ describe("compensating a Workflow that failed", () => {
 });
 
 /**
+ * **A slot may ask something of what fills it that its types cannot** (#339).
+ *
+ * The types check a Step's shape and cannot check what it did with the value: a Step declaring a
+ * *narrower* input is assignable, because TypeScript accepts a function that asks for less than
+ * it is handed — so a Step written against an older shape compiles, never reads the field it
+ * never heard of, and leaves it out of what it hands on. `place-order`'s `apply-adjustments` is
+ * the case that paid for this, and the same guard now holds three more positions there; that is
+ * where the argument is written. What belongs here is the mechanism, and its two promises are the
+ * ones no HTTP response can carry.
+ *
+ * **It belongs to the slot rather than to the Step**, which is the whole point: a check a Project
+ * could take out along with the Step it was attached to would hold only until somebody replaced
+ * the very slot it is about.
+ */
+describe("a slot's guard", () => {
+  /** A Step that answers with a trail of its own rather than adding to the one it was given. */
+  const forgetful = (unwound?: string[]) =>
+    defineStep(
+      "forgetful",
+      (_input: Trail): Trail => ({ trail: ["forgetful"] }),
+      unwound &&
+        (() => {
+          unwound.push("forgetful");
+        }),
+    );
+
+  /** A Step that records having run and, given the chance, records having been undone. */
+  const undoable = <Name extends string>(name: Name, unwound: string[]) =>
+    defineStep(
+      name,
+      (input: Trail): Trail => ({ trail: [...input.trail, name] }),
+      () => {
+        unwound.push(name);
+      },
+    );
+
+  /**
+   * What this slot asks: everything the Step was handed is still in what it answered.
+   *
+   * `apply-adjustments`' promise in miniature, and the same shape of question — about the values
+   * that went past rather than about the type they were declared with.
+   */
+  const keepsTheTrail = (input: Trail, output: Trail): void => {
+    const dropped = input.trail.filter((one) => !output.trail.includes(one));
+    if (dropped.length > 0) throw new Error(`dropped ${dropped.join(", ")}`);
+  };
+
+  it("holds a Project's replacement to it, as well as the Step the slot was declared with", async () => {
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(visit("first"))
+      .step(visit("second"), keepsTheTrail)
+      .build();
+
+    // Core's own Step adds to what it was given, so the guard says nothing at all.
+    await expect(workflow.run({ trail: [] }, CONTEXT)).resolves.toMatchObject({
+      ok: true,
+      output: { trail: ["first", "second"] },
+    });
+
+    const rewired = rewireWorkflow(workflow, { steps: { second: forgetful() } });
+
+    // And the replacement that answers with its own trail is stopped — as a **bug**, which is
+    // what a rejected `rejects` says: a refusal is a value, and this is not a decision the
+    // Workflow made but a deployment wired to lose what it was handed.
+    await expect(rewired.run({ trail: [] }, CONTEXT)).rejects.toThrow("dropped first");
+  });
+
+  it("compensates the Step whose answer it turned back, because that Step did run", async () => {
+    const unwound: string[] = [];
+    const workflow = defineWorkflow<Trail>("visits")
+      .step(undoable("first", unwound))
+      .step(visit("second"), keepsTheTrail)
+      .build();
+    const rewired = rewireWorkflow(workflow, {
+      steps: { second: forgetful(unwound) },
+    });
+
+    await expect(rewired.run({ trail: [] }, CONTEXT)).rejects.toThrow("dropped first");
+
+    // Newest first, and the guarded Step is among them — the distinction ADR-0036 turns on: a
+    // Step that *threw* never completed and has nothing to undo, while one whose output was
+    // rejected did its work and the run is failing after it.
+    expect(unwound).toEqual(["forgetful", "first"]);
+  });
+});
+
+/**
  * Composition — a Step invoking another declared Workflow (ADR-0054).
  *
  * The Workflow seam is where this belongs for the same reason replacement is here: what

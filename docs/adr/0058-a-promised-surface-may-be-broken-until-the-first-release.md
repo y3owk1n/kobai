@@ -373,6 +373,79 @@ freely the licence is being spent.
   `Extract<EventName, FulfilmentTransitionRefusal>` is `never`, over two sets that are each
   derived, so the collision cannot come back through an Event added later or a fifth state —
   which is what stops this entry being the first of three.
+- **#339 — a replaced `apply-adjustments`, `calculate-tax`, `hold-reservations` or
+  `take-payment` may no longer drop an Adjustment it was handed.** Extension Point 2, and **the first break here that no compiler announces**, which
+  is the whole reason it is in the register rather than left to be discovered. #321 put what
+  delivery costs into `ShippedLines.adjustments`, one slot in front of `apply-adjustments`, and
+  could not make a replacement pass it on: TypeScript checks a Step's `run` parameter
+  contravariantly, so a Step declaring the narrower `PricedLines` is still assignable to the slot
+  — it compiles, answers `adjustments: []`, and the Order totals correctly for the wrong figure.
+  So the slot now carries a **guard**: a postcondition on the position, which `rewireWorkflow`
+  puts onto a replacement, asserting that every Adjustment the Step was handed — matched by `code`
+  and `amount` — is still in what it returned. The argument is on `carriesAdjustmentsForward` in
+  `packages/core/src/order/place-order.ts`, where the two mechanisms it beat are argued too.
+
+  **`calculate-tax` carries the same guard, and the reason it needed one is the register's own
+  lesson.** #117 had already widened `TaxedLines.adjustments` so that a tax Step states a figure
+  for every Adjustment it returns, and that was taken at the time to be this hazard closed at that
+  slot. It is not: the type asks a Step to *say something about* each Adjustment it carries and
+  cannot ask it to carry any, because `[]` satisfies any element type — so `adjustments: []` went
+  on compiling there and losing the same delivery charge. A shape that compels an acknowledgement
+  is not a shape that compels a value to survive, and that distinction is the thing to carry
+  forward rather than the slot it was found at.
+
+  **So the rule is the slot, and the guard is on every replaceable slot that carries
+  Adjustments** — `apply-adjustments`, `calculate-tax`, `hold-reservations` and `take-payment`,
+  which is all four positions between `select-shipping` and Capture. It is deliberately not a
+  list that grew one slot at a time as each was noticed: a slot handed the Order's Adjustments
+  and returning a value of its own can drop one, and `ReservedLines` and `PaidOrder` are
+  `TaxedLines &` extensions, so `adjustments: []` satisfies them exactly as it satisfies the two
+  in front. `take-payment` is the sharpest — the total it charges is computed from its own input,
+  so a Step there bills for the carriage and hands back a value without it. **A slot added to
+  this Workflow later that carries Adjustments wants the guard as part of adding it**, not as a
+  later ticket.
+
+  **Why this was widened in place and insertion was not.** Both doors were open at once, and only
+  one of them is the same decision. A *replacement* fills a slot, so the slot's promise is the
+  thing it must keep and a guard on the position is exactly the right instrument; adding the
+  fourth slot to a list of one changed nothing about the mechanism, only about how completely it
+  was applied. An **inserted** `after` Step is a different question, and the guard's signature is
+  where that shows: `(slotInput, slotOutput)` has no meaning for a Step that sees the same type on
+  both sides and occupies a position of its own rather than filling a slot. Deciding whether a
+  guard belongs to a *position* as well as to a slot is a new decision rather than a wider
+  application of this one, and it is deferred to **#347**.
+
+  **What actually stops working is a handful of shapes, and a Project could honestly have
+  written any of them**: at `apply-adjustments`, a Step that implements free delivery by
+  *removing* the shipping Adjustment rather than by adding a discount beside it; at
+  `calculate-tax`, a Step that taxes the **lines** — because lines are what tax is about — and
+  rebuilds the value without the Order's own Adjustments; and at `hold-reservations` or
+  `take-payment`, a Step that assembles its answer out of the fields it knew about instead of
+  spreading what it was handed. That is the tightening, and it is taken on ADR-0022's own
+  terms — an Adjustment is its own line and never a figure edited in place, so the Order goes on
+  saying what carriage cost and what was given back. A Project that wants a different figure for
+  carriage replaces `select-shipping`, which is the slot that decides one. **A Step that adds its
+  own Adjustments alongside is untouched**, which is every honest replacement including
+  `@kobai/plugin-made-to-order`'s — and so is a tax Step that states a figure for each Adjustment
+  it was given, `0` included, and a Step at either of the last two slots that spreads what it was
+  handed, which is what all three of Core's own do. Nothing in this repository or in the
+  reference Project replaces `hold-reservations` or `take-payment`; `@kobai/plugin-stripe` fills
+  the Payment Provider Extension Point, which is a different one and is untouched.
+
+  **No codemod, and here the usual first ground does not apply**: the Project's compiler says
+  nothing, because nothing about the types moved. What says it instead is the run — as a bug
+  rather than a refusal, naming the slot that lost it and the code, the amount and the description
+  of what went missing, so an operator reading a 500 has the Adjustment in front of them. That
+  is worse notice than a compile error and better than the silence it replaces, and it is the
+  honest cost of a
+  postcondition on values: a deployment that prices no delivery has nothing to drop, so a stale
+  Step there is met on the first Order after a Merchant prices delivery rather than never.
+
+  What did **not** break: the HTTP surface, entirely — `packages/core/openapi.json` and
+  `packages/client/src/schema.ts` are byte-identical, and `WorkflowStep.guard` is read by nothing
+  on the wire, `GET /admin/deployment` naming the three fields it publishes one by one. Nor did
+  the declaration API: `.step(step, guard)` takes the guard as an optional second argument, so
+  every existing declaration reads as it did.
 
 ## What else the licence is holding up, and where that list went
 

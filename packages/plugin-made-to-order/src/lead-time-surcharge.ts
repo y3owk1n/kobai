@@ -165,11 +165,12 @@ export const leadTimeSurcharge = defineStep(
       written.set(input, stack);
     }
 
-    // **The carriage, carried forward** (#321). `select-shipping` runs a slot ahead of this one
-    // and puts what it costs to deliver this Cart in `adjustments`; a replacement of this slot
-    // that answered `[]` would drop a Shopper's delivery charge in silence, because the compiler
-    // cannot ask for it. A Lead Time belongs to the line that has one, so this Step adds nothing
-    // of its own here.
+    // **The carriage, carried forward** (#321, #339). `select-shipping` runs a slot ahead of
+    // this one and puts what it costs to deliver this Cart in `adjustments`; the compiler cannot
+    // ask for it — a Step declaring the narrower `PricedLines` is still assignable to the slot —
+    // so the slot itself does, at run time, and a Step of this one's that answered `[]` would
+    // stop the placement rather than quietly under-charging. A Lead Time belongs to the line
+    // that has one, so this Step adds nothing of its own here.
     return { cart: input.cart, lines, adjustments: input.adjustments };
   },
 

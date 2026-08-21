@@ -293,16 +293,17 @@ hands the market back rather than inventing one.
 
 **There are two declared Workflows today**, and the second is where the money is.
 `placeOrderWorkflow` is `place-order` — the one request that turns a Cart into an Order — and
-it declares seven slots, in this order:
+it declares eight slots, in this order:
 
 | Slot | What it does | Compensation |
 | --- | --- | --- |
 | `load-cart` | Reads the Cart, its Line Items, what each one's Fulfilment Strategy answers, and the market it is being bought in | — |
 | `price-lines` | Invokes `resolve-price` for each line, in that market | — |
-| `apply-adjustments` | Attaches discounts and surcharges as their own lines — **Core attaches none** | — |
-| `calculate-tax` | Works out the tax per line, and on each Adjustment the Order itself carries. Core's returns zero; tax is its own spec | — |
-| `hold-reservations` | Claims everything scarce, atomically | Release |
-| `take-payment` | Asks your Payment Provider for what the Order comes to | Refund |
+| `select-shipping` | Turns what it costs to deliver this Cart into an Adjustment on the Order. Core's offers the flat rates the Cart's Region carries | — |
+| `apply-adjustments` | Attaches discounts and surcharges as their own lines — **Core attaches none**, and whatever fills it has to hand on the Adjustments it was given | — |
+| `calculate-tax` | Works out the tax per line, and on each Adjustment the Order itself carries. Core's returns zero; tax is its own spec — and whatever fills it has to hand on the Adjustments it was given, exactly as the slot before it does | — |
+| `hold-reservations` | Claims everything scarce, atomically — and hands on the Adjustments it was given, like the two slots before it | Release |
+| `take-payment` | Asks your Payment Provider for what the Order comes to — and hands on the Adjustments it was given, which is what it just charged for | Refund |
 | `capture-order` | Consumes those Reservations and writes the immutable Order, in one transaction | none — the point of no return |
 
 **A placement happens *somewhere*, and `load-cart` is where that is decided** (#293). The Cart
@@ -358,6 +359,30 @@ that shape and each is load-bearing:
 - **Naming a slot the Workflow does not declare fails loudly**, when the config is applied
   rather than at the request that would have been priced differently. A typo in a slot name
   is not an override that silently does nothing.
+- **Four slots ask something of your Step that its types cannot**, and they are every slot of
+  `place-order` between `select-shipping` and Capture. `apply-adjustments`, `calculate-tax`,
+  `hold-reservations` and `take-payment` are each handed the Adjustments the slots before them
+  produced — the carriage `select-shipping` worked out — and **every one of
+  them has to be in what your Step returns**, matched by `code` and `amount`. The compiler cannot
+  ask, at either. A Step declaring the narrower `PricedLines` as its input is still assignable to
+  `apply-adjustments`, so one answering `adjustments: []` would compile, total correctly for the
+  wrong figure, and drop a Shopper's delivery charge with no error and no refusal (#339). And
+  `calculate-tax`'s return type does make every Adjustment state its own tax, which refuses a
+  Step handing the list on *untaxed* — but it cannot ask for a list to be non-empty, so
+  `adjustments: []` compiles there too and loses the same charge. `hold-reservations` and
+  `take-payment` are the same story once more: `ReservedLines` and `PaidOrder` are `TaxedLines &`
+  extensions, so a Step there that assembles its answer out of the fields it knows about, rather
+  than spreading what it was handed, drops the charge after it has been taxed — and at
+  `take-payment`, after it has been billed for. Dropping one now stops the placement as a bug,
+  naming what went missing and which slot lost it. **The last two are past the quote**, so a
+  storefront is quoted the right figure and the placement is where you find out. Adding your own beside
+  them — `[...input.adjustments, mine]` — is exactly what `apply-adjustments` is for; stating a
+  tax for each — `input.adjustments.map((one) => ({ ...one, tax: mine }))`, and `0` where you tax
+  none — is exactly what `calculate-tax` is for; and spreading what you were given —
+  `{ ...input, reservations: mine }`, `{ ...input, payment: mine }` — is all the last two ask.
+  None of them is asked for anything extra. *Free delivery over fifty* is a discount line of your own beside the charge rather than the charge
+  deleted, which is what an Adjustment being its own line means (ADR-0022). If you want a
+  different figure for carriage, replace `select-shipping`, which is the slot that decides one.
 
 **A Step's signature is a promise Core can move, and it has moved twice.** #117 widened
 `TaxedLines.adjustments` — the type a replaced `calculate-tax` returns — so that a tax Step
