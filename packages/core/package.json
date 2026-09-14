@@ -43,12 +43,12 @@
     "openapi:generate": "node scripts/generate-openapi.ts"
   },
   "dependencies": {
-    "@hono/zod-openapi": "^1.6.0",
-    "@node-rs/argon2": "^2.1.0",
+    "@hono/zod-openapi": "^1.6.3",
+    "@node-rs/argon2": "^2.2.1",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.3",
+    "hono": "^4.13.7",
     "pg": "^8.23.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
