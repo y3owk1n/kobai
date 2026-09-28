@@ -25,10 +25,10 @@
     "@kobai/plugin-made-to-order": "workspace:*",
     "@kobai/plugin-price-log": "workspace:*",
     "@kobai/plugin-stripe": "workspace:*",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.3",
     "kobai-reference-admin": "workspace:*"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.31.10"
+    "drizzle-kit": "^0.31.11"
   }
 }
